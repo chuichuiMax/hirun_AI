@@ -3,6 +3,7 @@
  */
 
 import { apiAdminGet } from './base'
+import { apiUrl } from '@/utils/apiUrl'
 
 async function parseErrorDetail(response, fallbackMessage) {
   const contentType = response.headers.get('content-type') || ''
@@ -21,7 +22,7 @@ async function parseErrorDetail(response, fallbackMessage) {
  * @returns {Promise<{enabled: boolean, provider_name?: string}>}
  */
 async function getOIDCConfig() {
-  const response = await fetch('/api/auth/oidc/config')
+  const response = await fetch(apiUrl('/api/auth/oidc/config'))
   if (!response.ok) {
     throw new Error('获取 OIDC 配置失败')
   }
@@ -35,7 +36,7 @@ async function getOIDCConfig() {
  */
 async function getOIDCLoginUrl(redirectPath = '/') {
   const params = new URLSearchParams({ redirect_path: redirectPath })
-  const response = await fetch(`/api/auth/oidc/login-url?${params}`)
+  const response = await fetch(apiUrl(`/api/auth/oidc/login-url?${params}`))
   if (!response.ok) {
     const detail = await parseErrorDetail(response, '获取 OIDC 登录地址失败')
     throw new Error(detail)
@@ -64,7 +65,7 @@ async function getUserAccessOptions() {
 }
 
 async function exchangeOIDCCode(code) {
-  const response = await fetch('/api/auth/oidc/exchange-code', {
+  const response = await fetch(apiUrl('/api/auth/oidc/exchange-code'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'

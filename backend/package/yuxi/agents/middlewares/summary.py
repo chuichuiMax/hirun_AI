@@ -15,6 +15,7 @@ from langchain.chat_models import BaseChatModel
 from langchain_core.messages import AnyMessage, ToolMessage
 
 from yuxi.agents.backends.composite import create_agent_composite_backend
+from yuxi.utils.logging_config import logger
 from yuxi.utils.paths import VIRTUAL_PATH_CONVERSATION_HISTORY, VIRTUAL_PATH_LARGE_TOOL_RESULTS
 
 _APPROX_CHARS_PER_TOKEN = 4
@@ -72,7 +73,8 @@ def _write_tool_result(backend, path: str, content: str) -> str | None:
         return path
     if "already exists" in str(error).lower():
         return path
-    raise RuntimeError(f"Failed to write tool result to {path}: {error}")
+    logger.warning(f"Failed to write tool result to {path}: {error}")
+    return None
 
 
 def _tool_result_replacement_content(

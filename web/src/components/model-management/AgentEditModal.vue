@@ -20,6 +20,7 @@ import { isBuiltinAgent, useAgentStore } from '@/stores/agent'
 import { useUserStore } from '@/stores/user'
 import { generatePixelAvatar } from '@/utils/pixelAvatar'
 import { MAX_IMAGE_UPLOAD_SIZE_BYTES, MAX_IMAGE_UPLOAD_SIZE_MB } from '@/utils/upload_limits'
+import { assetUrl } from '@/utils/assetUrl'
 
 const props = defineProps({
   backendOptions: { type: Array, default: () => [] }
@@ -205,7 +206,7 @@ const uploadAgentIcon = async (file) => {
   agentIconUploading.value = true
   try {
     const data = await userApi.uploadImage(file)
-    agentForm.icon = data.image_url || data.url || ''
+    agentForm.icon = assetUrl(data.image_url || data.url || '')
     message.success('图标上传成功')
   } catch (error) {
     message.error(error.message || '图标上传失败')

@@ -1,5 +1,6 @@
 import { useUserStore, checkAdminPermission, checkSuperAdminPermission } from '@/stores/user'
 import { message } from 'ant-design-vue'
+import { apiUrl } from '@/utils/apiUrl'
 
 /**
  * 基础API请求封装
@@ -37,7 +38,7 @@ export async function apiRequest(url, options = {}, requiresAuth = true, respons
     }
 
     // 发送请求
-    const response = await fetch(url, requestOptions)
+    const response = await fetch(apiUrl(url), requestOptions)
 
     // 处理API返回的错误
     if (!response.ok) {

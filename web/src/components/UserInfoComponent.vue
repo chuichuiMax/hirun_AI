@@ -33,7 +33,7 @@
             </div>
           </a-menu-item>
           <a-menu-divider />
-          <a-menu-item key="docs" @click="openDocs">
+          <a-menu-item v-if="infoStore.showDocsCenter" key="docs" @click="openDocs">
             <template #icon><BookOpen :size="16" /></template>
             <span class="menu-text">文档中心</span>
           </a-menu-item>
@@ -73,6 +73,7 @@
 import { computed, ref, inject, useSlots } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { useInfoStore } from '@/stores/info'
 import DebugComponent from '@/components/DebugComponent.vue'
 import { message } from 'ant-design-vue'
 import { BookOpen, Sun, Moon, LogOut, Settings, Terminal } from 'lucide-vue-next'
@@ -82,6 +83,7 @@ import FallbackAvatar from '@/components/common/FallbackAvatar.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
+const infoStore = useInfoStore()
 const themeStore = useThemeStore()
 const slots = useSlots()
 

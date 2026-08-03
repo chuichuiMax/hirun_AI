@@ -37,6 +37,8 @@ RUN pnpm install --frozen-lockfile --registry=https://registry.npmmirror.com
 
 # 复制源代码并构建
 COPY ./web .
+ARG VITE_BASE_PATH=/
+ENV VITE_BASE_PATH=$VITE_BASE_PATH
 RUN pnpm run build
 
 # 生产环境运行阶段

@@ -189,7 +189,7 @@
           :accept="acceptedFileTypes"
           :before-upload="beforeUpload"
           :customRequest="customRequest"
-          :action="'/api/knowledge/files/upload?kb_id=' + kbId"
+          :action="apiUrl('/api/knowledge/files/upload?kb_id=' + kbId)"
           :headers="getAuthHeaders()"
           @change="handleFileUpload"
           @drop="handleDrop"
@@ -436,6 +436,7 @@ import {
   ChevronUp
 } from 'lucide-vue-next'
 import { buildChunkParamsPayload } from '@/utils/chunk_presets'
+import { apiUrl } from '@/utils/apiUrl'
 import ChunkParamsConfig from '@/components/ChunkParamsConfig.vue'
 import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
 
@@ -1253,7 +1254,7 @@ const runUploadTask = (task) => {
 
     const xhr = new XMLHttpRequest()
     task.xhr = xhr
-    xhr.open('POST', `/api/knowledge/files/upload?kb_id=${currentKbId}`)
+    xhr.open('POST', apiUrl(`/api/knowledge/files/upload?kb_id=${currentKbId}`))
 
     const headers = getAuthHeaders()
     for (const [key, value] of Object.entries(headers)) {

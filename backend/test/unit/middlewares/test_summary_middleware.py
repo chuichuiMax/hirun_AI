@@ -53,6 +53,11 @@ class _MemoryBackend:
         return SimpleNamespace(error=None)
 
 
+class _FailingWriteBackend(_MemoryBackend):
+    def write(self, path: str, content: str) -> SimpleNamespace:
+        return SimpleNamespace(error="timed out")
+
+
 def _expected_tool_result_path(content: str, tool_name: str = "query_kb") -> str:
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
     return f"{VIRTUAL_PATH_LARGE_TOOL_RESULTS}/{tool_name}-{digest}.txt"
@@ -178,6 +183,20 @@ def test_sanitize_messages_for_summary_only_replaces_tool_message_content() -> N
     assert f"Full output path: {_expected_tool_result_path(messages[2].content)}" in formatted
     assert "TOOL_RESULT_SHOULD_NOT_BE_SUMMARIZED" in formatted
     assert "最终答案保留" in formatted
+
+
+@pytest.mark.unit
+def test_sanitize_messages_for_summary_continues_when_tool_result_write_fails() -> None:
+    backend = _FailingWriteBackend()
+    messages = _tool_messages()
+
+    sanitized = sanitize_messages_for_summary(messages, backend=backend)
+    formatted = get_buffer_string(sanitized)
+
+    assert backend.writes == []
+    assert "[Tool result saved]" in formatted
+    assert "Full output path:" not in formatted
+    assert "TOOL_RESULT_SHOULD_NOT_BE_SUMMARIZED" in formatted
 
 
 @pytest.mark.unit

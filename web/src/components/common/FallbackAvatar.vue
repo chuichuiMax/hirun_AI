@@ -19,6 +19,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { getAvatarFallbackStyle, getAvatarInitials } from '@/utils/pixelAvatar'
+import { assetUrl } from '@/utils/assetUrl'
 
 const props = defineProps({
   src: {
@@ -61,7 +62,7 @@ const failedImageCount = ref(0)
 
 const imageCandidates = computed(() => {
   const candidates = [props.src, props.defaultSrc]
-    .map((value) => String(value || '').trim())
+    .map((value) => assetUrl(String(value || '').trim()))
     .filter(Boolean)
   return [...new Set(candidates)]
 })

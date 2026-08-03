@@ -14,35 +14,26 @@
       </div>
     </div>
 
-    <!-- 顶部导航：品牌名称 & 操作按钮 -->
-    <nav class="login-navbar">
-      <div class="navbar-content">
-        <div class="brand-container" @click="goHome" style="cursor: pointer">
-          <img v-if="brandLogo" :src="brandLogo" alt="logo" class="brand-logo" />
-          <h1 class="brand-text">
-            <span v-if="brandOrgName" class="brand-org">{{ brandOrgName }}</span>
-            <span v-if="brandOrgName && brandName !== brandOrgName" class="brand-separator"></span>
-            <span class="brand-main">{{ brandName }}</span>
-          </h1>
-        </div>
-      </div>
-    </nav>
+    <!-- 左右分栏登录页 -->
+    <main class="login-shell">
+      <section class="login-panel">
+        <div class="login-card">
+          <div class="card-side is-image">
+            <img :src="loginBgImage" alt="博云东方企业园区" class="login-bg-image" />
+          </div>
 
-    <!-- 主要内容区：居中卡片 -->
-    <main class="login-main">
-      <div class="login-card">
-        <!-- 左侧图片 -->
-        <div class="card-side is-image">
-          <img :src="loginBgImage" alt="登录背景" class="login-bg-image" />
-        </div>
+          <div class="card-side is-form">
+            <div class="card-brand" @click="goHome">
+              <img
+                v-if="brandLogo"
+                :src="brandLogo"
+                :alt="brandOrgName || '博云东方'"
+                class="card-brand-logo"
+              />
+            </div>
 
-        <!-- 右侧表单 -->
-        <div class="card-side is-form">
-          <div class="form-wrapper">
-            <header class="form-header">
-              <!-- 如果是在初始化，显示特定标题 -->
-              <h2 v-if="isFirstRun" class="init-title">系统初始化，请创建超级管理员</h2>
-              <p v-else class="welcome-text">欢迎登录</p>
+            <header v-if="isFirstRun" class="form-header">
+              <h1 class="login-title">系统初始化，请创建超级管理员</h1>
             </header>
 
             <div class="login-content" :class="{ 'is-initializing': isFirstRun }">
@@ -251,20 +242,31 @@
             </div>
           </div>
         </div>
-      </div>
-    </main>
 
-    <!-- 页面底部：版权信息等 -->
-    <footer class="page-footer">
-      <div class="footer-links">
-        <a href="https://github.com/xerrors" target="_blank">联系我们</a>
-        <span class="divider">|</span>
-        <a href="https://github.com/xerrors/Yuxi" target="_blank">使用帮助</a>
-      </div>
-      <div class="copyright">
-        &copy; {{ new Date().getFullYear() }} {{ brandName }}. All Rights Reserved.
-      </div>
-    </footer>
+        <div class="showcase-below">
+          <div class="feature-row">
+            <div v-for="module in showcaseModules" :key="module.title" class="feature-card">
+              <div class="feature-card-head">
+                <component :is="module.icon" :size="18" stroke-width="1.75" />
+                <span>{{ module.title }}</span>
+              </div>
+              <div class="feature-card-body">
+                <span v-for="item in module.items" :key="item" class="feature-chip">{{ item }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="showcase-copy">
+            <p class="showcase-lead">企业私有化部署的安全可控智慧大脑</p>
+            <p class="showcase-desc">{{ showcaseSubtitle }}</p>
+          </div>
+        </div>
+
+        <p class="panel-copyright">
+          {{ infoStore.footer?.copyright || `© ${new Date().getFullYear()} 湖南博云东方粉末冶金有限公司` }}
+        </p>
+      </section>
+    </main>
   </div>
 </template>
 
@@ -281,9 +283,14 @@ import {
   User as UserIcon,
   Lock as LockIcon,
   Key as KeyIcon,
-  AlertCircle as ExclamationCircleIcon
+  AlertCircle as ExclamationCircleIcon,
+  Bot,
+  Share2,
+  LibraryBig,
+  MessageSquare
 } from 'lucide-vue-next'
 import { tryAutoStartOIDC, sanitizeRedirect } from '@/utils/oidcAutoStart'
+import { assetUrl } from '@/utils/assetUrl'
 
 const router = useRouter()
 const route = useRoute()
@@ -293,29 +300,29 @@ const agentStore = useAgentStore()
 
 // 品牌展示数据
 const loginBgImage = computed(() => {
-  return infoStore.organization?.login_bg || '/login-bg.jpg'
+  return assetUrl(infoStore.organization?.login_bg || '/boyun-login-bg.jpg')
 })
 const brandLogo = computed(() => {
-  return infoStore.organization?.logo || ''
+  return assetUrl(infoStore.organization?.logo || '')
 })
 const brandOrgName = computed(() => {
   return infoStore.organization?.name?.trim() || ''
 })
-const brandName = computed(() => {
-  const orgName = brandOrgName.value
-  const brandNameRaw = infoStore.branding?.name?.trim() || 'Yuxi'
 
-  if (orgName && brandNameRaw && orgName !== brandNameRaw) {
-    return brandNameRaw
-  }
-
-  return orgName || brandNameRaw
+const showcaseModules = [
+  { title: '智能体', icon: Bot, items: ['ReAct', '深度研究'] },
+  { title: '知识图谱', icon: Share2, items: ['实体关系', '图谱检索'] },
+  { title: '知识库', icon: LibraryBig, items: ['文档管理', '向量检索'] },
+  { title: '智能体助手', icon: MessageSquare, items: ['对话问答', '工具调用'] }
+]
+const showcaseSubtitle = computed(() => {
+  return '结合知识库与知识图谱，贯通生产、质量、研发、工艺核心知识，为硬质合金制造提供更准确、更全面的决策支持。'
 })
 const userAgreementUrl = computed(() => {
-  return infoStore.footer?.user_agreement_url?.trim() || ''
+  return assetUrl(infoStore.footer?.user_agreement_url?.trim() || '')
 })
 const privacyPolicyUrl = computed(() => {
-  return infoStore.footer?.privacy_policy_url?.trim() || ''
+  return assetUrl(infoStore.footer?.privacy_policy_url?.trim() || '')
 })
 const showAgreementConsent = computed(() => {
   return Boolean(userAgreementUrl.value && privacyPolicyUrl.value)
@@ -659,175 +666,151 @@ onUnmounted(() => {
   min-height: 100vh;
   width: 100%;
   position: relative;
-  display: flex;
-  flex-direction: column;
-  background-color: var(--gray-10);
-  background-image: radial-gradient(var(--gray-200) 1px, transparent 1px);
-  background-size: 24px 24px;
+  background: linear-gradient(135deg, #f3f7fc 0%, #e8f0fa 45%, #f7fafd 100%);
 
   &.has-alert {
     padding-top: 60px;
   }
 }
 
-/* Unified Navbar */
-.login-navbar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  padding: 32px 0;
-  z-index: 10;
-
-  .navbar-content {
-    max-width: 1500px; /* Constraint the width */
-    margin: 0 auto;
-    padding: 0 40px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    .brand-container {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-  }
-}
-
-.brand-text {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1;
+.login-shell {
+  min-height: 100vh;
   display: flex;
-  align-items: center;
-  gap: 12px;
-
-  .brand-org {
-    color: var(--gray-700);
-    font-weight: 600;
-  }
-
-  .brand-separator {
-    width: 4px;
-    height: 4px;
-    background-color: var(--gray-400);
-    border-radius: 50%;
-    font-weight: 600;
-  }
-
-  .brand-main {
-    color: var(--main-color);
-    font-weight: 600;
-  }
-}
-
-.brand-logo {
-  height: 32px;
-  width: auto;
-  object-fit: contain;
-}
-
-.top-logo {
-  height: 32px;
-  width: auto;
-  object-fit: contain;
-}
-
-.back-home-btn {
-  color: var(--gray-600);
-  font-size: 14px;
-  &:hover {
-    color: var(--main-color);
-    background-color: transparent;
-  }
-}
-
-/* Main Content: Card Layout */
-.login-main {
-  flex: 1;
-  display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 20px;
-  padding-top: 80px; /* Add space for navbar */
+  padding: 180px 24px 48px;
+}
+
+.login-panel {
+  width: 100%;
+  max-width: 960px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
 }
 
 .login-card {
-  width: 900px;
-  max-width: 95vw;
-  height: 560px;
-  background: var(--gray-0);
-  border-radius: 16px;
-  box-shadow: 0 0px 40px var(--shadow-1);
+  width: 100%;
+  max-width: 860px;
+  min-height: 520px;
   display: flex;
   overflow: hidden;
+  background: var(--gray-0);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(30, 50, 110, 0.08);
 }
 
-.card-side {
-  position: relative;
-}
-
-/* Image Side */
 .card-side.is-image {
-  flex: 1.4;
-  background-color: var(--main-10);
-  overflow: hidden;
+  flex: 1.15;
+  min-width: 0;
+  background: var(--main-10);
 
   .login-bg-image {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    object-position: center;
+    object-position: 50% 42%;
   }
 }
 
-/* Form Side */
 .card-side.is-form {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-}
-
-.form-wrapper {
-  width: 100%;
-  max-width: 320px;
+  min-width: 320px;
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  justify-content: center;
+  padding: 36px 32px 28px;
+}
+
+.card-brand {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 24px;
+  cursor: pointer;
+}
+
+.card-brand-logo {
+  height: 38px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
 }
 
 .form-header {
-  text-align: left;
-  .welcome-text {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--gray-500);
-    margin-bottom: 4px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-  .init-title {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--main-color);
-    margin: 0;
-    line-height: 1.4;
-  }
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--gray-1000);
+}
+
+.login-content.is-initializing {
+  max-height: 58vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .login-form {
+  :deep(.ant-form-item) {
+    margin-bottom: 18px;
+  }
+
+  :deep(.ant-form-item-label > label) {
+    font-weight: 500;
+    color: var(--gray-800);
+  }
+
+  :deep(.ant-form-item-label > label.ant-form-item-required:not(.ant-form-item-required-mark-optional)::before) {
+    color: var(--color-error-500);
+  }
+
+  :deep(.ant-input-affix-wrapper),
+  :deep(.ant-input),
+  :deep(.ant-input-password) {
+    background: var(--gray-0);
+    border-color: var(--gray-200);
+  }
+
   :deep(.ant-input-affix-wrapper) {
     padding: 10px 12px;
     border-radius: 8px;
   }
-  :deep(.ant-btn) {
+
+  :deep(.ant-input-affix-wrapper:hover),
+  :deep(.ant-input-affix-wrapper-focused),
+  :deep(.ant-input:hover),
+  :deep(.ant-input:focus),
+  :deep(.ant-input-password:hover),
+  :deep(.ant-input-password-focused) {
+    border-color: var(--main-color);
+    background: var(--gray-0);
+  }
+
+  :deep(.ant-btn-primary) {
     height: 44px;
     font-size: 16px;
+    font-weight: 600;
     border-radius: 8px;
+    background: var(--main-color);
+    border-color: var(--main-color);
+    box-shadow: 0 8px 20px rgba(35, 78, 160, 0.22);
+
+    &:hover {
+      background: var(--main-500);
+      border-color: var(--main-500);
+    }
   }
+
+  :deep(.ant-input-affix-wrapper input.ant-input) {
+    background: transparent;
+  }
+
   :deep(.ant-input-prefix) {
     margin-right: 8px;
     color: var(--gray-500);
@@ -838,12 +821,95 @@ onUnmounted(() => {
   margin-bottom: 14px;
 }
 
+.panel-copyright {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--gray-500);
+  text-align: center;
+}
+
+.showcase-below {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.feature-row {
+  width: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 14px;
+}
+
+.feature-card {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 220px;
+  padding: 16px 14px;
+  border-radius: 12px;
+  background: var(--gray-0);
+  border: 1px solid var(--gray-150);
+  box-shadow: 0 4px 16px rgba(30, 50, 110, 0.06);
+}
+
+.feature-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--main-900);
+}
+
+.feature-card-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.feature-chip {
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: var(--main-10);
+  color: var(--main-700);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.showcase-copy {
+  width: 100%;
+  text-align: center;
+  padding-top: 20px;
+  border-top: 1px solid rgba(35, 78, 160, 0.08);
+}
+
+.showcase-lead {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gray-800);
+}
+
+.showcase-desc {
+  margin: 0 auto;
+  max-width: 720px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--gray-600);
+}
+
 .third-party-login {
   margin-top: 16px;
+
   .divider {
     position: relative;
     text-align: center;
     margin: 24px 0 16px;
+
     &::before,
     &::after {
       content: '';
@@ -853,12 +919,15 @@ onUnmounted(() => {
       height: 1px;
       background-color: var(--gray-200);
     }
+
     &::before {
       left: 0;
     }
+
     &::after {
       right: 0;
     }
+
     span {
       display: inline-block;
       padding: 0 8px;
@@ -890,7 +959,6 @@ onUnmounted(() => {
     }
   }
 
-  /* 修复：添加骨架屏样式 */
   .login-skeleton {
     :deep(.ant-skeleton-button) {
       width: 100% !important;
@@ -938,39 +1006,6 @@ onUnmounted(() => {
   text-align: center;
 }
 
-/* Page Footer */
-.page-footer {
-  padding: 24px;
-  text-align: center;
-}
-
-.footer-links {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 8px;
-
-  a {
-    color: var(--gray-500);
-    font-size: 13px;
-    &:hover {
-      color: var(--main-color);
-    }
-  }
-
-  .divider {
-    color: var(--gray-300);
-    font-size: 12px;
-  }
-}
-
-.copyright {
-  font-size: 12px;
-  color: var(--gray-400);
-}
-
-/* Server Status Alert */
 .server-status-alert {
   position: absolute;
   top: 0;
@@ -1020,28 +1055,27 @@ onUnmounted(() => {
   }
 }
 
-/* Responsive */
-@media (max-width: 1280px) {
-  .login-navbar .navbar-content {
-    padding: 0 40px;
+@media (max-width: 960px) {
+  .feature-row {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .feature-card {
+    flex: 1 1 calc(50% - 10px);
+    max-width: none;
   }
 }
 
 @media (max-width: 768px) {
-  .login-navbar .navbar-content {
-    padding: 0 20px;
-  }
-
-  .brand-text {
-    font-size: 20px;
+  .login-shell {
+    padding: 140px 16px 32px;
   }
 
   .login-card {
     flex-direction: column;
-    height: auto;
-    max-height: none;
-    width: 100%;
-    margin-top: 20px;
+    min-height: auto;
+    max-width: 400px;
   }
 
   .card-side.is-image {
@@ -1049,7 +1083,26 @@ onUnmounted(() => {
   }
 
   .card-side.is-form {
-    padding: 40px 20px;
+    min-width: 0;
+    padding: 28px 20px 22px;
+  }
+
+  .feature-card {
+    flex: 1 1 calc(50% - 8px);
+  }
+}
+
+@media (max-width: 520px) {
+  .feature-row {
+    gap: 10px;
+  }
+
+  .feature-card {
+    flex: 1 1 100%;
+  }
+
+  .login-title {
+    font-size: 18px;
   }
 }
 </style>

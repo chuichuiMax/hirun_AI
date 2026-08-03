@@ -92,6 +92,37 @@ const router = createRouter({
       ]
     },
     {
+      path: '/knowledge',
+      name: 'knowledge',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'KnowledgeComp',
+          component: () => import('../views/DataBaseView.vue'),
+          meta: {
+            keepAlive: false,
+            requiresAuth: true,
+            requiresAdmin: true
+          }
+        },
+        {
+          path: ':kbId',
+          name: 'KnowledgeBaseDetail',
+          component: () => import('../views/DataBaseInfoView.vue'),
+          meta: {
+            keepAlive: false,
+            requiresAuth: true,
+            requiresAdmin: true
+          }
+        }
+      ]
+    },
+    {
+      path: '/extensions/knowledgebase/:kbId',
+      redirect: (to) => `/knowledge/${to.params.kbId}`
+    },
+    {
       path: '/extensions',
       name: 'extensions',
       component: AppLayout,
@@ -104,17 +135,13 @@ const router = createRouter({
             keepAlive: false,
             requiresAuth: true
           },
+          beforeEnter: (to) => {
+            if (to.query.tab === 'knowledge') {
+              return { path: '/knowledge' }
+            }
+            return true
+          },
           children: [
-            {
-              path: 'knowledgebase/:kbId',
-              name: 'ExtensionKnowledgeBaseDetail',
-              component: () => import('../views/DataBaseInfoView.vue'),
-              meta: {
-                keepAlive: false,
-                requiresAuth: true,
-                requiresAdmin: true
-              }
-            },
             {
               path: 'mcp/:slug',
               name: 'ExtensionMcpDetail',

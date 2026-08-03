@@ -124,7 +124,11 @@ class MinIOClient:
             )
 
             assert result is not None
-            url = f"http://{self.public_endpoint}/{bucket_name}/{object_name}"
+            public_base_url = os.getenv("MINIO_PUBLIC_BASE_URL", "").strip()
+            if public_base_url:
+                url = f"{public_base_url.rstrip('/')}/{bucket_name}/{object_name}"
+            else:
+                url = f"http://{self.public_endpoint}/{bucket_name}/{object_name}"
 
             return UploadResult(url, bucket_name, object_name)
 

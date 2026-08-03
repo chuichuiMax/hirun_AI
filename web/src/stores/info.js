@@ -38,6 +38,21 @@ export const useInfoStore = defineStore('info', () => {
     ...(infoConfig.value.footer || {})
   }))
 
+  // 计算属性 - 聊天示例问题
+  const chatSampleQuestions = computed(() => {
+    const questions = infoConfig.value.chat?.sample_questions
+    return Array.isArray(questions) ? questions.filter((q) => typeof q === 'string' && q.trim()) : []
+  })
+
+  const showDocsCenter = computed(() => !infoConfig.value.ui?.hide_docs_center)
+
+  const kbMenuLabel = computed(() => {
+    const customLabel = infoConfig.value.knowledge?.menu_label?.trim()
+    if (customLabel) return customLabel
+    const prefix = infoConfig.value.knowledge?.name_prefix?.trim()
+    return prefix ? `${prefix}知识库` : '知识库'
+  })
+
   // 动作方法
   function setInfoConfig(newConfig) {
     infoConfig.value = newConfig
@@ -85,6 +100,9 @@ export const useInfoStore = defineStore('info', () => {
     organization,
     branding,
     footer,
+    chatSampleQuestions,
+    showDocsCenter,
+    kbMenuLabel,
 
     // 方法
     toggleDebugMode,

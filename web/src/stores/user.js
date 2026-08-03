@@ -1,8 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useAgentStore } from './agent'
+import { apiUrl } from '@/utils/apiUrl'
+import { assetUrl } from '@/utils/assetUrl'
 
 export const useUserStore = defineStore('user', () => {
+  const authFetch = (url, options) => fetch(apiUrl(url), options)
   // 状态
   const token = ref(localStorage.getItem('user_token') || '')
   const userId = ref(null)
@@ -27,7 +30,7 @@ export const useUserStore = defineStore('user', () => {
       formData.append('username', credentials.loginId) // 使用loginId作为通用登录标识
       formData.append('password', credentials.password)
 
-      const response = await fetch('/api/auth/token', {
+      const response = await authFetch('/api/auth/token', {
         method: 'POST',
         body: formData
       })
@@ -54,7 +57,7 @@ export const useUserStore = defineStore('user', () => {
       username.value = data.username
       uid.value = data.uid
       phoneNumber.value = data.phone_number || ''
-      avatar.value = data.avatar || ''
+      avatar.value = assetUrl(data.avatar || '')
       userRole.value = data.role
       departmentId.value = data.department_id || null
       departmentName.value = data.department_name || ''
@@ -91,7 +94,7 @@ export const useUserStore = defineStore('user', () => {
 
   async function initialize(admin) {
     try {
-      const response = await fetch('/api/auth/initialize', {
+      const response = await authFetch('/api/auth/initialize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -112,7 +115,7 @@ export const useUserStore = defineStore('user', () => {
       username.value = data.username
       uid.value = data.uid
       phoneNumber.value = data.phone_number || ''
-      avatar.value = data.avatar || ''
+      avatar.value = assetUrl(data.avatar || '')
       userRole.value = data.role
       departmentId.value = data.department_id || null
       departmentName.value = data.department_name || ''
@@ -129,7 +132,7 @@ export const useUserStore = defineStore('user', () => {
 
   async function checkFirstRun() {
     try {
-      const response = await fetch('/api/auth/check-first-run')
+      const response = await authFetch('/api/auth/check-first-run')
       const data = await response.json()
       return data.first_run
     } catch (error) {
@@ -156,7 +159,7 @@ export const useUserStore = defineStore('user', () => {
           skip: String(skip),
           limit: String(pageSize)
         })
-        const response = await fetch(`/api/auth/users?${params.toString()}`, {
+        const response = await authFetch(`/api/auth/users?${params.toString()}`, {
           headers: {
             ...getAuthHeaders()
           }
@@ -185,7 +188,7 @@ export const useUserStore = defineStore('user', () => {
 
   async function createUser(userData) {
     try {
-      const response = await fetch('/api/auth/users', {
+      const response = await authFetch('/api/auth/users', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -208,7 +211,7 @@ export const useUserStore = defineStore('user', () => {
 
   async function updateUser(userId, userData) {
     try {
-      const response = await fetch(`/api/auth/users/${userId}`, {
+      const response = await authFetch(`/api/auth/users/${userId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -231,7 +234,7 @@ export const useUserStore = defineStore('user', () => {
 
   async function deleteUser(userId) {
     try {
-      const response = await fetch(`/api/auth/users/${userId}`, {
+      const response = await authFetch(`/api/auth/users/${userId}`, {
         method: 'DELETE',
         headers: {
           ...getAuthHeaders()
@@ -253,7 +256,7 @@ export const useUserStore = defineStore('user', () => {
   // 验证用户名并生成uid
   async function validateUsernameAndGenerateUid(username) {
     try {
-      const response = await fetch('/api/auth/validate-username', {
+      const response = await authFetch('/api/auth/validate-username', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -280,7 +283,7 @@ export const useUserStore = defineStore('user', () => {
       const formData = new FormData()
       formData.append('file', file)
 
-      const response = await fetch('/api/auth/upload-avatar', {
+      const response = await authFetch('/api/auth/upload-avatar', {
         method: 'POST',
         headers: {
           ...getAuthHeaders()
@@ -296,7 +299,7 @@ export const useUserStore = defineStore('user', () => {
       const data = await response.json()
 
       // 更新本地头像状态
-      avatar.value = data.avatar_url
+      avatar.value = assetUrl(data.avatar_url)
 
       return data
     } catch (error) {
@@ -308,7 +311,7 @@ export const useUserStore = defineStore('user', () => {
   // 获取当前用户信息
   async function getCurrentUser() {
     try {
-      const response = await fetch('/api/auth/me', {
+      const response = await authFetch('/api/auth/me', {
         headers: {
           ...getAuthHeaders()
         }
@@ -325,7 +328,7 @@ export const useUserStore = defineStore('user', () => {
       username.value = userData.username
       uid.value = userData.uid
       phoneNumber.value = userData.phone_number || ''
-      avatar.value = userData.avatar || ''
+      avatar.value = assetUrl(userData.avatar || '')
       userRole.value = userData.role
       departmentId.value = userData.department_id || null
       departmentName.value = userData.department_name || ''
@@ -340,7 +343,7 @@ export const useUserStore = defineStore('user', () => {
   // 更新个人资料
   async function updateProfile(profileData) {
     try {
-      const response = await fetch('/api/auth/profile', {
+      const response = await authFetch('/api/auth/profile', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

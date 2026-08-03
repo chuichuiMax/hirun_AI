@@ -1,5 +1,7 @@
 @import './base.css';
+@import './brand-boyun.css';
 @import './base.dark.css';
+@import './brand-boyun.dark.css';
 @import './sigma.css';
 @import './shorts.css';
 @import './dashboard.css';

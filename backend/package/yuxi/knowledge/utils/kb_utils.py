@@ -1,4 +1,5 @@
 import hashlib
+import os
 import time
 
 from yuxi.knowledge.chunking.ragflow_like.presets import resolve_chunk_processing_params
@@ -180,6 +181,50 @@ def merge_processing_params(metadata_params: dict | None, request_params: dict |
     return merged_params
 
 
+def apply_kb_name_prefix(name: str, prefix: str) -> str:
+    """为知识库名称添加品牌前缀（已包含前缀时不再重复添加）。"""
+    normalized_name = (name or "").strip()
+    normalized_prefix = (prefix or "").strip()
+    if not normalized_name or not normalized_prefix or normalized_name.startswith(normalized_prefix):
+        return normalized_name
+    return f"{normalized_prefix}{normalized_name}"
+
+
+def _known_minio_buckets() -> set[str]:
+    from yuxi.storage.minio.client import MinIOClient
+
+    return set(MinIOClient.KB_BUCKETS.values()) | MinIOClient.PUBLIC_READ_BUCKETS
+
+
+def _strip_public_base_prefix(path: str) -> str:
+    """移除子路径部署时 MINIO_PUBLIC_BASE_URL 前缀。"""
+    public_base = os.getenv("MINIO_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if not public_base:
+        return path
+    if not public_base.startswith("/"):
+        public_base = f"/{public_base}"
+    if path.startswith(f"{public_base}/"):
+        return path[len(public_base) :]
+    return path
+
+
+def _split_minio_path(path: str) -> tuple[str, str] | None:
+    from urllib.parse import unquote
+
+    normalized = _strip_public_base_prefix(path.strip())
+    if not normalized.startswith("/"):
+        return None
+
+    parts = normalized.lstrip("/").split("/", 1)
+    if len(parts) != 2 or not parts[1]:
+        return None
+
+    bucket_name, object_name = parts[0], unquote(parts[1])
+    if bucket_name not in _known_minio_buckets():
+        return None
+    return bucket_name, object_name
+
+
 def is_minio_url(file_path: str) -> bool:
     """检测是否是本系统生成的 MinIO 存储 URL。"""
     from urllib.parse import urlparse
@@ -188,58 +233,50 @@ def is_minio_url(file_path: str) -> bool:
     if parsed_url.scheme == "minio":
         return bool(parsed_url.netloc and parsed_url.path.lstrip("/"))
 
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-        return False
+    if parsed_url.scheme in {"http", "https"} and parsed_url.netloc:
+        return _split_minio_path(parsed_url.path) is not None
 
-    path_parts = parsed_url.path.lstrip("/").split("/", 1)
-    if len(path_parts) != 2:
-        return False
+    if not parsed_url.scheme and file_path.startswith("/"):
+        return _split_minio_path(file_path) is not None
 
-    from yuxi.storage.minio.client import MinIOClient
-
-    known_buckets = set(MinIOClient.KB_BUCKETS.values()) | MinIOClient.PUBLIC_READ_BUCKETS
-    return path_parts[0] in known_buckets
+    return False
 
 
 def parse_minio_url(file_path: str) -> tuple[str, str]:
     """
     解析MinIO URL，提取bucket名称和对象名称
 
-    支持标准 HTTP/HTTPS URL 格式：
-    - http(s)://host/bucket-name/path/to/object
-
-    Args:
-        file_path: MinIO文件URL (http:// 或 https://)
-
-    Returns:
-        tuple[str, str]: (bucket_name, object_name)
-
-    Raises:
-        ValueError: 如果无法解析URL
+    支持标准 HTTP/HTTPS URL、minio:// 协议，以及子路径部署的相对路径：
+    - /boyun/knowledgebases/path/to/object
     """
     try:
         from urllib.parse import unquote, urlparse
 
-        # 解析URL
         parsed_url = urlparse(file_path)
 
-        # 对于 minio:// 协议，bucket名称在netloc中
         if parsed_url.scheme == "minio":
             bucket_name = parsed_url.netloc
             object_name = unquote(parsed_url.path.lstrip("/"))
-        else:
-            # 对于 http/https 协议，bucket名称在path的第一部分
-            object_name = parsed_url.path.lstrip("/")
-            path_parts = object_name.split("/", 1)
-            if len(path_parts) > 1:
-                bucket_name = path_parts[0]
-                object_name = unquote(path_parts[1])
-            else:
-                raise ValueError(f"无法解析MinIO URL中的bucket名称: {file_path}")
+            return bucket_name, object_name
 
-        logger.debug(f"Parsed MinIO URL: bucket_name={bucket_name}, object_name={object_name}")
-        return bucket_name, object_name
+        if parsed_url.scheme in {"http", "https"} and parsed_url.netloc:
+            result = _split_minio_path(parsed_url.path)
+            if result:
+                bucket_name, object_name = result
+                logger.debug(f"Parsed MinIO URL: bucket_name={bucket_name}, object_name={object_name}")
+                return bucket_name, object_name
 
+        if not parsed_url.scheme and file_path.startswith("/"):
+            result = _split_minio_path(file_path)
+            if result:
+                bucket_name, object_name = result
+                logger.debug(f"Parsed MinIO URL: bucket_name={bucket_name}, object_name={object_name}")
+                return bucket_name, object_name
+
+        raise ValueError(f"无法解析MinIO URL中的bucket名称: {file_path}")
+
+    except ValueError:
+        raise
     except Exception as e:
         logger.error(f"Failed to parse MinIO URL {file_path}: {e}")
-        raise ValueError(f"无法解析MinIO URL: {file_path}")
+        raise ValueError(f"无法解析MinIO URL: {file_path}") from e

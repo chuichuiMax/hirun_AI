@@ -2,7 +2,7 @@
   <div class="database-container layout-container">
     <PageHeader
       v-if="!props.embedded"
-      title="知识库"
+      :title="infoStore.kbMenuLabel"
       :active-key="knowledgeActiveView"
       :tabs="knowledgeViewItems"
       :loading="dbState.listLoading"
@@ -70,7 +70,7 @@
 
         <div class="form-section">
           <h3 class="section-title">知识库名称<span class="required-mark">*</span></h3>
-          <a-input v-model:value="newDatabase.name" placeholder="新建知识库名称" />
+          <a-input v-model:value="newDatabase.name" placeholder="如：产品库（将自动添加博云前缀）" />
         </div>
 
         <div v-if="selectedKbTypeInfo?.requires_embedding_model" class="form-grid two-columns">
@@ -231,6 +231,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useConfigStore } from '@/stores/config'
 import { useDatabaseStore } from '@/stores/database'
+import { useInfoStore } from '@/stores/info'
 import { QuestionCircleOutlined } from '@ant-design/icons-vue'
 import { Plus } from 'lucide-vue-next'
 import { message } from 'ant-design-vue'
@@ -251,6 +252,7 @@ const route = useRoute()
 const router = useRouter()
 const configStore = useConfigStore()
 const databaseStore = useDatabaseStore()
+const infoStore = useInfoStore()
 
 const props = defineProps({
   embedded: { type: Boolean, default: false }
@@ -260,9 +262,9 @@ const props = defineProps({
 const { databases, state: dbState } = storeToRefs(databaseStore)
 
 const knowledgeActiveView = 'documents'
-const knowledgeViewItems = [
-  { key: 'documents', label: '文档知识库', path: '/extensions?tab=knowledge' }
-]
+const knowledgeViewItems = computed(() => [
+  { key: 'documents', label: `文档${infoStore.kbMenuLabel}`, path: '/knowledge' }
+])
 
 const kbTypes = computed(() => Object.keys(supportedKbTypes.value))
 const searchQuery = ref('')
@@ -506,13 +508,13 @@ const cardTags = (database) => {
 }
 
 const navigateToDatabase = (database) => {
-  router.push({ path: `/extensions/knowledgebase/${database.kb_id}` })
+  router.push({ path: `/knowledge/${database.kb_id}` })
 }
 
 watch(
   () => route.path,
   (newPath) => {
-    if (newPath === '/extensions' && route.query.tab === 'knowledge') {
+    if (newPath === '/knowledge') {
       databaseStore.loadDatabases()
     }
   }

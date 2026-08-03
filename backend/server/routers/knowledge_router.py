@@ -12,11 +12,12 @@ from starlette.responses import StreamingResponse
 
 from yuxi.services.task_service import TaskContext, tasker
 from server.utils.auth_middleware import get_admin_user, get_required_user
+from server.routers.system_router import load_info_config
 from yuxi import config, knowledge_base
 from yuxi.knowledge.factory import KnowledgeBaseFactory
 from yuxi.knowledge.graphs.milvus_graph_service import GRAPH_TASK_TYPE, MilvusGraphService
 from yuxi.knowledge.parser import Parser, SUPPORTED_FILE_EXTENSIONS, is_supported_file_extension
-from yuxi.knowledge.utils import calculate_content_hash, is_minio_url, parse_minio_url
+from yuxi.knowledge.utils import calculate_content_hash, apply_kb_name_prefix, is_minio_url, parse_minio_url
 from yuxi.knowledge.utils.mindmap_utils import (
     generate_database_mindmap,
     get_database_mindmap_data,
@@ -127,6 +128,12 @@ async def _has_running_graph_build_task(kb_id: str) -> bool:
     )
 
 
+async def _resolve_kb_display_name(name: str) -> str:
+    config = await load_info_config()
+    prefix = str((config.get("knowledge") or {}).get("name_prefix") or "").strip()
+    return apply_kb_name_prefix(name, prefix)
+
+
 # =============================================================================
 # === 知识库管理分组 ===
 # =============================================================================
@@ -160,6 +167,7 @@ async def create_database(
         f"embedding_model_spec {embedding_model_spec}, share_config {share_config}"
     )
     try:
+        database_name = await _resolve_kb_display_name(database_name)
         # 先检查名称是否已存在
         if await knowledge_base.database_name_exists(database_name):
             raise HTTPException(
@@ -360,7 +368,7 @@ async def update_database_info(
 
         database = await knowledge_base.update_database(
             kb_id,
-            data.name,
+            await _resolve_kb_display_name(data.name),
             data.description,
             data.llm_model_spec,
             update_llm_model_spec=update_llm_model_spec,

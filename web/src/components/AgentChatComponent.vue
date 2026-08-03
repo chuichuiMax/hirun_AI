@@ -140,7 +140,28 @@
 
               <!-- 打招呼区域 - 在输入框上方 -->
               <div v-if="!conversations.length" class="chat-greeting-input">
-                <h1>{{ randomGreeting }}</h1>
+                <h1>
+                  <img :src="greetingLogoUrl" alt="" class="greeting-logo" aria-hidden="true" />
+                  <span>{{ randomGreeting }}</span>
+                </h1>
+              </div>
+
+              <div
+                v-if="!conversations.length && chatSampleQuestions.length"
+                class="chat-sample-questions"
+              >
+                <div class="chat-sample-questions-title">示例问题</div>
+                <button
+                  v-for="(question, index) in chatSampleQuestions"
+                  :key="`${index}-${question}`"
+                  type="button"
+                  class="chat-sample-question-row"
+                  :disabled="isProcessing || !currentAgent"
+                  @click="useChatSampleQuestion(question)"
+                >
+                  <SearchOutlined class="chat-sample-question-icon" />
+                  <span class="chat-sample-question-text">{{ question }}</span>
+                </button>
               </div>
 
               <AgentInputArea
@@ -583,6 +604,7 @@ import {
   ClockCircleOutlined,
   CloseCircleOutlined,
   QuestionCircleOutlined,
+  SearchOutlined,
   SyncOutlined
 } from '@ant-design/icons-vue'
 import AgentInputArea from '@/components/AgentInputArea.vue'
@@ -597,6 +619,8 @@ import { useAgentStore } from '@/stores/agent'
 import { useChatThreadsStore } from '@/stores/chatThreads'
 import { useChatUIStore } from '@/stores/chatUI'
 import { useConfigStore } from '@/stores/config'
+import { useInfoStore } from '@/stores/info'
+import { assetUrl } from '@/utils/assetUrl'
 import { storeToRefs } from 'pinia'
 import { MessageProcessor } from '@/utils/messageProcessor'
 import { agentApi, threadApi } from '@/apis'
@@ -629,9 +653,12 @@ const agentStore = useAgentStore()
 const chatThreadsStore = useChatThreadsStore()
 const chatUIStore = useChatUIStore()
 const configStore = useConfigStore()
+const infoStore = useInfoStore()
 const { agents, selectedAgentId, agentConfig, configurableItems, availableKnowledgeBases } =
   storeToRefs(agentStore)
 const { threads, currentThreadId, currentThread } = storeToRefs(chatThreadsStore)
+const { chatSampleQuestions } = storeToRefs(infoStore)
+const greetingLogoUrl = assetUrl('/boyun-pm-logo.png')
 
 // ==================== LOCAL CHAT & UI STATE ====================
 const userInput = ref('')
@@ -639,11 +666,11 @@ const sendCooldownActive = ref(false)
 let sendCooldownTimer = null
 // 预设的打招呼文本
 const greetingMessages = [
-  '👋 您好，有什么可以帮您？',
-  '👋 你好！有什么想聊的吗？',
-  '👋 嘿，有什么我可以帮助你的？',
-  '👋 欢迎！今天想讨论什么话题？',
-  '👋 你好呀，随时为你服务！'
+  '您好，有什么可以帮您？',
+  '你好！有什么想聊的吗？',
+  '嘿，有什么我可以帮助你的？',
+  '欢迎！今天想讨论什么话题？',
+  '你好呀，随时为你服务！'
 ]
 
 // 随机选择一个打招呼文本
@@ -2404,6 +2431,14 @@ const handleSendMessage = async ({ image } = {}) => {
   }
 }
 
+const useChatSampleQuestion = async (question) => {
+  const text = String(question || '').trim()
+  if (!text || isProcessing.value || !currentAgent.value || props.sendDisabled) return
+  userInput.value = text
+  await nextTick()
+  await handleSendMessage()
+}
+
 // 发送或中断
 const handleSendOrStop = async (payload) => {
   if (sendCooldownActive.value) {
@@ -3024,14 +3059,105 @@ watch(currentChatId, (threadId, oldThreadId) => {
 }
 
 .chat-greeting-input {
-  padding: 24px 0;
+  padding: 24px 0 12px;
   text-align: center;
 
   h1 {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4em;
     font-size: 1.4rem;
     color: var(--gray-1000);
     margin: 0;
   }
+
+  .greeting-logo {
+    width: 1em;
+    height: 1em;
+    object-fit: contain;
+    flex-shrink: 0;
+  }
+}
+
+.chat-sample-questions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  max-height: min(360px, 42vh);
+  margin: 0 0 16px;
+  padding: 0 2px;
+  overflow-y: auto;
+}
+
+.chat-sample-questions-title {
+  color: var(--gray-600);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.chat-sample-question-row {
+  width: fit-content;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 30px;
+  background-color: var(--gray-0);
+  color: var(--gray-800);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
+
+  &:hover:not(:disabled) {
+    box-shadow: 0 2px 8px var(--shadow-1);
+
+    .chat-sample-question-icon {
+      color: var(--main-800);
+      opacity: 1;
+    }
+  }
+
+  &:active:not(:disabled) {
+    background-color: var(--main-50);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--main-300);
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+}
+
+.chat-sample-question-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.chat-sample-question-icon {
+  flex: 0 0 auto;
+  color: var(--main-color);
+  font-size: 14px;
+  width: 14px;
+  height: 14px;
+  opacity: 0.82;
+  transition:
+    color 0.2s ease,
+    opacity 0.2s ease;
 }
 
 .agent-segment-wrapper {
@@ -3237,15 +3363,17 @@ watch(currentChatId, (threadId, oldThreadId) => {
 
   &.start-screen {
     position: absolute;
-    top: 45%;
+    top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
     bottom: auto;
     max-width: 800px;
+    max-height: 90vh;
     width: 90%;
     background: transparent;
     padding: 0;
     border-top: none;
+    overflow-y: auto;
     z-index: 100; /* Ensure it's above other elements */
   }
 }

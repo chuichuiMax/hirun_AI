@@ -20,6 +20,11 @@ app.use(Antd)
 // 预加载信息配置
 import { useInfoStore } from '@/stores/info'
 const infoStore = useInfoStore()
-infoStore.loadInfoConfig()
+infoStore.loadInfoConfig().then((config) => {
+  const title = config?.branding?.title || config?.branding?.name
+  if (title) {
+    document.title = title
+  }
+})
 
 app.mount('#app')

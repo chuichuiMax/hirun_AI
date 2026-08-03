@@ -1,6 +1,34 @@
 import pytest
 
-from yuxi.knowledge.utils.kb_utils import prepare_item_metadata
+from yuxi.knowledge.utils.kb_utils import apply_kb_name_prefix, is_minio_url, parse_minio_url, prepare_item_metadata
+
+
+def test_is_minio_url_accepts_subpath_public_base(monkeypatch):
+    monkeypatch.setenv("MINIO_PUBLIC_BASE_URL", "/boyun")
+    url = "/boyun/knowledgebases/kb_demo/upload/demo.pdf"
+
+    assert is_minio_url(url) is True
+    assert parse_minio_url(url) == ("knowledgebases", "kb_demo/upload/demo.pdf")
+
+
+def test_is_minio_url_accepts_http_url_with_subpath_prefix(monkeypatch):
+    monkeypatch.setenv("MINIO_PUBLIC_BASE_URL", "/boyun")
+    url = "http://47.110.157.215/boyun/knowledgebases/kb_demo/upload/demo.pdf"
+
+    assert is_minio_url(url) is True
+    assert parse_minio_url(url) == ("knowledgebases", "kb_demo/upload/demo.pdf")
+
+
+def test_is_minio_url_rejects_unknown_bucket(monkeypatch):
+    monkeypatch.delenv("MINIO_PUBLIC_BASE_URL", raising=False)
+
+    assert is_minio_url("/unknown-bucket/demo.txt") is False
+
+
+def test_apply_kb_name_prefix_adds_prefix_once():
+    assert apply_kb_name_prefix("产品库", "博云") == "博云产品库"
+    assert apply_kb_name_prefix("博云产品库", "博云") == "博云产品库"
+    assert apply_kb_name_prefix("产品库", "") == "产品库"
 
 
 async def test_prepare_item_metadata_preserves_uploaded_file_size():

@@ -17,6 +17,7 @@ x-api-worker-env: &api-worker-env
   MINERU_API_URI: ${MINERU_API_URI:-http://mineru-api:30001}
   PADDLEX_URI: ${PADDLEX_URI:-http://paddlex:8080}
   MINIO_URI: ${MINIO_URI:-http://minio:9000}
+  MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-/boyun}
   SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-provisioner}
   SANDBOX_PROVISIONER_URL: ${SANDBOX_PROVISIONER_URL:-http://sandbox-provisioner:8002}
   SANDBOX_VIRTUAL_PATH_PREFIX: ${SANDBOX_VIRTUAL_PATH_PREFIX:-/home/gem/user-data}
@@ -38,6 +39,7 @@ services:
     volumes:
       - ./docker/volumes/yuxi:/app/saves
       - ./docker/volumes/models:/app/models
+      - ./backend/package/yuxi/config/static/info.local.yaml:/app/package/yuxi/config/static/info.local.yaml:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
@@ -76,6 +78,7 @@ services:
     volumes:
       - ./docker/volumes/yuxi:/app/saves
       - ./docker/volumes/models:/app/models
+      - ./backend/package/yuxi/config/static/info.local.yaml:/app/package/yuxi/config/static/info.local.yaml:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
@@ -145,6 +148,8 @@ services:
       context: .
       dockerfile: docker/web.Dockerfile
       target: production
+      args:
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/boyun/}
     image: yuxi-web:${YUXI_VERSION:-0.7.0}
     container_name: web-prod
     ports:
@@ -250,8 +255,6 @@ services:
   postgres:
     image: postgres:16
     container_name: postgres
-    ports:
-      - "5432:5432"
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
