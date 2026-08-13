@@ -66,6 +66,38 @@ const router = createRouter({
       ]
     },
     {
+      path: '/content',
+      name: 'content',
+      component: AppLayout,
+      redirect: '/content/new',
+      children: [
+        {
+          path: 'new',
+          name: 'ContentNew',
+          component: () => import('../views/ContentStudioView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'tasks/:taskId',
+          name: 'ContentTask',
+          component: () => import('../views/ContentStudioView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'history',
+          name: 'ContentHistory',
+          component: () => import('../views/ContentHistoryView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'admin/rules',
+          name: 'ContentRules',
+          component: () => import('../views/ContentRuleLibraryView.vue'),
+          meta: { keepAlive: false, requiresAuth: true, requiresAdmin: true }
+        }
+      ]
+    },
+    {
       path: '/dashboard',
       name: 'dashboard',
       component: AppLayout,

@@ -8,6 +8,7 @@ import {
   LibraryBig,
   Box,
   FolderKanban,
+  FilePenLine,
   PanelLeftClose,
   PanelLeftOpen,
   MessageCirclePlus
@@ -19,7 +20,6 @@ import { useChatThreadsStore } from '@/stores/chatThreads'
 import { useChatUIStore } from '@/stores/chatUI'
 import { useDatabaseStore } from '@/stores/database'
 import { useInfoStore } from '@/stores/info'
-import { assetUrl } from '@/utils/assetUrl'
 import { useTaskerStore } from '@/stores/tasker'
 import { useUserStore } from '@/stores/user'
 import { storeToRefs } from 'pinia'
@@ -35,9 +35,6 @@ const chatThreadsStore = useChatThreadsStore()
 const chatUIStore = useChatUIStore()
 const databaseStore = useDatabaseStore()
 const infoStore = useInfoStore()
-const brandLogoUrl = computed(() =>
-  assetUrl(infoStore.organization.logo || infoStore.organization.avatar)
-)
 const taskerStore = useTaskerStore()
 const userStore = useUserStore()
 const { activeCount: activeCountRef, isDrawerOpen } = storeToRefs(taskerStore)
@@ -112,6 +109,14 @@ const mainList = computed(() => {
       exactActive: true
     }
   ]
+
+  items.push({
+    name: '内容生产',
+    path: '/content/new',
+    activePaths: ['/content'],
+    icon: FilePenLine,
+    activeIcon: FilePenLine
+  })
 
   items.push({
     name: '工作区',
@@ -246,8 +251,8 @@ provide('settingsModal', {
       <div class="sidebar-brand" @click.stop>
         <router-link v-if="!sidebarCollapsed" to="/" class="brand-link">
           <img
-            :src="brandLogoUrl"
-            :alt="infoStore.organization.name"
+            src="/contentflow-logo.svg"
+            alt="ContentFlow"
             class="brand-logo"
           />
         </router-link>
@@ -259,8 +264,8 @@ provide('settingsModal', {
           @click="setSidebarCollapsed(false)"
         >
           <img
-            :src="brandLogoUrl"
-            :alt="infoStore.organization.name"
+            src="/contentflow-mark.svg"
+            alt="ContentFlow"
             class="brand-logo brand-logo-collapsed"
           />
           <PanelLeftOpen class="brand-expand-icon" size="20" />

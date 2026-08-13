@@ -24,8 +24,9 @@ async def lifespan(app: FastAPI):
         await pg_manager.create_tables()
         await pg_manager.ensure_business_schema()
         await pg_manager.ensure_knowledge_schema()
-    except Exception as e:
-        logger.error(f"Failed to initialize database during startup: {e}")
+    except Exception:
+        logger.exception("Failed to initialize database during startup")
+        raise
 
     # 确保内置 MCP 服务器定义存在于数据库
     try:
@@ -35,9 +36,11 @@ async def lifespan(app: FastAPI):
 
     try:
         from yuxi.agents.skills.service import init_builtin_skills
+        from yuxi.content import ensure_content_seed_data
 
         async with pg_manager.get_async_session_context() as session:
             await init_builtin_skills(session)
+            await ensure_content_seed_data(session)
     except Exception as e:
         logger.error(f"Failed to initialize builtin skills during startup: {e}")
 

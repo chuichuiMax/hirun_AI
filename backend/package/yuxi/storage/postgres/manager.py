@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import declarative_base
 from yuxi.storage.postgres.models_business import Base as BusinessBase
 from yuxi.storage.postgres.models_knowledge import Base as KnowledgeBase
+from yuxi.storage.postgres import models_content as _models_content  # noqa: F401
 from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
@@ -29,6 +30,9 @@ class PostgresManager(metaclass=SingletonMeta):
 
     # 知识库 PostgreSQL URL 环境变量名
     KB_DATABASE_URL_ENV = "POSTGRES_URL"
+    # API 与后台 Worker 可能同时启动。事务级 advisory lock 可避免空库首次
+    # 初始化时两个进程并发执行 create_all，造成 PostgreSQL 类型/表创建冲突。
+    SCHEMA_INIT_LOCK_ID = 2026081201
 
     def __init__(self):
         self.async_engine = None
@@ -84,7 +88,7 @@ class PostgresManager(metaclass=SingletonMeta):
             )
 
             self._initialized = True
-            logger.info(f"PostgreSQL manager initialized for knowledge base: {db_url.split('@')[0]}://***")
+            logger.info("PostgreSQL manager initialized")
         except Exception as e:
             logger.error(f"Failed to initialize PostgreSQL manager: {e}")
             # 不抛出异常，允许应用启动，但在使用时会报错
@@ -98,6 +102,10 @@ class PostgresManager(metaclass=SingletonMeta):
         """创建所有表（知识库和业务表）"""
         self._check_initialized()
         async with self.async_engine.begin() as conn:
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_id)"),
+                {"lock_id": self.SCHEMA_INIT_LOCK_ID},
+            )
             await conn.run_sync(KnowledgeBase.metadata.create_all)
             await conn.run_sync(BusinessBase.metadata.create_all)
         logger.info("PostgreSQL tables created/checked (knowledge + business)")
@@ -106,6 +114,10 @@ class PostgresManager(metaclass=SingletonMeta):
         """创建所有业务数据表"""
         self._check_initialized()
         async with self.async_engine.begin() as conn:
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_id)"),
+                {"lock_id": self.SCHEMA_INIT_LOCK_ID},
+            )
             await conn.run_sync(BusinessBase.metadata.create_all)
         logger.info("PostgreSQL business tables created/checked")
 

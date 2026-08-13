@@ -19,7 +19,14 @@
       <section class="login-panel">
         <div class="login-card">
           <div class="card-side is-image">
-            <img :src="loginBgImage" alt="博云东方企业园区" class="login-bg-image" />
+            <div class="login-showcase">
+              <span class="showcase-label">AI CONTENT OPERATING SYSTEM</span>
+              <h2>让内容生产成为<br />可持续的企业能力</h2>
+              <p>统一创作规则、业务事实、知识资产与 AI 工作流，让团队稳定生产可信内容。</p>
+              <div class="showcase-flow" aria-hidden="true">
+                <span>业务素材</span><i></i><span>创作策略</span><i></i><span>审核交付</span>
+              </div>
+            </div>
           </div>
 
           <div class="card-side is-form">
@@ -27,7 +34,7 @@
               <img
                 v-if="brandLogo"
                 :src="brandLogo"
-                :alt="brandOrgName || '博云东方'"
+                alt="ContentFlow"
                 class="card-brand-logo"
               />
             </div>
@@ -257,13 +264,13 @@
           </div>
 
           <div class="showcase-copy">
-            <p class="showcase-lead">企业私有化部署的安全可控智慧大脑</p>
+            <p class="showcase-lead">企业可信内容的统一生产工作台</p>
             <p class="showcase-desc">{{ showcaseSubtitle }}</p>
           </div>
         </div>
 
         <p class="panel-copyright">
-          {{ infoStore.footer?.copyright || `© ${new Date().getFullYear()} 湖南博云东方粉末冶金有限公司` }}
+          © {{ new Date().getFullYear() }} ContentFlow 企业内容生产平台
         </p>
       </section>
     </main>
@@ -284,10 +291,10 @@ import {
   Lock as LockIcon,
   Key as KeyIcon,
   AlertCircle as ExclamationCircleIcon,
-  Bot,
-  Share2,
+  FilePenLine,
+  BookOpenCheck,
   LibraryBig,
-  MessageSquare
+  FileClock
 } from 'lucide-vue-next'
 import { tryAutoStartOIDC, sanitizeRedirect } from '@/utils/oidcAutoStart'
 import { assetUrl } from '@/utils/assetUrl'
@@ -298,25 +305,16 @@ const userStore = useUserStore()
 const infoStore = useInfoStore()
 const agentStore = useAgentStore()
 
-// 品牌展示数据
-const loginBgImage = computed(() => {
-  return assetUrl(infoStore.organization?.login_bg || '/boyun-login-bg.jpg')
-})
-const brandLogo = computed(() => {
-  return assetUrl(infoStore.organization?.logo || '')
-})
-const brandOrgName = computed(() => {
-  return infoStore.organization?.name?.trim() || ''
-})
+const brandLogo = computed(() => assetUrl('/contentflow-logo.svg'))
 
 const showcaseModules = [
-  { title: '智能体', icon: Bot, items: ['ReAct', '深度研究'] },
-  { title: '知识图谱', icon: Share2, items: ['实体关系', '图谱检索'] },
-  { title: '知识库', icon: LibraryBig, items: ['文档管理', '向量检索'] },
-  { title: '智能体助手', icon: MessageSquare, items: ['对话问答', '工具调用'] }
+  { title: '内容创作', icon: FilePenLine, items: ['四阶段流程', '双输入模式'] },
+  { title: '创作规则', icon: BookOpenCheck, items: ['标题公式', '正文公式'] },
+  { title: '企业知识', icon: LibraryBig, items: ['业务资料', '事实证据'] },
+  { title: '生产管理', icon: FileClock, items: ['审核追溯', '版本历史'] }
 ]
 const showcaseSubtitle = computed(() => {
-  return '结合知识库与知识图谱，贯通生产、质量、研发、工艺核心知识，为硬质合金制造提供更准确、更全面的决策支持。'
+  return '把结构化创作方法、企业真实业务资料和生成模型组合成可配置、可执行、可审核、可追溯的内容生产流程。'
 })
 const userAgreementUrl = computed(() => {
   return assetUrl(infoStore.footer?.user_agreement_url?.trim() || '')
@@ -704,14 +702,18 @@ onUnmounted(() => {
 .card-side.is-image {
   flex: 1.15;
   min-width: 0;
-  background: var(--main-10);
+  display: flex;
+  align-items: center;
+  background:
+    linear-gradient(150deg, var(--main-900), var(--main-700) 58%, var(--main-500));
 
-  .login-bg-image {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    object-position: 50% 42%;
-  }
+  .login-showcase { padding: 48px; color: #fff; }
+  .showcase-label { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; opacity: 0.72; }
+  h2 { margin: 18px 0 16px; color: #fff; font-size: 32px; font-weight: 650; line-height: 1.35; }
+  p { max-width: 380px; margin: 0; font-size: 14px; line-height: 1.85; opacity: 0.78; }
+  .showcase-flow { display: flex; align-items: center; gap: 8px; margin-top: 38px; }
+  .showcase-flow span { padding: 7px 9px; border: 1px solid rgba(255,255,255,.22); border-radius: 5px; background: rgba(255,255,255,.08); font-size: 11px; }
+  .showcase-flow i { width: 20px; height: 1px; background: rgba(255,255,255,.35); }
 }
 
 .card-side.is-form {

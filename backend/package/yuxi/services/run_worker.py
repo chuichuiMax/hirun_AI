@@ -14,6 +14,7 @@ from yuxi.agents.mcp.service import ensure_builtin_mcp_servers_in_db
 from yuxi.agents.skills.service import init_builtin_skills
 from yuxi.repositories.agent_run_repository import TERMINAL_RUN_STATUSES, AgentRunRepository
 from yuxi.services.chat_service import stream_agent_chat, stream_agent_resume
+from yuxi.services.content_run_worker import process_content_run
 from yuxi.services.run_queue_service import (
     append_run_stream_event,
     clear_cancel_signal,
@@ -507,6 +508,9 @@ async def _worker_startup(ctx):
     await ensure_builtin_mcp_servers_in_db()
     async with pg_manager.get_async_session_context() as session:
         await init_builtin_skills(session)
+        from yuxi.content import ensure_content_seed_data
+
+        await ensure_content_seed_data(session)
 
 
 async def _worker_shutdown(ctx):
@@ -514,7 +518,7 @@ async def _worker_shutdown(ctx):
 
 
 class WorkerSettings:
-    functions = [process_agent_run]
+    functions = [process_agent_run, process_content_run]
     max_tries = 2
     retry_jobs = True
     job_timeout = 3600

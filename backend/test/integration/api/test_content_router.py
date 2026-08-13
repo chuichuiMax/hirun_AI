@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import uuid
+
+import pytest
+
+
+pytestmark = pytest.mark.asyncio
+
+
+async def test_content_bootstrap_and_task_strategy_flow(test_client, admin_headers):
+    bootstrap_response = await test_client.get("/api/content/bootstrap", headers=admin_headers)
+    assert bootstrap_response.status_code == 200, bootstrap_response.text
+    bootstrap = bootstrap_response.json()
+    assert len(bootstrap["industry_templates"]) == 6
+    assert len([item for item in bootstrap["rule_bundle"]["methods"] if item["method_type"] == "core"]) == 4
+    assert len(bootstrap["rule_bundle"]["title_formulas"]) == 7
+    assert len(bootstrap["rule_bundle"]["content_formulas"]) == 4
+
+    template = bootstrap["industry_templates"][0]
+    create_response = await test_client.post(
+        "/api/content/tasks",
+        headers=admin_headers,
+        json={
+            "industry_template_id": template["id"],
+            "mode": "quick",
+            "content_goal": template["default_goal"],
+            "name": f"pytest_content_{uuid.uuid4().hex[:8]}",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+    task_id = create_response.json()["task"]["id"]
+
+    try:
+        compile_response = await test_client.post(
+            f"/api/content/tasks/{task_id}/compile-brief",
+            headers=admin_headers,
+            json={
+                "brief": {
+                    "form_values": {
+                        "brand_name": "Pytest 品牌",
+                        "product": "企业内容服务",
+                        "pain_points": ["内容缺少事实依据"],
+                        "result": "连续7天完成内容复盘",
+                        "advantages": ["使用统一证据包"],
+                    }
+                }
+            },
+        )
+        assert compile_response.status_code == 200, compile_response.text
+        compiled = compile_response.json()
+        assert compiled["compiled"] is True
+        assert compiled["task"]["status"] == "brief_ready"
+        assert compiled["task"]["evidence_bundle"]["items"]
+
+        strategy_response = await test_client.post(
+            f"/api/content/tasks/{task_id}/strategy/recommend",
+            headers=admin_headers,
+        )
+        assert strategy_response.status_code == 200, strategy_response.text
+        strategy = strategy_response.json()["strategy"]
+        assert strategy["compatibility"] in {"auto_matched", "warning"}
+        assert strategy["methods"]
+        assert strategy["title_formula_code"].startswith("T")
+        assert strategy["content_formula_code"].startswith("C")
+
+        missing_asset_response = await test_client.patch(
+            "/api/content/artifacts/not-real",
+            headers=admin_headers,
+            json={"title": "标题", "body": "正文", "topics": []},
+        )
+        assert missing_asset_response.status_code == 404
+        assert (
+            missing_asset_response.json()["detail"]["error"]["code"]
+            == "CONTENT_ARTIFACT_NOT_FOUND"
+        )
+    finally:
+        delete_response = await test_client.delete(f"/api/content/tasks/{task_id}", headers=admin_headers)
+        assert delete_response.status_code == 200, delete_response.text

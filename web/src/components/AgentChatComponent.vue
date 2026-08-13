@@ -658,7 +658,7 @@ const { agents, selectedAgentId, agentConfig, configurableItems, availableKnowle
   storeToRefs(agentStore)
 const { threads, currentThreadId, currentThread } = storeToRefs(chatThreadsStore)
 const { chatSampleQuestions } = storeToRefs(infoStore)
-const greetingLogoUrl = assetUrl('/boyun-pm-logo.png')
+const greetingLogoUrl = assetUrl('/contentflow-mark.svg')
 
 // ==================== LOCAL CHAT & UI STATE ====================
 const userInput = ref('')

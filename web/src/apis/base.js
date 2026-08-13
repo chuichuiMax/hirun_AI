@@ -55,7 +55,11 @@ export async function apiRequest(url, options = {}, requiresAuth = true, respons
 
       try {
         errorData = await response.json()
-        errorMessage = errorData.detail || errorData.message || errorMessage
+        const detail = errorData.detail
+        if (typeof detail === 'string') errorMessage = detail
+        else if (detail?.error?.message) errorMessage = detail.error.message
+        else if (detail?.message) errorMessage = detail.message
+        else if (errorData.message) errorMessage = errorData.message
         console.log('API错误详情:', errorData)
 
         // 如果是422错误，打印更详细的信息
@@ -208,6 +212,19 @@ export function apiPut(url, data = {}, options = {}, requiresAuth = true, respon
     url,
     {
       method: 'PUT',
+      body: data instanceof FormData ? data : JSON.stringify(data),
+      ...options
+    },
+    requiresAuth,
+    responseType
+  )
+}
+
+export function apiPatch(url, data = {}, options = {}, requiresAuth = true, responseType = 'json') {
+  return apiRequest(
+    url,
+    {
+      method: 'PATCH',
       body: data instanceof FormData ? data : JSON.stringify(data),
       ...options
     },
