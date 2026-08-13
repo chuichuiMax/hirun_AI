@@ -171,7 +171,7 @@ services:
       - ./docker/volumes/neo4j/data:/data
       - ./docker/volumes/neo4j/logs:/var/lib/neo4j/logs
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:7474 || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider --timeout=5 http://localhost:7474 || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
