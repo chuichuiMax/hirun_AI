@@ -19,6 +19,12 @@ _SKILLS_ROOT = Path(__file__).resolve().parent
 
 BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
+        slug="humanizer-zh",
+        source_dir=_SKILLS_ROOT / "humanizer-zh",
+        description="降低中文内容的机械腔与模板化表达，同时保留原文事实、语气和格式。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
         slug="content-strategy-planner",
         source_dir=_SKILLS_ROOT / "content-strategy-planner",
         description="按规则版本、内容目标和业务简报规划并校验创作手法、标题公式与正文公式。",

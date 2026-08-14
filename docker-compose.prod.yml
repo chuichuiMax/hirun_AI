@@ -31,7 +31,7 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
-    image: yuxi-api:${YUXI_VERSION:-0.7.0}
+    image: ${YUXI_API_IMAGE:-yuxi-api}:${YUXI_VERSION:-0.7.0}
     container_name: api-prod
     working_dir: /app
     networks:
@@ -70,7 +70,7 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
-    image: yuxi-api:${YUXI_VERSION:-0.7.0}
+    image: ${YUXI_API_IMAGE:-yuxi-api}:${YUXI_VERSION:-0.7.0}
     container_name: worker-prod
     working_dir: /app
     networks:
@@ -150,7 +150,7 @@ services:
       target: production
       args:
         VITE_BASE_PATH: ${VITE_BASE_PATH:-/boyun/}
-    image: yuxi-web:${YUXI_VERSION:-0.7.0}
+    image: ${YUXI_WEB_IMAGE:-yuxi-web}:${YUXI_VERSION:-0.7.0}
     container_name: web-prod
     ports:
       - "80:80"

@@ -1,0 +1,105 @@
+name: Publish versioned images
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Immutable image version, for example 0.7.2-contentflow"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-images-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  API_IMAGE: ghcr.io/shenwei8899-ctrl/contentswarm-yuxi-api
+  WEB_IMAGE: ghcr.io/shenwei8899-ctrl/contentswarm-yuxi-web
+
+jobs:
+  test-build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || [[ "$VERSION" == "latest" ]]; then
+            echo "Invalid immutable version: $VERSION" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.2"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test backend skill integration
+        working-directory: backend
+        run: |
+          uv sync --group test --no-dev --frozen
+          uv run pytest \
+            test/unit/agents/skills/test_humanizer_skill.py \
+            test/unit/services/test_skill_service.py
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build web
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          push: true
+          tags: ${{ env.API_IMAGE }}:${{ inputs.version }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/web.Dockerfile
+          target: production
+          push: true
+          tags: ${{ env.WEB_IMAGE }}:${{ inputs.version }}
+          build-args: VITE_BASE_PATH=/boyun/
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
