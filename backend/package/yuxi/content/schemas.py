@@ -88,6 +88,31 @@ class ContentFinalizeRequest(BaseModel):
     note: str | None = None
 
 
+class XiaohongshuAccountCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    display_name: str = Field(min_length=1, max_length=120)
+
+
+class XiaohongshuAccountUpdate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    enabled: bool | None = None
+
+
+class XiaohongshuDistributionCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    request_id: str = Field(min_length=8, max_length=120)
+    account_ids: list[str] = Field(min_length=1, max_length=20)
+    mode: Literal["draft", "publish"] = "draft"
+    title: str | None = Field(default=None, min_length=1, max_length=20)
+    body: str | None = Field(default=None, min_length=1, max_length=1000)
+    topics: list[str] | None = Field(default=None, max_length=10)
+    confirm_publish: bool = False
+
+
 class RuleVersionAction(BaseModel):
     note: str | None = None
 

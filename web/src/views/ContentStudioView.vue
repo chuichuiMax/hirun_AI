@@ -17,7 +17,8 @@ import {
   Send,
   Settings2,
   ShieldCheck,
-  Sparkles
+  Sparkles,
+  UserRoundCog
 } from 'lucide-vue-next'
 import ContentStageStepper from '@/components/content/ContentStageStepper.vue'
 import { useContentStudioStore } from '@/stores/contentStudio'
@@ -342,6 +343,7 @@ const reviewArtifact = async () => {
 const finalizeArtifact = async () => {
   try {
     await store.finalizeArtifact()
+    await router.push(`/content/results/${store.task.id}`)
     message.success('已保存为正式内容资产')
   } catch (error) {
     message.error(error.message || '保存正式版本失败')
@@ -363,6 +365,7 @@ const openVersions = async () => {
         <p>规则、事实和知识同源，关键节点由人确认。</p>
       </div>
       <div class="header-actions">
+        <a-button @click="router.push('/content/accounts')"><UserRoundCog :size="16" />账号管理</a-button>
         <a-button @click="router.push('/content/history')"><History :size="16" />生产历史</a-button>
         <a-button v-if="userStore.isAdmin" @click="router.push('/content/admin/rules')">
           <Settings2 :size="16" />创作规则库

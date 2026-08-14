@@ -49,6 +49,26 @@ export const contentApi = {
     apiPost(`/api/content/artifacts/${artifactId}/regenerate`, payload),
   listArtifactVersions: (artifactId) =>
     apiGet(`/api/content/artifacts/${artifactId}/versions`),
+  listXiaohongshuAccounts: () => apiGet('/api/content/xiaohongshu/accounts'),
+  createXiaohongshuAccount: (payload) =>
+    apiPost('/api/content/xiaohongshu/accounts', payload),
+  updateXiaohongshuAccount: (accountId, payload) =>
+    apiPatch(`/api/content/xiaohongshu/accounts/${accountId}`, payload),
+  deleteXiaohongshuAccount: (accountId) =>
+    apiDelete(`/api/content/xiaohongshu/accounts/${accountId}`),
+  loginXiaohongshuAccount: (accountId) =>
+    apiPost(`/api/content/xiaohongshu/accounts/${accountId}/login`),
+  checkXiaohongshuAccount: (accountId) =>
+    apiPost(`/api/content/xiaohongshu/accounts/${accountId}/check`),
+  getXiaohongshuLoginSession: (sessionId) =>
+    apiGet(`/api/content/xiaohongshu/login-sessions/${sessionId}`),
+  createDistribution: (artifactId, payload) =>
+    apiPost(`/api/content/artifacts/${artifactId}/distributions`, payload),
+  listDistributions: (artifactId) =>
+    apiGet(`/api/content/artifacts/${artifactId}/distributions`),
+  getDistribution: (jobId) => apiGet(`/api/content/distributions/${jobId}`),
+  getDistributionScreenshot: (resultId) =>
+    apiGet(`/api/content/distribution-results/${resultId}/screenshot`, {}, true, 'blob'),
   listRuleVersions: () => apiGet('/api/content/admin/rules'),
   getAdminRuleBundle: (versionId) =>
     apiGet(`/api/content/admin/rules/${versionId}/bundle`),

@@ -90,6 +90,18 @@ const router = createRouter({
           meta: { keepAlive: false, requiresAuth: true }
         },
         {
+          path: 'results/:taskId',
+          name: 'ContentResult',
+          component: () => import('../views/ContentResultView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'accounts',
+          name: 'ContentAccounts',
+          component: () => import('../views/XiaohongshuAccountsView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
           path: 'admin/rules',
           name: 'ContentRules',
           component: () => import('../views/ContentRuleLibraryView.vue'),

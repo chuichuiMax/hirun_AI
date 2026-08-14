@@ -309,6 +309,154 @@ class ContentReviewRecord(Base):
     created_at = Column(DateTime, default=utc_now_naive)
 
 
+class XiaohongshuAccount(Base):
+    __tablename__ = "xiaohongshu_accounts"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    display_name = Column(String(120), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    login_status = Column(String(32), nullable=False, default="unbound", index=True)
+    platform_nickname = Column(String(120), nullable=True)
+    platform_account_id = Column(String(120), nullable=True)
+    last_verified_at = Column(DateTime, nullable=True)
+    last_error_code = Column(String(80), nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("owner_uid", "display_name", name="uq_xiaohongshu_accounts_owner_name"),
+        Index("idx_xiaohongshu_accounts_owner_updated", "owner_uid", "updated_at"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "display_name": self.display_name,
+            "enabled": bool(self.enabled),
+            "login_status": self.login_status,
+            "platform_nickname": self.platform_nickname,
+            "platform_account_id": self.platform_account_id,
+            "last_verified_at": format_utc_datetime(self.last_verified_at),
+            "last_error_code": self.last_error_code,
+            "last_error_message": self.last_error_message,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class XiaohongshuLoginSession(Base):
+    __tablename__ = "xiaohongshu_login_sessions"
+
+    id = Column(String(64), primary_key=True)
+    account_id = Column(
+        String(64), ForeignKey("xiaohongshu_accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    owner_uid = Column(String(255), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    expires_at = Column(DateTime, nullable=False)
+    error_code = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    completed_at = Column(DateTime, nullable=True)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "account_id": self.account_id,
+            "status": self.status,
+            "expires_at": format_utc_datetime(self.expires_at),
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+            "completed_at": format_utc_datetime(self.completed_at),
+        }
+
+
+class ContentDistributionJob(Base):
+    __tablename__ = "content_distribution_jobs"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    artifact_id = Column(
+        String(64), ForeignKey("content_artifacts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    artifact_version = Column(Integer, nullable=False)
+    platform = Column(String(32), nullable=False, default="xiaohongshu")
+    mode = Column(String(16), nullable=False)
+    payload_snapshot = Column(JSON, nullable=False, default=dict)
+    idempotency_key = Column(String(160), nullable=False, unique=True)
+    dedupe_key = Column(String(160), nullable=True, index=True)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    error_code = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_content_distribution_jobs_owner_created", "owner_uid", "created_at"),
+        Index("idx_content_distribution_jobs_artifact_created", "artifact_id", "created_at"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "artifact_id": self.artifact_id,
+            "artifact_version": self.artifact_version,
+            "platform": self.platform,
+            "mode": self.mode,
+            "payload": self.payload_snapshot or {},
+            "status": self.status,
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "created_at": format_utc_datetime(self.created_at),
+            "started_at": format_utc_datetime(self.started_at),
+            "completed_at": format_utc_datetime(self.completed_at),
+        }
+
+
+class ContentDistributionResult(Base):
+    __tablename__ = "content_distribution_results"
+
+    id = Column(String(64), primary_key=True)
+    job_id = Column(
+        String(64), ForeignKey("content_distribution_jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    account_id = Column(
+        String(64), ForeignKey("xiaohongshu_accounts.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    error_code = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+    note_url = Column(Text, nullable=True)
+    screenshot_path = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (UniqueConstraint("job_id", "account_id", name="uq_distribution_results_job_account"),)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "job_id": self.job_id,
+            "account_id": self.account_id,
+            "status": self.status,
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "note_url": self.note_url,
+            "has_screenshot": bool(self.screenshot_path),
+            "created_at": format_utc_datetime(self.created_at),
+            "started_at": format_utc_datetime(self.started_at),
+            "completed_at": format_utc_datetime(self.completed_at),
+        }
+
+
 class ContentAnalyticsEvent(Base):
     __tablename__ = "content_analytics_events"
 

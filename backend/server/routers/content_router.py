@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.utils.auth_middleware import get_admin_user, get_db, get_required_user, get_superadmin_user
@@ -21,6 +21,9 @@ from yuxi.content.schemas import (
     StrategySelection,
     StrategyValidateRequest,
     RuleVersionAction,
+    XiaohongshuAccountCreate,
+    XiaohongshuAccountUpdate,
+    XiaohongshuDistributionCreate,
 )
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.services.agent_run_service import cancel_agent_run_view, stream_agent_run_events
@@ -53,8 +56,122 @@ from yuxi.services.content_service import (
     validate_rule_bundle_for_publish,
 )
 from yuxi.storage.postgres.models_business import User
+from yuxi.services.xiaohongshu_service import (
+    check_account_login,
+    create_account,
+    create_distribution,
+    delete_account,
+    get_distribution_job,
+    get_login_session,
+    get_result_screenshot,
+    list_accounts,
+    list_artifact_distributions,
+    start_account_login,
+    update_account,
+)
 
 content = APIRouter(prefix="/content", tags=["content"])
+
+
+@content.get("/xiaohongshu/accounts")
+async def list_xiaohongshu_accounts(
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_accounts(db, current_user)
+
+
+@content.post("/xiaohongshu/accounts")
+async def create_xiaohongshu_account(
+    payload: XiaohongshuAccountCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_account(db, current_user, payload)
+
+
+@content.patch("/xiaohongshu/accounts/{account_id}")
+async def update_xiaohongshu_account(
+    account_id: str,
+    payload: XiaohongshuAccountUpdate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await update_account(db, current_user, account_id, payload)
+
+
+@content.delete("/xiaohongshu/accounts/{account_id}")
+async def delete_xiaohongshu_account(
+    account_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await delete_account(db, current_user, account_id)
+
+
+@content.post("/xiaohongshu/accounts/{account_id}/login")
+async def login_xiaohongshu_account(
+    account_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await start_account_login(db, current_user, account_id)
+
+
+@content.post("/xiaohongshu/accounts/{account_id}/check")
+async def check_xiaohongshu_account(
+    account_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await check_account_login(db, current_user, account_id)
+
+
+@content.get("/xiaohongshu/login-sessions/{session_id}")
+async def get_xiaohongshu_login_session(
+    session_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_login_session(db, current_user, session_id)
+
+
+@content.post("/artifacts/{artifact_id}/distributions")
+async def distribute_content_artifact(
+    artifact_id: str,
+    payload: XiaohongshuDistributionCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_distribution(db, current_user, artifact_id, payload)
+
+
+@content.get("/artifacts/{artifact_id}/distributions")
+async def list_content_artifact_distributions(
+    artifact_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_artifact_distributions(db, current_user, artifact_id)
+
+
+@content.get("/distributions/{job_id}")
+async def get_content_distribution(
+    job_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_distribution_job(db, current_user, job_id)
+
+
+@content.get("/distribution-results/{result_id}/screenshot")
+async def get_content_distribution_screenshot(
+    result_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    path = await get_result_screenshot(db, current_user, result_id)
+    return FileResponse(path, media_type="image/png", filename=f"{result_id}.png")
 
 
 @content.get("/bootstrap")

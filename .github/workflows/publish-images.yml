@@ -52,7 +52,8 @@ jobs:
           uv sync --group test --no-dev --frozen
           uv run pytest \
             test/unit/agents/skills/test_humanizer_skill.py \
-            test/unit/services/test_skill_service.py
+            test/unit/services/test_skill_service.py \
+            test/unit/content/test_xiaohongshu_distribution.py
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -82,15 +83,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push API image
+      - name: Build API image for runtime verification
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/api.Dockerfile
-          push: true
-          tags: ${{ env.API_IMAGE }}:${{ inputs.version }}
+          load: true
+          tags: yuxi-api-ci:${{ inputs.version }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
+
+      - name: Test Xiaohongshu browser runtime in API image
+        run: |
+          docker run --rm --shm-size=512m \
+            -e XHS_BROWSER_E2E=1 \
+            -v "$GITHUB_WORKSPACE/backend/test:/app/test:ro" \
+            "yuxi-api-ci:${{ inputs.version }}" \
+            python -m pytest test/e2e/test_xiaohongshu_runtime.py -q
+
+      - name: Push verified API image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          docker tag "yuxi-api-ci:$VERSION" "$API_IMAGE:$VERSION"
+          docker push "$API_IMAGE:$VERSION"
 
       - name: Build and push web image
         uses: docker/build-push-action@v6

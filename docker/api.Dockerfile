@@ -33,6 +33,7 @@ RUN set -ex \
         ffmpeg \
         git \
         libpq5 \
+        fonts-noto-cjk \
         libsm6 \
         libxext6 \
     # (D) 清理垃圾，减小体积
@@ -50,6 +51,11 @@ COPY backend/package /app/package
 # 如果网络还是不好，可以在后面添加 --index-url https://pypi.tuna.tsinghua.edu.cn/simple
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --group test --no-dev --frozen
+
+# Browser runtime is built into the versioned API image and is launched only by
+# Xiaohongshu jobs running in the existing worker process.
+RUN /usr/local/bin/patchright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 # 激活虚拟环境并添加到PATH
 ENV PATH="/app/.venv/bin:$PATH"
