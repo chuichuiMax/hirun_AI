@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 ContentMode = Literal["quick", "pro"]
@@ -92,12 +92,16 @@ class RuleVersionAction(BaseModel):
     note: str | None = None
 
 
-class RuleDraftCreate(BaseModel):
+class RuleInputBase(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class RuleDraftCreate(RuleInputBase):
     source_version_id: str
     changelog: str = Field(default="", max_length=1000)
 
 
-class CreationMethodInput(BaseModel):
+class CreationMethodInput(RuleInputBase):
     code: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
     name: str = Field(min_length=1, max_length=80)
     method_type: Literal["core", "enhancer"] = "core"
@@ -111,7 +115,7 @@ class CreationMethodInput(BaseModel):
     sort_order: int = Field(default=0, ge=0)
 
 
-class TitleFormulaInput(BaseModel):
+class TitleFormulaInput(RuleInputBase):
     code: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
     name: str = Field(min_length=1, max_length=120)
     suitable_scenes: list[str] = Field(default_factory=list)
@@ -124,7 +128,7 @@ class TitleFormulaInput(BaseModel):
     sort_order: int = Field(default=0, ge=0)
 
 
-class ContentFormulaInput(BaseModel):
+class ContentFormulaInput(RuleInputBase):
     code: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
     name: str = Field(min_length=1, max_length=120)
     industry_aliases: dict[str, str] = Field(default_factory=dict)
@@ -140,7 +144,7 @@ class ContentFormulaInput(BaseModel):
     sort_order: int = Field(default=0, ge=0)
 
 
-class CombinationRuleInput(BaseModel):
+class CombinationRuleInput(RuleInputBase):
     content_goal: str = Field(min_length=1, max_length=64)
     methods: list[str] = Field(default_factory=list)
     title_formula_codes: list[str] = Field(default_factory=list)
@@ -151,7 +155,7 @@ class CombinationRuleInput(BaseModel):
     recommendation_reason: str = Field(default="", max_length=4000)
 
 
-class RuleBundleUpdate(BaseModel):
+class RuleBundleUpdate(RuleInputBase):
     changelog: str = Field(default="", max_length=1000)
     methods: list[CreationMethodInput] = Field(default_factory=list, max_length=200)
     title_formulas: list[TitleFormulaInput] = Field(default_factory=list, max_length=500)

@@ -50,6 +50,7 @@ from yuxi.services.content_service import (
     create_content_rule_draft,
     discard_content_rule_draft,
     save_content_rule_draft,
+    validate_rule_bundle_for_publish,
 )
 from yuxi.storage.postgres.models_business import User
 
@@ -328,7 +329,7 @@ async def get_admin_rule_bundle(
     bundle = await ContentRepository(db).get_rule_bundle(version_id, include_disabled=True)
     if bundle is None:
         raise HTTPException(status_code=404, detail="规则版本不存在")
-    return {"bundle": bundle}
+    return {"bundle": bundle, "validation": validate_rule_bundle_for_publish(bundle)}
 
 
 @content.post("/admin/rules/drafts")

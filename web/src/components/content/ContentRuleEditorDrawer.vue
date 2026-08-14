@@ -79,9 +79,13 @@ const rules = computed(() => {
     name: [{ required: true, message: '请输入名称' }]
   }
   if (props.type === 'methods') result.principle = [{ required: true, message: '请输入核心原则' }]
-  if (props.type === 'title_formulas') result.core_goal = [{ required: true, message: '请输入核心目标' }]
+  if (props.type === 'title_formulas') {
+    result.core_goal = [{ required: true, message: '请输入核心目标' }]
+    result.compatible_methods = [{ required: true, type: 'array', min: 1, message: '至少选择一个核心手法' }]
+  }
   if (props.type === 'content_formulas') {
     result.structure_schema = [{ required: true, type: 'array', min: 1, message: '至少添加一个正文段落' }]
+    result.compatible_methods = [{ required: true, type: 'array', min: 1, message: '至少选择一个核心手法' }]
   }
   return result
 })
@@ -171,7 +175,7 @@ const submit = async () => {
         <a-form-item label="适用场景">
           <a-select v-model:value="form.suitable_scenes" mode="tags" placeholder="输入场景后按回车" />
         </a-form-item>
-        <a-form-item label="兼容创作手法">
+        <a-form-item label="兼容创作手法" name="compatible_methods">
           <a-select v-model:value="form.compatible_methods" mode="multiple" placeholder="选择至少一个核心手法">
             <a-select-option v-for="item in methodOptions" :key="item.code" :value="item.code">{{ item.code }} · {{ item.name }}</a-select-option>
           </a-select>
@@ -201,7 +205,7 @@ const submit = async () => {
             <a-button block @click="addStructureSection"><Plus :size="15" />添加段落</a-button>
           </div>
         </a-form-item>
-        <a-form-item label="兼容创作手法">
+        <a-form-item label="兼容创作手法" name="compatible_methods">
           <a-select v-model:value="form.compatible_methods" mode="multiple" placeholder="选择至少一个核心手法">
             <a-select-option v-for="item in methodOptions" :key="item.code" :value="item.code">{{ item.code }} · {{ item.name }}</a-select-option>
           </a-select>

@@ -107,7 +107,7 @@ const loadVersion = async (versionId) => {
     const response = await contentApi.getAdminRuleBundle(versionId)
     selectedVersionId.value = versionId
     ruleBundle.value = response.bundle
-    validation.value = null
+    validation.value = response.validation || null
     searchText.value = ''
     markSaved()
   } finally {

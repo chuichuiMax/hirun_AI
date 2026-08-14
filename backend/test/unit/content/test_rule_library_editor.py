@@ -2,9 +2,10 @@ from copy import deepcopy
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from yuxi.content.rules import BODY_FORMULAS, COMBINATION_RULES, METHODS, TITLE_FORMULAS
-from yuxi.content.schemas import RuleBundleUpdate
+from yuxi.content.schemas import CreationMethodInput, RuleBundleUpdate
 from yuxi.services.content_service import normalize_rule_bundle, validate_rule_bundle_for_publish
 
 
@@ -62,3 +63,8 @@ def test_rule_bundle_normalization_rejects_duplicate_codes():
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail["error"]["code"] == "CONTENT_RULE_CODE_DUPLICATED"
+
+
+def test_rule_inputs_reject_whitespace_only_required_text():
+    with pytest.raises(ValidationError):
+        CreationMethodInput(code="M99", name="   ", principle="有效原则")

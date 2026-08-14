@@ -40,6 +40,12 @@ async def test_rule_draft_editing_isolated_from_published_version(test_client, a
         assert create_response.status_code == 200, create_response.text
         draft = create_response.json()["bundle"]
         draft_id = draft["version"]["id"]
+        draft_bundle_response = await test_client.get(
+            f"/api/content/admin/rules/{draft_id}/bundle",
+            headers=admin_headers,
+        )
+        assert draft_bundle_response.status_code == 200, draft_bundle_response.text
+        assert draft_bundle_response.json()["validation"]["errors"] == []
         draft["methods"].append(
             {
                 "code": "M99",

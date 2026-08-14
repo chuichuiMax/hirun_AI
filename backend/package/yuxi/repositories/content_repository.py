@@ -24,6 +24,7 @@ from yuxi.storage.postgres.models_content import (
 )
 from yuxi.utils.datetime_utils import format_utc_datetime, utc_now_naive
 
+
 def _method_dict(item: CreationMethod) -> dict[str, Any]:
     return {
         "id": item.id,
