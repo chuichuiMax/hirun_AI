@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.storage.postgres.models_business import User
@@ -144,30 +144,25 @@ class ContentRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_rule_bundle(self, version_id: str) -> dict[str, Any] | None:
+    async def get_rule_bundle(self, version_id: str, *, include_disabled: bool = False) -> dict[str, Any] | None:
         version = await self.get_rule_version(version_id)
         if version is None:
             return None
+        method_query = select(CreationMethod).where(CreationMethod.version_id == version_id)
+        title_query = select(TitleFormula).where(TitleFormula.version_id == version_id)
+        content_query = select(ContentFormula).where(ContentFormula.version_id == version_id)
+        if not include_disabled:
+            method_query = method_query.where(CreationMethod.enabled.is_(True))
+            title_query = title_query.where(TitleFormula.enabled.is_(True))
+            content_query = content_query.where(ContentFormula.enabled.is_(True))
         methods = (
-            await self.db.execute(
-                select(CreationMethod)
-                .where(CreationMethod.version_id == version_id, CreationMethod.enabled.is_(True))
-                .order_by(CreationMethod.sort_order)
-            )
+            await self.db.execute(method_query.order_by(CreationMethod.sort_order))
         ).scalars()
         title_formulas = (
-            await self.db.execute(
-                select(TitleFormula)
-                .where(TitleFormula.version_id == version_id, TitleFormula.enabled.is_(True))
-                .order_by(TitleFormula.sort_order)
-            )
+            await self.db.execute(title_query.order_by(TitleFormula.sort_order))
         ).scalars()
         content_formulas = (
-            await self.db.execute(
-                select(ContentFormula)
-                .where(ContentFormula.version_id == version_id, ContentFormula.enabled.is_(True))
-                .order_by(ContentFormula.sort_order)
-            )
+            await self.db.execute(content_query.order_by(ContentFormula.sort_order))
         ).scalars()
         combinations = (
             await self.db.execute(
@@ -202,11 +197,129 @@ class ContentRepository:
                 "version": item.version,
                 "status": item.status,
                 "changelog": item.changelog,
+                "created_by": item.created_by,
                 "created_at": format_utc_datetime(item.created_at),
                 "published_at": format_utc_datetime(item.published_at),
             }
             for item in items
         ]
+
+    async def get_platform_rule_draft(self) -> ContentRuleVersion | None:
+        result = await self.db.execute(
+            select(ContentRuleVersion)
+            .where(ContentRuleVersion.status == "draft", ContentRuleVersion.tenant_id.is_(None))
+            .order_by(ContentRuleVersion.version.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def next_platform_rule_version(self) -> int:
+        current = await self.db.execute(
+            select(func.coalesce(func.max(ContentRuleVersion.version), 0)).where(
+                ContentRuleVersion.tenant_id.is_(None)
+            )
+        )
+        return int(current.scalar_one()) + 1
+
+    async def create_rule_version(
+        self,
+        *,
+        version_id: str,
+        version: int,
+        changelog: str,
+        created_by: str,
+    ) -> ContentRuleVersion:
+        item = ContentRuleVersion(
+            id=version_id,
+            tenant_id=None,
+            version=version,
+            status="draft",
+            changelog=changelog,
+            created_by=created_by,
+        )
+        self.db.add(item)
+        await self.db.flush()
+        return item
+
+    async def replace_rule_bundle(self, version_id: str, bundle: dict[str, Any]) -> None:
+        for model in (ContentCombinationRule, ContentFormula, TitleFormula, CreationMethod):
+            await self.db.execute(delete(model).where(model.version_id == version_id))
+
+        for sort_order, item in enumerate(bundle.get("methods") or []):
+            self.db.add(
+                CreationMethod(
+                    id=f"crm_{uuid.uuid4().hex}",
+                    version_id=version_id,
+                    code=item["code"],
+                    name=item["name"],
+                    method_type=item["method_type"],
+                    principle=item["principle"],
+                    suitable_scenes=item.get("suitable_scenes") or [],
+                    sentence_patterns=item.get("sentence_patterns") or [],
+                    tag_schema=item.get("tag_schema") or {},
+                    variable_schema=item.get("variable_schema") or [],
+                    risk_rules=item.get("risk_rules") or [],
+                    enabled=item.get("enabled", True),
+                    sort_order=sort_order,
+                )
+            )
+        for sort_order, item in enumerate(bundle.get("title_formulas") or []):
+            self.db.add(
+                TitleFormula(
+                    id=f"ctf_{uuid.uuid4().hex}",
+                    version_id=version_id,
+                    code=item["code"],
+                    name=item["name"],
+                    suitable_scenes=item.get("suitable_scenes") or [],
+                    core_goal=item["core_goal"],
+                    reference_examples=item.get("reference_examples") or [],
+                    variable_schema=item.get("variable_schema") or [],
+                    compatible_methods=item.get("compatible_methods") or [],
+                    risk_rules=item.get("risk_rules") or [],
+                    enabled=item.get("enabled", True),
+                    sort_order=sort_order,
+                )
+            )
+        for sort_order, item in enumerate(bundle.get("content_formulas") or []):
+            self.db.add(
+                ContentFormula(
+                    id=f"cbf_{uuid.uuid4().hex}",
+                    version_id=version_id,
+                    code=item["code"],
+                    name=item["name"],
+                    industry_aliases=item.get("industry_aliases") or {},
+                    compatible_methods=item.get("compatible_methods") or [],
+                    suitable_scenes=item.get("suitable_scenes") or [],
+                    business_pains=item.get("business_pains") or [],
+                    structure_schema=item.get("structure_schema") or [],
+                    reference_examples=item.get("reference_examples") or [],
+                    required_variables=item.get("required_variables") or [],
+                    output_schema=item.get("output_schema") or {},
+                    risk_rules=item.get("risk_rules") or [],
+                    enabled=item.get("enabled", True),
+                    sort_order=sort_order,
+                )
+            )
+        for item in bundle.get("combination_rules") or []:
+            self.db.add(
+                ContentCombinationRule(
+                    id=f"ccr_{uuid.uuid4().hex}",
+                    version_id=version_id,
+                    content_goal=item["content_goal"],
+                    methods=item.get("methods") or [],
+                    title_formula_codes=item.get("title_formula_codes") or [],
+                    content_formula_code=item["content_formula_code"],
+                    compatibility=item.get("compatibility", "compatible"),
+                    priority=item.get("priority", 0),
+                    conditions=item.get("conditions") or {},
+                    recommendation_reason=item.get("recommendation_reason") or "",
+                )
+            )
+        await self.db.flush()
+
+    async def delete_rule_version(self, version_id: str) -> None:
+        await self.db.execute(delete(ContentRuleVersion).where(ContentRuleVersion.id == version_id))
+        await self.db.flush()
 
     async def get_template(self, template_id: str) -> IndustryTemplateVersion | None:
         result = await self.db.execute(

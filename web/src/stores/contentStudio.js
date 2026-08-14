@@ -45,6 +45,13 @@ const parseSse = async (response, onEvent) => {
   dispatch()
 }
 
+const createClientRequestId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export const useContentStudioStore = defineStore('contentStudio', () => {
   const bootstrap = ref(null)
   const task = ref(null)
@@ -211,7 +218,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     runEvents.value = []
     lastRunSeq = '0-0'
     const response = await contentApi.createRun(task.value.id, {
-      request_id: crypto.randomUUID(),
+      request_id: createClientRequestId(),
       model_spec: modelSpec || null
     })
     currentRun.value = response
@@ -223,7 +230,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     if (!currentRun.value?.run_id) return
     interrupt.value = null
     const response = await contentApi.resumeRun(currentRun.value.run_id, {
-      request_id: crypto.randomUUID(),
+      request_id: createClientRequestId(),
       resume
     })
     currentRun.value = response
@@ -247,7 +254,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   async function retryNode(nodeId, modelSpec = null) {
     if (!currentRun.value?.run_id) return
     const response = await contentApi.retryNode(currentRun.value.run_id, {
-      request_id: crypto.randomUUID(),
+      request_id: createClientRequestId(),
       node_id: nodeId,
       model_spec: modelSpec || null
     })

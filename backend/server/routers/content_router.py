@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,8 @@ from yuxi.content.schemas import (
     ContentRunResume,
     ContentTaskCreate,
     ContentTaskUpdate,
+    RuleBundleUpdate,
+    RuleDraftCreate,
     StrategySelection,
     StrategyValidateRequest,
     RuleVersionAction,
@@ -45,6 +47,9 @@ from yuxi.services.content_service import (
     update_content_task,
     validate_content_strategy,
     activate_content_rule_version,
+    create_content_rule_draft,
+    discard_content_rule_draft,
+    save_content_rule_draft,
 )
 from yuxi.storage.postgres.models_business import User
 
@@ -311,6 +316,47 @@ async def list_rule_versions(
 ):
     del current_user
     return {"items": await ContentRepository(db).list_rule_versions()}
+
+
+@content.get("/admin/rules/{version_id}/bundle")
+async def get_admin_rule_bundle(
+    version_id: str,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    del current_user
+    bundle = await ContentRepository(db).get_rule_bundle(version_id, include_disabled=True)
+    if bundle is None:
+        raise HTTPException(status_code=404, detail="规则版本不存在")
+    return {"bundle": bundle}
+
+
+@content.post("/admin/rules/drafts")
+async def create_rule_draft(
+    payload: RuleDraftCreate,
+    current_user: User = Depends(get_superadmin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_content_rule_draft(db, current_user, payload)
+
+
+@content.put("/admin/rules/{version_id}/bundle")
+async def save_rule_draft(
+    version_id: str,
+    payload: RuleBundleUpdate,
+    current_user: User = Depends(get_superadmin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await save_content_rule_draft(db, current_user, version_id, payload)
+
+
+@content.delete("/admin/rules/{version_id}")
+async def discard_rule_draft(
+    version_id: str,
+    current_user: User = Depends(get_superadmin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await discard_content_rule_draft(db, current_user, version_id)
 
 
 @content.post("/admin/rules/{version_id}/publish")

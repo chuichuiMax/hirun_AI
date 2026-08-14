@@ -20,6 +20,8 @@ from yuxi.content.schemas import (
     ContentRunResume,
     ContentTaskCreate,
     ContentTaskUpdate,
+    RuleBundleUpdate,
+    RuleDraftCreate,
     StrategySelection,
     StrategyValidateRequest,
 )
@@ -55,6 +57,173 @@ def _validate_model_spec(model_spec: str | None) -> str | None:
     if not info or info.model_type != "chat":
         raise _content_error(422, "CONTENT_MODEL_UNAVAILABLE", f"未找到可用聊天模型：{normalized}")
     return normalized
+
+
+def _clean_list(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value.strip() for value in values if value and value.strip()))
+
+
+def normalize_rule_bundle(payload: RuleBundleUpdate) -> dict[str, Any]:
+    bundle = payload.model_dump()
+    bundle["changelog"] = bundle["changelog"].strip()
+    list_fields = {
+        "methods": ("suitable_scenes", "sentence_patterns", "variable_schema", "risk_rules"),
+        "title_formulas": (
+            "suitable_scenes",
+            "reference_examples",
+            "variable_schema",
+            "compatible_methods",
+            "risk_rules",
+        ),
+        "content_formulas": (
+            "compatible_methods",
+            "suitable_scenes",
+            "business_pains",
+            "structure_schema",
+            "reference_examples",
+            "required_variables",
+            "risk_rules",
+        ),
+        "combination_rules": ("methods", "title_formula_codes"),
+    }
+    for section, fields in list_fields.items():
+        for index, item in enumerate(bundle[section]):
+            for field in fields:
+                item[field] = _clean_list(item[field])
+            if "code" in item:
+                item["code"] = item["code"].strip().upper()
+            if section == "combination_rules":
+                item["content_goal"] = item["content_goal"].strip().lower()
+                item["content_formula_code"] = item["content_formula_code"].strip().upper()
+                item["methods"] = [code.upper() for code in item["methods"]]
+                item["title_formula_codes"] = [code.upper() for code in item["title_formula_codes"]]
+            elif "compatible_methods" in item:
+                item["compatible_methods"] = [code.upper() for code in item["compatible_methods"]]
+            item["sort_order"] = index
+
+    for section in ("methods", "title_formulas", "content_formulas"):
+        codes = [item["code"] for item in bundle[section]]
+        duplicate_codes = sorted({code for code in codes if codes.count(code) > 1})
+        if duplicate_codes:
+            raise _content_error(
+                422,
+                "CONTENT_RULE_CODE_DUPLICATED",
+                f"{section} 存在重复编码：{', '.join(duplicate_codes)}",
+                section=section,
+                codes=duplicate_codes,
+            )
+    return bundle
+
+
+def validate_rule_bundle_for_publish(bundle: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
+    errors: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+
+    methods = {item["code"]: item for item in bundle.get("methods") or [] if item.get("enabled", True)}
+    core_methods = {code for code, item in methods.items() if item.get("method_type") == "core"}
+    titles = {item["code"]: item for item in bundle.get("title_formulas") or [] if item.get("enabled", True)}
+    bodies = {item["code"]: item for item in bundle.get("content_formulas") or [] if item.get("enabled", True)}
+
+    def add_error(code: str, message: str, path: str) -> None:
+        errors.append({"code": code, "message": message, "path": path})
+
+    if not core_methods:
+        add_error("METHOD_REQUIRED", "至少保留一个已启用的核心创作手法", "methods")
+    if "S01" not in methods:
+        add_error("SCENE_ENHANCER_REQUIRED", "系统工作流依赖已启用的 S01 场景增强", "methods.S01")
+    if not titles:
+        add_error("TITLE_FORMULA_REQUIRED", "至少保留一个已启用的标题公式", "title_formulas")
+    if not bodies:
+        add_error("CONTENT_FORMULA_REQUIRED", "至少保留一个已启用的正文公式", "content_formulas")
+
+    for code, item in titles.items():
+        compatible = set(item.get("compatible_methods") or [])
+        missing = compatible - core_methods
+        if not compatible:
+            add_error("TITLE_METHOD_REQUIRED", f"标题公式 {code} 至少关联一个核心手法", f"title_formulas.{code}")
+        elif missing:
+            add_error(
+                "TITLE_METHOD_INVALID",
+                f"标题公式 {code} 引用了不可用手法：{', '.join(sorted(missing))}",
+                f"title_formulas.{code}.compatible_methods",
+            )
+
+    for code, item in bodies.items():
+        compatible = set(item.get("compatible_methods") or [])
+        missing = compatible - core_methods
+        if not item.get("structure_schema"):
+            add_error("CONTENT_STRUCTURE_REQUIRED", f"正文公式 {code} 至少包含一个结构段落", f"content_formulas.{code}")
+        if not compatible:
+            add_error("CONTENT_METHOD_REQUIRED", f"正文公式 {code} 至少关联一个核心手法", f"content_formulas.{code}")
+        elif missing:
+            add_error(
+                "CONTENT_METHOD_INVALID",
+                f"正文公式 {code} 引用了不可用手法：{', '.join(sorted(missing))}",
+                f"content_formulas.{code}.compatible_methods",
+            )
+
+    covered_goals: set[str] = set()
+    valid_goals = {item["code"] for item in CONTENT_GOALS}
+    for index, item in enumerate(bundle.get("combination_rules") or []):
+        path = f"combination_rules.{index}"
+        goal = item.get("content_goal")
+        if goal not in valid_goals:
+            add_error("COMBINATION_GOAL_INVALID", f"组合规则使用了无效内容目标：{goal}", f"{path}.content_goal")
+        else:
+            covered_goals.add(goal)
+        missing_methods = set(item.get("methods") or []) - core_methods
+        missing_titles = set(item.get("title_formula_codes") or []) - set(titles)
+        body_code = item.get("content_formula_code")
+        if not item.get("methods"):
+            add_error("COMBINATION_METHOD_REQUIRED", "组合规则至少选择一个核心手法", f"{path}.methods")
+        elif missing_methods:
+            add_error(
+                "COMBINATION_METHOD_INVALID",
+                f"组合规则引用了不可用手法：{', '.join(sorted(missing_methods))}",
+                f"{path}.methods",
+            )
+        if not item.get("title_formula_codes"):
+            add_error("COMBINATION_TITLE_REQUIRED", "组合规则至少选择一个标题公式", f"{path}.title_formula_codes")
+        elif missing_titles:
+            add_error(
+                "COMBINATION_TITLE_INVALID",
+                f"组合规则引用了不可用标题公式：{', '.join(sorted(missing_titles))}",
+                f"{path}.title_formula_codes",
+            )
+        if body_code not in bodies:
+            add_error(
+                "COMBINATION_CONTENT_INVALID",
+                f"组合规则引用了不可用正文公式：{body_code}",
+                f"{path}.content_formula_code",
+            )
+        selected_methods = set(item.get("methods") or [])
+        for title_code in item.get("title_formula_codes") or []:
+            title = titles.get(title_code)
+            if title and not selected_methods.intersection(title.get("compatible_methods") or []):
+                add_error(
+                    "COMBINATION_TITLE_METHOD_MISMATCH",
+                    f"组合规则的手法与标题公式 {title_code} 不兼容",
+                    f"{path}.title_formula_codes",
+                )
+        body = bodies.get(body_code)
+        if body and not selected_methods.intersection(body.get("compatible_methods") or []):
+            add_error(
+                "COMBINATION_CONTENT_METHOD_MISMATCH",
+                f"组合规则的手法与正文公式 {body_code} 不兼容",
+                f"{path}.content_formula_code",
+            )
+
+    for goal in CONTENT_GOALS:
+        if goal["code"] not in covered_goals:
+            add_error(
+                "COMBINATION_GOAL_UNCOVERED",
+                f"内容目标“{goal['name']}”至少需要一条组合规则",
+                "combination_rules",
+            )
+
+    if not bundle.get("combination_rules"):
+        warnings.append({"code": "COMBINATION_EMPTY", "message": "尚未配置组合矩阵", "path": "combination_rules"})
+    return {"errors": errors, "warnings": warnings}
 
 
 def _task_name(template_name: str, content_goal: str) -> str:
@@ -585,6 +754,100 @@ async def regenerate_content_artifact(
     )
 
 
+async def create_content_rule_draft(
+    db: AsyncSession,
+    user: User,
+    payload: RuleDraftCreate,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    current = await repo.get_published_rule_version_for_update()
+    existing = await repo.get_platform_rule_draft()
+    if existing:
+        raise _content_error(
+            409,
+            "CONTENT_RULE_DRAFT_EXISTS",
+            f"已有规则草稿 v{existing.version}，请继续编辑或先放弃该草稿",
+            version_id=existing.id,
+        )
+    if current is None or current.id != payload.source_version_id:
+        raise _content_error(409, "CONTENT_RULE_SOURCE_INVALID", "只能基于当前已发布的平台规则创建草稿")
+    source = current
+    source_bundle = await repo.get_rule_bundle(source.id, include_disabled=True)
+    if source_bundle is None:
+        raise _content_error(404, "CONTENT_RULE_VERSION_MISSING", "源规则版本不存在")
+
+    version = await repo.next_platform_rule_version()
+    version_id = f"content-rules-platform-v{version}"
+    changelog = payload.changelog.strip() or f"基于 v{source.version} 创建运营编辑草稿"
+    await repo.create_rule_version(
+        version_id=version_id,
+        version=version,
+        changelog=changelog,
+        created_by=str(user.uid),
+    )
+    await repo.replace_rule_bundle(version_id, source_bundle)
+    await repo.track(
+        "content_rule_draft_created",
+        uid=str(user.uid),
+        properties={"version_id": version_id, "version": version, "source_version_id": source.id},
+    )
+    await db.commit()
+    bundle = await repo.get_rule_bundle(version_id, include_disabled=True)
+    return {"bundle": bundle, "validation": validate_rule_bundle_for_publish(bundle or {})}
+
+
+async def save_content_rule_draft(
+    db: AsyncSession,
+    user: User,
+    version_id: str,
+    payload: RuleBundleUpdate,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    version = await repo.get_rule_version_for_update(version_id)
+    if version is None or version.tenant_id is not None:
+        raise _content_error(404, "CONTENT_RULE_VERSION_MISSING", "平台规则版本不存在")
+    if version.status != "draft":
+        raise _content_error(409, "CONTENT_RULE_VERSION_IMMUTABLE", "已发布或已归档规则不可直接修改，请创建新草稿")
+
+    bundle = normalize_rule_bundle(payload)
+    await repo.replace_rule_bundle(version.id, bundle)
+    version.changelog = bundle["changelog"] or version.changelog
+    validation = validate_rule_bundle_for_publish(bundle)
+    await repo.track(
+        "content_rule_draft_saved",
+        uid=str(user.uid),
+        properties={
+            "version_id": version.id,
+            "version": version.version,
+            "method_count": len(bundle["methods"]),
+            "title_formula_count": len(bundle["title_formulas"]),
+            "content_formula_count": len(bundle["content_formulas"]),
+            "combination_count": len(bundle["combination_rules"]),
+            "validation_error_count": len(validation["errors"]),
+        },
+    )
+    await db.commit()
+    saved = await repo.get_rule_bundle(version.id, include_disabled=True)
+    return {"bundle": saved, "validation": validation}
+
+
+async def discard_content_rule_draft(db: AsyncSession, user: User, version_id: str) -> dict[str, bool]:
+    repo = ContentRepository(db)
+    version = await repo.get_rule_version_for_update(version_id)
+    if version is None or version.tenant_id is not None:
+        raise _content_error(404, "CONTENT_RULE_VERSION_MISSING", "平台规则版本不存在")
+    if version.status != "draft":
+        raise _content_error(409, "CONTENT_RULE_VERSION_IMMUTABLE", "只能放弃尚未发布的规则草稿")
+    await repo.track(
+        "content_rule_draft_discarded",
+        uid=str(user.uid),
+        properties={"version_id": version.id, "version": version.version},
+    )
+    await repo.delete_rule_version(version.id)
+    await db.commit()
+    return {"discarded": True}
+
+
 async def activate_content_rule_version(
     db: AsyncSession,
     user: User,
@@ -601,6 +864,16 @@ async def activate_content_rule_version(
         raise _content_error(409, "CONTENT_RULE_VERSION_NOT_ROLLBACKABLE", "只能回滚到已发布过的规则版本")
     if not rollback and target.status not in {"draft", "archived", "published"}:
         raise _content_error(409, "CONTENT_RULE_VERSION_NOT_PUBLISHABLE", "当前规则版本不可发布")
+
+    bundle = await repo.get_rule_bundle(target.id, include_disabled=True)
+    validation = validate_rule_bundle_for_publish(bundle or {})
+    if validation["errors"]:
+        raise _content_error(
+            409,
+            "CONTENT_RULE_VERSION_INVALID",
+            "规则校验未通过，请修正后再发布",
+            validation=validation,
+        )
 
     current = await repo.get_published_rule_version_for_update()
     if current and current.id != target.id:

@@ -50,6 +50,12 @@ export const contentApi = {
   listArtifactVersions: (artifactId) =>
     apiGet(`/api/content/artifacts/${artifactId}/versions`),
   listRuleVersions: () => apiGet('/api/content/admin/rules'),
+  getAdminRuleBundle: (versionId) =>
+    apiGet(`/api/content/admin/rules/${versionId}/bundle`),
+  createRuleDraft: (payload) => apiPost('/api/content/admin/rules/drafts', payload),
+  saveRuleDraft: (versionId, payload) =>
+    apiPut(`/api/content/admin/rules/${versionId}/bundle`, payload),
+  discardRuleDraft: (versionId) => apiDelete(`/api/content/admin/rules/${versionId}`),
   publishRuleVersion: (versionId, payload = {}) =>
     apiPost(`/api/content/admin/rules/${versionId}/publish`, payload),
   rollbackRuleVersion: (versionId, payload = {}) =>
