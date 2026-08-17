@@ -566,7 +566,10 @@ async def test_interrupted_publish_is_not_automatically_retried(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_multi_account_failure_does_not_block_other_accounts(monkeypatch: pytest.MonkeyPatch):
+async def test_multi_account_failure_does_not_block_other_accounts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(XiaohongshuAccount.__table__.create)
@@ -611,6 +614,7 @@ async def test_multi_account_failure_does_not_block_other_accounts(monkeypatch: 
             }
 
         monkeypatch.setenv("XHS_BROWSER_GATEWAY_URL", "http://gateway.test")
+        monkeypatch.setenv("XHS_RUNTIME_ROOT", str(tmp_path / "xiaohongshu"))
         monkeypatch.setattr(
             xiaohongshu_worker,
             "pg_manager",
