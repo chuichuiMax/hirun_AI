@@ -374,15 +374,29 @@ async def create_cover_generate_job(
         if (mask.image_width, mask.image_height) != (source.image_width, source.image_height):
             raise _error(422, "COVER_MASK_SIZE_MISMATCH", "蒙版尺寸必须与原图一致")
     prompt, artifact = await _content_prompt(db, user, payload.content_task_id, payload.prompt)
+    title = payload.title.strip() or (artifact.title.strip()[:60] if artifact else "")
     mode_guidance = {
-        "text_to_image": "输出高点击率的小红书视觉封面，构图简洁、主体突出、中文标题清晰，不要水印或平台 Logo。",
+        "text_to_image": "生成高点击率的小红书封面底图，构图简洁、主体突出、层次清晰。",
         "image_to_image": "保留原图主体身份与关键细节，优化构图、光影和小红书封面氛围，不要凭空替换主体。",
-        "multi_reference": "综合所有参考图；保留原图主体，借鉴模板的布局与视觉语言，但不要复制水印、Logo 或无关文字。",
+        "multi_reference": "综合所有参考图；保留原图主体，借鉴模板的布局与视觉语言，但不要照搬其中的文字或品牌元素。",
         "mask": "只优化蒙版指定区域，未指定区域保持原图结构与主体一致。",
     }
-    prompt = f"{mode_guidance[payload.mode]}\n\n{prompt}"
+    output_guidance = (
+        "输出完整的封面视觉底图，左上区域预留干净、低细节的标题安全区。"
+        "画面内不要生成任何文字、数字、字母、水印、平台 Logo 或伪造品牌标识；"
+        "系统会在生成后叠加准确的中文标题。"
+    )
+    prompt = f"{mode_guidance[payload.mode]}\n{output_guidance}\n\n{prompt}"
+    default_negative_prompt = (
+        "乱码文字、错误汉字、随机字母、数字、水印、平台 Logo、伪造品牌标识、"
+        "低清晰度、主体变形、过度锐化、杂乱背景"
+    )
     request = payload.model_dump()
     request["prompt"] = prompt
+    request["title"] = title
+    request["negative_prompt"] = "，".join(
+        item for item in ((payload.negative_prompt or "").strip(), default_negative_prompt) if item
+    )
     job, deduplicated = await _create_job(
         db,
         user,

@@ -40,11 +40,11 @@ cp .env.template .env.prod
 
 部署脚本会在拉取镜像之前校验上述生产凭据和 HTTPS 地址，缺失、仍为公开默认值或长度不足时立即终止，且不会把密钥内容输出到日志。部署完成后除本机 API 与内部浏览器网关外，还会通过 `PUBLIC_BASE_URL` 验证公网 TLS 入口；三者任一失败都会触发既定回滚流程。
 
-首次配置 image2 中转站后，应先在测试环境执行真实四模式验收。该命令会消耗中转站额度，只有显式设置开关才会运行；容器内结果图与不含密钥的任务清单保存到 `/app/saves/image2-live-smoke`，开发 Compose 对应宿主机目录为 `docker/volumes/yuxi/image2-live-smoke`：
+首次配置 image2 中转站后，应先在测试环境执行真实四模式及 Worker/MinIO 闭环验收。`IMAGE2_MODEL` 必须是中转站模型列表中的图片模型 ID，不能误填 `high` 等质量参数。该命令会消耗中转站额度，只有显式设置开关才会运行；容器内结果图与不含密钥的任务清单保存到 `/app/saves/image2-live-smoke`，开发 Compose 对应宿主机目录为 `docker/volumes/yuxi/image2-live-smoke`：
 
 ```bash
 docker compose exec -e RUN_IMAGE2_LIVE_TESTS=1 api \
-  uv run --group test pytest test/e2e/test_image2_live.py -m e2e
+  pytest test/e2e/test_image2_live.py -m e2e
 ```
 
 宝塔 Nginx 使用项目内的 `scripts/nginx/yuxi-boyun.conf` 扩展时，应确保该扩展同时包含在 HTTP 与 HTTPS 虚拟主机中。扩展会将 HTTP 请求以 308 跳转到 HTTPS，并设置 HSTS、`nosniff`、同源嵌入与 Referrer Policy；应用发布前应先执行 `nginx -t`，确认通过后再单独 reload Nginx。部署脚本不会擅自修改或重载宿主机 Nginx。

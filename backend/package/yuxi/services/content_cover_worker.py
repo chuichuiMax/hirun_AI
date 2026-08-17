@@ -10,7 +10,7 @@ from typing import Any
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from yuxi.content_cover.image2_client import Image2Client, Image2Error
-from yuxi.content_cover.renderer import CoverRenderError, render_cover
+from yuxi.content_cover.renderer import CoverRenderError, apply_title_overlay, render_cover
 from yuxi.content_cover.schemas import Image2Input, Image2Request, Image2Submission
 from yuxi.content_cover.templates import COVER_SIZES
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
@@ -90,7 +90,12 @@ async def _download_asset(asset: ContentCoverAsset) -> bytes:
         raise RuntimeError(f"封面素材读取失败：{asset.id}") from exc
 
 
-def _normalize_output(data: bytes, *, target_size: tuple[int, int] | None = None) -> tuple[bytes, int, int]:
+def _normalize_output(
+    data: bytes,
+    *,
+    target_size: tuple[int, int] | None = None,
+    title: str = "",
+) -> tuple[bytes, int, int]:
     if len(data) > MAX_OUTPUT_BYTES:
         raise Image2Error("IMAGE2_IMAGE_TOO_LARGE", "image2 返回的图片超过 30 MB")
     try:
@@ -107,6 +112,8 @@ def _normalize_output(data: bytes, *, target_size: tuple[int, int] | None = None
             image.load()
             if target_size and image.size != target_size:
                 image = ImageOps.fit(image, target_size, Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+            if title.strip():
+                image = apply_title_overlay(image, title)
             width, height = image.size
             output = io.BytesIO()
             image.save(output, format="PNG", optimize=True)
@@ -126,11 +133,16 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
         if requested_size is not None
         else None
     )
+    title = str((job.request_json or {}).get("title") or "").strip()
     try:
         async with pg_manager.get_async_session_context() as db:
             repo = ContentCoverRepository(db)
             for index, raw in enumerate(outputs):
-                normalized, width, height = _normalize_output(raw, target_size=target_size)
+                normalized, width, height = _normalize_output(
+                    raw,
+                    target_size=target_size,
+                    title=title,
+                )
                 asset_id = f"cca_{uuid.uuid4().hex}"
                 object_name = f"content-covers/{job.owner_uid}/{job.id}/output-{index + 1}.png"
                 uploaded = await get_minio_client().aupload_file(

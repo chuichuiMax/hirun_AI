@@ -97,6 +97,16 @@ def test_mask_generation_requires_one_source_and_mask():
         )
 
 
+def test_generation_title_is_limited_to_sixty_characters():
+    with pytest.raises(ValidationError):
+        CoverGenerateCreate(
+            mode="text_to_image",
+            title="封" * 61,
+            prompt="生成封面",
+            idempotency_key="request-1234",
+        )
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -162,6 +172,25 @@ def test_worker_normalizes_model_result_to_requested_cover_size():
     )
 
     with Image.open(io.BytesIO(normalized)) as result:
+        assert result.size == (1080, 1440)
+        assert result.format == "PNG"
+    assert (width, height) == (1080, 1440)
+
+
+def test_worker_adds_exact_title_overlay_after_model_output():
+    source = _image("#52677A", (640, 480))
+    without_title, _, _ = content_cover_worker._normalize_output(
+        source,
+        target_size=(1080, 1440),
+    )
+    with_title, width, height = content_cover_worker._normalize_output(
+        source,
+        target_size=(1080, 1440),
+        title="内容生产新方式",
+    )
+
+    assert with_title != without_title
+    with Image.open(io.BytesIO(with_title)) as result:
         assert result.size == (1080, 1440)
         assert result.format == "PNG"
     assert (width, height) == (1080, 1440)

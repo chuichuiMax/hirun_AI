@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import math
 from collections.abc import Sequence
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
@@ -13,18 +12,150 @@ class CoverRenderError(ValueError):
     pass
 
 
-def _font(size: int) -> ImageFont.ImageFont:
+def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
     candidates = (
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "C:/Windows/Fonts/msyh.ttc",
+        (
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "C:/Windows/Fonts/msyhbd.ttc",
+        )
+        if bold
+        else (
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "C:/Windows/Fonts/msyh.ttc",
+        )
     )
+    candidates = (*candidates, "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc")
     for path in candidates:
         try:
             return ImageFont.truetype(path, size=size)
         except OSError:
             continue
     return ImageFont.load_default()
+
+
+def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    left, _, right, _ = draw.textbbox((0, 0), text, font=font)
+    return right - left
+
+
+def _wrap_title(
+    draw: ImageDraw.ImageDraw,
+    title: str,
+    font: ImageFont.ImageFont,
+    *,
+    max_width: int,
+    max_lines: int = 3,
+) -> str:
+    lines: list[str] = []
+    truncated = False
+    paragraphs = title.splitlines() or [title]
+    for paragraph_index, paragraph in enumerate(paragraphs):
+        current = ""
+        for character in paragraph:
+            candidate = f"{current}{character}"
+            if current and _text_width(draw, candidate, font) > max_width:
+                lines.append(current.rstrip())
+                current = character.lstrip()
+                if len(lines) >= max_lines:
+                    truncated = True
+                    break
+            else:
+                current = candidate
+        if truncated:
+            break
+        if current or not paragraph:
+            lines.append(current.rstrip())
+        if len(lines) >= max_lines and paragraph_index < len(paragraphs) - 1:
+            truncated = True
+            break
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        truncated = True
+    if truncated and lines:
+        final_line = lines[-1].rstrip()
+        while final_line and _text_width(draw, f"{final_line}…", font) > max_width:
+            final_line = final_line[:-1]
+        lines[-1] = f"{final_line}…"
+    return "\n".join(lines)
+
+
+def _fit_title(
+    draw: ImageDraw.ImageDraw,
+    title: str,
+    *,
+    max_width: int,
+    max_height: int,
+    preferred_size: int,
+    minimum_size: int = 34,
+) -> tuple[ImageFont.ImageFont, str, int, int, int]:
+    for size in range(preferred_size, minimum_size - 1, -2):
+        font = _font(size, bold=True)
+        spacing = max(8, size // 5)
+        text = _wrap_title(draw, title, font, max_width=max_width)
+        bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=spacing)
+        text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        if text_height <= max_height:
+            return font, text, text_width, text_height, spacing
+    font = _font(minimum_size, bold=True)
+    spacing = max(8, minimum_size // 5)
+    text = _wrap_title(draw, title, font, max_width=max_width)
+    bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=spacing)
+    return font, text, bbox[2] - bbox[0], bbox[3] - bbox[1], spacing
+
+
+def apply_title_overlay(image: Image.Image, title: str) -> Image.Image:
+    """Add a deterministic, readable title to an image2-generated cover."""
+    title = title.strip()
+    canvas = image.convert("RGBA")
+    if not title:
+        return canvas
+
+    width, height = canvas.size
+    margin = max(28, round(width * 0.055))
+    padding_x = max(26, round(width * 0.035))
+    padding_y = max(22, round(height * 0.018))
+    accent_width = max(7, round(width * 0.008))
+    panel_max_width = round(width * 0.87)
+    text_max_width = panel_max_width - padding_x * 2 - accent_width
+    text_max_height = round(height * 0.25) - padding_y * 2
+
+    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font, text, text_width, text_height, spacing = _fit_title(
+        draw,
+        title,
+        max_width=text_max_width,
+        max_height=text_max_height,
+        preferred_size=max(58, min(92, width // 12)),
+    )
+    panel_width = min(panel_max_width, text_width + padding_x * 2 + accent_width)
+    panel_height = text_height + padding_y * 2
+    left, top = margin, margin
+    right, bottom = left + panel_width, top + panel_height
+    radius = max(18, round(width * 0.024))
+    shadow_offset = max(7, round(width * 0.009))
+
+    draw.rounded_rectangle(
+        (left + shadow_offset, top + shadow_offset, right + shadow_offset, bottom + shadow_offset),
+        radius=radius,
+        fill=(0, 0, 0, 48),
+    )
+    draw.rounded_rectangle((left, top, right, bottom), radius=radius, fill=(250, 248, 243, 238))
+    accent_left = left + padding_x // 2
+    draw.rounded_rectangle(
+        (accent_left, top + padding_y, accent_left + accent_width, bottom - padding_y),
+        radius=accent_width // 2,
+        fill=(211, 66, 54, 255),
+    )
+    draw.multiline_text(
+        (left + padding_x + accent_width, top + padding_y),
+        text,
+        fill=(24, 28, 31, 255),
+        font=font,
+        spacing=spacing,
+    )
+    return Image.alpha_composite(canvas, overlay)
 
 
 def _open_image(data: bytes, *, max_size: tuple[int, int]) -> Image.Image:
@@ -171,16 +302,25 @@ def render_cover(
     title = str(options.get("title") or "").strip()
     if title:
         font_size = max(36, min(int(options.get("title_size", 62)), 96))
-        title_font = _font(font_size)
-        max_chars = max(5, math.floor((width - 120) / font_size))
-        lines = [title[index : index + max_chars] for index in range(0, len(title), max_chars)][:3]
-        text = "\n".join(lines)
-        bbox = draw.multiline_textbbox((0, 0), text, font=title_font, spacing=12)
-        box_width, box_height = bbox[2] - bbox[0] + 52, bbox[3] - bbox[1] + 42
+        title_font, text, text_width, text_height, spacing = _fit_title(
+            draw,
+            title,
+            max_width=width - 172,
+            max_height=round(height * 0.25),
+            preferred_size=font_size,
+            minimum_size=34,
+        )
+        box_width, box_height = text_width + 64, text_height + 48
         x = 42
         y = height - box_height - 42 if template_id in {"grid_3x3", "before_after"} else 42
         draw.rounded_rectangle((x, y, x + box_width, y + box_height), radius=20, fill=theme["surface"])
-        draw.multiline_text((x + 26, y + 18), text, fill=theme["foreground"], font=title_font, spacing=12)
+        draw.multiline_text(
+            (x + 32, y + 21),
+            text,
+            fill=theme["foreground"],
+            font=title_font,
+            spacing=spacing,
+        )
 
     output = io.BytesIO()
     canvas.convert("RGB").save(output, format="PNG", optimize=True)

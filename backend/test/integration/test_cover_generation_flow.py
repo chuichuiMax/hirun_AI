@@ -357,6 +357,7 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
                     "mode": "multi_reference",
                     "source_asset_ids": [uploaded["source"]],
                     "template_asset_id": uploaded["template"],
+                    "title": "新品通勤指南",
                     "prompt": "为新品生成轻复古小红书封面",
                     "size": "1080x1440",
                     "n": 1,
@@ -382,6 +383,9 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
         assert captured_request["request"].template_image is not None
         assert captured_request["idempotency_key"] == job_id
         assert "小红书" in captured_request["request"].prompt
+        assert "不要生成任何文字" in captured_request["request"].prompt
+        assert job.request_json["title"] == "新品通勤指南"
+        assert "乱码文字" in captured_request["request"].negative_prompt
 
         output_asset = next(item for item in assets if item["role"] == "output")
         result_bytes = await get_minio_client().adownload_file(

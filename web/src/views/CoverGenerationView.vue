@@ -127,6 +127,7 @@ function buildGeneratePayload() {
     source_asset_ids: sourceAssets.value.map((item) => item.id),
     template_asset_id: tab.value === 'template' ? templateAsset.value?.id : null,
     mask_asset_id: mode === 'mask' ? maskAsset.value?.id : null,
+    title: form.title,
     prompt: form.prompt,
     negative_prompt: form.negativePrompt || null,
     size: form.size,
@@ -337,7 +338,8 @@ onBeforeUnmount(() => {
             </label>
             <div v-else class="single-preview"><img :src="templateAsset.previewUrl" alt="模板图" /><button :disabled="store.isRunning" aria-label="移除模板图" @click="removeAsset(templateAsset, 'template')"><X :size="16" /></button></div>
           </div>
-          <label class="wide-field"><span>生成要求</span><textarea v-model="form.prompt" rows="5" maxlength="8000" placeholder="例如：轻复古生活方式封面，主体清晰，留出呼吸感；关联内容任务后会自动拼入标题、正文摘要与话题。" /></label>
+          <label class="wide-field"><span>封面标题 <small>推荐填写；留空时使用关联内容资产标题</small></span><input v-model="form.title" maxlength="60" placeholder="例如：内容生产新方式" /></label>
+          <label class="wide-field"><span>生成要求</span><textarea v-model="form.prompt" rows="5" maxlength="8000" placeholder="例如：轻复古生活方式，主体清晰，暖色自然光，左上留出呼吸感；关联内容任务后会自动拼入正文摘要与话题。" /></label>
           <label class="wide-field"><span>不希望出现</span><input v-model="form.negativePrompt" maxlength="4000" placeholder="例如：低清晰度、复杂水印、变形人物" /></label>
           <div class="form-grid compact">
             <label><span>生成数量</span><select v-model.number="form.count"><option :value="1">1 张</option><option :value="2">2 张</option><option :value="4">4 张</option></select></label>
@@ -439,6 +441,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--main-500); box-s
 .preview-stage img { width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: cover; overflow: hidden; border-radius: 4px; }
 .preview-stage > span { place-self: center; align-self: center; color: var(--gray-500); font-size: 12px; text-align: center; }
 .preview-stage > strong { position: absolute; z-index: 3; left: 14px; top: 14px; max-width: calc(100% - 28px); padding: 5px 8px; overflow: hidden; border-radius: 5px; color: var(--gray-1000); background: rgba(255, 255, 255, .9); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.preview-stage[data-layout='grid_3x3'] > strong, .preview-stage[data-layout='before_after'] > strong { top: auto; bottom: 14px; }
 .preview-stage[data-layout='grid_3x3'] { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
 .preview-stage[data-layout='split_vertical'], .preview-stage[data-layout='before_after'] { grid-template-columns: repeat(2, 1fr); }
 .preview-stage[data-layout='split_horizontal'] { grid-template-rows: repeat(2, 1fr); }

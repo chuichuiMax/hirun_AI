@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import os
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from PIL import Image, ImageDraw
+from sqlalchemy import delete, select
 
 from yuxi.content_cover.image2_client import Image2Client, Image2Config
 from yuxi.content_cover.schemas import Image2Input, Image2Request
+from yuxi.repositories.content_cover_repository import ContentCoverRepository
+from yuxi.services import content_cover_worker
+from yuxi.storage.minio.client import get_minio_client
+from yuxi.storage.postgres.manager import pg_manager
+from yuxi.storage.postgres.models_content import ContentCoverAsset, ContentCoverJob
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.e2e, pytest.mark.slow]
 
@@ -116,3 +124,135 @@ async def test_live_image2_modes(mode: str):
         ),
         encoding="utf-8",
     )
+
+
+async def test_live_worker_multi_reference_flow():
+    """Exercise the real relay through the same Worker/DB/MinIO path used by the UI."""
+    if os.getenv("RUN_IMAGE2_LIVE_TESTS", "").lower() not in {"1", "true", "yes"}:
+        pytest.skip("Set RUN_IMAGE2_LIVE_TESTS=1 to spend relay quota and run real image2 calls.")
+
+    config = Image2Config.from_env()
+    owner_uid = f"live_cover_{uuid.uuid4().hex}"
+    job_id = f"ccj_{uuid.uuid4().hex}"
+    stored_objects: list[tuple[str, str]] = []
+    pg_manager.initialize()
+    try:
+        async with pg_manager.get_async_session_context() as db:
+            repo = ContentCoverRepository(db)
+            asset_ids: dict[str, str] = {}
+            for role, data in (("source", _fixture_image()), ("template", _fixture_image(template=True))):
+                asset_id = f"cca_{uuid.uuid4().hex}"
+                object_name = f"content-covers/{owner_uid}/{asset_id}/image.png"
+                uploaded = await get_minio_client().aupload_file(
+                    bucket_name=os.getenv("CONTENT_COVER_BUCKET", "content-covers"),
+                    object_name=object_name,
+                    data=data,
+                    content_type="image/png",
+                )
+                stored_objects.append((uploaded.bucket_name, uploaded.object_name))
+                await repo.create_asset(
+                    id=asset_id,
+                    owner_uid=owner_uid,
+                    tenant_id=None,
+                    content_task_id=None,
+                    role=role,
+                    original_file_name=f"{role}.png",
+                    content_type="image/png",
+                    file_size=len(data),
+                    image_width=768,
+                    image_height=1024,
+                    sha256=hashlib.sha256(data).hexdigest(),
+                    bucket_name=uploaded.bucket_name,
+                    object_name=uploaded.object_name,
+                    metadata_json={"live_smoke": True},
+                )
+                asset_ids[role] = asset_id
+            await repo.create_job(
+                id=job_id,
+                owner_uid=owner_uid,
+                tenant_id=None,
+                content_task_id=None,
+                artifact_id=None,
+                parent_job_id=None,
+                mode="multi_reference",
+                status="queued",
+                model=config.model,
+                provider_task_id=None,
+                idempotency_key=f"live-worker-{uuid.uuid4().hex}",
+                request_json={
+                    "mode": "multi_reference",
+                    "source_asset_ids": [asset_ids["source"]],
+                    "template_asset_id": asset_ids["template"],
+                    "mask_asset_id": None,
+                    "title": "内容生产新方式",
+                    "prompt": (
+                        "根据原图和版式参考生成简洁的小红书产品封面底图，"
+                        "左上留白，不要生成文字、水印或平台 Logo。"
+                    ),
+                    "negative_prompt": "低清晰度、变形、复杂水印",
+                    "size": "1080x1440",
+                    "n": 1,
+                    "parameters": {},
+                },
+                result_json={},
+                progress=0,
+            )
+            await db.commit()
+
+        await content_cover_worker.process_content_cover_job({}, job_id)
+
+        async with pg_manager.get_async_session_context() as db:
+            job = await ContentCoverRepository(db).get_job(job_id)
+            assert job is not None
+            assert job.status == "succeeded", job.error_message
+            assert job.model == config.model
+            assert len(job.result_json.get("asset_ids") or []) == 1
+            output = (
+                await db.execute(
+                    select(ContentCoverAsset).where(
+                        ContentCoverAsset.id == job.result_json["asset_ids"][0],
+                        ContentCoverAsset.owner_uid == owner_uid,
+                    )
+                )
+            ).scalar_one()
+            assert (output.image_width, output.image_height) == (1080, 1440)
+            stored_objects.append((output.bucket_name, output.object_name))
+
+        result_bytes = await get_minio_client().adownload_file(output.bucket_name, output.object_name)
+        with Image.open(io.BytesIO(result_bytes)) as image:
+            image.load()
+            assert image.format == "PNG"
+            assert image.size == (1080, 1440)
+
+        evidence_root = Path(os.getenv("IMAGE2_LIVE_OUTPUT_DIR", "saves/image2-live-smoke"))
+        run_dir = evidence_root / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") / "worker_multi_reference"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "result-1.png").write_bytes(result_bytes)
+        (run_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "mode": "multi_reference",
+                    "model": config.model,
+                    "size": "1080x1440",
+                    "job_id": job_id,
+                    "provider_task_id": job.provider_task_id,
+                    "verified_at": datetime.now(UTC).isoformat(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    finally:
+        async with pg_manager.get_async_session_context() as db:
+            rows = (
+                await db.execute(select(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
+            ).scalars()
+            known_objects = {(item.bucket_name, item.object_name) for item in rows}
+            stored_objects.extend(known_objects)
+            await db.execute(delete(ContentCoverJob).where(ContentCoverJob.owner_uid == owner_uid))
+            await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
+            await db.commit()
+        for bucket_name, object_name in set(stored_objects):
+            await get_minio_client().adelete_file(bucket_name, object_name)
+        await pg_manager.close()

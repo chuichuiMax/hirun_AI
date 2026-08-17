@@ -38,6 +38,7 @@ class CoverGenerateCreate(BaseModel):
     source_asset_ids: list[str] = Field(default_factory=list, max_length=9)
     template_asset_id: str | None = None
     mask_asset_id: str | None = None
+    title: str = Field(default="", max_length=60)
     prompt: str = Field(default="", max_length=8000)
     negative_prompt: str | None = Field(default=None, max_length=4000)
     size: str = "1080x1440"
