@@ -69,16 +69,21 @@ jobs:
             -p 59000:9000 \
             minio/minio:RELEASE.2023-03-20T20-16-18Z \
             server /data --address :9000
+          docker run -d --name yuxi-ci-redis \
+            -p 56379:6379 \
+            redis:7-alpine
 
           for _ in $(seq 1 60); do
             if docker exec yuxi-ci-postgres pg_isready -U yuxi_ci -d yuxi_ci >/dev/null \
-              && curl -sf http://127.0.0.1:59000/minio/health/live >/dev/null; then
+              && curl -sf http://127.0.0.1:59000/minio/health/live >/dev/null \
+              && docker exec yuxi-ci-redis redis-cli ping >/dev/null; then
               exit 0
             fi
             sleep 2
           done
           docker logs yuxi-ci-postgres --tail 80 || true
           docker logs yuxi-ci-minio --tail 80 || true
+          docker logs yuxi-ci-redis --tail 80 || true
           exit 1
 
       - name: Test content cover and OCR
@@ -89,6 +94,7 @@ jobs:
           MINIO_ACCESS_KEY: yuxi_ci
           MINIO_SECRET_KEY: ci-minio-secret-password
           CONTENT_COVER_BUCKET: yuxi-ci-content-covers
+          REDIS_URL: redis://127.0.0.1:56379/0
         run: |
           uv run pytest \
             test/unit/content/test_cover_generation.py \
