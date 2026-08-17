@@ -15,6 +15,7 @@ from yuxi.agents.skills.service import init_builtin_skills
 from yuxi.repositories.agent_run_repository import TERMINAL_RUN_STATUSES, AgentRunRepository
 from yuxi.services.chat_service import stream_agent_chat, stream_agent_resume
 from yuxi.services.content_run_worker import process_content_run
+from yuxi.services.content_cover_worker import process_content_cover_job
 from yuxi.services.xiaohongshu_worker import (
     process_xiaohongshu_distribution,
     process_xiaohongshu_login,
@@ -527,6 +528,7 @@ class WorkerSettings:
     functions = [
         process_agent_run,
         process_content_run,
+        process_content_cover_job,
         process_xiaohongshu_login,
         process_xiaohongshu_status_check,
         process_xiaohongshu_profile_cleanup,

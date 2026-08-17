@@ -14,6 +14,7 @@ import {
   Play,
   RefreshCw,
   Save,
+  ScanText,
   Send,
   Settings2,
   ShieldCheck,
@@ -21,6 +22,7 @@ import {
   UserRoundCog
 } from 'lucide-vue-next'
 import ContentStageStepper from '@/components/content/ContentStageStepper.vue'
+import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
 
@@ -48,6 +50,7 @@ const confirmedEvidenceIds = ref([])
 const modelSpec = ref('')
 const editor = reactive({ title: '', body: '', topics: [] })
 const versionDrawerOpen = ref(false)
+const ocrModalOpen = ref(false)
 let draftSaveTimer = null
 
 const taskId = computed(() => route.params.taskId)
@@ -366,6 +369,11 @@ const openVersions = async () => {
       </div>
       <div class="header-actions">
         <a-button @click="router.push('/content/accounts')"><UserRoundCog :size="16" />账号管理</a-button>
+        <a-button
+          :disabled="!store.task"
+          :title="store.task ? '上传图片并使用 RapidOCR 识别' : '请先创建内容任务'"
+          @click="ocrModalOpen = true"
+        ><ScanText :size="16" />图片识别</a-button>
         <a-button @click="router.push('/content/history')"><History :size="16" />生产历史</a-button>
         <a-button v-if="userStore.isAdmin" @click="router.push('/content/admin/rules')">
           <Settings2 :size="16" />创作规则库
@@ -662,6 +670,7 @@ const openVersions = async () => {
         </a-timeline-item>
       </a-timeline>
     </a-drawer>
+    <ContentOcrDrawer v-if="store.task" v-model:open="ocrModalOpen" :task-id="store.task.id" />
   </div>
 </template>
 

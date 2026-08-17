@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   CircleAlert,
   FilePenLine,
+  ImagePlus,
   Send,
   ShieldCheck,
   UserRoundCog
@@ -20,6 +21,7 @@ const loading = ref(false)
 const task = ref(null)
 const artifact = ref(null)
 const distributionOpen = ref(false)
+const coverUrl = ref('')
 
 const reviewStatus = computed(() => artifact.value?.review_snapshot?.status || 'pending')
 const canDistribute = computed(() =>
@@ -36,6 +38,14 @@ const load = async () => {
       const artifactResponse = await contentApi.getTaskArtifact(route.params.taskId)
       artifact.value = artifactResponse.artifact
     }
+    if (artifact.value?.cover_asset_id) {
+      try {
+        const coverResponse = await contentApi.getCoverAssetFile(artifact.value.cover_asset_id)
+        coverUrl.value = URL.createObjectURL(await coverResponse.blob())
+      } catch (error) {
+        message.warning(error.message || '当前封面暂时无法预览')
+      }
+    }
   } catch (error) {
     message.error(error.message || '内容结果加载失败')
   } finally {
@@ -44,6 +54,9 @@ const load = async () => {
 }
 
 onMounted(load)
+onBeforeUnmount(() => {
+  if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
+})
 </script>
 
 <template>
@@ -72,6 +85,11 @@ onMounted(load)
           <CircleAlert v-else :size="18" />
           <span>{{ reviewStatus === 'passed' ? '内容审核已通过，可进行平台分发' : reviewStatus === 'warning' ? '内容存在提醒，分发前请再次检查' : '内容审核未通过，暂不能分发' }}</span>
         </div>
+        <div v-if="coverUrl" class="selected-cover">
+          <img :src="coverUrl" alt="当前内容封面" />
+          <div><strong>当前分发封面</strong><span>小红书分发将优先使用这张封面</span></div>
+          <button @click="router.push({ path: '/content/covers', query: { task: route.params.taskId } })">重新生成</button>
+        </div>
         <h2>{{ artifact.title }}</h2>
         <div v-if="artifact.topics?.length" class="topics"><span v-for="topic in artifact.topics" :key="topic">#{{ topic }}</span></div>
         <div class="body-text">{{ artifact.body }}</div>
@@ -85,7 +103,8 @@ onMounted(load)
         </section>
         <section class="action-guide">
           <strong>一键分发包含什么？</strong>
-          <ol><li>自动生成 3:4 小红书封面</li><li>写入标题、正文和全部话题</li><li>按账号分别保存草稿或发布</li><li>记录每个账号的执行结果</li></ol>
+          <ol><li>{{ artifact.cover_asset_id ? '使用当前选定的小红书封面' : '自动生成默认 3:4 小红书封面' }}</li><li>写入标题、正文和全部话题</li><li>按账号分别保存草稿或发布</li><li>记录每个账号的执行结果</li></ol>
+          <button class="cover-link" @click="router.push({ path: '/content/covers', query: { task: route.params.taskId } })"><ImagePlus :size="15" />{{ artifact.cover_asset_id ? '管理封面' : '生成专属封面' }}</button>
         </section>
       </aside>
     </main>
@@ -111,6 +130,9 @@ onMounted(load)
 .review-strip { display: flex; align-items: center; gap: 8px; margin: -8px 0 24px; padding: 10px 12px; border-radius: 8px; background: var(--color-warning-50); color: var(--color-warning-900); font-size: 13px; }
 .review-strip.passed { background: var(--color-success-50); color: var(--color-success-700); }
 .review-strip.blocked { background: var(--color-error-50); color: var(--color-error-700); }
+.selected-cover { display: grid; grid-template-columns: 90px 1fr auto; gap: 13px; align-items: center; margin-bottom: 24px; padding: 11px; border: 1px solid var(--main-100); border-radius: 10px; background: var(--main-30); }
+.selected-cover img { width: 90px; height: 112px; border-radius: 7px; object-fit: cover; }.selected-cover div { display: grid; gap: 4px; }.selected-cover span { color: var(--color-text-secondary); font-size: 12px; }.selected-cover button, .cover-link { border: 0; color: var(--main-700); background: transparent; cursor: pointer; }
+.cover-link { display: inline-flex; align-items: center; gap: 5px; padding: 0; }
 .content-card h2 { max-width: 780px; margin: 0 0 14px; font-size: 30px; line-height: 1.35; }
 .topics { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 26px; }
 .topics span { padding: 3px 9px; border-radius: 999px; background: var(--main-30); color: var(--main-700); font-size: 12px; }

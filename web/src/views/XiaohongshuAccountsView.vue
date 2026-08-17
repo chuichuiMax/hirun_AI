@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   CircleOff,
   Link2,
+  MonitorUp,
   Pencil,
   Plus,
   RefreshCw,
@@ -15,14 +16,14 @@ import {
   UserRoundCog
 } from 'lucide-vue-next'
 import { contentApi } from '@/apis/content_api'
-import XiaohongshuLoginModal from '@/components/content/XiaohongshuLoginModal.vue'
+import XiaohongshuBrowserDrawer from '@/components/content/XiaohongshuBrowserDrawer.vue'
 
 const router = useRouter()
 const loading = ref(false)
 const accounts = ref([])
 const createOpen = ref(false)
 const creating = ref(false)
-const loginOpen = ref(false)
+const browserOpen = ref(false)
 const editOpen = ref(false)
 const activeAccount = ref(null)
 const checkingAccountId = ref('')
@@ -59,7 +60,7 @@ const create = async () => {
     form.display_name = ''
     await load()
     activeAccount.value = response.account
-    loginOpen.value = true
+    browserOpen.value = true
   } catch (error) {
     message.error(error.message || '添加账号失败')
   } finally {
@@ -69,7 +70,12 @@ const create = async () => {
 
 const bind = (account) => {
   activeAccount.value = account
-  loginOpen.value = true
+  browserOpen.value = true
+}
+
+const openBrowser = (account) => {
+  activeAccount.value = account
+  browserOpen.value = true
 }
 
 const openRename = (account) => {
@@ -194,10 +200,11 @@ onMounted(load)
           </div>
           <div class="account-actions">
             <a-switch :checked="account.enabled" @change="(value) => toggle(account, value)" />
-            <a-button v-if="account.login_status !== 'logged_in'" type="primary" @click="bind(account)">
-              <Link2 :size="15" />扫码绑定
+            <a-button type="primary" :disabled="!account.enabled" @click="openBrowser(account)">
+              <MonitorUp :size="15" />{{ account.login_status === 'logged_in' ? '打开远程浏览器' : '打开登录界面' }}
             </a-button>
-            <a-button v-else :loading="checkingAccountId === account.id" :disabled="Boolean(checkingAccountId)" @click="check(account)"><RefreshCw :size="15" />检查状态</a-button>
+            <a-button v-if="account.login_status === 'logged_in'" :loading="checkingAccountId === account.id" :disabled="Boolean(checkingAccountId)" @click="check(account)"><RefreshCw :size="15" />检查状态</a-button>
+            <a-button v-else type="text" @click="bind(account)"><Link2 :size="15" />重新绑定</a-button>
             <a-button type="text" aria-label="修改备注" @click="openRename(account)"><Pencil :size="15" /></a-button>
             <a-button danger type="text" aria-label="移除账号" @click="remove(account)"><Trash2 :size="16" /></a-button>
           </div>
@@ -219,7 +226,7 @@ onMounted(load)
       <label class="form-field"><span>账号备注名</span><a-input v-model:value="editForm.display_name" :maxlength="120" @press-enter="rename" /></label>
     </a-modal>
 
-    <XiaohongshuLoginModal v-model:open="loginOpen" :account="activeAccount" @success="load" />
+    <XiaohongshuBrowserDrawer v-model:open="browserOpen" :account="activeAccount" @updated="load" />
   </div>
 </template>
 

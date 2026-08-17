@@ -9,6 +9,7 @@ import {
   Box,
   FolderKanban,
   FilePenLine,
+  Images,
   PanelLeftClose,
   PanelLeftOpen,
   MessageCirclePlus
@@ -113,9 +114,16 @@ const mainList = computed(() => {
   items.push({
     name: '内容生产',
     path: '/content/new',
-    activePaths: ['/content'],
+    activePaths: ['/content/new', '/content/tasks', '/content/history', '/content/results', '/content/accounts', '/content/admin'],
     icon: FilePenLine,
     activeIcon: FilePenLine
+  })
+
+  items.push({
+    name: '封面生成',
+    path: '/content/covers',
+    icon: Images,
+    activeIcon: Images
   })
 
   items.push({

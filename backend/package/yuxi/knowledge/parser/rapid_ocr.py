@@ -71,9 +71,9 @@ class RapidOCRParser(BaseDocumentProcessor):
         except Exception as e:
             raise OCRException(f"RapidOCR模型加载失败: {str(e)}", self.get_service_name(), "load_failed")
 
-    def process_image(self, image, params: dict | None = None) -> str:
+    def process_image_result(self, image, params: dict | None = None) -> dict:
         """
-        处理单张图像并提取文本
+        处理单张图像并返回可持久化的结构化结果
 
         Args:
             image: 图像数据,支持:
@@ -83,50 +83,60 @@ class RapidOCRParser(BaseDocumentProcessor):
             params: 处理参数 (当前未使用)
 
         Returns:
-            str: 提取的文本内容
+            dict: 文本、文字块和处理耗时
         """
+        del params
         self._load_model()
 
         try:
-            # 处理不同类型的输入
-            if isinstance(image, str):
-                image_path = image
+            if isinstance(image, (str, bytes, Path)):
+                image_input = image
                 cleanup_needed = False
             else:
-                # 创建临时文件
-                image_path = self._create_temp_image_file(image)
+                image_input = self._create_temp_image_file(image)
                 cleanup_needed = True
 
             try:
-                # 执行 OCR
                 start_time = time.time()
-                result = self.ocr(image_path)
+                result = self.ocr(image_input)
                 processing_time = time.time() - start_time
-
-                # 提取文本
-                if result.txts:
-                    text = "\n".join(result.txts)
-                    logger.info(
-                        f"RapidOCR 成功: {os.path.basename(image_path) if isinstance(image, str) else 'temp_image'}"
-                        f" ({processing_time:.2f}s)"
-                    )
-                    return text
+                texts = list(result.txts or [])
+                scores = list(result.scores or [])
+                boxes = result.boxes.tolist() if result.boxes is not None else []
+                blocks = [
+                    {
+                        "text": text,
+                        "confidence": round(float(scores[index]), 6) if index < len(scores) else None,
+                        "box": boxes[index] if index < len(boxes) else None,
+                    }
+                    for index, text in enumerate(texts)
+                ]
+                source_name = os.path.basename(image_input) if isinstance(image_input, str) else "memory_image"
+                if texts:
+                    logger.info(f"RapidOCR 成功: {source_name} ({processing_time:.2f}s)")
                 else:
-                    logger.warning(f"RapidOCR 未识别到文本: {image_path}")
-                    return ""
+                    logger.warning(f"RapidOCR 未识别到文本: {source_name}")
+                return {
+                    "text": "\n".join(texts),
+                    "blocks": blocks,
+                    "processing_ms": round(processing_time * 1000),
+                }
 
             finally:
-                # 清理临时文件
-                if cleanup_needed and os.path.exists(image_path):
+                if cleanup_needed and os.path.exists(image_input):
                     try:
-                        os.remove(image_path)
+                        os.remove(image_input)
                     except Exception as e:
-                        logger.warning(f"临时文件清理失败: {image_path} - {e}")
+                        logger.warning(f"临时文件清理失败: {image_input} - {e}")
 
         except Exception as e:
             error_msg = f"图像OCR处理失败: {str(e)}"
             logger.error(error_msg)
             raise OCRException(error_msg, self.get_service_name(), "processing_failed")
+
+    def process_image(self, image, params: dict | None = None) -> str:
+        """处理单张图像并提取纯文本，保持现有文档解析接口兼容。"""
+        return self.process_image_result(image, params)["text"]
 
     def _create_temp_image_file(self, image) -> str:
         """将图像数据保存为临时文件"""

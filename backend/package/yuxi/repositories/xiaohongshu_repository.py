@@ -12,6 +12,7 @@ from yuxi.storage.postgres.models_content import (
     ContentDistributionJob,
     ContentDistributionResult,
     XiaohongshuAccount,
+    XiaohongshuBrowserSession,
     XiaohongshuLoginSession,
 )
 from yuxi.utils.datetime_utils import utc_now_naive
@@ -83,9 +84,7 @@ class XiaohongshuRepository:
         account.display_name = f"{account.display_name[:100]} ({account.id[-8:]})"
         await self.db.flush()
 
-    async def create_login_session(
-        self, *, account: XiaohongshuAccount, expires_at
-    ) -> XiaohongshuLoginSession:
+    async def create_login_session(self, *, account: XiaohongshuAccount, expires_at) -> XiaohongshuLoginSession:
         session = XiaohongshuLoginSession(
             id=f"xhls_{uuid.uuid4().hex}",
             account_id=account.id,
@@ -125,10 +124,32 @@ class XiaohongshuRepository:
 
     async def get_login_session_for_worker(self, session_id: str) -> XiaohongshuLoginSession | None:
         return (
-            await self.db.execute(
-                select(XiaohongshuLoginSession).where(XiaohongshuLoginSession.id == session_id)
-            )
+            await self.db.execute(select(XiaohongshuLoginSession).where(XiaohongshuLoginSession.id == session_id))
         ).scalar_one_or_none()
+
+    async def get_browser_session(
+        self, account_id: str, owner_uid: str, *, for_update: bool = False
+    ) -> XiaohongshuBrowserSession | None:
+        query = select(XiaohongshuBrowserSession).where(
+            XiaohongshuBrowserSession.account_id == account_id,
+            XiaohongshuBrowserSession.owner_uid == owner_uid,
+        )
+        if for_update:
+            query = query.with_for_update()
+        return (await self.db.execute(query)).scalar_one_or_none()
+
+    async def create_browser_session(
+        self, *, owner_uid: str, account_id: str, session_id: str
+    ) -> XiaohongshuBrowserSession:
+        session = XiaohongshuBrowserSession(
+            id=session_id,
+            owner_uid=owner_uid,
+            account_id=account_id,
+            status="starting",
+        )
+        self.db.add(session)
+        await self.db.flush()
+        return session
 
     async def get_artifact_version(self, artifact_id: str, version: int) -> ContentArtifactVersion | None:
         row = await self.db.execute(
@@ -150,6 +171,8 @@ class XiaohongshuRepository:
         idempotency_key: str,
         dedupe_key: str | None,
         accounts: list[XiaohongshuAccount],
+        confirmed_by: str | None = None,
+        confirmed_at: datetime | None = None,
     ) -> ContentDistributionJob:
         job = ContentDistributionJob(
             id=f"cdj_{uuid.uuid4().hex}",
@@ -160,6 +183,8 @@ class XiaohongshuRepository:
             payload_snapshot=payload_snapshot,
             idempotency_key=idempotency_key,
             dedupe_key=dedupe_key,
+            confirmed_by=confirmed_by,
+            confirmed_at=confirmed_at,
         )
         self.db.add(job)
         await self.db.flush()
@@ -192,9 +217,7 @@ class XiaohongshuRepository:
             )
         ).scalar_one_or_none()
 
-    async def get_job_by_idempotency_key(
-        self, idempotency_key: str, owner_uid: str
-    ) -> ContentDistributionJob | None:
+    async def get_job_by_idempotency_key(self, idempotency_key: str, owner_uid: str) -> ContentDistributionJob | None:
         row = await self.db.execute(
             select(ContentDistributionJob).where(
                 ContentDistributionJob.idempotency_key == idempotency_key,
@@ -213,7 +236,7 @@ class XiaohongshuRepository:
                 ContentDistributionJob.owner_uid == owner_uid,
                 ContentDistributionJob.mode == "publish",
                 ContentDistributionJob.created_at >= created_after,
-                ContentDistributionJob.status.in_(("queued", "running", "completed", "partial_failed")),
+                ContentDistributionJob.status.in_(("queued", "running", "completed", "partial_failed", "uncertain")),
             )
             .order_by(ContentDistributionJob.created_at.desc())
             .limit(1)

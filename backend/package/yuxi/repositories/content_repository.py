@@ -14,6 +14,7 @@ from yuxi.storage.postgres.models_content import (
     ContentCombinationRule,
     ContentFormula,
     ContentNodeRun,
+    ContentOCRResult,
     ContentReviewRecord,
     ContentRuleVersion,
     ContentTask,
@@ -156,15 +157,9 @@ class ContentRepository:
             method_query = method_query.where(CreationMethod.enabled.is_(True))
             title_query = title_query.where(TitleFormula.enabled.is_(True))
             content_query = content_query.where(ContentFormula.enabled.is_(True))
-        methods = (
-            await self.db.execute(method_query.order_by(CreationMethod.sort_order))
-        ).scalars()
-        title_formulas = (
-            await self.db.execute(title_query.order_by(TitleFormula.sort_order))
-        ).scalars()
-        content_formulas = (
-            await self.db.execute(content_query.order_by(ContentFormula.sort_order))
-        ).scalars()
+        methods = (await self.db.execute(method_query.order_by(CreationMethod.sort_order))).scalars()
+        title_formulas = (await self.db.execute(title_query.order_by(TitleFormula.sort_order))).scalars()
+        content_formulas = (await self.db.execute(content_query.order_by(ContentFormula.sort_order))).scalars()
         combinations = (
             await self.db.execute(
                 select(ContentCombinationRule)
@@ -216,9 +211,7 @@ class ContentRepository:
 
     async def next_platform_rule_version(self) -> int:
         current = await self.db.execute(
-            select(func.coalesce(func.max(ContentRuleVersion.version), 0)).where(
-                ContentRuleVersion.tenant_id.is_(None)
-            )
+            select(func.coalesce(func.max(ContentRuleVersion.version), 0)).where(ContentRuleVersion.tenant_id.is_(None))
         )
         return int(current.scalar_one()) + 1
 
@@ -323,9 +316,7 @@ class ContentRepository:
         await self.db.flush()
 
     async def get_template(self, template_id: str) -> IndustryTemplateVersion | None:
-        result = await self.db.execute(
-            select(IndustryTemplateVersion).where(IndustryTemplateVersion.id == template_id)
-        )
+        result = await self.db.execute(select(IndustryTemplateVersion).where(IndustryTemplateVersion.id == template_id))
         return result.scalar_one_or_none()
 
     async def list_templates(self, *, published_only: bool = True) -> list[dict[str, Any]]:
@@ -336,9 +327,7 @@ class ContentRepository:
         return [_template_dict(item) for item in items]
 
     async def get_workflow(self, workflow_id: str) -> ContentWorkflowVersion | None:
-        result = await self.db.execute(
-            select(ContentWorkflowVersion).where(ContentWorkflowVersion.id == workflow_id)
-        )
+        result = await self.db.execute(select(ContentWorkflowVersion).where(ContentWorkflowVersion.id == workflow_id))
         return result.scalar_one_or_none()
 
     async def list_workflows(self, *, published_only: bool = False) -> list[dict[str, Any]]:
@@ -422,9 +411,7 @@ class ContentRepository:
             filters.append(ContentTask.created_by == str(user.uid))
         if status:
             filters.append(ContentTask.status == status)
-        total = (
-            await self.db.execute(select(func.count(ContentTask.id)).where(*filters))
-        ).scalar_one()
+        total = (await self.db.execute(select(func.count(ContentTask.id)).where(*filters))).scalar_one()
         items = (
             await self.db.execute(
                 select(ContentTask)
@@ -436,6 +423,64 @@ class ContentRepository:
         ).scalars()
         return list(items), int(total)
 
+    async def create_ocr_result(
+        self,
+        *,
+        result_id: str,
+        task: ContentTask,
+        original_file_name: str,
+        content_type: str,
+        file_size: int,
+        image_width: int,
+        image_height: int,
+        bucket_name: str,
+        object_name: str,
+        created_by: str,
+    ) -> ContentOCRResult:
+        item = ContentOCRResult(
+            id=result_id,
+            task_id=task.id,
+            tenant_id=task.tenant_id,
+            original_file_name=original_file_name,
+            content_type=content_type,
+            file_size=file_size,
+            image_width=image_width,
+            image_height=image_height,
+            bucket_name=bucket_name,
+            object_name=object_name,
+            status="processing",
+            created_by=created_by,
+        )
+        self.db.add(item)
+        await self.db.flush()
+        return item
+
+    async def get_ocr_result(self, result_id: str, *, for_update: bool = False) -> ContentOCRResult | None:
+        query = select(ContentOCRResult).where(ContentOCRResult.id == result_id)
+        if for_update:
+            query = query.with_for_update()
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_ocr_result_for_user(
+        self, result_id: str, user: User, *, for_update: bool = False
+    ) -> ContentOCRResult | None:
+        item = await self.get_ocr_result(result_id, for_update=for_update)
+        if item is None:
+            return None
+        task = await self.get_task_for_user(item.task_id, user)
+        return item if task is not None else None
+
+    async def list_ocr_results(self, task_id: str) -> list[ContentOCRResult]:
+        items = (
+            await self.db.execute(
+                select(ContentOCRResult)
+                .where(ContentOCRResult.task_id == task_id)
+                .order_by(ContentOCRResult.created_at.desc())
+            )
+        ).scalars()
+        return list(items)
+
     async def get_artifact_for_task(self, task_id: str) -> ContentArtifact | None:
         result = await self.db.execute(select(ContentArtifact).where(ContentArtifact.task_id == task_id))
         return result.scalar_one_or_none()
@@ -444,8 +489,17 @@ class ContentRepository:
         result = await self.db.execute(select(ContentArtifact).where(ContentArtifact.id == artifact_id))
         return result.scalar_one_or_none()
 
-    async def get_artifact_for_user(self, artifact_id: str, user: User) -> ContentArtifact | None:
-        artifact = await self.get_artifact(artifact_id)
+    async def get_artifact_for_user(
+        self,
+        artifact_id: str,
+        user: User,
+        *,
+        for_update: bool = False,
+    ) -> ContentArtifact | None:
+        query = select(ContentArtifact).where(ContentArtifact.id == artifact_id)
+        if for_update:
+            query = query.with_for_update()
+        artifact = (await self.db.execute(query)).scalar_one_or_none()
         if artifact is None:
             return None
         task = await self.get_task_for_user(artifact.task_id, user)
@@ -476,6 +530,8 @@ class ContentRepository:
             rule_version_id=rule_version_id,
             knowledge_snapshot=knowledge_snapshot or {},
             review_snapshot=review_snapshot or {},
+            cover_asset_id=artifact.cover_asset_id,
+            cover_job_id=artifact.cover_job_id,
             created_by=created_by,
         )
         self.db.add(version)
@@ -504,6 +560,8 @@ class ContentRepository:
                 "rule_version_id": item.rule_version_id,
                 "knowledge_snapshot": item.knowledge_snapshot or {},
                 "review_snapshot": item.review_snapshot or {},
+                "cover_asset_id": item.cover_asset_id,
+                "cover_job_id": item.cover_job_id,
                 "created_by": item.created_by,
                 "created_at": format_utc_datetime(item.created_at),
             }

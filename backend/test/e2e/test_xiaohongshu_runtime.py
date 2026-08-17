@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 import yuxi.integrations.xiaohongshu.runtime as runtime_module
+import yuxi.integrations.xiaohongshu.session_manager as session_manager_module
 from yuxi.integrations.xiaohongshu import XiaohongshuRuntime
+from yuxi.integrations.xiaohongshu.session_manager import XiaohongshuBrowserSessionManager
 
 pytestmark = [
     pytest.mark.e2e,
@@ -62,9 +64,13 @@ async def test_browser_runtime_keeps_draft_and_publish_actions_separate(
     thread.start()
     base_url = f"http://127.0.0.1:{server.server_port}"
     monkeypatch.setattr(runtime_module, "XHS_LOGIN_URL", f"{base_url}/login")
+    monkeypatch.setattr(runtime_module, "XHS_HOME_URL", f"{base_url}/home")
     monkeypatch.setattr(runtime_module, "XHS_PUBLISH_NOTE_URL", f"{base_url}/publish")
     monkeypatch.setattr(runtime_module, "XHS_SUCCESS_URL_PATTERN", f"{base_url}/publish/success?**")
+    monkeypatch.setattr(session_manager_module, "XHS_LOGIN_URL", f"{base_url}/login")
+    monkeypatch.setattr(session_manager_module, "XHS_HOME_URL", f"{base_url}/home")
     runtime = XiaohongshuRuntime(root=tmp_path)
+    manager = XiaohongshuBrowserSessionManager(runtime=XiaohongshuRuntime(root=tmp_path / "gateway"))
 
     try:
         draft = await runtime.distribute(
@@ -85,7 +91,29 @@ async def test_browser_runtime_keeps_draft_and_publish_actions_separate(
             topics=["内容创作", "发布验证"],
             mode="publish",
         )
+        opened = await manager.open("session_mock_1", "user-1", "xha_gateway")
+        session_draft = await manager.distribute(
+            session_id="session_mock_1",
+            owner_uid="user-1",
+            account_id="xha_gateway",
+            job_id="job_session_draft",
+            title="同会话草稿验证",
+            body="自动化任务与人工画面必须复用同一个浏览器会话。",
+            topics=["远程浏览器"],
+            mode="draft",
+        )
+        session_screenshot = await manager.screenshot(
+            session_id="session_mock_1",
+            owner_uid="user-1",
+            account_id="xha_gateway",
+        )
+        await manager.close(
+            session_id="session_mock_1",
+            owner_uid="user-1",
+            account_id="xha_gateway",
+        )
     finally:
+        await manager.close_all()
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
@@ -96,3 +124,6 @@ async def test_browser_runtime_keeps_draft_and_publish_actions_separate(
     assert published["note_url"].startswith(f"{base_url}/publish/success?")
     assert Path(published["screenshot_path"]).is_file()
     assert Path(published["screenshot_path"]).with_name("cover.png").is_file()
+    assert opened["status"] == "ready"
+    assert Path(session_draft["screenshot_path"]).is_file()
+    assert session_screenshot.startswith(b"\x89PNG")

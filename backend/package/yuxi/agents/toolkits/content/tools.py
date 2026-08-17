@@ -31,6 +31,10 @@ class TaskFactsInput(BaseModel):
     task_id: str
 
 
+class TaskOCRInput(BaseModel):
+    task_id: str = Field(description="需要读取 OCR 结果的内容任务 ID")
+
+
 class NormalizeEvidenceInput(BaseModel):
     task_id: str
     brief: dict[str, Any]
@@ -120,6 +124,27 @@ async def get_business_facts(task_id: str, runtime: ToolRuntime = None) -> dict[
             "brief": task.brief_json or {},
             "evidence_bundle": task.evidence_json or {"items": []},
         }
+
+
+@tool(
+    category="buildin",
+    tags=["内容生产", "OCR", "业务素材"],
+    display_name="读取内容任务 OCR 结果",
+    args_schema=TaskOCRInput,
+)
+async def get_content_ocr_results(task_id: str, runtime: ToolRuntime = None) -> dict[str, Any]:
+    """读取当前用户可访问内容任务中已持久化的 OCR 原始结果和校对结果。"""
+    uid = _runtime_uid(runtime)
+    async with pg_manager.get_async_session_context() as db:
+        user = (await db.execute(select(User).where(User.uid == uid))).scalar_one_or_none()
+        if user is None:
+            raise ValueError("用户不存在")
+        repo = ContentRepository(db)
+        task = await repo.get_task_for_user(task_id, user)
+        if task is None:
+            raise ValueError("内容任务不存在或无权访问")
+        items = await repo.list_ocr_results(task.id)
+        return {"task_id": task.id, "items": [item.to_dict() for item in items]}
 
 
 @tool(

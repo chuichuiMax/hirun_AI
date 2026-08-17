@@ -90,6 +90,12 @@ const router = createRouter({
           meta: { keepAlive: false, requiresAuth: true }
         },
         {
+          path: 'covers',
+          name: 'ContentCovers',
+          component: () => import('../views/CoverGenerationView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
           path: 'results/:taskId',
           name: 'ContentResult',
           component: () => import('../views/ContentResultView.vue'),

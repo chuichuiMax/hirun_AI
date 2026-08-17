@@ -32,6 +32,7 @@ Yuxi 是一个面向 RAG、知识图谱和多智能体工作流的知识库平�
 - `storage` 放持久化基础设施。`storage/postgres` 管理业务表、知识库表和 LangGraph checkpoint 所需连接池；`storage/minio` 管理对象存储。
 - `knowledge` 是知识库和图谱领域。`KnowledgeBaseManager` 根据知识库类型分发到具体实现；`implementations` 放 Milvus、Dify 等知识库实现；`graphs` 放 Milvus 知识库图谱适配与构建服务；`chunking` 放文档分块策略。
 - `knowledge/parser` 是文档解析边界，统一封装 MinerU、PaddleX、RapidOCR、DeepSeek OCR 等解析实现。
+- `content_cover` 是内容封面领域的纯能力边界，维护版式声明、Pillow 渲染器、image2 中转站协议和输入输出类型；HTTP 编排放在 `content_cover_service`，异步执行放在 `content_cover_worker`，持久化查询放在 `content_cover_repository`。
 - `models` 封装 chat、embedding、rerank 模型适配；`config` 维护应用配置和内置模型信息；`utils` 放跨领域但足够通用的工具。
 
 测试代码放在 `backend/test`，按 `unit`、`integration`、`e2e` 分层组织。新增或修改后端行为时，测试应落在最能覆盖风险的那一层。
@@ -59,6 +60,8 @@ Yuxi 是一个面向 RAG、知识图谱和多智能体工作流的知识库平�
 5. `worker-dev` 执行 LangGraph 智能体；中间件按上下文挂载知识库工具、Skills、MCP、附件与沙盒能力。
 6. 运行事件写入 Redis，最终状态和业务记录写入 Postgres；文件和产物落到 `saves`、MinIO 或沙盒用户数据目录。
 7. 前端通过 SSE/轮询消费运行事件，渲染消息、工具调用、引用来源、产物卡片和文件预览。
+
+内容封面任务沿用相同的长任务边界：`/api/content/covers` 负责鉴权、上传和任务创建，ARQ Worker 执行确定性排版或 image2 提交/轮询，Postgres 保存任务及内容版本关联，MinIO 保存输入与输出图片，Redis Stream 向 `CoverGenerationView` 推送进度。小红书分发创建不可变快照时同时锁定当前封面对象。
 
 ## 架构不变量
 

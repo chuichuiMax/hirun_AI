@@ -385,6 +385,35 @@ class PostgresManager(metaclass=SingletonMeta):
         """确保业务 schema 包含后续新增字段（运行时 schema 演进）。"""
         self._check_initialized()
         stmts = [
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS cover_asset_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS cover_job_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS cover_asset_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS cover_job_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_distribution_jobs ADD COLUMN IF NOT EXISTS confirmed_by VARCHAR(255)",
+            "ALTER TABLE IF EXISTS content_distribution_jobs ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP",
+            (
+                "ALTER TABLE IF EXISTS content_distribution_results "
+                "ADD COLUMN IF NOT EXISTS browser_session_id VARCHAR(80)"
+            ),
+            ("ALTER TABLE IF EXISTS content_distribution_results ADD COLUMN IF NOT EXISTS evidence_type VARCHAR(32)"),
+            (
+                "ALTER TABLE IF EXISTS content_distribution_results "
+                "ADD COLUMN IF NOT EXISTS uncertain BOOLEAN NOT NULL DEFAULT FALSE"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_distribution_results_browser_session_id "
+                "ON content_distribution_results(browser_session_id)"
+            ),
+            "CREATE INDEX IF NOT EXISTS ix_content_artifacts_cover_asset_id ON content_artifacts(cover_asset_id)",
+            "CREATE INDEX IF NOT EXISTS ix_content_artifacts_cover_job_id ON content_artifacts(cover_job_id)",
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_artifact_versions_cover_asset_id "
+                "ON content_artifact_versions(cover_asset_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_artifact_versions_cover_job_id "
+                "ON content_artifact_versions(cover_job_id)"
+            ),
             "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS tool_dependencies JSONB DEFAULT '[]'::jsonb",
             "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS mcp_dependencies JSONB DEFAULT '[]'::jsonb",
             "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS skill_dependencies JSONB DEFAULT '[]'::jsonb",
@@ -520,6 +549,10 @@ class PostgresManager(metaclass=SingletonMeta):
 
         if self.langgraph_pool:
             await self.langgraph_pool.close()
+        self.async_engine = None
+        self.AsyncSession = None
+        self.langgraph_pool = None
+        self._initialized = False
 
     async def async_check_first_run(self):
         """检查是否首次运行（异步版本）- 检查用户表是否有数据"""

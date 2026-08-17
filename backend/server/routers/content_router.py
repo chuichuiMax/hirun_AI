@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from server.utils.auth_middleware import get_admin_user, get_db, get_required_user, get_superadmin_user
 from yuxi.content.schemas import (
     ContentArtifactRegenerate,
     ContentArtifactReview,
@@ -12,25 +10,38 @@ from yuxi.content.schemas import (
     ContentBriefSave,
     ContentFinalizeRequest,
     ContentNodeRetry,
+    ContentOCRCorrection,
     ContentRunCreate,
     ContentRunResume,
     ContentTaskCreate,
     ContentTaskUpdate,
     RuleBundleUpdate,
     RuleDraftCreate,
+    RuleVersionAction,
     StrategySelection,
     StrategyValidateRequest,
-    RuleVersionAction,
     XiaohongshuAccountCreate,
     XiaohongshuAccountUpdate,
+    XiaohongshuBrowserAction,
     XiaohongshuDistributionCreate,
 )
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.services.agent_run_service import cancel_agent_run_view, stream_agent_run_events
+from yuxi.services.content_ocr_service import (
+    create_content_ocr_result,
+    get_content_ocr_image,
+    get_content_ocr_result,
+    list_content_ocr_results,
+    retry_content_ocr_result,
+    update_content_ocr_result,
+)
 from yuxi.services.content_service import (
+    activate_content_rule_version,
+    create_content_rule_draft,
     create_content_run,
     create_content_task,
     delete_content_task,
+    discard_content_rule_draft,
     duplicate_content_task,
     finalize_content_artifact,
     get_content_bootstrap,
@@ -45,30 +56,36 @@ from yuxi.services.content_service import (
     retry_content_node,
     review_content_artifact,
     save_content_brief,
+    save_content_rule_draft,
     save_content_strategy,
     update_content_artifact,
     update_content_task,
     validate_content_strategy,
-    activate_content_rule_version,
-    create_content_rule_draft,
-    discard_content_rule_draft,
-    save_content_rule_draft,
     validate_rule_bundle_for_publish,
 )
-from yuxi.storage.postgres.models_business import User
 from yuxi.services.xiaohongshu_service import (
     check_account_login,
+    claim_browser_session,
     create_account,
     create_distribution,
+    browser_session_action,
+    close_browser_session,
     delete_account,
+    get_browser_screenshot,
+    get_browser_session,
     get_distribution_job,
     get_login_session,
     get_result_screenshot,
+    heartbeat_browser_session,
     list_accounts,
     list_artifact_distributions,
     start_account_login,
+    open_browser_session,
     update_account,
 )
+from yuxi.storage.postgres.models_business import User
+
+from server.utils.auth_middleware import get_admin_user, get_db, get_required_user, get_superadmin_user
 
 content = APIRouter(prefix="/content", tags=["content"])
 
@@ -127,6 +144,71 @@ async def check_xiaohongshu_account(
     return await check_account_login(db, current_user, account_id)
 
 
+@content.post("/xiaohongshu/accounts/{account_id}/browser-session")
+async def open_xiaohongshu_browser_session(
+    account_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await open_browser_session(db, current_user, account_id)
+
+
+@content.get("/xiaohongshu/accounts/{account_id}/browser-session")
+async def get_xiaohongshu_browser_session(
+    account_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_browser_session(db, current_user, account_id)
+
+
+@content.post("/xiaohongshu/accounts/{account_id}/browser-session/heartbeat")
+async def heartbeat_xiaohongshu_browser_session(
+    account_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await heartbeat_browser_session(db, current_user, account_id)
+
+
+@content.post("/xiaohongshu/accounts/{account_id}/browser-session/claim")
+async def claim_xiaohongshu_browser_session(
+    account_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await claim_browser_session(db, current_user, account_id)
+
+
+@content.post("/xiaohongshu/accounts/{account_id}/browser-session/action")
+async def act_xiaohongshu_browser_session(
+    account_id: str,
+    payload: XiaohongshuBrowserAction,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await browser_session_action(db, current_user, account_id, payload.model_dump(exclude_none=True))
+
+
+@content.get("/xiaohongshu/accounts/{account_id}/browser-session/screenshot")
+async def screenshot_xiaohongshu_browser_session(
+    account_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    data = await get_browser_screenshot(db, current_user, account_id)
+    return Response(content=data, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@content.delete("/xiaohongshu/accounts/{account_id}/browser-session")
+async def close_xiaohongshu_browser_session(
+    account_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await close_browser_session(db, current_user, account_id)
+
+
 @content.get("/xiaohongshu/login-sessions/{session_id}")
 async def get_xiaohongshu_login_session(
     session_id: str,
@@ -175,9 +257,7 @@ async def get_content_distribution_screenshot(
 
 
 @content.get("/bootstrap")
-async def content_bootstrap(
-    current_user: User = Depends(get_required_user), db: AsyncSession = Depends(get_db)
-):
+async def content_bootstrap(current_user: User = Depends(get_required_user), db: AsyncSession = Depends(get_db)):
     return await get_content_bootstrap(db, current_user)
 
 
@@ -236,6 +316,63 @@ async def duplicate_task(
     db: AsyncSession = Depends(get_db),
 ):
     return await duplicate_content_task(db, current_user, task_id)
+
+
+@content.post("/tasks/{task_id}/ocr-results")
+async def create_ocr_result(
+    task_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_content_ocr_result(db, current_user, task_id, file)
+
+
+@content.get("/tasks/{task_id}/ocr-results")
+async def list_ocr_results(
+    task_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_content_ocr_results(db, current_user, task_id)
+
+
+@content.get("/ocr-results/{result_id}")
+async def get_ocr_result(
+    result_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_content_ocr_result(db, current_user, result_id)
+
+
+@content.patch("/ocr-results/{result_id}")
+async def update_ocr_result(
+    result_id: str,
+    payload: ContentOCRCorrection,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await update_content_ocr_result(db, current_user, result_id, payload)
+
+
+@content.post("/ocr-results/{result_id}/retry")
+async def retry_ocr_result(
+    result_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await retry_content_ocr_result(db, current_user, result_id)
+
+
+@content.get("/ocr-results/{result_id}/image")
+async def get_ocr_image(
+    result_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    data, content_type, _ = await get_content_ocr_image(db, current_user, result_id)
+    return Response(content=data, media_type=content_type, headers={"Cache-Control": "private, max-age=300"})
 
 
 @content.put("/tasks/{task_id}/brief")
@@ -429,9 +566,7 @@ async def regenerate_artifact(
 
 
 @content.get("/admin/rules")
-async def list_rule_versions(
-    current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db)
-):
+async def list_rule_versions(current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db)):
     del current_user
     return {"items": await ContentRepository(db).list_rule_versions()}
 
@@ -510,16 +645,12 @@ async def rollback_rule_version(
 
 
 @content.get("/admin/industry-templates")
-async def list_industry_templates(
-    current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db)
-):
+async def list_industry_templates(current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db)):
     del current_user
     return {"items": await ContentRepository(db).list_templates(published_only=False)}
 
 
 @content.get("/admin/workflow-templates")
-async def list_workflow_templates(
-    current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db)
-):
+async def list_workflow_templates(current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db)):
     del current_user
     return {"items": await ContentRepository(db).list_workflows(published_only=False)}

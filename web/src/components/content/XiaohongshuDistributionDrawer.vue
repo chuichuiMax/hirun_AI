@@ -50,6 +50,7 @@ const statusLabels = {
   running: '正在分发',
   completed: '全部完成',
   partial_failed: '部分失败',
+  uncertain: '结果待人工核对',
   failed: '分发失败',
   draft_saved: '已存草稿箱',
   published: '已发布'
@@ -76,7 +77,11 @@ const pollJob = async () => {
     } else {
       submitting.value = false
       message[currentJob.value.status === 'completed' ? 'success' : 'warning'](
-        currentJob.value.status === 'completed' ? '小红书分发已完成' : '分发完成，但存在失败账号'
+        currentJob.value.status === 'completed'
+          ? currentJob.value.mode === 'draft'
+            ? '内容已保存到所选账号的远程浏览器草稿箱'
+            : '小红书分发已完成'
+          : '分发完成，但存在失败账号'
       )
       await loadHistory()
     }
@@ -232,6 +237,7 @@ onBeforeUnmount(stopPolling)
             <strong :class="result.status">{{ statusLabels[result.status] || result.status }}</strong>
             <a-button v-if="result.has_screenshot" type="link" size="small" @click="openEvidence(result)"><Eye :size="13" />查看执行截图</a-button>
             <small v-if="result.error_message">{{ result.error_message }}</small>
+            <small v-if="result.uncertain" class="uncertain-tip">禁止自动重试，请先进入该账号后台核对是否已经发布。</small>
           </div>
         </section>
 
@@ -287,6 +293,7 @@ onBeforeUnmount(stopPolling)
 .result-row :deep(.ant-btn), .history-result :deep(.ant-btn) { display: inline-flex; align-items: center; gap: 4px; padding: 0; }
 .result-row .draft_saved, .result-row .published { color: var(--color-success-700); }
 .result-row .failed { color: var(--color-error-700); }
+.result-row .uncertain, .history-result .uncertain, .uncertain-tip { color: var(--color-warning-900); }
 .history-section { padding: 4px 2px; }
 .history-card { padding: 9px 0; border-bottom: 1px solid var(--gray-150); }
 .history-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; color: var(--color-text-secondary); font-size: 12px; }

@@ -61,7 +61,7 @@ class XiaohongshuRuntime:
                 locale="zh-CN",
             )
         except Exception as exc:
-            raise XiaohongshuRuntimeError("XHS_BROWSER_START_FAILED", f"浏览器启动失败：{exc}") from exc
+            raise XiaohongshuRuntimeError("XHS_BROWSER_START_FAILED", "浏览器启动失败，请稍后重试") from exc
 
     @staticmethod
     async def _is_logged_in(page) -> bool:
@@ -93,9 +93,7 @@ class XiaohongshuRuntime:
             if marker in lines:
                 index = lines.index(marker)
                 candidates = (
-                    lines[index + 1 : index + 3]
-                    if marker == "创作服务平台"
-                    else lines[max(0, index - 2) : index]
+                    lines[index + 1 : index + 3] if marker == "创作服务平台" else lines[max(0, index - 2) : index]
                 )
                 nickname = next(
                     (item for item in candidates if item not in ignored and not item.isdigit() and len(item) <= 32),
@@ -194,6 +192,106 @@ class XiaohongshuRuntime:
         image.save(output_path, format="PNG", optimize=True)
         return output_path
 
+    async def distribute_on_page(
+        self,
+        page,
+        owner_uid: str,
+        account_id: str,
+        job_id: str,
+        *,
+        title: str,
+        body: str,
+        topics: list[str],
+        mode: str,
+        cover_bytes: bytes | None = None,
+    ) -> dict[str, str]:
+        from patchright.async_api import TimeoutError as BrowserTimeoutError
+
+        if cover_bytes is None:
+            cover_path = self.render_cover(owner_uid, account_id, job_id, title, topics)
+        else:
+            output_dir = self.account_dir(owner_uid, account_id) / "jobs" / job_id
+            output_dir.mkdir(parents=True, exist_ok=True)
+            cover_path = output_dir / "cover.png"
+            cover_path.write_bytes(cover_bytes)
+        output_dir = cover_path.parent
+        screenshot_path = output_dir / "result.png"
+        try:
+            await page.goto(XHS_PUBLISH_NOTE_URL, wait_until="domcontentloaded", timeout=60000)
+            if not await self._is_logged_in(page):
+                raise XiaohongshuRuntimeError("XHS_LOGIN_REQUIRED", "账号登录已失效，请重新扫码")
+
+            upload = page.locator('input[type="file"][accept*="image"]').first
+            if not await upload.count():
+                upload = page.locator("div[class^='upload-content'] input.upload-input").first
+            await upload.wait_for(state="attached", timeout=30000)
+            await upload.set_input_files([str(cover_path)])
+
+            title_input = page.locator('input[placeholder*="填写标题"]').first
+            try:
+                await title_input.wait_for(state="visible", timeout=60000)
+            except BrowserTimeoutError as exc:
+                raise XiaohongshuRuntimeError("XHS_UPLOAD_TIMEOUT", "图片上传超时") from exc
+            await title_input.fill(title)
+
+            editor = page.locator('p[data-placeholder*="输入正文描述"]').first
+            await editor.wait_for(state="visible", timeout=15000)
+            await editor.click()
+            await page.keyboard.press("Control+KeyA")
+            await page.keyboard.press("Delete")
+            await page.keyboard.insert_text(body)
+            for topic in topics:
+                await page.keyboard.press("End")
+                await page.keyboard.insert_text(f" #{topic}")
+                suggestion = page.locator("#creator-editor-topic-container .item").first
+                try:
+                    await suggestion.wait_for(state="visible", timeout=3000)
+                    await suggestion.click()
+                except BrowserTimeoutError:
+                    await page.keyboard.press("Space")
+
+            if mode == "draft":
+                clicked = False
+                for label in ("保存草稿", "存草稿", "暂存草稿", "暂存离开", "保存到草稿箱"):
+                    button = page.get_by_role("button", name=label, exact=False).first
+                    if await button.count() and await button.is_visible():
+                        await button.click()
+                        clicked = True
+                        break
+                if not clicked:
+                    raise XiaohongshuRuntimeError("XHS_DRAFT_BUTTON_MISSING", "未找到保存草稿按钮")
+                try:
+                    await page.get_by_text(re.compile("草稿.*(成功|已保存)|保存成功")).first.wait_for(
+                        state="visible", timeout=15000
+                    )
+                except BrowserTimeoutError as exc:
+                    raise XiaohongshuRuntimeError("XHS_DRAFT_UNCONFIRMED", "已点击保存，但未收到草稿成功确认") from exc
+                note_url = ""
+            else:
+                button = page.get_by_role("button", name="发布", exact=True).first
+                await button.wait_for(state="visible", timeout=15000)
+                await button.click()
+                try:
+                    await page.wait_for_url(XHS_SUCCESS_URL_PATTERN, timeout=60000)
+                except BrowserTimeoutError as exc:
+                    raise XiaohongshuRuntimeError("XHS_PUBLISH_UNCONFIRMED", "未收到发布成功确认") from exc
+                note_url = page.url
+
+            await page.screenshot(path=str(screenshot_path), full_page=True)
+            return {"note_url": note_url, "screenshot_path": str(screenshot_path)}
+        except XiaohongshuRuntimeError:
+            try:
+                await page.screenshot(path=str(screenshot_path), full_page=True)
+            except Exception:
+                pass
+            raise
+        except Exception as exc:
+            try:
+                await page.screenshot(path=str(screenshot_path), full_page=True)
+            except Exception:
+                pass
+            raise XiaohongshuRuntimeError("XHS_BROWSER_ERROR", "小红书页面操作失败，请稍后重试") from exc
+
     async def distribute(
         self,
         owner_uid: str,
@@ -204,92 +302,24 @@ class XiaohongshuRuntime:
         body: str,
         topics: list[str],
         mode: str,
+        cover_bytes: bytes | None = None,
     ) -> dict[str, str]:
-        from patchright.async_api import TimeoutError as BrowserTimeoutError
         from patchright.async_api import async_playwright
 
-        cover_path = self.render_cover(owner_uid, account_id, job_id, title, topics)
-        output_dir = cover_path.parent
-        screenshot_path = output_dir / "result.png"
         async with async_playwright() as playwright:
             context = await self._launch_context(playwright, owner_uid, account_id)
             try:
                 page = context.pages[0] if context.pages else await context.new_page()
-                await page.goto(XHS_PUBLISH_NOTE_URL, wait_until="domcontentloaded", timeout=60000)
-                if not await self._is_logged_in(page):
-                    raise XiaohongshuRuntimeError("XHS_LOGIN_REQUIRED", "账号登录已失效，请重新扫码")
-
-                upload = page.locator('input[type="file"][accept*="image"]').first
-                if not await upload.count():
-                    upload = page.locator("div[class^='upload-content'] input.upload-input").first
-                await upload.wait_for(state="attached", timeout=30000)
-                await upload.set_input_files([str(cover_path)])
-
-                title_input = page.locator('input[placeholder*="填写标题"]').first
-                try:
-                    await title_input.wait_for(state="visible", timeout=60000)
-                except BrowserTimeoutError as exc:
-                    raise XiaohongshuRuntimeError("XHS_UPLOAD_TIMEOUT", "图片上传超时") from exc
-                await title_input.fill(title)
-
-                editor = page.locator('p[data-placeholder*="输入正文描述"]').first
-                await editor.wait_for(state="visible", timeout=15000)
-                await editor.click()
-                await page.keyboard.press("Control+KeyA")
-                await page.keyboard.press("Delete")
-                await page.keyboard.insert_text(body)
-                for topic in topics:
-                    await page.keyboard.press("End")
-                    await page.keyboard.insert_text(f" #{topic}")
-                    suggestion = page.locator("#creator-editor-topic-container .item").first
-                    try:
-                        await suggestion.wait_for(state="visible", timeout=3000)
-                        await suggestion.click()
-                    except BrowserTimeoutError:
-                        await page.keyboard.press("Space")
-
-                if mode == "draft":
-                    clicked = False
-                    for label in ("保存草稿", "存草稿", "暂存草稿", "暂存离开", "保存到草稿箱"):
-                        button = page.get_by_role("button", name=label, exact=False).first
-                        if await button.count() and await button.is_visible():
-                            await button.click()
-                            clicked = True
-                            break
-                    if not clicked:
-                        raise XiaohongshuRuntimeError("XHS_DRAFT_BUTTON_MISSING", "未找到保存草稿按钮")
-                    try:
-                        await page.get_by_text(re.compile("草稿.*(成功|已保存)|保存成功")).first.wait_for(
-                            state="visible", timeout=15000
-                        )
-                    except BrowserTimeoutError as exc:
-                        raise XiaohongshuRuntimeError(
-                            "XHS_DRAFT_UNCONFIRMED", "已点击保存，但未收到草稿成功确认"
-                        ) from exc
-                    note_url = ""
-                else:
-                    button = page.get_by_role("button", name="发布", exact=True).first
-                    await button.wait_for(state="visible", timeout=15000)
-                    await button.click()
-                    try:
-                        await page.wait_for_url(XHS_SUCCESS_URL_PATTERN, timeout=60000)
-                    except BrowserTimeoutError as exc:
-                        raise XiaohongshuRuntimeError("XHS_PUBLISH_UNCONFIRMED", "未收到发布成功确认") from exc
-                    note_url = page.url
-
-                await page.screenshot(path=str(screenshot_path), full_page=True)
-                return {"note_url": note_url, "screenshot_path": str(screenshot_path)}
-            except XiaohongshuRuntimeError:
-                try:
-                    await page.screenshot(path=str(screenshot_path), full_page=True)
-                except Exception:
-                    pass
-                raise
-            except Exception as exc:
-                try:
-                    await page.screenshot(path=str(screenshot_path), full_page=True)
-                except Exception:
-                    pass
-                raise XiaohongshuRuntimeError("XHS_BROWSER_ERROR", f"小红书页面操作失败：{exc}") from exc
+                return await self.distribute_on_page(
+                    page,
+                    owner_uid,
+                    account_id,
+                    job_id,
+                    title=title,
+                    body=body,
+                    topics=topics,
+                    mode=mode,
+                    cover_bytes=cover_bytes,
+                )
             finally:
                 await context.close()

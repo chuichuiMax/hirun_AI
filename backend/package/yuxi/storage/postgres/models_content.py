@@ -3,7 +3,6 @@
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
-
 from yuxi.storage.postgres.models_business import Base
 from yuxi.utils.datetime_utils import format_utc_datetime, utc_now_naive
 
@@ -217,6 +216,62 @@ class ContentTask(Base):
         }
 
 
+class ContentOCRResult(Base):
+    __tablename__ = "content_ocr_results"
+
+    id = Column(String(64), primary_key=True)
+    task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    original_file_name = Column(String(255), nullable=False)
+    content_type = Column(String(80), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    image_width = Column(Integer, nullable=False)
+    image_height = Column(Integer, nullable=False)
+    bucket_name = Column(String(120), nullable=False)
+    object_name = Column(Text, nullable=False)
+    engine = Column(String(32), nullable=False, default="rapid_ocr")
+    engine_version = Column(String(64), nullable=False, default="PP-OCRv5")
+    status = Column(String(32), nullable=False, default="processing", index=True)
+    raw_text = Column(Text, nullable=False, default="")
+    corrected_text = Column(Text, nullable=True)
+    blocks_json = Column(JSON, nullable=False, default=list)
+    processing_ms = Column(Integer, nullable=True)
+    error_code = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (Index("idx_content_ocr_task_created", "task_id", "created_at"),)
+
+    def to_dict(self) -> dict[str, Any]:
+        corrected_text = self.corrected_text
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "source_image": {
+                "file_name": self.original_file_name,
+                "content_type": self.content_type,
+                "file_size": self.file_size,
+                "width": self.image_width,
+                "height": self.image_height,
+            },
+            "engine": self.engine,
+            "engine_version": self.engine_version,
+            "status": self.status,
+            "raw_text": self.raw_text or "",
+            "corrected_text": corrected_text,
+            "effective_text": corrected_text if corrected_text is not None else self.raw_text or "",
+            "blocks": self.blocks_json or [],
+            "processing_ms": self.processing_ms,
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
 class ContentNodeRun(Base):
     __tablename__ = "content_node_runs"
 
@@ -251,6 +306,8 @@ class ContentArtifact(Base):
     strategy_snapshot = Column(JSON, nullable=False, default=dict)
     evidence_snapshot = Column(JSON, nullable=False, default=dict)
     review_snapshot = Column(JSON, nullable=False, default=dict)
+    cover_asset_id = Column(String(64), nullable=True, index=True)
+    cover_job_id = Column(String(64), nullable=True, index=True)
     created_by = Column(String(64), nullable=False)
     created_at = Column(DateTime, default=utc_now_naive)
     updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
@@ -268,6 +325,8 @@ class ContentArtifact(Base):
             "strategy_snapshot": self.strategy_snapshot or {},
             "evidence_snapshot": self.evidence_snapshot or {},
             "review_snapshot": self.review_snapshot or {},
+            "cover_asset_id": self.cover_asset_id,
+            "cover_job_id": self.cover_job_id,
             "created_by": self.created_by,
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
@@ -289,10 +348,103 @@ class ContentArtifactVersion(Base):
     rule_version_id = Column(String(64), nullable=False)
     knowledge_snapshot = Column(JSON, nullable=False, default=dict)
     review_snapshot = Column(JSON, nullable=False, default=dict)
+    cover_asset_id = Column(String(64), nullable=True, index=True)
+    cover_job_id = Column(String(64), nullable=True, index=True)
     created_by = Column(String(64), nullable=False)
     created_at = Column(DateTime, default=utc_now_naive)
 
     __table_args__ = (UniqueConstraint("artifact_id", "version", name="uq_content_artifact_version"),)
+
+
+class ContentCoverAsset(Base):
+    __tablename__ = "content_cover_assets"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    content_task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    role = Column(String(32), nullable=False, index=True)
+    original_file_name = Column(String(255), nullable=False)
+    content_type = Column(String(80), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    image_width = Column(Integer, nullable=False)
+    image_height = Column(Integer, nullable=False)
+    sha256 = Column(String(64), nullable=False, index=True)
+    bucket_name = Column(String(120), nullable=False)
+    object_name = Column(Text, nullable=False)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (Index("idx_content_cover_assets_owner_created", "owner_uid", "created_at"),)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "content_task_id": self.content_task_id,
+            "role": self.role,
+            "file_name": self.original_file_name,
+            "content_type": self.content_type,
+            "file_size": self.file_size,
+            "width": self.image_width,
+            "height": self.image_height,
+            "sha256": self.sha256,
+            "metadata": self.metadata_json or {},
+            "created_at": format_utc_datetime(self.created_at),
+        }
+
+
+class ContentCoverJob(Base):
+    __tablename__ = "content_cover_jobs"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    content_task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    artifact_id = Column(String(64), ForeignKey("content_artifacts.id", ondelete="SET NULL"), nullable=True, index=True)
+    parent_job_id = Column(
+        String(64), ForeignKey("content_cover_jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    mode = Column(String(32), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    model = Column(String(255), nullable=True)
+    provider_task_id = Column(String(255), nullable=True, index=True)
+    idempotency_key = Column(String(128), nullable=False)
+    request_json = Column(JSON, nullable=False, default=dict)
+    result_json = Column(JSON, nullable=False, default=dict)
+    error_code = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+    progress = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("owner_uid", "idempotency_key", name="uq_content_cover_jobs_owner_idempotency"),
+        Index("idx_content_cover_jobs_owner_created", "owner_uid", "created_at"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "content_task_id": self.content_task_id,
+            "artifact_id": self.artifact_id,
+            "parent_job_id": self.parent_job_id,
+            "mode": self.mode,
+            "status": self.status,
+            "model": self.model,
+            "provider_task_id": self.provider_task_id,
+            "request": self.request_json or {},
+            "result": self.result_json or {},
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "progress": self.progress,
+            "created_at": format_utc_datetime(self.created_at),
+            "started_at": format_utc_datetime(self.started_at),
+            "completed_at": format_utc_datetime(self.completed_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
 
 
 class ContentReviewRecord(Base):
@@ -377,14 +529,56 @@ class XiaohongshuLoginSession(Base):
         }
 
 
+class XiaohongshuBrowserSession(Base):
+    __tablename__ = "xiaohongshu_browser_sessions"
+
+    id = Column(String(80), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    account_id = Column(
+        String(64), ForeignKey("xiaohongshu_accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status = Column(String(32), nullable=False, default="stopped", index=True)
+    worker_id = Column(String(120), nullable=True)
+    browser_version = Column(String(120), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    last_heartbeat_at = Column(DateTime, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    last_error_code = Column(String(80), nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("owner_uid", "account_id", name="uq_xhs_browser_sessions_owner_account"),
+        Index("idx_xhs_browser_sessions_owner_status", "owner_uid", "status"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "account_id": self.account_id,
+            "status": self.status,
+            "worker_id": self.worker_id,
+            "browser_version": self.browser_version,
+            "started_at": format_utc_datetime(self.started_at),
+            "last_heartbeat_at": format_utc_datetime(self.last_heartbeat_at),
+            "last_used_at": format_utc_datetime(self.last_used_at),
+            "expires_at": format_utc_datetime(self.expires_at),
+            "last_error_code": self.last_error_code,
+            "last_error_message": self.last_error_message,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+            "remote_view_available": self.status in {"ready", "login_required"},
+        }
+
+
 class ContentDistributionJob(Base):
     __tablename__ = "content_distribution_jobs"
 
     id = Column(String(64), primary_key=True)
     owner_uid = Column(String(255), nullable=False, index=True)
-    artifact_id = Column(
-        String(64), ForeignKey("content_artifacts.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    artifact_id = Column(String(64), ForeignKey("content_artifacts.id", ondelete="CASCADE"), nullable=False, index=True)
     artifact_version = Column(Integer, nullable=False)
     platform = Column(String(32), nullable=False, default="xiaohongshu")
     mode = Column(String(16), nullable=False)
@@ -394,6 +588,8 @@ class ContentDistributionJob(Base):
     status = Column(String(32), nullable=False, default="queued", index=True)
     error_code = Column(String(80), nullable=True)
     error_message = Column(Text, nullable=True)
+    confirmed_by = Column(String(255), nullable=True)
+    confirmed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now_naive, index=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -414,6 +610,8 @@ class ContentDistributionJob(Base):
             "status": self.status,
             "error_code": self.error_code,
             "error_message": self.error_message,
+            "confirmed": bool(self.confirmed_at),
+            "confirmed_at": format_utc_datetime(self.confirmed_at),
             "created_at": format_utc_datetime(self.created_at),
             "started_at": format_utc_datetime(self.started_at),
             "completed_at": format_utc_datetime(self.completed_at),
@@ -435,6 +633,9 @@ class ContentDistributionResult(Base):
     error_message = Column(Text, nullable=True)
     note_url = Column(Text, nullable=True)
     screenshot_path = Column(Text, nullable=True)
+    browser_session_id = Column(String(80), nullable=True, index=True)
+    evidence_type = Column(String(32), nullable=True)
+    uncertain = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=utc_now_naive)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -451,6 +652,9 @@ class ContentDistributionResult(Base):
             "error_message": self.error_message,
             "note_url": self.note_url,
             "has_screenshot": bool(self.screenshot_path),
+            "browser_session_id": self.browser_session_id,
+            "evidence_type": self.evidence_type,
+            "uncertain": bool(self.uncertain),
             "created_at": format_utc_datetime(self.created_at),
             "started_at": format_utc_datetime(self.started_at),
             "completed_at": format_utc_datetime(self.completed_at),

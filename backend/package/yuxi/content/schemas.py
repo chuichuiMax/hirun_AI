@@ -4,7 +4,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 ContentMode = Literal["quick", "pro"]
 
 
@@ -37,6 +36,10 @@ class ContentBriefPayload(BaseModel):
 
 class ContentBriefSave(BaseModel):
     brief: ContentBriefPayload
+
+
+class ContentOCRCorrection(BaseModel):
+    corrected_text: str = Field(max_length=200_000)
 
 
 class StrategySelection(BaseModel):
@@ -111,6 +114,17 @@ class XiaohongshuDistributionCreate(BaseModel):
     body: str | None = Field(default=None, min_length=1, max_length=1000)
     topics: list[str] | None = Field(default=None, max_length=10)
     confirm_publish: bool = False
+
+
+class XiaohongshuBrowserAction(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    action: Literal["click", "type", "keypress", "scroll"]
+    x: float | None = Field(default=None, ge=0, le=4000)
+    y: float | None = Field(default=None, ge=0, le=4000)
+    text: str | None = Field(default=None, max_length=2000)
+    key: str | None = Field(default=None, max_length=32)
+    delta_y: int | None = Field(default=None, ge=-2000, le=2000)
 
 
 class RuleVersionAction(BaseModel):

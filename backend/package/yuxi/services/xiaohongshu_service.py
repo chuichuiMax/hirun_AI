@@ -4,10 +4,12 @@ import hashlib
 import json
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +21,7 @@ from yuxi.content.schemas import (
 )
 from yuxi.integrations.xiaohongshu import XiaohongshuRuntime
 from yuxi.repositories.content_repository import ContentRepository
+from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.xiaohongshu_repository import XiaohongshuRepository
 from yuxi.services.run_queue_service import get_arq_pool, get_redis_client
 from yuxi.storage.postgres.models_business import User
@@ -27,6 +30,12 @@ from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.logging_config import logger
 
 LOGIN_SESSION_SECONDS = 180
+XHS_BROWSER_GATEWAY_URL = os.getenv("XHS_BROWSER_GATEWAY_URL", "http://xhs-browser-gateway:5051").rstrip("/")
+XHS_GATEWAY_TOKEN = os.getenv("XHS_GATEWAY_TOKEN", "")
+XHS_BROWSER_OPERATION_LOCK_SECONDS = max(60, int(os.getenv("XHS_BROWSER_OPERATION_LOCK_SECONDS", "180")))
+XHS_BROWSER_OPERATION_BLOCK_SECONDS = max(1, int(os.getenv("XHS_BROWSER_OPERATION_BLOCK_SECONDS", "3")))
+XHS_GATEWAY_IDLE_SECONDS = max(60, int(os.getenv("XHS_GATEWAY_IDLE_SECONDS", "900")))
+XHS_BROWSER_CONTROL_LEASE_SECONDS = max(30, int(os.getenv("XHS_BROWSER_CONTROL_LEASE_SECONDS", "120")))
 
 
 def _error(status_code: int, code: str, message: str, **extra: Any) -> HTTPException:
@@ -57,14 +66,385 @@ def _serialize_job(job: ContentDistributionJob, results) -> dict[str, Any]:
     return payload
 
 
+async def _gateway_request(method: str, path: str, **kwargs) -> httpx.Response:
+    headers = dict(kwargs.pop("headers", {}) or {})
+    if XHS_GATEWAY_TOKEN:
+        headers["Authorization"] = f"Bearer {XHS_GATEWAY_TOKEN}"
+    try:
+        async with httpx.AsyncClient(base_url=XHS_BROWSER_GATEWAY_URL, timeout=45.0) as client:
+            response = await client.request(method, path, headers=headers, **kwargs)
+    except httpx.HTTPError as exc:
+        raise _error(
+            503,
+            "XHS_BROWSER_GATEWAY_UNAVAILABLE",
+            "小红书远程浏览器服务暂不可用",
+            retryable=True,
+        ) from exc
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail") if response.content else None
+        except ValueError:
+            detail = None
+        if isinstance(detail, dict):
+            code = str(detail.get("code") or detail.get("error", {}).get("code") or "XHS_GATEWAY_ERROR")
+            message = str(detail.get("message") or detail.get("error", {}).get("message") or "远程浏览器操作失败")
+        else:
+            code = "XHS_GATEWAY_ERROR"
+            message = "远程浏览器操作失败"
+        status_code = response.status_code if response.status_code in {404, 409, 422, 429} else 502
+        raise _error(
+            status_code,
+            code,
+            message,
+            retryable=response.status_code == 429 or response.status_code >= 500,
+        )
+    return response
+
+
+def _browser_operation_lock_key(owner_uid: str, account_id: str) -> str:
+    return f"xhs:account-lock:{owner_uid}:{account_id}"
+
+
+def _browser_control_key(owner_uid: str, account_id: str) -> str:
+    return f"xhs:browser-control:{owner_uid}:{account_id}"
+
+
+async def _has_browser_control(
+    session_id: str,
+    owner_uid: str,
+    account_id: str,
+    *,
+    refresh: bool = False,
+) -> bool:
+    try:
+        redis = await get_redis_client()
+        key = _browser_control_key(owner_uid, account_id)
+        value = await redis.get(key)
+        if isinstance(value, bytes):
+            value = value.decode()
+        claimed = value == session_id
+        if claimed and refresh:
+            await redis.expire(key, XHS_BROWSER_CONTROL_LEASE_SECONDS)
+        return claimed
+    except Exception as exc:
+        raise _error(
+            503,
+            "XHS_CONTROL_LEASE_UNAVAILABLE",
+            "人工接管状态暂不可用",
+            retryable=True,
+        ) from exc
+
+
+@asynccontextmanager
+async def _browser_operation_slot(owner_uid: str, account_id: str):
+    try:
+        redis = await get_redis_client()
+        lock = redis.lock(
+            _browser_operation_lock_key(owner_uid, account_id),
+            timeout=XHS_BROWSER_OPERATION_LOCK_SECONDS,
+            blocking_timeout=XHS_BROWSER_OPERATION_BLOCK_SECONDS,
+        )
+        acquired = await lock.acquire()
+    except Exception as exc:
+        raise _error(
+            503,
+            "XHS_ACCOUNT_LOCK_UNAVAILABLE",
+            "账号操作锁暂不可用",
+            retryable=True,
+        ) from exc
+    if not acquired:
+        raise _error(409, "XHS_ACCOUNT_BUSY", "该账号正在执行其他操作，请稍后重试", retryable=True)
+    try:
+        yield
+    finally:
+        try:
+            await lock.release()
+        except Exception as exc:
+            logger.warning(
+                f"Failed to release Xiaohongshu browser operation lock "
+                f"account={account_id} error_type={type(exc).__name__}"
+            )
+
+
+async def _open_gateway_session(session_id: str, owner_uid: str, account_id: str) -> dict[str, Any]:
+    response = await _gateway_request(
+        "POST",
+        "/internal/sessions/open",
+        json={"session_id": session_id, "owner_uid": owner_uid, "account_id": account_id},
+    )
+    return response.json()
+
+
+async def _current_browser_session(
+    repo: XiaohongshuRepository,
+    owner_uid: str,
+    account_id: str,
+    expected_session_id: str,
+):
+    account = await repo.get_account(account_id, owner_uid)
+    if account is None:
+        raise _error(404, "XHS_ACCOUNT_NOT_FOUND", "小红书账号不存在")
+    if not account.enabled:
+        raise _error(409, "XHS_ACCOUNT_DISABLED", "请先启用该账号")
+    session = await repo.get_browser_session(account_id, owner_uid)
+    if session is None or session.id != expected_session_id:
+        raise _error(404, "XHS_BROWSER_SESSION_NOT_FOUND", "远程浏览器会话不存在")
+    return account, session
+
+
+async def _recover_gateway_session(
+    repo: XiaohongshuRepository,
+    session_id: str,
+    owner_uid: str,
+    account_id: str,
+):
+    async with _browser_operation_slot(owner_uid, account_id):
+        account, session = await _current_browser_session(repo, owner_uid, account_id, session_id)
+        state = await _open_gateway_session(session.id, owner_uid, account_id)
+    return account, session, state
+
+
+def _browser_session_id(account_id: str) -> str:
+    return f"xhbs_{account_id}_{uuid.uuid4().hex[:24]}"
+
+
+async def _sync_browser_state(db: AsyncSession, account, session, state: dict[str, Any]) -> None:
+    now = utc_now_naive()
+    logged_in = bool(state.get("logged_in"))
+    session.status = "ready" if logged_in else "login_required"
+    session.last_heartbeat_at = now
+    session.last_used_at = now
+    session.expires_at = now + timedelta(seconds=XHS_GATEWAY_IDLE_SECONDS)
+    session.last_error_code = None
+    session.last_error_message = None
+    if logged_in:
+        session.started_at = session.started_at or now
+        account.login_status = "logged_in"
+        account.platform_nickname = str(state.get("nickname") or "") or account.platform_nickname
+        account.platform_account_id = str(state.get("platform_account_id") or "") or account.platform_account_id
+        account.last_verified_at = now
+        account.last_error_code = None
+        account.last_error_message = None
+    elif account.login_status == "logged_in":
+        account.login_status = "expired"
+        account.last_error_code = "XHS_LOGIN_REQUIRED"
+        account.last_error_message = "账号需要重新登录"
+
+
+async def open_browser_session(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+    owner_uid = _owner_uid(user)
+    repo = XiaohongshuRepository(db)
+    account = await repo.get_account(account_id, owner_uid, for_update=True)
+    if account is None:
+        raise _error(404, "XHS_ACCOUNT_NOT_FOUND", "小红书账号不存在")
+    if not account.enabled:
+        raise _error(409, "XHS_ACCOUNT_DISABLED", "请先启用该账号")
+    session = await repo.get_browser_session(account_id, owner_uid, for_update=True)
+    if session is None:
+        session = await repo.create_browser_session(
+            owner_uid=owner_uid,
+            account_id=account_id,
+            session_id=_browser_session_id(account_id),
+        )
+    await db.commit()
+    try:
+        async with _browser_operation_slot(owner_uid, account_id):
+            account, session = await _current_browser_session(repo, owner_uid, account_id, session.id)
+            state = await _open_gateway_session(session.id, owner_uid, account_id)
+    except HTTPException as exc:
+        session.status = "error"
+        session.last_error_code = (
+            exc.detail.get("error", {}).get("code") if isinstance(exc.detail, dict) else "XHS_GATEWAY_ERROR"
+        )
+        session.last_error_message = str(exc.detail)
+        await db.commit()
+        raise
+    await _sync_browser_state(db, account, session, state)
+    session.worker_id = os.getenv("HOSTNAME") or None
+    session.browser_version = os.getenv("XHS_GATEWAY_BROWSER_VERSION") or None
+    await db.commit()
+    return {"session": session.to_dict(), "browser": state}
+
+
+async def get_browser_session(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+    owner_uid = _owner_uid(user)
+    repo = XiaohongshuRepository(db)
+    account = await repo.get_account(account_id, owner_uid)
+    session = await repo.get_browser_session(account_id, owner_uid)
+    if account is None:
+        raise _error(404, "XHS_ACCOUNT_NOT_FOUND", "小红书账号不存在")
+    if session is None:
+        raise _error(404, "XHS_BROWSER_SESSION_NOT_FOUND", "远程浏览器会话不存在")
+    try:
+        response = await _gateway_request(
+            "GET",
+            f"/internal/sessions/{session.id}/status",
+            params={"owner_uid": owner_uid, "account_id": account_id},
+        )
+        state = response.json()
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        account, session, state = await _recover_gateway_session(
+            repo,
+            session.id,
+            owner_uid,
+            account_id,
+        )
+    await _sync_browser_state(db, account, session, state)
+    await db.commit()
+    return {"session": session.to_dict(), "browser": state}
+
+
+async def heartbeat_browser_session(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+    result = await get_browser_session(db, user, account_id)
+    result["control_claimed"] = await _has_browser_control(
+        result["session"]["id"],
+        _owner_uid(user),
+        account_id,
+        refresh=True,
+    )
+    return result
+
+
+async def claim_browser_session(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+    owner_uid = _owner_uid(user)
+    repo = XiaohongshuRepository(db)
+    account = await repo.get_account(account_id, owner_uid)
+    session = await repo.get_browser_session(account_id, owner_uid)
+    if account is None:
+        raise _error(404, "XHS_ACCOUNT_NOT_FOUND", "小红书账号不存在")
+    if session is None or session.status not in {"ready", "login_required"}:
+        raise _error(409, "XHS_BROWSER_SESSION_NOT_READY", "请先打开远程浏览器")
+    async with _browser_operation_slot(owner_uid, account_id):
+        _, session = await _current_browser_session(repo, owner_uid, account_id, session.id)
+        if session.status not in {"ready", "login_required"}:
+            raise _error(409, "XHS_BROWSER_SESSION_NOT_READY", "请先打开远程浏览器")
+        try:
+            redis = await get_redis_client()
+            await redis.set(
+                _browser_control_key(owner_uid, account_id),
+                session.id,
+                ex=XHS_BROWSER_CONTROL_LEASE_SECONDS,
+            )
+        except Exception as exc:
+            raise _error(
+                503,
+                "XHS_CONTROL_LEASE_UNAVAILABLE",
+                "人工接管状态暂不可用",
+                retryable=True,
+            ) from exc
+    return {
+        "claimed": True,
+        "session_id": session.id,
+        "expires_in": XHS_BROWSER_CONTROL_LEASE_SECONDS,
+    }
+
+
+async def browser_session_action(
+    db: AsyncSession, user: User, account_id: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    owner_uid = _owner_uid(user)
+    repo = XiaohongshuRepository(db)
+    account = await repo.get_account(account_id, owner_uid)
+    session = await repo.get_browser_session(account_id, owner_uid)
+    if account is None:
+        raise _error(404, "XHS_ACCOUNT_NOT_FOUND", "小红书账号不存在")
+    if session is None:
+        raise _error(404, "XHS_BROWSER_SESSION_NOT_FOUND", "请先打开远程浏览器")
+    async with _browser_operation_slot(owner_uid, account_id):
+        account, session = await _current_browser_session(repo, owner_uid, account_id, session.id)
+        if not await _has_browser_control(session.id, owner_uid, account_id, refresh=True):
+            raise _error(409, "XHS_BROWSER_CONTROL_REQUIRED", "请先启用人工接管")
+        try:
+            response = await _gateway_request(
+                "POST",
+                f"/internal/sessions/{session.id}/action",
+                json={**payload, "session_id": session.id, "owner_uid": owner_uid, "account_id": account_id},
+            )
+            state = response.json()
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            await _open_gateway_session(session.id, owner_uid, account_id)
+            raise _error(
+                409,
+                "XHS_BROWSER_SESSION_RECOVERED",
+                "远程浏览器会话已恢复，请根据新画面重新操作",
+                retryable=True,
+            ) from exc
+    await _sync_browser_state(db, account, session, state)
+    await db.commit()
+    return {"session": session.to_dict(), "browser": state}
+
+
+async def get_browser_screenshot(db: AsyncSession, user: User, account_id: str) -> bytes:
+    owner_uid = _owner_uid(user)
+    repo = XiaohongshuRepository(db)
+    account = await repo.get_account(account_id, owner_uid)
+    if account is None:
+        raise _error(404, "XHS_ACCOUNT_NOT_FOUND", "小红书账号不存在")
+    session = await repo.get_browser_session(account_id, owner_uid)
+    if session is None:
+        raise _error(404, "XHS_BROWSER_SESSION_NOT_FOUND", "请先打开远程浏览器")
+    try:
+        response = await _gateway_request(
+            "GET",
+            f"/internal/sessions/{session.id}/screenshot",
+            params={"owner_uid": owner_uid, "account_id": account_id},
+        )
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        _, session, _ = await _recover_gateway_session(
+            repo,
+            session.id,
+            owner_uid,
+            account_id,
+        )
+        response = await _gateway_request(
+            "GET",
+            f"/internal/sessions/{session.id}/screenshot",
+            params={"owner_uid": owner_uid, "account_id": account_id},
+        )
+    session.last_used_at = utc_now_naive()
+    await db.commit()
+    return response.content
+
+
+async def close_browser_session(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+    owner_uid = _owner_uid(user)
+    repo = XiaohongshuRepository(db)
+    session = await repo.get_browser_session(account_id, owner_uid)
+    if session is None:
+        return {"closed": True, "account_id": account_id}
+    async with _browser_operation_slot(owner_uid, account_id):
+        session = await repo.get_browser_session(account_id, owner_uid, for_update=True)
+        if session is None:
+            return {"closed": True, "account_id": account_id}
+        await _gateway_request(
+            "DELETE",
+            f"/internal/sessions/{session.id}",
+            params={"owner_uid": owner_uid, "account_id": account_id},
+        )
+    session.status = "stopped"
+    session.last_heartbeat_at = utc_now_naive()
+    try:
+        await (await get_redis_client()).delete(_browser_control_key(owner_uid, account_id))
+    except Exception as exc:
+        logger.warning(
+            f"Failed to revoke Xiaohongshu browser control lease account={account_id} error_type={type(exc).__name__}"
+        )
+    await db.commit()
+    return {"closed": True, "account_id": account_id, "session": session.to_dict()}
+
+
 async def list_accounts(db: AsyncSession, user: User) -> dict[str, Any]:
     items = await XiaohongshuRepository(db).list_accounts(_owner_uid(user))
     return {"items": [item.to_dict() for item in items]}
 
 
-async def create_account(
-    db: AsyncSession, user: User, payload: XiaohongshuAccountCreate
-) -> dict[str, Any]:
+async def create_account(db: AsyncSession, user: User, payload: XiaohongshuAccountCreate) -> dict[str, Any]:
     repo = XiaohongshuRepository(db)
     try:
         account = await repo.create_account(
@@ -101,12 +481,38 @@ async def update_account(
 
 
 async def delete_account(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+    owner_uid = _owner_uid(user)
     repo = XiaohongshuRepository(db)
-    account = await repo.get_account(account_id, _owner_uid(user), for_update=True)
+    account = await repo.get_account(account_id, owner_uid)
     if account is None:
         raise _error(404, "XHS_ACCOUNT_NOT_FOUND", "小红书账号不存在")
-    await repo.delete_account(account)
-    await db.commit()
+    async with _browser_operation_slot(owner_uid, account_id):
+        account = await repo.get_account(account_id, owner_uid, for_update=True)
+        if account is None:
+            raise _error(404, "XHS_ACCOUNT_NOT_FOUND", "小红书账号不存在")
+        browser_session = await repo.get_browser_session(account_id, owner_uid, for_update=True)
+        if browser_session is not None and browser_session.status in {
+            "starting",
+            "ready",
+            "login_required",
+            "busy",
+        }:
+            await _gateway_request(
+                "DELETE",
+                f"/internal/sessions/{browser_session.id}",
+                params={"owner_uid": account.owner_uid, "account_id": account.id},
+            )
+            browser_session.status = "stopped"
+            browser_session.last_heartbeat_at = utc_now_naive()
+        try:
+            await (await get_redis_client()).delete(_browser_control_key(owner_uid, account_id))
+        except Exception as exc:
+            logger.warning(
+                f"Failed to revoke Xiaohongshu browser control lease "
+                f"account={account_id} error_type={type(exc).__name__}"
+            )
+        await repo.delete_account(account)
+        await db.commit()
     try:
         queue = await get_arq_pool()
         await queue.enqueue_job(
@@ -116,11 +522,16 @@ async def delete_account(db: AsyncSession, user: User, account_id: str) -> dict[
             _job_id=f"xhs-cleanup:{account.id}",
         )
     except Exception as exc:
-        logger.warning(f"Falling back to immediate Xiaohongshu profile cleanup for {account.id}: {exc}")
+        logger.warning(
+            f"Falling back to immediate Xiaohongshu profile cleanup "
+            f"account={account.id} error_type={type(exc).__name__}"
+        )
         try:
             XiaohongshuRuntime().remove_account_dir(account.owner_uid, account.id)
         except Exception as cleanup_exc:
-            logger.error(f"Failed to clean Xiaohongshu profile for {account.id}: {cleanup_exc}")
+            logger.error(
+                f"Failed to clean Xiaohongshu profile account={account.id} error_type={type(cleanup_exc).__name__}"
+            )
             raise _error(
                 503,
                 "XHS_PROFILE_CLEANUP_PENDING",
@@ -131,6 +542,10 @@ async def delete_account(db: AsyncSession, user: User, account_id: str) -> dict[
 
 
 async def start_account_login(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+    if XHS_BROWSER_GATEWAY_URL:
+        result = await open_browser_session(db, user, account_id)
+        return {**result, "reused": result["session"]["status"] != "starting"}
+
     repo = XiaohongshuRepository(db)
     account = await repo.get_account(account_id, _owner_uid(user), for_update=True)
     if account is None:
@@ -221,6 +636,16 @@ async def get_login_session(db: AsyncSession, user: User, session_id: str) -> di
 
 
 async def check_account_login(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+    if XHS_BROWSER_GATEWAY_URL:
+        result = await open_browser_session(db, user, account_id)
+        account = await XiaohongshuRepository(db).get_account(account_id, _owner_uid(user))
+        return {
+            "accepted": False,
+            "completed": True,
+            "account": account.to_dict(),
+            **result,
+        }
+
     account = await XiaohongshuRepository(db).get_account(account_id, _owner_uid(user))
     if account is None:
         raise _error(404, "XHS_ACCOUNT_NOT_FOUND", "小红书账号不存在")
@@ -276,11 +701,7 @@ async def create_distribution(
     title = payload.title if payload.title is not None else artifact.title.strip()
     body = payload.body if payload.body is not None else artifact.body.strip()
     topics = list(
-        dict.fromkeys(
-            item.strip().lstrip("#")
-            for item in (payload.topics or artifact.topics or [])
-            if item.strip()
-        )
+        dict.fromkeys(item.strip().lstrip("#") for item in (payload.topics or artifact.topics or []) if item.strip())
     )
     if not title or len(title) > 20:
         raise _error(422, "XHS_TITLE_INVALID", "小红书标题需为 1–20 个字符")
@@ -299,13 +720,26 @@ async def create_distribution(
         results = await repo.list_distribution_results(existing.id)
         return {"job": _serialize_job(existing, results), "deduplicated": True}
 
+    cover_snapshot = {"type": "generated", "template": "title-card-v1"}
+    if artifact.cover_asset_id:
+        cover_asset = await ContentCoverRepository(db).get_asset_for_user(artifact.cover_asset_id, owner_uid)
+        if cover_asset is None or cover_asset.role != "output":
+            raise _error(409, "CONTENT_COVER_MISSING", "当前封面不存在，请重新选择封面")
+        cover_snapshot = {
+            "type": "asset",
+            "asset_id": cover_asset.id,
+            "bucket_name": cover_asset.bucket_name,
+            "object_name": cover_asset.object_name,
+            "sha256": cover_asset.sha256,
+        }
+
     snapshot = {
         "schema_version": 1,
         "account_ids": account_ids,
         "title": title,
         "body": body,
         "topics": topics,
-        "cover": {"type": "generated", "template": "title-card-v1"},
+        "cover": cover_snapshot,
     }
     dedupe_key = None
     if payload.mode == "publish":
@@ -341,6 +775,8 @@ async def create_distribution(
         idempotency_key=request_key,
         dedupe_key=dedupe_key,
         accounts=accounts,
+        confirmed_by=owner_uid if payload.mode == "publish" else None,
+        confirmed_at=utc_now_naive() if payload.mode == "publish" else None,
     )
     try:
         await db.commit()
@@ -385,9 +821,7 @@ async def get_distribution_job(db: AsyncSession, user: User, job_id: str) -> dic
     return {"job": _serialize_job(job, await repo.list_distribution_results(job.id))}
 
 
-async def list_artifact_distributions(
-    db: AsyncSession, user: User, artifact_id: str
-) -> dict[str, Any]:
+async def list_artifact_distributions(db: AsyncSession, user: User, artifact_id: str) -> dict[str, Any]:
     owner_uid = _owner_uid(user)
     artifact = await ContentRepository(db).get_artifact(artifact_id)
     if artifact is None or artifact.created_by != owner_uid:
@@ -400,9 +834,7 @@ async def list_artifact_distributions(
     return {"items": items}
 
 
-async def get_result_screenshot(
-    db: AsyncSession, user: User, result_id: str
-) -> Path:
+async def get_result_screenshot(db: AsyncSession, user: User, result_id: str) -> Path:
     result = await XiaohongshuRepository(db).get_result(result_id, _owner_uid(user))
     if result is None or not result.screenshot_path:
         raise _error(404, "XHS_SCREENSHOT_NOT_FOUND", "执行截图不存在")
