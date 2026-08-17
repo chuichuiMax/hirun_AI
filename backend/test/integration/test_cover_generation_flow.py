@@ -17,6 +17,7 @@ from yuxi.repositories.content_repository import ContentRepository
 import yuxi.services.content_cover_service as content_cover_service
 import yuxi.services.content_cover_worker as content_cover_worker
 from yuxi.content_cover.schemas import Image2Output, Image2Submission
+from yuxi.content.rules import ensure_content_seed_data
 from yuxi.storage.minio.client import get_minio_client
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_content import (
@@ -416,6 +417,7 @@ async def test_selected_candidate_creates_new_artifact_version():
     job_id = f"ccj_{uuid.uuid4().hex}"
 
     async with pg_manager.get_async_session_context() as db:
+        await ensure_content_seed_data(db)
         template = (
             await db.execute(select(IndustryTemplateVersion).order_by(IndustryTemplateVersion.created_at).limit(1))
         ).scalar_one()
