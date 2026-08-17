@@ -201,7 +201,7 @@ onMounted(load)
           <div class="account-actions">
             <a-switch :checked="account.enabled" @change="(value) => toggle(account, value)" />
             <a-button type="primary" :disabled="!account.enabled" @click="openBrowser(account)">
-              <MonitorUp :size="15" />{{ account.login_status === 'logged_in' ? '打开远程浏览器' : '打开登录界面' }}
+              <MonitorUp :size="15" />{{ account.login_status === 'logged_in' ? '打开草稿箱' : '打开登录界面' }}
             </a-button>
             <a-button v-if="account.login_status === 'logged_in'" :loading="checkingAccountId === account.id" :disabled="Boolean(checkingAccountId)" @click="check(account)"><RefreshCw :size="15" />检查状态</a-button>
             <a-button v-else type="text" @click="bind(account)"><Link2 :size="15" />重新绑定</a-button>
