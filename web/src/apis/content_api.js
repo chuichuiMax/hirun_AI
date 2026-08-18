@@ -99,8 +99,8 @@ export const contentApi = {
     apiPost(`/api/content/xiaohongshu/accounts/${accountId}/login`),
   checkXiaohongshuAccount: (accountId) =>
     apiPost(`/api/content/xiaohongshu/accounts/${accountId}/check`),
-  openXiaohongshuBrowserSession: (accountId) =>
-    apiPost(`/api/content/xiaohongshu/accounts/${accountId}/browser-session`),
+  openXiaohongshuBrowserSession: (accountId, payload = {}) =>
+    apiPost(`/api/content/xiaohongshu/accounts/${accountId}/browser-session`, payload),
   getXiaohongshuBrowserSession: (accountId) =>
     apiGet(`/api/content/xiaohongshu/accounts/${accountId}/browser-session`),
   heartbeatXiaohongshuBrowserSession: (accountId) =>

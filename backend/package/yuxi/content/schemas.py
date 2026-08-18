@@ -116,6 +116,10 @@ class XiaohongshuDistributionCreate(BaseModel):
     confirm_publish: bool = False
 
 
+class XiaohongshuBrowserOpen(BaseModel):
+    target: Literal["home", "drafts"] = "home"
+
+
 class XiaohongshuBrowserAction(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

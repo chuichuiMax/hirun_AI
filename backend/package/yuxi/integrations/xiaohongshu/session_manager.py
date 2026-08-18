@@ -21,6 +21,8 @@ class BrowserSession:
     account_id: str
     context: object
     page: object
+    target: str = "home"
+    view: str = "home"
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_used_at: float = field(default_factory=monotonic)
 
@@ -61,7 +63,16 @@ class XiaohongshuBrowserSessionManager:
                 self._playwright = await async_playwright().start()
         return self._playwright
 
-    async def open(self, session_id: str, owner_uid: str, account_id: str) -> dict:
+    async def open(
+        self,
+        session_id: str,
+        owner_uid: str,
+        account_id: str,
+        *,
+        target: str = "home",
+    ) -> dict:
+        if target not in {"home", "drafts"}:
+            raise ValueError("不支持的浏览器目标页面")
         key = self._key(owner_uid, account_id)
         lock = await self._account_lock(owner_uid, account_id)
         async with lock:
@@ -72,6 +83,7 @@ class XiaohongshuBrowserSessionManager:
                         await existing.context.close()
                     self._sessions.pop(key, None)
                 else:
+                    existing.target = target
                     existing.last_used_at = monotonic()
                     async with existing.lock:
                         return await self._status_unlocked(existing)
@@ -96,6 +108,8 @@ class XiaohongshuBrowserSessionManager:
                     account_id=account_id,
                     context=context,
                     page=page,
+                    target=target,
+                    view="login" if page.url.startswith(XHS_LOGIN_URL) else "home",
                 )
                 async with self._manager_lock:
                     self._sessions[key] = session
@@ -128,6 +142,11 @@ class XiaohongshuBrowserSessionManager:
     async def _status_unlocked(self, session: BrowserSession) -> dict:
         logged_in = await self.runtime._is_logged_in(session.page)
         profile = await self.runtime._profile(session.page) if logged_in else {"nickname": "", "account_id": ""}
+        if not logged_in:
+            session.view = "login"
+        elif session.target == "drafts" and session.view != "drafts":
+            await self.runtime.open_drafts(session.page)
+            session.view = "drafts"
         return {
             "session_id": session.session_id,
             "owner_uid": session.owner_uid,
@@ -136,6 +155,7 @@ class XiaohongshuBrowserSessionManager:
             "logged_in": logged_in,
             "nickname": profile.get("nickname", ""),
             "platform_account_id": profile.get("account_id", ""),
+            "view": session.view,
         }
 
     async def screenshot(self, *, session_id: str, owner_uid: str, account_id: str) -> bytes:
@@ -162,7 +182,22 @@ class XiaohongshuBrowserSessionManager:
                 await session.page.keyboard.insert_text(text)
             elif action == "keypress":
                 key = str(payload.get("key") or "")
-                allowed = {"Enter", "Escape", "Tab", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"}
+                allowed = {
+                    "Enter",
+                    "Escape",
+                    "Tab",
+                    "Backspace",
+                    "Delete",
+                    "Home",
+                    "End",
+                    "PageUp",
+                    "PageDown",
+                    "ArrowUp",
+                    "ArrowDown",
+                    "ArrowLeft",
+                    "ArrowRight",
+                    "Control+A",
+                }
                 if key not in allowed:
                     raise ValueError("不支持的按键")
                 await session.page.keyboard.press(key)

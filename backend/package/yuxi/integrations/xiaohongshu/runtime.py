@@ -17,6 +17,8 @@ XHS_LOGIN_URL = "https://creator.xiaohongshu.com/login"
 XHS_HOME_URL = "https://creator.xiaohongshu.com/new/home"
 XHS_PUBLISH_NOTE_URL = "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=image"
 XHS_SUCCESS_URL_PATTERN = "**/publish/success?**"
+XHS_DRAFT_ENTRY_PATTERN = re.compile(r"^草稿箱\s*(?:[（(]\d+[)）])?$")
+XHS_DRAFT_TAB_PATTERN = re.compile(r"视频笔记\s*[（(]\d+[)）]")
 LOGIN_BOX_SELECTOR = "div[class*='login-box']"
 QR_IMAGE_SELECTOR = "img.css-1lhmg90"
 QR_SWITCH_SELECTOR = "img.css-wemwzq"
@@ -102,6 +104,32 @@ class XiaohongshuRuntime:
                 if nickname:
                     break
         return {"nickname": nickname, "account_id": account_id}
+
+    async def open_drafts(self, page) -> None:
+        """Open the creator-platform draft drawer without exposing arbitrary navigation."""
+        from patchright.async_api import TimeoutError as BrowserTimeoutError
+
+        if not await self._is_logged_in(page):
+            raise XiaohongshuRuntimeError("XHS_LOGIN_REQUIRED", "账号登录已失效，请重新扫码")
+
+        async def draft_box_is_open() -> bool:
+            indicator = page.get_by_text(XHS_DRAFT_TAB_PATTERN).first
+            try:
+                return bool(await indicator.count()) and await indicator.is_visible()
+            except Exception:
+                return False
+
+        if await draft_box_is_open():
+            return
+
+        await page.goto(XHS_PUBLISH_NOTE_URL, wait_until="domcontentloaded", timeout=60000)
+        draft_entry = page.get_by_text(XHS_DRAFT_ENTRY_PATTERN).first
+        try:
+            await draft_entry.wait_for(state="visible", timeout=15000)
+            await draft_entry.click()
+            await page.get_by_text(XHS_DRAFT_TAB_PATTERN).first.wait_for(state="visible", timeout=15000)
+        except BrowserTimeoutError as exc:
+            raise XiaohongshuRuntimeError("XHS_DRAFTS_OPEN_UNCONFIRMED", "未能自动打开小红书草稿箱") from exc
 
     async def check_status(self, owner_uid: str, account_id: str) -> dict[str, str | bool]:
         from patchright.async_api import async_playwright

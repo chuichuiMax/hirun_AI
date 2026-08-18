@@ -59,6 +59,7 @@ class SessionRequest(BaseModel):
     session_id: str = Field(min_length=8, max_length=80)
     owner_uid: str = Field(min_length=1, max_length=255)
     account_id: str = Field(min_length=1, max_length=80)
+    target: str = Field(default="home", pattern="^(home|drafts)$")
 
 
 class ActionRequest(SessionRequest):
@@ -93,7 +94,12 @@ async def health() -> dict[str, str | int]:
 @app.post("/internal/sessions/open", dependencies=[Depends(require_internal_token)])
 async def open_session(payload: SessionRequest) -> dict:
     try:
-        return await manager.open(payload.session_id, payload.owner_uid, payload.account_id)
+        return await manager.open(
+            payload.session_id,
+            payload.owner_uid,
+            payload.account_id,
+            target=payload.target,
+        )
     except BrowserSessionCapacityError as exc:
         raise HTTPException(
             status_code=429,

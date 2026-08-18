@@ -16,20 +16,25 @@ from yuxi.integrations.xiaohongshu.session_manager import (
 class FakeMouse:
     def __init__(self):
         self.clicks = []
+        self.wheels = []
 
     async def click(self, x, y):
         self.clicks.append((x, y))
 
     async def wheel(self, x, y):
-        del x, y
+        self.wheels.append((x, y))
 
 
 class FakeKeyboard:
+    def __init__(self):
+        self.inserted = []
+        self.pressed = []
+
     async def insert_text(self, text):
-        del text
+        self.inserted.append(text)
 
     async def press(self, key):
-        del key
+        self.pressed.append(key)
 
 
 class FakePage:
@@ -71,6 +76,7 @@ class FakeRuntime:
     def __init__(self):
         self.page = FakePage()
         self.context = FakeContext(self.page)
+        self.drafts_opened = 0
 
     async def _launch_context(self, playwright, owner_uid, account_id):
         del playwright, owner_uid, account_id
@@ -83,6 +89,10 @@ class FakeRuntime:
     async def _profile(self, page):
         del page
         return {"nickname": "测试账号", "account_id": "platform-1"}
+
+    async def open_drafts(self, page):
+        self.drafts_opened += 1
+        page.url = "https://creator.xiaohongshu.com/publish/drafts"
 
 
 class IsolatedFakeRuntime(FakeRuntime):
@@ -122,6 +132,57 @@ async def test_action_returns_status_without_reentrant_lock_deadlock():
 
     await manager.close_all()
     assert runtime.context.closed is True
+
+
+@pytest.mark.asyncio
+async def test_drafts_target_opens_once_and_is_reported_in_status():
+    runtime = FakeRuntime()
+    manager = XiaohongshuBrowserSessionManager(runtime=runtime)
+    manager._playwright = FakePlaywright()
+
+    opened = await manager.open(
+        "session-1",
+        "owner-1",
+        "account-1",
+        target="drafts",
+    )
+    reopened = await manager.open(
+        "session-1",
+        "owner-1",
+        "account-1",
+        target="drafts",
+    )
+
+    assert opened["view"] == "drafts"
+    assert reopened["view"] == "drafts"
+    assert runtime.drafts_opened == 1
+    await manager.close_all()
+
+
+@pytest.mark.asyncio
+async def test_direct_takeover_keyboard_and_wheel_actions_are_bounded():
+    runtime = FakeRuntime()
+    manager = XiaohongshuBrowserSessionManager(runtime=runtime)
+    manager._playwright = FakePlaywright()
+    await manager.open("session-1", "owner-1", "account-1")
+
+    for payload in (
+        {"action": "type", "text": "直接输入中文"},
+        {"action": "keypress", "key": "Control+A"},
+        {"action": "keypress", "key": "Delete"},
+        {"action": "scroll", "delta_y": 5000},
+    ):
+        await manager.action(
+            session_id="session-1",
+            owner_uid="owner-1",
+            account_id="account-1",
+            payload=payload,
+        )
+
+    assert runtime.page.keyboard.inserted == ["直接输入中文"]
+    assert runtime.page.keyboard.pressed == ["Control+A", "Delete"]
+    assert runtime.page.mouse.wheels == [(0, 2000)]
+    await manager.close_all()
 
 
 @pytest.mark.asyncio
@@ -291,3 +352,35 @@ async def test_gateway_capacity_returns_retryable_http_status(monkeypatch: pytes
 
     assert exc_info.value.status_code == 429
     assert exc_info.value.detail["code"] == "XHS_GATEWAY_CAPACITY_REACHED"
+
+
+@pytest.mark.asyncio
+async def test_gateway_forwards_restricted_drafts_target(monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    async def open_drafts(session_id, owner_uid, account_id, *, target):
+        captured.update(
+            session_id=session_id,
+            owner_uid=owner_uid,
+            account_id=account_id,
+            target=target,
+        )
+        return {"status": "ready", "view": target}
+
+    monkeypatch.setattr(xhs_browser_gateway.manager, "open", open_drafts)
+    request = xhs_browser_gateway.SessionRequest(
+        session_id="session-123",
+        owner_uid="owner-1",
+        account_id="account-1",
+        target="drafts",
+    )
+
+    response = await xhs_browser_gateway.open_session(request)
+
+    assert response == {"status": "ready", "view": "drafts"}
+    assert captured == {
+        "session_id": "session-123",
+        "owner_uid": "owner-1",
+        "account_id": "account-1",
+        "target": "drafts",
+    }

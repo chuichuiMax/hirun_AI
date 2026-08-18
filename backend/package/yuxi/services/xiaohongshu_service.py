@@ -166,11 +166,22 @@ async def _browser_operation_slot(owner_uid: str, account_id: str):
             )
 
 
-async def _open_gateway_session(session_id: str, owner_uid: str, account_id: str) -> dict[str, Any]:
+async def _open_gateway_session(
+    session_id: str,
+    owner_uid: str,
+    account_id: str,
+    *,
+    target: str = "home",
+) -> dict[str, Any]:
     response = await _gateway_request(
         "POST",
         "/internal/sessions/open",
-        json={"session_id": session_id, "owner_uid": owner_uid, "account_id": account_id},
+        json={
+            "session_id": session_id,
+            "owner_uid": owner_uid,
+            "account_id": account_id,
+            "target": target,
+        },
     )
     return response.json()
 
@@ -197,10 +208,12 @@ async def _recover_gateway_session(
     session_id: str,
     owner_uid: str,
     account_id: str,
+    *,
+    target: str = "drafts",
 ):
     async with _browser_operation_slot(owner_uid, account_id):
         account, session = await _current_browser_session(repo, owner_uid, account_id, session_id)
-        state = await _open_gateway_session(session.id, owner_uid, account_id)
+        state = await _open_gateway_session(session.id, owner_uid, account_id, target=target)
     return account, session, state
 
 
@@ -231,7 +244,13 @@ async def _sync_browser_state(db: AsyncSession, account, session, state: dict[st
         account.last_error_message = "账号需要重新登录"
 
 
-async def open_browser_session(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+async def open_browser_session(
+    db: AsyncSession,
+    user: User,
+    account_id: str,
+    *,
+    target: str = "home",
+) -> dict[str, Any]:
     owner_uid = _owner_uid(user)
     repo = XiaohongshuRepository(db)
     account = await repo.get_account(account_id, owner_uid, for_update=True)
@@ -250,7 +269,7 @@ async def open_browser_session(db: AsyncSession, user: User, account_id: str) ->
     try:
         async with _browser_operation_slot(owner_uid, account_id):
             account, session = await _current_browser_session(repo, owner_uid, account_id, session.id)
-            state = await _open_gateway_session(session.id, owner_uid, account_id)
+            state = await _open_gateway_session(session.id, owner_uid, account_id, target=target)
     except HTTPException as exc:
         session.status = "error"
         session.last_error_code = (
@@ -366,7 +385,7 @@ async def browser_session_action(
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
-            await _open_gateway_session(session.id, owner_uid, account_id)
+            await _open_gateway_session(session.id, owner_uid, account_id, target="drafts")
             raise _error(
                 409,
                 "XHS_BROWSER_SESSION_RECOVERED",

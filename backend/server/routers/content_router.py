@@ -23,6 +23,7 @@ from yuxi.content.schemas import (
     XiaohongshuAccountCreate,
     XiaohongshuAccountUpdate,
     XiaohongshuBrowserAction,
+    XiaohongshuBrowserOpen,
     XiaohongshuDistributionCreate,
 )
 from yuxi.repositories.content_repository import ContentRepository
@@ -147,10 +148,16 @@ async def check_xiaohongshu_account(
 @content.post("/xiaohongshu/accounts/{account_id}/browser-session")
 async def open_xiaohongshu_browser_session(
     account_id: str,
+    payload: XiaohongshuBrowserOpen | None = None,
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await open_browser_session(db, current_user, account_id)
+    return await open_browser_session(
+        db,
+        current_user,
+        account_id,
+        target=payload.target if payload is not None else "home",
+    )
 
 
 @content.get("/xiaohongshu/accounts/{account_id}/browser-session")
