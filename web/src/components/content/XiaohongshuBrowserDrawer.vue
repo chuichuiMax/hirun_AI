@@ -129,6 +129,8 @@ const start = async () => {
     const response = await contentApi.openXiaohongshuBrowserSession(accountId, { target: 'drafts' })
     if (epoch !== pollingEpoch || !props.open || props.account?.id !== accountId) return
     session.value = response
+    await claimControl({ notify: false })
+    if (epoch !== pollingEpoch || !props.open || props.account?.id !== accountId) return
     await refreshScreenshot(epoch, accountId)
     if (epoch === pollingEpoch && props.open && props.account?.id === accountId) {
       const delay = response.browser?.logged_in && response.browser?.view === 'drafts' ? 20000 : 3000
@@ -240,7 +242,7 @@ const scrollScreen = (event) => {
   }, 80)
 }
 
-const claimControl = async () => {
+async function claimControl({ notify = true } = {}) {
   if (!props.account?.id || claiming.value) return
   const accountId = props.account.id
   const epoch = pollingEpoch
@@ -251,7 +253,7 @@ const claimControl = async () => {
     if (sequence !== actionSequence || epoch !== pollingEpoch || props.account?.id !== accountId) return
     controlClaimed.value = true
     errorMessage.value = ''
-    message.success('人工接管已启用，可直接点击、键入和滚动')
+    if (notify) message.success('人工接管已启用，可直接点击、键入和滚动')
     focusKeyboard()
   } catch (error) {
     if (sequence === actionSequence && epoch === pollingEpoch && props.account?.id === accountId) {
