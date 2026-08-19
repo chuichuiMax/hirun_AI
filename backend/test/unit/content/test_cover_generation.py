@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from yuxi.content_cover.image2_client import Image2Client, Image2Config, Image2Error, image2_is_configured
 import yuxi.content_cover.renderer as content_cover_renderer
+import yuxi.content_cover.image2_settings as image2_settings
 from yuxi.content_cover.renderer import (
     apply_template_title,
     finalize_template_transfer,
@@ -21,6 +22,7 @@ from yuxi.content_cover.renderer import (
 )
 from yuxi.content_cover.schemas import (
     CoverGenerateCreate,
+    Image2GlobalConfigUpdate,
     Image2Input,
     Image2Output,
     Image2Request,
@@ -45,6 +47,19 @@ def _image(color: str, size: tuple[int, int] = (320, 240)) -> bytes:
     return output.getvalue()
 
 
+@pytest.fixture(autouse=True)
+def stub_worker_image2_global_config(monkeypatch: pytest.MonkeyPatch):
+    async def load_config(owner_uid):
+        del owner_uid
+        return Image2Config.from_values(
+            base_url="https://relay.example.com/v1",
+            api_key="test-key",
+            model="image2-test",
+        )
+
+    monkeypatch.setattr(content_cover_worker, "_load_image2_config", load_config)
+
+
 def test_image2_configuration_rejects_invalid_status_path(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("IMAGE2_BASE_URL", "https://relay.example.com/v1")
     monkeypatch.setenv("IMAGE2_API_KEY", "test-key")
@@ -55,6 +70,65 @@ def test_image2_configuration_rejects_invalid_status_path(monkeypatch: pytest.Mo
     with pytest.raises(Image2Error) as exc_info:
         Image2Config.from_env()
     assert exc_info.value.code == "IMAGE2_CONFIG_INVALID"
+
+
+def test_global_image2_config_normalizes_values():
+    payload = Image2GlobalConfigUpdate(
+        base_url=" https://relay.example.com/v1 ",
+        api_key=" request-secret ",
+    )
+
+    assert payload.base_url == "https://relay.example.com/v1"
+    assert payload.api_key == "request-secret"
+
+
+@pytest.mark.asyncio
+async def test_global_image2_config_preserves_saved_key_and_never_returns_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured = {}
+    setting = SimpleNamespace(
+        base_url="https://old-relay.example.com/v1",
+        api_key="saved-secret",
+        model="gpt-image-2",
+    )
+
+    class FakeDb:
+        async def commit(self):
+            captured["committed"] = True
+
+    class FakeRepo:
+        def __init__(self, db):
+            del db
+
+        async def get_image2_setting(self, owner_uid, *, for_update=False):
+            assert owner_uid == "alice"
+            del for_update
+            return setting
+
+        async def upsert_image2_setting(self, **values):
+            captured["values"] = values
+            setting.base_url = values["base_url"]
+            setting.api_key = values["api_key"]
+            setting.model = values["model"]
+            return setting
+
+    monkeypatch.setattr(image2_settings, "ContentCoverRepository", FakeRepo)
+
+    db = FakeDb()
+    await image2_settings.save_image2_config(
+        db,
+        base_url="https://new-relay.example.com/v1",
+        api_key=None,
+        owner_uid="alice",
+    )
+    state = await image2_settings.get_image2_config_state(db, owner_uid="alice")
+
+    assert captured["values"]["api_key"] == "saved-secret"
+    assert captured["committed"] is True
+    assert state["base_url"] == "https://new-relay.example.com/v1"
+    assert state["api_key_configured"] is True
+    assert "api_key" not in state
 
 
 @pytest.mark.parametrize(
@@ -417,7 +491,14 @@ async def test_image2_payload_contains_source_template_and_mask_data_urls():
         source_images=[image],
         template_image=image,
         mask_image=image,
-        extra={"strength": 0.7, "model": "must-not-override", "size": "1x1"},
+        extra={
+            "strength": 0.7,
+            "quality": "low",
+            "input_fidelity": "low",
+            "output_format": "jpeg",
+            "model": "must-not-override",
+            "size": "1x1",
+        },
     )
     async with _client(handler) as client:
         result = await client.submit(request)
@@ -429,6 +510,9 @@ async def test_image2_payload_contains_source_template_and_mask_data_urls():
     assert [item["role"] for item in captured["images"]] == ["source", "template"]
     assert captured["mask"].startswith("data:image/png;base64,")
     assert captured["strength"] == 0.7
+    assert captured["quality"] == "high"
+    assert captured["input_fidelity"] == "high"
+    assert captured["output_format"] == "png"
     assert content_type == "image/png"
     assert raw.startswith(b"\x89PNG")
 
@@ -461,12 +545,13 @@ async def test_template_replicate_places_primary_source_before_style_reference()
     assert result.status == "completed"
     assert captured["path"].endswith("/images/edits")
     assert captured["content_type"].startswith("multipart/form-data; boundary=")
-    assert captured["body"].index(b'filename="source.png"') < captured["body"].index(
-        b'filename="template.png"'
-    )
+    assert captured["body"].index(b'filename="source.png"') < captured["body"].index(b'filename="template.png"')
     assert b'name="image[]"' in captured["body"]
     assert b'name="quality"' in captured["body"]
+    assert b'name="input_fidelity"' in captured["body"]
+    assert b'name="output_format"' in captured["body"]
     assert b"high" in captured["body"]
+    assert b"png" in captured["body"]
 
 
 @pytest.mark.asyncio
@@ -484,9 +569,7 @@ async def test_image2_async_submission_can_be_polled_to_completion():
         )
 
     async with _client(handler) as client:
-        submitted = await client.submit(
-            Image2Request(mode="text_to_image", prompt="封面", size="1080x1440")
-        )
+        submitted = await client.submit(Image2Request(mode="text_to_image", prompt="封面", size="1080x1440"))
         completed = await client.poll(submitted.provider_task_id)
 
     assert submitted.status == "pending"
@@ -504,9 +587,7 @@ async def test_image2_understands_nested_async_relay_response():
         return httpx.Response(202, json={"data": {"taskId": "nested-task", "state": "processing"}})
 
     async with _client(handler) as client:
-        submitted = await client.submit(
-            Image2Request(mode="text_to_image", prompt="封面", size="1080x1440")
-        )
+        submitted = await client.submit(Image2Request(mode="text_to_image", prompt="封面", size="1080x1440"))
 
     assert submitted.provider_task_id == "nested-task"
     assert submitted.status == "pending"
@@ -520,9 +601,7 @@ async def test_image2_understands_plain_base64_response():
         return httpx.Response(200, json={"data": encoded})
 
     async with _client(handler) as client:
-        submitted = await client.submit(
-            Image2Request(mode="text_to_image", prompt="封面", size="1080x1440")
-        )
+        submitted = await client.submit(Image2Request(mode="text_to_image", prompt="封面", size="1080x1440"))
         raw, content_type = await client.read_output(submitted.images[0])
 
     assert submitted.status == "completed"
@@ -667,6 +746,9 @@ async def test_worker_resumes_existing_provider_task_without_resubmit(monkeypatc
     calls = {"submit": 0, "poll": 0}
 
     class FakeClient:
+        def __init__(self, config=None):
+            del config
+
         async def __aenter__(self):
             return self
 
@@ -706,6 +788,7 @@ async def test_worker_resumes_existing_provider_task_without_resubmit(monkeypatc
     monkeypatch.setattr(content_cover_worker, "POLL_INTERVAL_SECONDS", 0)
     job = SimpleNamespace(
         id="ccj-resume",
+        owner_uid="alice",
         mode="text_to_image",
         provider_task_id="provider-existing",
         result_json={},
@@ -723,6 +806,9 @@ async def test_worker_generates_multiple_candidates_sequentially(monkeypatch: py
     submitted = []
 
     class FakeClient:
+        def __init__(self, config=None):
+            del config
+
         async def __aenter__(self):
             return self
 
@@ -754,6 +840,7 @@ async def test_worker_generates_multiple_candidates_sequentially(monkeypatch: py
     monkeypatch.setattr(content_cover_worker, "_emit", no_event)
     job = SimpleNamespace(
         id="ccj-serial",
+        owner_uid="alice",
         mode="text_to_image",
         provider_task_id=None,
         result_json={},
@@ -776,11 +863,12 @@ async def test_worker_template_replica_uses_two_references_and_full_generated_ca
 ):
     captured = {}
     source_asset = SimpleNamespace(role="source", content_type="image/png", original_file_name="source.png")
-    template_asset = SimpleNamespace(
-        role="template", content_type="image/png", original_file_name="template.png"
-    )
+    template_asset = SimpleNamespace(role="template", content_type="image/png", original_file_name="template.png")
 
     class FakeClient:
+        def __init__(self, config=None):
+            del config
+
         async def __aenter__(self):
             return self
 
@@ -818,6 +906,7 @@ async def test_worker_template_replica_uses_two_references_and_full_generated_ca
     monkeypatch.setattr(content_cover_renderer, "_extract_template_text_blocks", lambda image: [])
     job = SimpleNamespace(
         id="ccj-template-transfer",
+        owner_uid="alice",
         mode="multi_reference",
         provider_task_id=None,
         result_json={},
@@ -835,10 +924,10 @@ async def test_worker_template_replica_uses_two_references_and_full_generated_ca
 
     request = captured["request"]
     assert request.mode == "multi_reference"
-    assert request.source_images[0].file_name == "source-reference.jpg"
-    assert request.source_images[0].content_type == "image/jpeg"
-    assert request.template_image.file_name == "template-reference.jpg"
-    assert request.template_image.content_type == "image/jpeg"
+    assert request.source_images[0].file_name == "source-reference.png"
+    assert request.source_images[0].content_type == "image/png"
+    assert request.template_image.file_name == "template-reference.png"
+    assert request.template_image.content_type == "image/png"
     assert request.mask_image is None
     with Image.open(io.BytesIO(request.source_images[0].data)) as source_reference:
         assert source_reference.size == (1080, 1440)

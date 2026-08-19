@@ -17,11 +17,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content_cover import COVER_SIZES, COVER_TEMPLATES, COVER_THEMES
-from yuxi.content_cover.image2_client import image2_is_configured
+from yuxi.content_cover.image2_client import Image2Error
+from yuxi.content_cover.image2_settings import (
+    get_image2_config_state,
+    resolve_image2_config,
+    save_image2_config,
+)
 from yuxi.content_cover.schemas import (
     CoverComposeCreate,
     CoverGenerateCreate,
     CoverRetryCreate,
+    Image2GlobalConfigUpdate,
 )
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
@@ -80,15 +86,8 @@ def _template_texts(artifact: ContentArtifact | None, title: str) -> dict[str, A
     tags: list[str] = []
     if artifact is not None:
         body = re.sub(r"[`#>*_\[\](){}]+", " ", artifact.body or "")
-        sentences = [
-            _compact_cover_copy(item, limit=24)
-            for item in re.split(r"[。！？!?\n]+", body)
-        ]
-        sentences = [
-            item
-            for item in sentences
-            if 6 <= len(item) <= 24 and item != summarized_title
-        ]
+        sentences = [_compact_cover_copy(item, limit=24) for item in re.split(r"[。！？!?\n]+", body)]
+        sentences = [item for item in sentences if 6 <= len(item) <= 24 and item != summarized_title]
         preferred = [
             item
             for item in sentences
@@ -135,13 +134,16 @@ def serialize_job(item: ContentCoverJob) -> dict[str, Any]:
 
 async def get_cover_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
     tasks, _ = await ContentRepository(db).list_tasks(user=user, page=1, page_size=30)
+    image2_state = await get_image2_config_state(
+        db,
+        owner_uid=_owner_uid(user),
+    )
     return {
         "templates": list(COVER_TEMPLATES.values()),
         "themes": list(COVER_THEMES.values()),
         "sizes": [{"id": key, **value} for key, value in COVER_SIZES.items()],
         "image2": {
-            "configured": image2_is_configured(),
-            "model": (os.getenv("IMAGE2_MODEL") or "").strip() or None,
+            **image2_state,
             "modes": ["text_to_image", "image_to_image", "multi_reference", "mask"],
         },
         "content_tasks": [
@@ -157,12 +159,7 @@ def _normalize_upload(data: bytes, role: str) -> tuple[bytes, int, int, str]:
             if source.format not in {"JPEG", "PNG", "WEBP"}:
                 raise _error(400, "COVER_IMAGE_FORMAT_UNSUPPORTED", "仅支持 JPG、PNG 或 WebP 图片")
             width, height = source.size
-            if (
-                width < 2
-                or height < 2
-                or max(width, height) > MAX_COVER_DIMENSION
-                or width * height > MAX_COVER_PIXELS
-            ):
+            if width < 2 or height < 2 or max(width, height) > MAX_COVER_DIMENSION or width * height > MAX_COVER_PIXELS:
                 raise _error(400, "COVER_IMAGE_DIMENSION_INVALID", "图片尺寸必须在 2–8192 像素且不超过 4000 万像素")
             image = ImageOps.exif_transpose(source)
             image.load()
@@ -318,6 +315,7 @@ async def _create_job(
     parent_job_id: str | None = None,
     provider_task_id: str | None = None,
     initial_result_json: dict[str, Any] | None = None,
+    model: str | None = None,
 ) -> tuple[ContentCoverJob, bool]:
     repo = ContentCoverRepository(db)
     owner_uid = _owner_uid(user)
@@ -334,7 +332,7 @@ async def _create_job(
             parent_job_id=parent_job_id,
             mode=mode,
             status="queued",
-            model=(os.getenv("IMAGE2_MODEL") or "").strip() or None,
+            model=model or (os.getenv("IMAGE2_MODEL") or "").strip() or None,
             provider_task_id=provider_task_id,
             idempotency_key=idempotency_key,
             request_json=request,
@@ -351,9 +349,7 @@ async def _create_job(
         raise
 
 
-async def create_cover_compose_job(
-    db: AsyncSession, user: User, payload: CoverComposeCreate
-) -> dict[str, Any]:
+async def create_cover_compose_job(db: AsyncSession, user: User, payload: CoverComposeCreate) -> dict[str, Any]:
     template = COVER_TEMPLATES.get(payload.template_id)
     if template is None:
         raise _error(422, "COVER_TEMPLATE_INVALID", "封面版式不存在")
@@ -416,11 +412,11 @@ async def _content_prompt(
     return "\n\n".join(sections), artifact, linked_title
 
 
-async def create_cover_generate_job(
-    db: AsyncSession, user: User, payload: CoverGenerateCreate
-) -> dict[str, Any]:
-    if not image2_is_configured():
-        raise _error(503, "IMAGE2_NOT_CONFIGURED", "image2 中转站尚未配置")
+async def create_cover_generate_job(db: AsyncSession, user: User, payload: CoverGenerateCreate) -> dict[str, Any]:
+    try:
+        image2_config = await resolve_image2_config(db, owner_uid=_owner_uid(user))
+    except Image2Error as exc:
+        raise _error(503, "IMAGE2_NOT_CONFIGURED", "image2 中转站尚未配置") from exc
     repo = ContentCoverRepository(db)
     owner_uid = _owner_uid(user)
     source_assets = await repo.get_assets_for_user(payload.source_asset_ids, owner_uid, for_update=True)
@@ -479,8 +475,7 @@ async def create_cover_generate_job(
         )
     prompt = f"{mode_guidance[payload.mode]}\n{output_guidance}\n\n{prompt}"
     default_negative_prompt = (
-        "乱码文字、错误汉字、随机字母、数字、水印、平台 Logo、伪造品牌标识、"
-        "低清晰度、主体变形、过度锐化、杂乱背景"
+        "乱码文字、错误汉字、随机字母、数字、水印、平台 Logo、伪造品牌标识、低清晰度、主体变形、过度锐化、杂乱背景"
     )
     if template_replicate:
         default_negative_prompt += (
@@ -494,7 +489,16 @@ async def create_cover_generate_job(
     request["template_replicate"] = template_replicate
     request["parameters"] = {
         **payload.parameters,
-        **({"template_replicate": True} if template_replicate else {}),
+        **(
+            {
+                "template_replicate": True,
+                "quality": "high",
+                "input_fidelity": "high",
+                "output_format": "png",
+            }
+            if template_replicate
+            else {}
+        ),
     }
     request["negative_prompt"] = "，".join(
         item for item in ((payload.negative_prompt or "").strip(), default_negative_prompt) if item
@@ -507,6 +511,7 @@ async def create_cover_generate_job(
         artifact_id=artifact.id if artifact else None,
         idempotency_key=payload.idempotency_key,
         request=request,
+        model=image2_config.model,
     )
     return {"job": serialize_job(job), "deduplicated": deduplicated}
 
@@ -532,16 +537,19 @@ async def list_cover_jobs(
     return {"items": [serialize_job(item) for item in items], "total": total, "page": page, "page_size": page_size}
 
 
-async def retry_cover_job(
-    db: AsyncSession, user: User, job_id: str, payload: CoverRetryCreate
-) -> dict[str, Any]:
+async def retry_cover_job(db: AsyncSession, user: User, job_id: str, payload: CoverRetryCreate) -> dict[str, Any]:
     old = await ContentCoverRepository(db).get_job_for_user(job_id, _owner_uid(user))
     if old is None:
         raise _error(404, "COVER_JOB_NOT_FOUND", "封面任务不存在")
     if old.status not in {"failed", "cancelled", "succeeded"}:
         raise _error(409, "COVER_JOB_NOT_RETRYABLE", "任务结束后才能重新生成")
-    if old.mode != "compose" and not image2_is_configured():
-        raise _error(503, "IMAGE2_NOT_CONFIGURED", "image2 中转站尚未配置")
+    request = dict(old.request_json or {})
+    image2_config = None
+    if old.mode != "compose":
+        try:
+            image2_config = await resolve_image2_config(db, owner_uid=_owner_uid(user))
+        except Image2Error as exc:
+            raise _error(503, "IMAGE2_NOT_CONFIGURED", "image2 中转站尚未配置") from exc
     recoverable_provider_task_id = None
     retry_result_json: dict[str, Any] = {}
     if old.provider_task_id and old.error_code in {
@@ -562,12 +570,30 @@ async def retry_cover_job(
         content_task_id=old.content_task_id,
         artifact_id=old.artifact_id,
         idempotency_key=payload.idempotency_key,
-        request=dict(old.request_json or {}),
+        request=request,
         parent_job_id=old.id,
         provider_task_id=recoverable_provider_task_id,
         initial_result_json=retry_result_json,
+        model=image2_config.model if image2_config else None,
     )
     return {"job": serialize_job(job), "deduplicated": deduplicated}
+
+
+async def update_image2_global_config(
+    db: AsyncSession,
+    user: User,
+    payload: Image2GlobalConfigUpdate,
+) -> dict[str, Any]:
+    try:
+        await save_image2_config(
+            db,
+            base_url=payload.base_url,
+            api_key=payload.api_key,
+            owner_uid=_owner_uid(user),
+        )
+    except Image2Error as exc:
+        raise _error(422, exc.code, str(exc)) from exc
+    return await get_image2_config_state(db, owner_uid=_owner_uid(user))
 
 
 async def cancel_cover_job(db: AsyncSession, user: User, job_id: str) -> dict[str, Any]:

@@ -26,8 +26,17 @@ async def test_cover_asset_upload_is_private_and_deletable(test_client, admin_he
         "card_stack",
         "hero_thumbs",
     }
-    assert set(body["image2"]) == {"configured", "model", "modes"}
-    assert "base_url" not in body["image2"]
+    assert set(body["image2"]) == {
+        "configured",
+        "base_url",
+        "api_key_configured",
+        "model",
+        "source",
+        "can_manage",
+        "quality",
+        "modes",
+    }
+    assert body["image2"]["can_manage"] is True
     assert "api_key" not in body["image2"]
 
     image_bytes = _png()

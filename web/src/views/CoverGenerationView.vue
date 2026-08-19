@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { Download, ImagePlus, RefreshCw, Sparkles, WandSparkles, X } from 'lucide-vue-next'
+import { Download, ImagePlus, RefreshCw, Settings, Sparkles, WandSparkles, X } from 'lucide-vue-next'
 import { contentApi } from '@/apis/content_api'
 import { useCoverGenerationStore } from '@/stores/coverGeneration'
 
@@ -15,6 +15,8 @@ const templateAsset = ref(null)
 const templateSourceAsset = ref(null)
 const maskAsset = ref(null)
 const draggingRole = ref('')
+const image2ConfigOpen = ref(false)
+const image2ConfigSaving = ref(false)
 const previewUrls = new Map()
 const form = reactive({
   contentTaskId: '',
@@ -29,6 +31,7 @@ const form = reactive({
   fit: 'cover',
   count: 1
 })
+const image2ConfigForm = reactive({ baseUrl: '', apiKey: '' })
 
 const templates = computed(() => store.bootstrap?.templates || [])
 const themes = computed(() => store.bootstrap?.themes || [])
@@ -43,13 +46,17 @@ const templateAspectWarning = computed(() => {
   return '模板比例与输出尺寸差异较大，导出时会按画布居中裁切；建议选择匹配比例的模板或输出尺寸。'
 })
 const canCancel = computed(() => store.isRunning && !['saving', 'cancel_requested'].includes(store.currentJob?.status))
+const image2Ready = computed(() => Boolean(store.bootstrap?.image2?.configured))
+const canManageImage2 = computed(() => Boolean(
+  store.bootstrap?.image2 && store.bootstrap.image2.can_manage !== false
+))
 const canSubmit = computed(() => {
   if (store.isRunning || store.loading.upload || store.loading.submit) return false
   if (tab.value === 'compose') {
     const count = sourceAssets.value.length
     return count >= (activeTemplate.value?.min_assets || 2) && count <= (activeTemplate.value?.max_assets || 9)
   }
-  if (!store.bootstrap?.image2?.configured) return false
+  if (!image2Ready.value) return false
   if (sourceAssets.value.length > 9) return false
   if (tab.value === 'template') {
     return Boolean(templateAsset.value && templateSourceAsset.value)
@@ -186,7 +193,9 @@ function buildGeneratePayload() {
     negative_prompt: form.negativePrompt || null,
     size: form.size,
     n: form.count,
-    parameters: {}
+    parameters: tab.value === 'template'
+      ? { quality: 'high', input_fidelity: 'high', output_format: 'png' }
+      : {}
   }
 }
 
@@ -226,6 +235,38 @@ async function retryJob(job) {
     await router.replace({ query: { ...route.query, job: created.id } })
   } catch (error) {
     message.error(error.message || '重试失败')
+  }
+}
+
+function openImage2Config() {
+  image2ConfigForm.baseUrl = store.bootstrap?.image2?.base_url || ''
+  image2ConfigForm.apiKey = ''
+  image2ConfigOpen.value = true
+}
+
+async function saveImage2Config() {
+  if (!canManageImage2.value) return
+  if (!image2ConfigForm.baseUrl.trim()) {
+    message.warning('请填写 image2 中转站 Base URL')
+    return
+  }
+  if (!store.bootstrap?.image2?.api_key_configured && !image2ConfigForm.apiKey.trim()) {
+    message.warning('首次配置请填写 API Key')
+    return
+  }
+  image2ConfigSaving.value = true
+  try {
+    await store.saveImage2Config({
+      base_url: image2ConfigForm.baseUrl.trim(),
+      api_key: image2ConfigForm.apiKey.trim() || null
+    })
+    image2ConfigForm.apiKey = ''
+    image2ConfigOpen.value = false
+    message.success('image2 全局配置已保存')
+  } catch (error) {
+    message.error(error.message || 'image2 配置保存失败')
+  } finally {
+    image2ConfigSaving.value = false
   }
 }
 
@@ -319,9 +360,9 @@ onBeforeUnmount(() => {
         <h1>封面生成</h1>
         <p>将多张素材排成稳定版式，或使用 image2 根据内容资产生成小红书封面。</p>
       </div>
-      <span class="image2-state" :class="{ ready: store.bootstrap?.image2?.configured }">
-        image2 {{ store.bootstrap?.image2?.configured ? '已配置' : '未配置' }}
-      </span>
+      <button class="image2-state" :class="{ ready: image2Ready }" @click="openImage2Config">
+        <Settings :size="15" />image2 {{ image2Ready ? '已配置' : '未配置' }}
+      </button>
     </header>
 
     <div class="workspace-grid">
@@ -471,7 +512,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="submit-row">
-          <p v-if="tab !== 'compose' && !store.bootstrap?.image2?.configured">需先在服务环境配置 IMAGE2_BASE_URL、IMAGE2_API_KEY 和 IMAGE2_MODEL。</p>
+          <p v-if="tab !== 'compose' && !image2Ready">请点击右上角配置可用的 image2 中转站。</p>
           <button class="primary-button" :disabled="!canSubmit" @click="submit">
             <WandSparkles :size="18" />{{ store.loading.submit ? '正在提交…' : '开始生成' }}
           </button>
@@ -509,6 +550,30 @@ onBeforeUnmount(() => {
         </div>
       </aside>
     </div>
+
+    <a-modal
+      v-model:open="image2ConfigOpen"
+      title="image2 全局配置"
+      :confirm-loading="image2ConfigSaving"
+      :ok-button-props="{ disabled: !canManageImage2 }"
+      ok-text="保存全局配置"
+      cancel-text="取消"
+      @ok="saveImage2Config"
+    >
+      <div class="image2-config-modal">
+        <p>配置保存后对当前账号的所有封面 image2 任务持续生效，环境变量仅作为未配置时的回退。</p>
+        <label>
+          <span>中转站 Base URL</span>
+          <input v-model.trim="image2ConfigForm.baseUrl" type="url" maxlength="500" autocomplete="off" placeholder="例如：https://relay.example.com/v1" :disabled="!canManageImage2" />
+        </label>
+        <label>
+          <span>API Key</span>
+          <input v-model="image2ConfigForm.apiKey" type="password" maxlength="500" autocomplete="new-password" :placeholder="store.bootstrap?.image2?.api_key_configured ? '已配置，留空则保留原密钥' : '请输入中转站 API Key'" :disabled="!canManageImage2" />
+        </label>
+        <div class="quality-locks"><span>质量：最高</span><span>输入保真：最高</span><span>格式：PNG</span></div>
+        <small v-if="canManageImage2">API Key 保存后不会在页面或接口中回显。</small>
+      </div>
+    </a-modal>
   </main>
 </template>
 
@@ -517,7 +582,7 @@ onBeforeUnmount(() => {
 .page-head { max-width: 1500px; margin: 0 auto 24px; display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
 .eyebrow { margin: 0 0 6px; color: var(--main-700); font-size: 11px; font-weight: 700; letter-spacing: .16em; }
 h1 { margin: 0; font-size: 30px; letter-spacing: -.04em; } .page-head p:last-child { margin: 8px 0 0; color: var(--gray-600); }
-.image2-state { border: 1px solid var(--color-warning-100); border-radius: 999px; padding: 7px 12px; color: var(--color-warning-700); background: var(--color-warning-10); font-size: 12px; }
+.image2-state { border: 1px solid var(--color-warning-100); border-radius: 999px; padding: 7px 12px; display: inline-flex; gap: 6px; align-items: center; color: var(--color-warning-700); background: var(--color-warning-10); font-size: 12px; cursor: pointer; }
 .image2-state.ready { color: var(--color-success-700); border-color: var(--color-success-100); background: var(--color-success-10); }
 .workspace-grid { max-width: 1500px; margin: auto; display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 20px; align-items: start; }
 .editor-panel, .result-panel { border: 1px solid var(--gray-200); border-radius: 18px; background: var(--main-0); box-shadow: 0 10px 34px rgba(1, 21, 31, .06); }
@@ -548,6 +613,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--main-500); box-s
 .reference-preview > button { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: 0; border-radius: 50%; display: grid; place-items: center; color: white; background: rgba(0,0,0,.68); cursor: pointer; }
 .template-aspect-warning { margin: 10px 0 0; padding: 9px 11px; border-radius: 8px; color: var(--color-warning-700); background: var(--color-warning-10); font-size: 12px; }
 .template-transfer-note { margin-top: 11px; padding: 11px 13px; display: flex; gap: 12px; align-items: center; border: 1px solid var(--main-100); border-radius: 10px; color: var(--main-800); background: var(--main-30); font-size: 12px; }.template-transfer-note span { color: var(--gray-600); }
+.quality-locks { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }.quality-locks span { padding: 4px 8px; border-radius: 999px; color: var(--color-success-700); background: var(--color-success-10); font-size: 11px; }
+.image2-config-modal { display: grid; gap: 15px; }.image2-config-modal > p { margin: 0; color: var(--gray-600); line-height: 1.6; }.image2-config-modal > small { color: var(--gray-500); }
 .upload-box { min-height: 130px; border: 1px dashed var(--main-300); border-radius: 11px; display: grid; place-content: center; justify-items: center; gap: 7px; text-align: center; color: var(--main-700); background: var(--main-30); cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }.upload-box span { color: var(--gray-500); font-size: 11px; }.upload-box input { display: none; }.upload-box.is-dragging { border-color: var(--main-600); background: var(--main-50); box-shadow: 0 0 0 3px var(--main-100); }
 .compact-upload { min-height: 86px; margin-top: 12px; }.single-preview { width: 150px; height: 100px; margin-top: 12px; }.mask-field input { padding: 7px; }.mask-field small { display: block; }.mask-dropzone { min-height: 86px; padding: 12px; box-sizing: border-box; border: 1px dashed var(--main-300); border-radius: 11px; color: var(--main-700); background: var(--main-30); cursor: pointer; text-align: center; }.mask-dropzone input { display: none; }
 .compose-preview { display: grid; justify-items: center; gap: 8px; margin-top: 18px; padding: 16px; border: 1px solid var(--gray-150); border-radius: 12px; background: var(--main-20); }

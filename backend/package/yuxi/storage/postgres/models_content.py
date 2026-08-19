@@ -736,6 +736,17 @@ class ContentArtifactVersion(Base):
     __table_args__ = (UniqueConstraint("artifact_id", "version", name="uq_content_artifact_version"),)
 
 
+class ContentCoverImage2Setting(Base):
+    __tablename__ = "content_cover_image2_settings"
+
+    owner_uid = Column(String(255), primary_key=True)
+    base_url = Column(String(500), nullable=False)
+    api_key = Column(String(500), nullable=False)
+    model = Column(String(255), nullable=False, default="gpt-image-2")
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+
 class ContentCoverAsset(Base):
     __tablename__ = "content_cover_assets"
 

@@ -33,28 +33,25 @@ class Image2Config:
     send_response_format: bool = False
 
     @classmethod
-    def from_env(cls) -> Image2Config:
-        base_url = (os.getenv("IMAGE2_BASE_URL") or "").strip().rstrip("/")
-        api_key = (os.getenv("IMAGE2_API_KEY") or "").strip()
-        model = (os.getenv("IMAGE2_MODEL") or "").strip()
+    def from_values(cls, *, base_url: str, api_key: str, model: str) -> Image2Config:
+        base_url = base_url.strip().rstrip("/")
+        api_key = api_key.strip()
+        model = model.strip()
         if not base_url or not api_key or not model:
             raise Image2Error("IMAGE2_NOT_CONFIGURED", "image2 中转站尚未配置")
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise Image2Error("IMAGE2_CONFIG_INVALID", "IMAGE2_BASE_URL 必须是有效的 HTTP(S) 地址")
+            raise Image2Error("IMAGE2_CONFIG_INVALID", "image2 Base URL 必须是有效的 HTTP(S) 地址")
         try:
             parsed.port
         except ValueError as exc:
-            raise Image2Error("IMAGE2_CONFIG_INVALID", "IMAGE2_BASE_URL 端口无效") from exc
+            raise Image2Error("IMAGE2_CONFIG_INVALID", "image2 Base URL 端口无效") from exc
         submit_path = (os.getenv("IMAGE2_SUBMIT_PATH") or "/images/generations").strip()
         edit_path = (os.getenv("IMAGE2_EDIT_PATH") or "/images/edits").strip()
         status_path = (os.getenv("IMAGE2_STATUS_PATH") or "/images/generations/{task_id}").strip()
         if not submit_path or not edit_path or not status_path:
             raise Image2Error("IMAGE2_CONFIG_INVALID", "image2 接口路径不能为空")
-        if any(
-            urlparse(path).scheme or urlparse(path).netloc
-            for path in (submit_path, edit_path, status_path)
-        ):
+        if any(urlparse(path).scheme or urlparse(path).netloc for path in (submit_path, edit_path, status_path)):
             raise Image2Error("IMAGE2_CONFIG_INVALID", "image2 接口路径必须是相对路径")
         if "{task_id}" not in status_path:
             raise Image2Error("IMAGE2_CONFIG_INVALID", "IMAGE2_STATUS_PATH 必须包含 {task_id}")
@@ -73,6 +70,14 @@ class Image2Config:
             status_path=status_path,
             timeout_seconds=timeout_seconds,
             send_response_format=os.getenv("IMAGE2_SEND_RESPONSE_FORMAT", "false").lower() in {"1", "true", "yes"},
+        )
+
+    @classmethod
+    def from_env(cls) -> Image2Config:
+        return cls.from_values(
+            base_url=os.getenv("IMAGE2_BASE_URL") or "",
+            api_key=os.getenv("IMAGE2_API_KEY") or "",
+            model=os.getenv("IMAGE2_MODEL") or "",
         )
 
 
@@ -124,6 +129,8 @@ class Image2Client:
             "size": request.size,
             "n": request.n,
             "mode": request.mode,
+            "quality": "high",
+            "output_format": "png",
         }
         if request.negative_prompt:
             payload["negative_prompt"] = request.negative_prompt
@@ -142,6 +149,7 @@ class Image2Client:
         if inputs:
             payload["images"] = inputs
             payload["image"] = inputs[0]["image"] if len(inputs) == 1 else [item["image"] for item in inputs]
+            payload["input_fidelity"] = "high"
         if request.mask_image:
             payload["mask"] = self._data_url(request.mask_image)
         if self.config.send_response_format:
@@ -156,6 +164,9 @@ class Image2Client:
             "image",
             "mask",
             "mode",
+            "quality",
+            "input_fidelity",
+            "output_format",
             "response_format",
             "template_replicate",
         }
@@ -184,9 +195,7 @@ class Image2Client:
             )
         if isinstance(candidates, str):
             candidates = [
-                {"url": candidates}
-                if candidates.startswith(("http://", "https://"))
-                else {"b64_json": candidates}
+                {"url": candidates} if candidates.startswith(("http://", "https://")) else {"b64_json": candidates}
             ]
         outputs: list[Image2Output] = []
         for item in candidates if isinstance(candidates, list) else []:
@@ -312,9 +321,7 @@ class Image2Client:
             if request.template_image:
                 references.append(request.template_image)
             field_name = "image[]" if len(references) > 1 else "image"
-            files = [
-                (field_name, (item.file_name, item.data, item.content_type)) for item in references
-            ]
+            files = [(field_name, (item.file_name, item.data, item.content_type)) for item in references]
             if request.mask_image:
                 files.append(
                     (
@@ -335,6 +342,8 @@ class Image2Client:
                 "size": "1024x1024" if request.size == "1080x1080" else "1024x1536",
                 "n": str(request.n),
                 "quality": "high",
+                "input_fidelity": "high",
+                "output_format": "png",
             }
             if self.config.send_response_format:
                 form["response_format"] = "b64_json"

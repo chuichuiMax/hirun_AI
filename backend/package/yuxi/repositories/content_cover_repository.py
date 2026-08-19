@@ -10,6 +10,7 @@ from yuxi.storage.postgres.models_content import (
     ContentArtifact,
     ContentArtifactVersion,
     ContentCoverAsset,
+    ContentCoverImage2Setting,
     ContentCoverJob,
 )
 from yuxi.utils.datetime_utils import utc_now_naive
@@ -18,6 +19,42 @@ from yuxi.utils.datetime_utils import utc_now_naive
 class ContentCoverRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def get_image2_setting(
+        self,
+        owner_uid: str,
+        *,
+        for_update: bool = False,
+    ) -> ContentCoverImage2Setting | None:
+        query = select(ContentCoverImage2Setting).where(ContentCoverImage2Setting.owner_uid == owner_uid)
+        if for_update:
+            query = query.with_for_update()
+        return (await self.db.execute(query)).scalar_one_or_none()
+
+    async def upsert_image2_setting(
+        self,
+        *,
+        owner_uid: str,
+        base_url: str,
+        api_key: str,
+        model: str,
+    ) -> ContentCoverImage2Setting:
+        setting = await self.get_image2_setting(owner_uid, for_update=True)
+        if setting is None:
+            setting = ContentCoverImage2Setting(
+                owner_uid=owner_uid,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+            )
+            self.db.add(setting)
+        else:
+            setting.base_url = base_url
+            setting.api_key = api_key
+            setting.model = model
+            setting.updated_at = utc_now_naive()
+        await self.db.flush()
+        return setting
 
     async def create_asset(self, **values: Any) -> ContentCoverAsset:
         item = ContentCoverAsset(**values)

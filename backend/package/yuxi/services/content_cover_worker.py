@@ -10,6 +10,7 @@ from typing import Any
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from yuxi.content_cover.image2_client import Image2Client, Image2Error
+from yuxi.content_cover.image2_settings import resolve_image2_config
 from yuxi.content_cover.renderer import (
     CoverRenderError,
     apply_title_overlay,
@@ -134,11 +135,7 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
     asset_ids: list[str] = []
     uploaded_objects: list[tuple[str, str]] = []
     requested_size = COVER_SIZES.get((job.request_json or {}).get("size") or "")
-    target_size = (
-        (requested_size["width"], requested_size["height"])
-        if requested_size is not None
-        else None
-    )
+    target_size = (requested_size["width"], requested_size["height"]) if requested_size is not None else None
     title = str((job.request_json or {}).get("title") or "").strip()
     template_replicate = bool((job.request_json or {}).get("template_replicate"))
     try:
@@ -243,21 +240,26 @@ async def _as_image2_input(asset: ContentCoverAsset) -> Image2Input:
 
 
 def _compact_template_reference(data: bytes, file_name: str) -> Image2Input:
-    """Keep multipart references compact without changing their composition."""
+    """Keep multipart references lossless while preserving their composition."""
     try:
         with Image.open(io.BytesIO(data)) as source:
-            image = ImageOps.exif_transpose(source).convert("RGB")
+            image = ImageOps.exif_transpose(source).convert("RGBA")
             image.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
             output = io.BytesIO()
-            image.save(output, format="JPEG", quality=90, optimize=True)
+            image.save(output, format="PNG", optimize=True)
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise CoverRenderError("模板复刻素材不是有效图片") from exc
     stem = file_name.rsplit(".", 1)[0] or "reference"
     return Image2Input(
         data=output.getvalue(),
-        content_type="image/jpeg",
-        file_name=f"{stem}-reference.jpg",
+        content_type="image/png",
+        file_name=f"{stem}-reference.png",
     )
+
+
+async def _load_image2_config(owner_uid: str):
+    async with pg_manager.get_async_session_context() as db:
+        return await resolve_image2_config(db, owner_uid=owner_uid)
 
 
 async def _poll_image2(
@@ -320,9 +322,7 @@ async def _run_image2(job: ContentCoverJob) -> list[bytes]:
             negative_prompt=request_data.get("negative_prompt"),
             size=request_data.get("size") or "1080x1440",
             n=1,
-            source_images=[
-                _compact_template_reference(source_data, sources[0].original_file_name)
-            ],
+            source_images=[_compact_template_reference(source_data, sources[0].original_file_name)],
             template_image=_compact_template_reference(
                 template_data,
                 template.original_file_name,
@@ -346,7 +346,8 @@ async def _run_image2(job: ContentCoverJob) -> list[bytes]:
         provider_task_ids.append(job.provider_task_id)
     outputs: list[bytes] = []
     deadline = asyncio.get_running_loop().time() + POLL_TIMEOUT_SECONDS
-    async with Image2Client() as client:
+    image2_config = await _load_image2_config(job.owner_uid)
+    async with Image2Client(image2_config) as client:
         for index in range(requested_count):
             await _check_cancelled(job.id)
             progress_start = 20 + int(index * 60 / requested_count)

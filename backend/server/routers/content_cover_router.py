@@ -12,6 +12,7 @@ from yuxi.content_cover.schemas import (
     CoverGenerateCreate,
     CoverRetryCreate,
     CoverSetCurrentCreate,
+    Image2GlobalConfigUpdate,
 )
 from yuxi.services.content_cover_service import (
     cancel_cover_job,
@@ -26,6 +27,7 @@ from yuxi.services.content_cover_service import (
     retry_cover_job,
     set_current_cover,
     stream_cover_job_events,
+    update_image2_global_config,
 )
 from yuxi.storage.postgres.models_business import User
 
@@ -38,6 +40,15 @@ async def cover_bootstrap(
     db: AsyncSession = Depends(get_db),
 ):
     return await get_cover_bootstrap(db, current_user)
+
+
+@content_covers.put("/image2-config")
+async def update_cover_image2_config(
+    payload: Image2GlobalConfigUpdate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return {"image2": await update_image2_global_config(db, current_user, payload)}
 
 
 @content_covers.post("/assets", status_code=status.HTTP_201_CREATED)

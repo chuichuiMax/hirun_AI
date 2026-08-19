@@ -8,6 +8,25 @@ COVER_SIZES = {"1080x1440", "1080x1080"}
 AI_MODES = {"text_to_image", "image_to_image", "multi_reference", "mask"}
 
 
+class Image2GlobalConfigUpdate(BaseModel):
+    base_url: str = Field(min_length=8, max_length=500)
+    api_key: str | None = Field(default=None, max_length=500)
+
+    @field_validator("base_url")
+    @classmethod
+    def strip_base_url(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("image2 Base URL 不能为空")
+        return value
+
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, value: str | None) -> str | None:
+        value = value.strip() if value is not None else None
+        return value or None
+
+
 class CoverComposeCreate(BaseModel):
     asset_ids: list[str] = Field(min_length=2, max_length=9)
     template_id: str

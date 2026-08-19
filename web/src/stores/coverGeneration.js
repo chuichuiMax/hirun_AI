@@ -221,6 +221,18 @@ export const useCoverGenerationStore = defineStore('coverGeneration', () => {
     return contentApi.setCurrentCover(currentJob.value.id, assetId)
   }
 
+  async function saveImage2Config(payload) {
+    const response = await contentApi.updateCoverImage2Config(payload)
+    bootstrap.value = {
+      ...bootstrap.value,
+      image2: {
+        ...(bootstrap.value?.image2 || {}),
+        ...response.image2
+      }
+    }
+    return bootstrap.value.image2
+  }
+
   function clearCurrent() {
     streamController?.abort()
     currentJob.value = null
@@ -249,6 +261,7 @@ export const useCoverGenerationStore = defineStore('coverGeneration', () => {
     restore,
     cancel,
     retry,
+    saveImage2Config,
     setCurrent,
     clearCurrent,
     dispose

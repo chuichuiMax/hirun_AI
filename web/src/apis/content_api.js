@@ -30,6 +30,7 @@ export const contentApi = {
   getOcrImage: (resultId) =>
     apiGet(`/api/content/ocr-results/${resultId}/image`, {}, true, 'blob'),
   getCoverBootstrap: () => apiGet('/api/content/covers/bootstrap'),
+  updateCoverImage2Config: (payload) => apiPut('/api/content/covers/image2-config', payload),
   uploadCoverAsset: (file, role = 'source', contentTaskId = null) => {
     const form = new FormData()
     form.append('file', file)

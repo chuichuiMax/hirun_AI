@@ -17,6 +17,12 @@ from yuxi.repositories.content_repository import ContentRepository
 import yuxi.services.content_cover_service as content_cover_service
 import yuxi.services.content_cover_worker as content_cover_worker
 import yuxi.content_cover.renderer as content_cover_renderer
+from yuxi.content_cover.image2_client import Image2Config
+from yuxi.content_cover.image2_settings import (
+    get_image2_config_state,
+    resolve_image2_config,
+    save_image2_config,
+)
 from yuxi.content_cover.schemas import Image2Output, Image2Submission
 from yuxi.content.rules import ensure_content_seed_data
 from yuxi.storage.minio.client import get_minio_client
@@ -25,6 +31,7 @@ from yuxi.storage.postgres.models_content import (
     ContentArtifact,
     ContentArtifactVersion,
     ContentCoverAsset,
+    ContentCoverImage2Setting,
     ContentCoverJob,
     ContentRuleVersion,
     ContentTask,
@@ -49,6 +56,51 @@ async def isolate_postgres_event_loop():
     await _reset_pg_manager()
     yield
     await _reset_pg_manager()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_image2_global_settings_persist_per_account_without_returning_key():
+    pg_manager.initialize()
+    await pg_manager.create_business_tables()
+    owner_a = f"cover-config-a-{uuid.uuid4().hex}"
+    owner_b = f"cover-config-b-{uuid.uuid4().hex}"
+
+    try:
+        async with pg_manager.get_async_session_context() as db:
+            await save_image2_config(
+                db,
+                owner_uid=owner_a,
+                base_url="https://relay-a.example.com/v1",
+                api_key="secret-a",
+            )
+            await save_image2_config(
+                db,
+                owner_uid=owner_b,
+                base_url="https://relay-b.example.com/v1",
+                api_key="secret-b",
+            )
+            config_a = await resolve_image2_config(db, owner_uid=owner_a)
+            config_b = await resolve_image2_config(db, owner_uid=owner_b)
+            state_a = await get_image2_config_state(db, owner_uid=owner_a)
+
+        assert (config_a.base_url, config_a.api_key) == (
+            "https://relay-a.example.com/v1",
+            "secret-a",
+        )
+        assert (config_b.base_url, config_b.api_key) == (
+            "https://relay-b.example.com/v1",
+            "secret-b",
+        )
+        assert state_a["source"] == "database"
+        assert state_a["api_key_configured"] is True
+        assert "api_key" not in state_a
+    finally:
+        async with pg_manager.get_async_session_context() as db:
+            await db.execute(
+                delete(ContentCoverImage2Setting).where(ContentCoverImage2Setting.owner_uid.in_([owner_a, owner_b]))
+            )
+            await db.commit()
 
 
 @pytest.mark.integration
@@ -140,10 +192,10 @@ async def test_compose_cover_runs_from_upload_to_stored_result(monkeypatch: pyte
 
         async with pg_manager.get_async_session_context() as db:
             assets = (
-                await db.execute(
-                    ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)
-                )
-            ).mappings().all()
+                (await db.execute(ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)))
+                .mappings()
+                .all()
+            )
         output_asset = next(item for item in assets if item["role"] == "output")
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             file_response = await client.get(f"/api/content/covers/assets/{output_asset['id']}/file")
@@ -163,10 +215,10 @@ async def test_compose_cover_runs_from_upload_to_stored_result(monkeypatch: pyte
     finally:
         async with pg_manager.get_async_session_context() as db:
             assets = (
-                await db.execute(
-                    ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)
-                )
-            ).mappings().all()
+                (await db.execute(ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)))
+                .mappings()
+                .all()
+            )
             asset_objects = [(item["bucket_name"], item["object_name"]) for item in assets]
             await db.execute(delete(ContentCoverJob).where(ContentCoverJob.owner_uid == owner_uid))
             await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
@@ -262,10 +314,10 @@ async def test_compose_job_is_idempotent_cancellable_and_retryable(monkeypatch: 
     finally:
         async with pg_manager.get_async_session_context() as db:
             assets = (
-                await db.execute(
-                    ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)
-                )
-            ).mappings().all()
+                (await db.execute(ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)))
+                .mappings()
+                .all()
+            )
             asset_objects = [(item["bucket_name"], item["object_name"]) for item in assets]
             await db.execute(delete(ContentCoverJob).where(ContentCoverJob.owner_uid == owner_uid))
             await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
@@ -294,6 +346,9 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
         del args, kwargs
 
     class FakeImage2Client:
+        def __init__(self, config=None):
+            captured_request["client_config"] = config
+
         async def __aenter__(self):
             return self
 
@@ -324,14 +379,18 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
     monkeypatch.setattr(content_cover_worker, "_emit", no_event)
     monkeypatch.setattr(content_cover_worker, "_check_cancelled", no_event)
     monkeypatch.setattr(content_cover_worker, "clear_cancel_signal", no_event)
+
+    async def load_image2_config(worker_owner_uid):
+        assert worker_owner_uid == owner_uid
+        return Image2Config.from_env()
+
+    monkeypatch.setattr(content_cover_worker, "_load_image2_config", load_image2_config)
     monkeypatch.setattr(content_cover_worker, "Image2Client", FakeImage2Client)
     monkeypatch.setattr(content_cover_worker, "POLL_INTERVAL_SECONDS", 0)
     monkeypatch.setattr(
         content_cover_renderer,
         "_extract_template_text_blocks",
-        lambda image: [
-            {"text": "OLD TITLE", "box": [[120, 80], [900, 80], [900, 220], [120, 220]]}
-        ],
+        lambda image: [{"text": "OLD TITLE", "box": [[120, 80], [900, 80], [900, 220], [120, 220]]}],
     )
 
     app = FastAPI()
@@ -380,16 +439,16 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
         async with pg_manager.get_async_session_context() as db:
             job = await ContentCoverRepository(db).get_job(job_id)
             assets = (
-                await db.execute(
-                    ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)
-                )
-            ).mappings().all()
+                (await db.execute(ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)))
+                .mappings()
+                .all()
+            )
         assert job.status == "succeeded", job.error_message
         assert job.provider_task_id == "provider-task-1"
         assert captured_request["request"].mode == "multi_reference"
         assert len(captured_request["request"].source_images) == 1
-        assert captured_request["request"].source_images[0].file_name.endswith("-reference.jpg")
-        assert captured_request["request"].template_image.file_name.endswith("-reference.jpg")
+        assert captured_request["request"].source_images[0].file_name.endswith("-reference.png")
+        assert captured_request["request"].template_image.file_name.endswith("-reference.png")
         assert captured_request["request"].mask_image is None
         assert captured_request["idempotency_key"] == job_id
         assert "参考图1是用户原图" in captured_request["request"].prompt
@@ -400,12 +459,15 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
         assert "模板旧底图残留" in captured_request["request"].negative_prompt
         assert job.request_json["template_replicate"] is True
         assert job.request_json["parameters"]["template_replicate"] is True
+        assert job.request_json["parameters"]["quality"] == "high"
+        assert job.request_json["parameters"]["input_fidelity"] == "high"
+        assert job.request_json["parameters"]["output_format"] == "png"
+        assert captured_request["client_config"].base_url == "https://relay.example.com/v1"
+        assert captured_request["client_config"].api_key == "test-key"
         assert "template_settings" not in job.request_json
 
         output_asset = next(item for item in assets if item["role"] == "output")
-        result_bytes = await get_minio_client().adownload_file(
-            output_asset["bucket_name"], output_asset["object_name"]
-        )
+        result_bytes = await get_minio_client().adownload_file(output_asset["bucket_name"], output_asset["object_name"])
         with Image.open(io.BytesIO(result_bytes)) as image:
             assert image.size == (1080, 1440)
             assert image.mode == "RGB"
@@ -415,10 +477,10 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
     finally:
         async with pg_manager.get_async_session_context() as db:
             assets = (
-                await db.execute(
-                    ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)
-                )
-            ).mappings().all()
+                (await db.execute(ContentCoverAsset.__table__.select().where(ContentCoverAsset.owner_uid == owner_uid)))
+                .mappings()
+                .all()
+            )
             asset_objects = [(item["bucket_name"], item["object_name"]) for item in assets]
             await db.execute(delete(ContentCoverJob).where(ContentCoverJob.owner_uid == owner_uid))
             await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
@@ -545,12 +607,16 @@ async def test_selected_candidate_creates_new_artifact_version():
 
         async with pg_manager.get_async_session_context() as db:
             versions = (
-                await db.execute(
-                    select(ContentArtifactVersion)
-                    .where(ContentArtifactVersion.artifact_id == artifact_id)
-                    .order_by(ContentArtifactVersion.version)
+                (
+                    await db.execute(
+                        select(ContentArtifactVersion)
+                        .where(ContentArtifactVersion.artifact_id == artifact_id)
+                        .order_by(ContentArtifactVersion.version)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             linked_job = await ContentCoverRepository(db).get_job(job_id)
         assert [item.cover_asset_id for item in versions] == [None, asset_ids[1]]
         assert versions[1].source_type == "cover_update"
