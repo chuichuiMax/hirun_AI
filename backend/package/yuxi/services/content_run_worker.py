@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from langgraph.types import Command
+from pydantic import ValidationError
+from sqlalchemy.exc import OperationalError
 
 from yuxi.agents.buildin import agent_manager
 from yuxi.agents.buildin.content_workflow.context import ContentWorkflowContext
@@ -124,14 +127,32 @@ async def process_content_run(ctx, run_id: str):
                 "workflow_version_id": task.workflow_version_id,
                 "rule_version_id": task.rule_version_id,
                 "industry_template_version_id": task.industry_template_version_id,
+                "schema_version": int((task.runtime_config_snapshot_json or {}).get("schema_version") or 1),
+                "runtime_config_snapshot": task.runtime_config_snapshot_json or {},
+                "content_type": {},
+                "industry_pack": {},
+                "persona_profile": {},
+                "channel_profile": {},
+                "compliance_policies": [],
+                "lexicon_entries": [],
+                "media_evidence_items": [],
                 "content_brief": task.brief_json or {},
+                "content_angles": (task.strategy_json or {}).get("content_angle_candidates") or [],
+                "selected_angle": task.selected_angle_json or None,
                 "strategy_plan": task.strategy_json or {},
+                "slot_plan": (task.strategy_json or {}).get("slot_plan") or {},
+                "content_outline": (task.strategy_json or {}).get("content_outline") or {},
+                "evidence_usage_plan": (task.strategy_json or {}).get("evidence_usage_plan") or {},
                 "evidence_bundle": task.evidence_json or {"items": []},
                 "title_candidates": [],
                 "selected_title": None,
                 "content_draft": None,
                 "validation_report": None,
+                "title_validation_report": None,
                 "review_report": None,
+                "persona_diff": None,
+                "channel_result": None,
+                "approval_result": None,
                 "artifact_id": None,
                 "current_node": "queued",
                 "retry_counts": {},
@@ -191,14 +212,27 @@ async def process_content_run(ctx, run_id: str):
         )
         await append_run_stream_event(run_id, "end", {"status": "cancelled"}, thread_id=task.id)
     except Exception as exc:
-        if job_try < 2:
+        retryable = isinstance(
+            exc,
+            (
+                asyncio.TimeoutError,
+                ConnectionError,
+                TimeoutError,
+                OperationalError,
+                json.JSONDecodeError,
+                ValidationError,
+            ),
+        )
+        if retryable and job_try < 2:
             await append_run_stream_event(
                 run_id,
                 "error",
                 {"status": "retrying", "message": str(exc), "job_try": job_try},
                 thread_id=task.id,
             )
-            raise
+            from yuxi.services.run_worker import RetryableRunError
+
+            raise RetryableRunError(str(exc)) from exc
         async with pg_manager.get_async_session_context() as db:
             persisted_task = await ContentRepository(db).get_task(task.id, for_update=True)
             persisted_task.status = "failed"

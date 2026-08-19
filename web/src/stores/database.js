@@ -40,31 +40,42 @@ export const useDatabaseStore = defineStore('database', () => {
   let refreshInterval = null
   let autoRefreshSource = null // Tracks whether auto-refresh was user-triggered or automatic
   let autoRefreshManualOverride = false // Indicates user explicitly disabled auto-refresh
+  let listLoadingPromise = null
+  const queryParamsRequests = new Map()
+  let queryParamsLoadedKbId = null
 
   // Actions
   // 管理员获取所有知识库，普通用户获取有权限访问的知识库
   async function loadDatabases() {
+    if (listLoadingPromise) return listLoadingPromise
     state.listLoading = true
-    try {
-      const data = userStore.isAdmin
-        ? await databaseApi.getDatabases()
-        : await databaseApi.getAccessibleDatabases()
-      const list = data?.databases || []
-      databases.value = list.sort((a, b) => {
-        const timeA = parseToShanghai(a.created_at)
-        const timeB = parseToShanghai(b.created_at)
-        if (!timeA && !timeB) return 0
-        if (!timeA) return 1
-        if (!timeB) return -1
-        return timeB.valueOf() - timeA.valueOf() // 降序排列，最新的在前面
-      })
-    } catch (error) {
-      console.error('加载数据库列表失败:', error)
-      if (error.message.includes('权限')) {
-        message.error('没有权限访问知识库')
+    listLoadingPromise = (async () => {
+      try {
+        const data = userStore.isAdmin
+          ? await databaseApi.getDatabases()
+          : await databaseApi.getAccessibleDatabases()
+        const list = data?.databases || []
+        databases.value = list.sort((a, b) => {
+          const timeA = parseToShanghai(a.created_at)
+          const timeB = parseToShanghai(b.created_at)
+          if (!timeA && !timeB) return 0
+          if (!timeA) return 1
+          if (!timeB) return -1
+          return timeB.valueOf() - timeA.valueOf() // 降序排列，最新的在前面
+        })
+        return databases.value
+      } catch (error) {
+        console.error('加载数据库列表失败:', error)
+        if (error.message.includes('权限')) {
+          message.error('没有权限访问知识库')
+        }
+        throw error
       }
-      throw error
+    })()
+    try {
+      return await listLoadingPromise
     } finally {
+      listLoadingPromise = null
       state.listLoading = false
     }
   }
@@ -109,8 +120,9 @@ export const useDatabaseStore = defineStore('database', () => {
       database.value = data
       ensureAutoRefreshForProcessing(data?.files)
 
-      // Only load query parameters if explicitly requested or if not loaded yet
-      if (!skipQueryParams && queryParams.value.length === 0) {
+      // Query parameter metadata is cached per knowledge base and concurrent
+      // consumers share the same request.
+      if (!skipQueryParams) {
         await loadQueryParams(kbIdValue)
       }
     } catch (error) {
@@ -444,14 +456,22 @@ export const useDatabaseStore = defineStore('database', () => {
     }
   }
 
-  async function loadQueryParams(id) {
+  async function loadQueryParams(id, force = false) {
     const kbIdValue = id || kbId.value
     if (!kbIdValue) return
 
+    if (!force && queryParamsLoadedKbId === kbIdValue) {
+      return queryParams.value
+    }
+
+    const pendingRequest = queryParamsRequests.get(kbIdValue)
+    if (pendingRequest) return pendingRequest
+
     state.queryParamsLoading = true
-    try {
+    const request = (async () => {
       const response = await queryApi.getKnowledgeBaseQueryParams(kbIdValue)
       queryParams.value = response.params?.options || []
+      queryParamsLoadedKbId = kbIdValue
 
       // Create a set of currently supported parameter keys
       const supportedParamKeys = new Set(queryParams.value.map((param) => param.key))
@@ -469,11 +489,19 @@ export const useDatabaseStore = defineStore('database', () => {
           meta[param.key] = param.default
         }
       })
+      return queryParams.value
+    })()
+
+    queryParamsRequests.set(kbIdValue, request)
+    try {
+      return await request
     } catch (error) {
       console.error('Failed to load query params:', error)
       message.error('加载查询参数失败')
+      return []
     } finally {
-      state.queryParamsLoading = false
+      queryParamsRequests.delete(kbIdValue)
+      state.queryParamsLoading = queryParamsRequests.size > 0
     }
   }
 

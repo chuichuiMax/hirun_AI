@@ -45,13 +45,34 @@ const strategySelection = reactive({
   title_formula_code: '',
   content_formula_code: ''
 })
+const selectedAngleId = ref('')
 const selectedTitleId = ref('')
 const confirmedEvidenceIds = ref([])
+const approvalNote = ref('')
 const modelSpec = ref('')
 const editor = reactive({ title: '', body: '', topics: [] })
 const versionDrawerOpen = ref(false)
 const ocrModalOpen = ref(false)
 let draftSaveTimer = null
+
+const testFormDefaults = {
+  decoration: {
+    brand_name: '杭州栖居空间设计',
+    audience: ['杭州准备改善型装修的三口之家'],
+    pain: ['89㎡空间收纳不足', '厨房动线拥挤', '担心预算失控'],
+    advantage: ['设计施工一体化', '节点验收留档', '主材报价透明'],
+    project_type: '三室两厅一卫',
+    area: '89㎡',
+    budget: '硬装预算18万元',
+    duration: '预计工期90天',
+    craft_and_materials:
+      '全屋定制柜采用ENF级板材，水电管线分色布置，防水完成后进行48小时闭水试验，各节点验收后留存影像记录。',
+    owner_pain:
+      '入户和餐厅缺少集中收纳，厨房操作台不足，儿童房需要同时满足学习与储物。',
+    project_result:
+      '现场复尺后通过玄关柜、餐边柜和儿童房组合柜增加12㎡收纳空间，厨房动线调整为洗、切、炒顺序。'
+  }
+}
 
 const taskId = computed(() => route.params.taskId)
 const selectedTemplate = computed(() =>
@@ -83,8 +104,11 @@ const compatibilityClass = computed(() => {
 const titleOptions = computed(
   () => store.interrupt?.options || store.task?.title_candidates || []
 )
+const angleOptions = computed(() =>
+  store.interrupt?.interrupt_type === 'select_content_angle' ? store.interrupt.options || [] : []
+)
 const nodeTimeline = computed(() => {
-  const labels = {
+  const v1Labels = {
     compile_brief: '构建业务简报',
     plan_strategy: '规划创作策略',
     collect_evidence: '检索并冻结证据',
@@ -96,6 +120,31 @@ const nodeTimeline = computed(() => {
     review: '内容质量审核',
     save: '保存内容版本'
   }
+  const v2Labels = {
+    compile_context: '编译运行上下文',
+    ingest_materials: '导入真实素材',
+    assemble_facts: '组装事实与证据',
+    analyze_content_value: '分析内容价值',
+    select_content_angle: '选择内容角度',
+    match_strategy_v2: '匹配创作策略',
+    resolve_formula_slots: '解析公式变量',
+    collect_evidence: '检索并冻结证据',
+    confirm_high_risk_facts: '确认高风险事实',
+    generate_title_candidates: '生成标题候选',
+    validate_title_candidates: '校验标题候选',
+    select_title: '人工选择标题',
+    build_content_outline: '构建内容大纲',
+    generate_body_draft: '生成正文初稿',
+    persona_style_polish: '调整人设语气',
+    adapt_to_channel: '适配发布渠道',
+    deterministic_validate: '执行确定性校验',
+    semantic_review: '语义质量审核',
+    human_approval: '人工审批',
+    save_artifact_and_snapshots: '保存内容与快照'
+  }
+  const labels = Number(store.task?.runtime_config_snapshot?.schema_version || 1) >= 2
+    ? v2Labels
+    : v1Labels
   const byNode = new Map(store.runEvents.map((item) => [item.node_id, item]))
   return Object.entries(labels).map(([id, label]) => ({ id, label, status: byNode.get(id)?.status || 'pending' }))
 })
@@ -125,8 +174,15 @@ const stageFromTask = (task) => {
 const initializeFormValues = () => {
   Object.keys(formValues).forEach((key) => delete formValues[key])
   const saved = store.task?.brief?.form_values || {}
+  const hasSavedValues = Object.values(saved).some(
+    (value) => value !== undefined && value !== null && value !== '' && (!Array.isArray(value) || value.length)
+  )
+  const defaults = hasSavedValues
+    ? {}
+    : testFormDefaults[store.template?.slug || selectedTemplate.value?.slug] || {}
   activeFields.value.forEach((field) => {
-    if (saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
+    if (hasSavedValues && saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
+    else if (defaults[field.key] !== undefined) formValues[field.key] = defaults[field.key]
     else if (field.type === 'tags' || field.type === 'knowledge') formValues[field.key] = []
     else formValues[field.key] = ''
   })
@@ -303,6 +359,19 @@ const retryFailedRun = async () => {
 
 const submitHumanReview = async () => {
   try {
+    if (store.interrupt?.interrupt_type === 'select_content_angle') {
+      const selected = angleOptions.value.find((item) => item.id === selectedAngleId.value)
+      if (!selected) {
+        message.warning('请选择一个内容角度')
+        return
+      }
+      await store.resumeRun({
+        interrupt_type: 'select_content_angle',
+        angle_id: selected.id,
+        primary_narrative_axis: selected.primary_narrative_axis
+      })
+      return
+    }
     if (store.interrupt?.interrupt_type === 'confirm_facts') {
       await store.resumeRun({
         interrupt_type: 'confirm_facts',
@@ -320,6 +389,18 @@ const submitHumanReview = async () => {
     })
   } catch (error) {
     message.error(error.message || '恢复工作流失败')
+  }
+}
+
+const submitHumanApproval = async (approved) => {
+  try {
+    await store.resumeRun({
+      interrupt_type: 'human_approval',
+      approved,
+      note: approvalNote.value.trim() || null
+    })
+  } catch (error) {
+    message.error(error.message || '提交人工审批失败')
   }
 }
 
@@ -547,7 +628,12 @@ const openVersions = async () => {
 
         <div class="stage-actions split">
           <a-button @click="stage = 1"><ArrowLeft :size="15" />返回素材</a-button>
-          <a-button type="primary" :loading="store.loading.saving" @click="confirmStrategy">锁定策略并进入生成</a-button>
+          <a-button
+            type="primary"
+            :loading="store.loading.saving"
+            :disabled="compatibilityClass === 'blocked'"
+            @click="confirmStrategy"
+          >锁定策略并进入生成</a-button>
         </div>
       </section>
 
@@ -576,7 +662,19 @@ const openVersions = async () => {
             </div>
           </div>
 
-          <div v-if="store.interrupt?.interrupt_type === 'select_title'" class="human-review-card">
+          <div v-if="store.interrupt?.interrupt_type === 'select_content_angle'" class="human-review-card">
+            <div class="human-heading"><Sparkles :size="20" /><div><h3>选择本次内容角度</h3><p>系统已根据目标、事实和证据生成可执行方向，选择后将继续匹配公式。</p></div></div>
+            <a-radio-group v-model:value="selectedAngleId" class="title-options angle-options">
+              <a-radio v-for="item in angleOptions" :key="item.id" :value="item.id">
+                <strong>{{ item.value_proposition }}</strong>
+                <span>{{ item.recommendation_reason }}</span>
+                <small v-if="item.target_audience?.length">目标人群：{{ item.target_audience.join('、') }}</small>
+              </a-radio>
+            </a-radio-group>
+            <a-button type="primary" :disabled="!selectedAngleId" @click="submitHumanReview">确认角度并继续</a-button>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'select_title'" class="human-review-card">
             <div class="human-heading"><Send :size="20" /><div><h3>请选择最终标题</h3><p>选择后 LangGraph 从 checkpoint 恢复，无需重新检索证据。</p></div></div>
             <a-radio-group v-model:value="selectedTitleId" class="title-options">
               <a-radio v-for="item in titleOptions" :key="item.id" :value="item.id">
@@ -597,11 +695,32 @@ const openVersions = async () => {
             <a-button type="primary" @click="submitHumanReview">确认选中事实并继续</a-button>
           </div>
 
+          <div v-else-if="store.interrupt?.interrupt_type === 'human_approval'" class="human-review-card">
+            <div class="human-heading"><ShieldCheck :size="20" /><div><h3>最终人工审批</h3><p>请根据审核结果确认是否允许保存内容资产。</p></div></div>
+            <div v-if="store.interrupt.review?.checks?.length" class="approval-checks">
+              <div v-for="check in store.interrupt.review.checks" :key="`${check.code}-${check.message}`">
+                <strong>{{ check.message }}</strong>
+                <span v-if="check.suggestion">{{ check.suggestion }}</span>
+              </div>
+            </div>
+            <a-textarea v-model:value="approvalNote" :rows="3" placeholder="可选：填写审批备注" />
+            <div class="approval-actions">
+              <a-button danger @click="submitHumanApproval(false)">驳回</a-button>
+              <a-button type="primary" @click="submitHumanApproval(true)">通过并继续</a-button>
+            </div>
+          </div>
+
           <div v-else-if="runFailed" class="running-card failure-card">
             <CircleAlert :size="26" />
             <h3>工作流执行失败</h3>
             <p>{{ store.task?.error?.message || store.lastError?.message || '已保留完成节点和 checkpoint，可从失败节点恢复。' }}</p>
             <a-button type="primary" @click="retryFailedRun"><RefreshCw :size="15" />从失败节点重试</a-button>
+          </div>
+
+          <div v-else-if="store.interrupt" class="running-card failure-card">
+            <CircleAlert :size="26" />
+            <h3>遇到未支持的人工节点</h3>
+            <p>节点类型：{{ store.interrupt.interrupt_type || '未知' }}。请联系管理员检查工作流版本。</p>
           </div>
 
           <div v-else class="running-card">
@@ -666,7 +785,10 @@ const openVersions = async () => {
         <a-timeline-item v-for="item in store.versions" :key="item.id">
           <strong>v{{ item.version }} · {{ item.source_type }}</strong>
           <p>{{ item.title }}</p>
-          <small>{{ item.created_at }} · {{ item.model_spec || '人工编辑' }}</small>
+          <small>
+            {{ item.created_at }} ·
+            {{ item.model_spec || (item.source_type === 'generated' ? '系统默认模型' : '人工编辑') }}
+          </small>
         </a-timeline-item>
       </a-timeline>
     </a-drawer>
@@ -763,6 +885,14 @@ const openVersions = async () => {
 .human-heading p { margin-top: 3px; color: var(--color-text-secondary); }
 .title-options, .fact-options { width: 100%; display: flex; flex-direction: column; gap: 9px; margin-bottom: 16px; }
 .title-options :deep(.ant-radio-wrapper), .fact-options :deep(.ant-checkbox-wrapper) { width: 100%; margin-inline-start: 0; padding: 12px; border: 1px solid var(--gray-150); border-radius: 6px; align-items: flex-start; }
+.angle-options :deep(.ant-radio-wrapper-checked) { border-color: var(--main-color); background: var(--main-30); }
+.angle-options strong, .angle-options span, .angle-options small { display: block; }
+.angle-options span, .angle-options small { margin-top: 4px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.approval-checks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.approval-checks > div { padding: 10px 12px; border-radius: 6px; background: var(--color-warning-50); color: var(--color-warning-900); }
+.approval-checks strong, .approval-checks span { display: block; font-size: 12px; }
+.approval-checks span { margin-top: 3px; opacity: 0.82; }
+.approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .title-options strong, .title-options span { display: block; }
 .title-options span { margin-top: 3px; color: var(--color-text-tertiary); font-size: 12px; }
 .running-card { display: flex; flex-direction: column; align-items: center; text-align: center; }

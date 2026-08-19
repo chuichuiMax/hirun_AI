@@ -51,6 +51,27 @@ def test_recommend_strategy_uses_goal_matrix(rule_bundle, complete_brief, goal, 
     assert strategy["scene_enhancer"] == "S01"
 
 
+def test_recommend_strategy_skips_title_formula_with_missing_quick_mode_variables(rule_bundle):
+    quick_brief = {
+        "brand": {"name": "木序全屋定制"},
+        "audience": [],
+        "business_variables": {
+            "product": "120㎡旧房翻新与全屋定制",
+            "pain_points": ["预算容易超支"],
+            "advantages": ["分项报价透明"],
+            "result": "26.8万元，92天交付",
+            "location": "杭州城西",
+        },
+        "form_values": {},
+    }
+
+    strategy = recommend_strategy(rule_bundle, brief=quick_brief, content_goal="acquire")
+
+    assert strategy["title_formula_code"] == "T06"
+    assert strategy["compatibility"] == "auto_matched"
+    assert strategy["required_variables"] == []
+
+
 def test_validate_strategy_blocks_incompatible_methods(rule_bundle, complete_brief):
     result = validate_strategy_bundle(
         rule_bundle,

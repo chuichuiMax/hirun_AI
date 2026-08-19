@@ -16,16 +16,29 @@ from yuxi.content.schemas import (
     ContentArtifactUpdate,
     ContentArtifactRegenerate,
     ContentBriefPayload,
+    ChannelPreviewRequest,
+    ContentAngleSelection,
     ContentRunCreate,
     ContentRunResume,
     ContentTaskCreate,
     ContentTaskUpdate,
+    MaterialConfirmation,
+    MaterialCreate,
     RuleBundleUpdate,
     RuleDraftCreate,
+    SlotResolveRequest,
     StrategySelection,
+    StrategyRecommendV2Request,
     StrategyValidateRequest,
 )
 from yuxi.content.validators import normalize_manual_evidence, validate_content
+from yuxi.content.v2 import (
+    CombinationEngineV2,
+    ComplianceEngine,
+    ContentValueAnalyzer,
+    FormulaSlotResolver,
+    LexiconResolver,
+)
 from yuxi.models.providers.cache import model_cache
 from yuxi.repositories.agent_run_repository import AgentRunRepository
 from yuxi.repositories.content_repository import ContentRepository
@@ -84,7 +97,17 @@ def normalize_rule_bundle(payload: RuleBundleUpdate) -> dict[str, Any]:
             "required_variables",
             "risk_rules",
         ),
-        "combination_rules": ("methods", "title_formula_codes"),
+        "combination_rules": (
+            "content_type_codes",
+            "industry_scope",
+            "channel_scope",
+            "narrative_axis_codes",
+            "methods",
+            "title_formula_codes",
+            "title_pattern_codes",
+            "body_pattern_codes",
+            "required_evidence_types",
+        ),
     }
     for section, fields in list_fields.items():
         for index, item in enumerate(bundle[section]):
@@ -97,6 +120,8 @@ def normalize_rule_bundle(payload: RuleBundleUpdate) -> dict[str, Any]:
                 item["content_formula_code"] = item["content_formula_code"].strip().upper()
                 item["methods"] = [code.upper() for code in item["methods"]]
                 item["title_formula_codes"] = [code.upper() for code in item["title_formula_codes"]]
+                for field in ("content_type_codes", "title_pattern_codes", "body_pattern_codes"):
+                    item[field] = [code.upper() for code in item[field]]
             elif "compatible_methods" in item:
                 item["compatible_methods"] = [code.upper() for code in item["compatible_methods"]]
             item["sort_order"] = index
@@ -241,6 +266,8 @@ def _brief_field_value(brief: dict[str, Any], key: str) -> Any:
         return brief.get("audience")
     if key in {"required_terms", "forbidden_terms", "knowledge_scope"}:
         return brief.get(key)
+    if key in {"channel_profile_version_id", "persona_profile_version_id", "attachments"}:
+        return brief.get(key)
     return (brief.get("business_variables") or {}).get(key)
 
 
@@ -254,6 +281,18 @@ def compile_content_brief(
     business_variables.update(
         {key: value for key, value in form_values.items() if key not in reserved and value not in (None, "", [])}
     )
+    fields = template.quick_form_schema if task.mode == "quick" else template.pro_form_schema
+    # V2 行业表单只负责行业语言，生成协议消费稳定的平台变量。字段映射来自
+    # 已发布表单/行业包配置，新增行业无需修改 Skill 或工作流代码。
+    for field in fields or []:
+        variable_code = field.get("variable_code")
+        value = form_values.get(field.get("key"))
+        if variable_code and value not in (None, "", []):
+            business_variables[variable_code] = value
+    if business_variables.get("pain") and not business_variables.get("pain_points"):
+        business_variables["pain_points"] = business_variables["pain"]
+    if business_variables.get("advantage") and not business_variables.get("advantages"):
+        business_variables["advantages"] = business_variables["advantage"]
     brand = dict(raw.get("brand") or {})
     if form_values.get("brand_name"):
         brand["name"] = form_values["brand_name"]
@@ -268,6 +307,10 @@ def compile_content_brief(
         "task_id": task.id,
         "industry": template.slug,
         "content_goal": task.content_goal,
+        "content_type_code": getattr(task, "content_type_code", None),
+        "industry_pack_version_id": getattr(task, "industry_pack_version_id", None),
+        "channel_profile_version_id": getattr(task, "channel_profile_version_id", None),
+        "persona_profile_version_id": getattr(task, "persona_profile_version_id", None),
         "mode": task.mode,
         "brand": brand,
         "audience": audience,
@@ -279,8 +322,8 @@ def compile_content_brief(
         "attachments": raw.get("attachments") or [],
         "locked_fields": raw.get("locked_fields") or [],
         "form_values": form_values,
+        "material_confirmations": raw.get("material_confirmations") or [],
     }
-    fields = template.quick_form_schema if task.mode == "quick" else template.pro_form_schema
     missing = []
     for field in fields or []:
         if not field.get("required"):
@@ -301,15 +344,457 @@ async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
         from yuxi.knowledge import knowledge_base
 
         knowledge_options = (await knowledge_base.get_databases_by_user(user)).get("databases") or []
+    rule_bundle = await repo.get_rule_bundle(version.id)
     return {
         "industry_templates": await repo.list_templates(),
         "content_goals": CONTENT_GOALS,
-        "rule_bundle": await repo.get_rule_bundle(version.id),
+        "content_types": (rule_bundle or {}).get("content_types") or [],
+        "industry_packs": await repo.list_industry_packs(),
+        "channel_profiles": await repo.list_channel_profiles(),
+        "personas": await repo.list_personas(user),
+        "rule_bundle": rule_bundle,
         "knowledge_options": [
             {"id": item.get("kb_id"), "name": item.get("name"), "description": item.get("description")}
             for item in knowledge_options
             if item.get("kb_id")
         ],
+    }
+
+
+def _media_evidence_dict(item: Any) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "task_id": item.task_id,
+        "attachment_id": item.attachment_id,
+        "object_uri": item.object_uri,
+        "media_type": item.media_type,
+        "original_filename": item.original_filename,
+        "extracted_text": item.extracted_text,
+        "metadata": item.metadata_json or {},
+        "source_hash": item.source_hash,
+        "verified_status": item.verified_status,
+        "privacy_status": item.privacy_status,
+        "allowed_usage": item.allowed_usage or [],
+        "confirmed_facts": item.confirmed_facts or [],
+        "confirmed_by": item.confirmed_by,
+        "confirmed_at": item.confirmed_at.isoformat() if item.confirmed_at else None,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+    }
+
+
+async def get_content_v2_catalog(db: AsyncSession, user: User) -> dict[str, Any]:
+    """规则管理端与工作台共享的 V2 已发布配置目录。"""
+
+    repo = ContentRepository(db)
+    version = await repo.get_published_rule_version()
+    if version is None:
+        raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "创作规则库尚未初始化")
+    bundle = await repo.get_rule_bundle(version.id)
+    return {
+        "rule_version": (bundle or {}).get("version"),
+        "content_types": (bundle or {}).get("content_types") or [],
+        "formula_patterns": (bundle or {}).get("formula_patterns") or [],
+        "variables": (bundle or {}).get("variables") or [],
+        "industry_packs": await repo.list_industry_packs(),
+        "lexicon_packs": await repo.list_lexicon_packs(),
+        "personas": await repo.list_personas(user),
+        "channel_profiles": await repo.list_channel_profiles(),
+        "compliance_policies": await repo.list_compliance_policies(),
+    }
+
+
+async def add_task_material(
+    db: AsyncSession, user: User, task_id: str, payload: MaterialCreate
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    task = await repo.get_task_for_user(task_id, user, for_update=True)
+    if task is None:
+        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    try:
+        item = await repo.create_media_evidence(task_id=task.id, **payload.model_dump())
+        task.brief_json = {
+            **(task.brief_json or {}),
+            "attachments": [
+                *[
+                    attachment
+                    for attachment in ((task.brief_json or {}).get("attachments") or [])
+                    if attachment.get("attachment_id") != payload.attachment_id
+                ],
+                {
+                    "media_evidence_id": item.id,
+                    "attachment_id": item.attachment_id,
+                    "media_type": item.media_type,
+                    "original_filename": item.original_filename,
+                    "verified_status": item.verified_status,
+                    "privacy_status": item.privacy_status,
+                },
+            ],
+        }
+        await repo.track(
+            "content_material_ingested",
+            uid=str(user.uid),
+            task_id=task.id,
+            properties={"media_type": item.media_type, "attachment_id": item.attachment_id},
+        )
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise _content_error(409, "CONTENT_MATERIAL_DUPLICATED", "该附件已经加入当前任务")
+    return {"material": _media_evidence_dict(item)}
+
+
+async def list_task_materials(db: AsyncSession, user: User, task_id: str) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    task = await repo.get_task_for_user(task_id, user)
+    if task is None:
+        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    return {"items": [_media_evidence_dict(item) for item in await repo.list_media_evidence(task.id)]}
+
+
+async def confirm_task_material(
+    db: AsyncSession,
+    user: User,
+    task_id: str,
+    evidence_id: str,
+    payload: MaterialConfirmation,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    task = await repo.get_task_for_user(task_id, user, for_update=True)
+    if task is None:
+        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    item = await repo.get_media_evidence(evidence_id)
+    if item is None or item.task_id != task.id:
+        raise _content_error(404, "CONTENT_MATERIAL_NOT_FOUND", "任务素材不存在")
+    item.verified_status = payload.verified_status
+    item.privacy_status = payload.privacy_status
+    item.allowed_usage = payload.allowed_usage
+    item.confirmed_facts = payload.confirmed_facts
+    item.confirmed_by = str(user.uid)
+    item.confirmed_at = utc_now_naive()
+    fact_values = {
+        str(fact.get("variable_code") or fact.get("key")): fact.get("value")
+        for fact in payload.confirmed_facts
+        if (fact.get("variable_code") or fact.get("key")) and fact.get("value") not in (None, "", [])
+    }
+    evidence_items = [
+        evidence
+        for evidence in ((task.evidence_json or {}).get("items") or [])
+        if evidence.get("id") != item.id
+    ]
+    if payload.verified_status == "confirmed" and payload.privacy_status == "approved":
+        evidence_items.append(
+            {
+                "id": item.id,
+                "type": "media_evidence",
+                "source_type": "media",
+                "source_id": item.attachment_id,
+                "source_version": item.source_hash,
+                "content": item.extracted_text,
+                "values": fact_values,
+                "variable_codes": sorted(fact_values),
+                "verified_status": "confirmed",
+                "privacy_status": "approved",
+                "allowed_usage": payload.allowed_usage,
+            }
+        )
+    task.evidence_json = {
+        **(task.evidence_json or {}),
+        "items": evidence_items,
+        "summary": {
+            **((task.evidence_json or {}).get("summary") or {}),
+            "media": sum(1 for evidence in evidence_items if evidence.get("source_type") == "media"),
+        },
+    }
+    await repo.track(
+        "content_material_confirmed",
+        uid=str(user.uid),
+        task_id=task.id,
+        properties={
+            "media_evidence_id": item.id,
+            "verified_status": item.verified_status,
+            "privacy_status": item.privacy_status,
+        },
+    )
+    await db.commit()
+    return {"material": _media_evidence_dict(item)}
+
+
+async def _load_v2_runtime_context(
+    repo: ContentRepository, user: User, task: ContentTask
+) -> dict[str, Any]:
+    bundle = await repo.get_rule_bundle(task.rule_version_id)
+    if not bundle or not bundle.get("content_types"):
+        raise _content_error(409, "CONTENT_V2_RULES_REQUIRED", "该任务绑定的不是 V2 规则版本")
+    template = await repo.get_template(task.industry_template_version_id)
+    industry_pack = await repo.get_industry_pack(task.industry_pack_version_id) if task.industry_pack_version_id else None
+    channels = await repo.list_channel_profiles()
+    channel = next((item for item in channels if item["id"] == task.channel_profile_version_id), None)
+    persona: dict[str, Any] = {}
+    if task.persona_profile_version_id:
+        persona_row = await repo.get_persona_version_for_user(task.persona_profile_version_id, user)
+        if persona_row:
+            version, profile = persona_row
+            persona = {
+                "id": version.id,
+                "profile_id": profile.id,
+                "name": profile.name,
+                "version": version.version,
+                "identity": version.identity or {},
+                "experience_facts": version.experience_facts or [],
+                "professional_background": version.professional_background or {},
+                "tone": version.tone or {},
+                "values": version.values or [],
+                "positions": version.positions or [],
+                "service_boundaries": version.service_boundaries or [],
+                "preferred_phrases": version.preferred_phrases or [],
+                "forbidden_phrases": version.forbidden_phrases or [],
+                "evidence_ids": version.evidence_ids or [],
+            }
+
+    lexicon_catalog = await repo.list_lexicon_packs()
+    industry_lexicons = set(industry_pack.lexicon_version_ids or []) if industry_pack else set()
+    selected_lexicons = [
+        item
+        for item in lexicon_catalog
+        if item["scope_type"] == "platform"
+        or item["id"] in industry_lexicons
+        or (channel and item["scope_type"] == "channel" and item["scope_id"] == channel["code"])
+        or (item["scope_type"] == "enterprise" and item["tenant_id"] == task.tenant_id)
+    ]
+    lexicon_versions = []
+    for item in selected_lexicons:
+        lexicon_versions.append({**item, "entries": await repo.list_lexicon_entries(item["id"])})
+    resolved_lexicon = LexiconResolver().resolve(lexicon_versions)
+    return {
+        "bundle": bundle,
+        "template": template,
+        "industry_pack": industry_pack,
+        "channel": channel,
+        "persona": persona,
+        "lexicon": resolved_lexicon,
+    }
+
+
+async def analyze_task_content_value(db: AsyncSession, user: User, task_id: str) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    task = await repo.get_task_for_user(task_id, user, for_update=True)
+    if task is None:
+        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    if not task.brief_json:
+        raise _content_error(409, "CONTENT_BRIEF_REQUIRED", "请先完成业务简报")
+    context = await _load_v2_runtime_context(repo, user, task)
+    angles = ContentValueAnalyzer().analyze(
+        brief=task.brief_json,
+        evidence_bundle=task.evidence_json or {"items": []},
+        content_types=context["bundle"]["content_types"],
+        preferred_content_type=task.content_type_code,
+        limit=3,
+    )
+    task.strategy_json = {**(task.strategy_json or {}), "content_angle_candidates": angles}
+    task.current_stage = "strategy"
+    task.updated_by = str(user.uid)
+    await repo.track(
+        "content_value_analyzed",
+        uid=str(user.uid),
+        task_id=task.id,
+        properties={"angle_count": len(angles), "content_type_code": task.content_type_code},
+    )
+    await db.commit()
+    return {"angles": angles, "task": task.to_dict()}
+
+
+async def select_task_content_angle(
+    db: AsyncSession,
+    user: User,
+    task_id: str,
+    payload: ContentAngleSelection,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    task = await repo.get_task_for_user(task_id, user, for_update=True)
+    if task is None:
+        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    candidates = (task.strategy_json or {}).get("content_angle_candidates") or []
+    selected = next((item for item in candidates if item.get("id") == payload.angle_id), None)
+    if selected is None:
+        raise _content_error(422, "CONTENT_ANGLE_INVALID", "创作角度不存在或已过期，请重新分析")
+    if selected.get("primary_narrative_axis") != payload.primary_narrative_axis:
+        raise _content_error(422, "CONTENT_NARRATIVE_AXIS_INVALID", "主要叙事轴必须来自所选角度")
+    task.selected_angle_json = selected
+    task.primary_narrative_axis = payload.primary_narrative_axis
+    task.content_type_code = selected["content_type_code"]
+    task.strategy_json = {
+        **(task.strategy_json or {}),
+        "content_angle": selected,
+        "primary_narrative_axis": payload.primary_narrative_axis,
+        "content_type_code": task.content_type_code,
+    }
+    task.runtime_config_snapshot_json = {
+        **(task.runtime_config_snapshot_json or {}),
+        "content_type_code": task.content_type_code,
+        "content_angle": selected,
+        "primary_narrative_axis": task.primary_narrative_axis,
+    }
+    await repo.track(
+        "content_angle_selected",
+        uid=str(user.uid),
+        task_id=task.id,
+        properties={"angle_id": payload.angle_id, "primary_narrative_axis": payload.primary_narrative_axis},
+    )
+    await db.commit()
+    return {"selected_angle": selected, "task": task.to_dict()}
+
+
+async def recommend_content_strategy_v2(
+    db: AsyncSession,
+    user: User,
+    task_id: str,
+    payload: StrategyRecommendV2Request,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    task = await repo.get_task_for_user(task_id, user, for_update=True)
+    if task is None:
+        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    if not task.brief_json:
+        raise _content_error(409, "CONTENT_BRIEF_REQUIRED", "请先完成业务简报")
+    context = await _load_v2_runtime_context(repo, user, task)
+    if not task.selected_angle_json:
+        angles = ContentValueAnalyzer().analyze(
+            brief=task.brief_json,
+            evidence_bundle=task.evidence_json or {"items": []},
+            content_types=context["bundle"]["content_types"],
+            preferred_content_type=task.content_type_code,
+            limit=3,
+        )
+        if not angles:
+            raise _content_error(409, "CONTENT_ANGLE_UNAVAILABLE", "当前事实不足以形成创作角度")
+        task.selected_angle_json = angles[0]
+        task.primary_narrative_axis = angles[0]["primary_narrative_axis"]
+        task.content_type_code = angles[0]["content_type_code"]
+    result = CombinationEngineV2().recommend(
+        context["bundle"],
+        brief=task.brief_json,
+        evidence_bundle=task.evidence_json or {"items": []},
+        content_goal=task.content_goal,
+        content_type_code=task.content_type_code,
+        industry_slug=context["industry_pack"].slug if context["industry_pack"] else (
+            context["template"].slug if context["template"] else None
+        ),
+        channel_code=context["channel"]["code"] if context["channel"] else None,
+        primary_narrative_axis=task.primary_narrative_axis,
+        lexicon_entries=context["lexicon"]["entries"],
+        persona=context["persona"],
+        limit=payload.limit,
+        random_seed=payload.random_seed,
+    )
+    selected = result.get("selected")
+    if selected:
+        task.strategy_json = {
+            **selected,
+            "content_formula_code": selected["body_formula_code"],
+            "content_angle": task.selected_angle_json,
+            "compatibility": result["compatibility"],
+            "recommendation_trace": {
+                "alternatives": result["alternatives"],
+                "rejected": result["rejected"],
+                "required_actions": result["required_actions"],
+            },
+            "rule_version_id": task.rule_version_id,
+        }
+        task.runtime_config_snapshot_json = {
+            **(task.runtime_config_snapshot_json or {}),
+            "content_type_code": task.content_type_code,
+            "primary_narrative_axis": task.primary_narrative_axis,
+            "industry_pack_version_id": task.industry_pack_version_id,
+            "channel_profile_version_id": task.channel_profile_version_id,
+            "persona_profile_version_id": task.persona_profile_version_id,
+            "lexicon_version_ids": context["lexicon"]["version_ids"],
+            "title_pattern_code": selected["title_pattern_code"],
+            "body_pattern_code": selected["body_pattern_code"],
+        }
+        task.status = "strategy_ready" if result["compatibility"] != "blocked" else "brief_ready"
+        task.current_stage = "generation" if result["compatibility"] != "blocked" else "strategy"
+    await repo.track(
+        "strategy_v2_auto_matched",
+        uid=str(user.uid),
+        task_id=task.id,
+        properties={"compatibility": result["compatibility"], "content_type_code": task.content_type_code},
+    )
+    await db.commit()
+    return {"recommendation": result, "strategy": task.strategy_json or {}, "task": task.to_dict()}
+
+
+async def resolve_task_formula_slots(
+    db: AsyncSession,
+    user: User,
+    task_id: str,
+    payload: SlotResolveRequest,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    task = await repo.get_task_for_user(task_id, user, for_update=True)
+    if task is None:
+        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    context = await _load_v2_runtime_context(repo, user, task)
+    strategy = payload.strategy or task.strategy_json or {}
+    patterns = {item["code"]: item for item in context["bundle"]["formula_patterns"]}
+    resolver = FormulaSlotResolver()
+    plans = {}
+    for kind, key in (("title", "title_pattern_code"), ("body", "body_pattern_code")):
+        pattern = patterns.get(strategy.get(key))
+        if pattern is None:
+            raise _content_error(422, "CONTENT_PATTERN_MISSING", f"策略缺少可执行的{kind} Pattern")
+        plans[kind] = resolver.resolve(
+            pattern,
+            brief=task.brief_json or {},
+            evidence_bundle=task.evidence_json or {"items": []},
+            lexicon_entries=context["lexicon"]["entries"],
+            persona=context["persona"],
+            content_goal=task.content_goal,
+        )
+    task.strategy_json = {**strategy, "slot_plan": plans}
+    task.runtime_config_snapshot_json = {
+        **(task.runtime_config_snapshot_json or {}),
+        "slot_plan": plans,
+    }
+    await db.commit()
+    status = "blocked" if any(value["compatibility"] == "blocked" for value in plans.values()) else "compatible"
+    return {"compatibility": status, "slot_plan": plans, "task": task.to_dict()}
+
+
+async def preview_task_channel(
+    db: AsyncSession,
+    user: User,
+    task_id: str,
+    payload: ChannelPreviewRequest,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    task = await repo.get_task_for_user(task_id, user)
+    if task is None:
+        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    channels = await repo.list_channel_profiles()
+    channel = next((item for item in channels if item["id"] == payload.channel_profile_version_id), None)
+    if channel is None:
+        raise _content_error(404, "CONTENT_CHANNEL_PROFILE_INVALID", "渠道配置不存在或未发布")
+    template = await repo.get_template(task.industry_template_version_id)
+    industry_slug = template.slug if template else None
+    policies = [
+        item
+        for item in await repo.list_compliance_policies()
+        if item["scope_type"] == "platform"
+        or (item["scope_type"] == "channel" and item["scope_id"] == channel["code"])
+        or (item["scope_type"] == "industry" and item["scope_id"] == industry_slug)
+        or (item["scope_type"] == "enterprise" and item["tenant_id"] == task.tenant_id)
+    ]
+    result = ComplianceEngine().validate_and_adapt(
+        title=payload.title,
+        body=payload.body,
+        topics=payload.topics,
+        channel_profile=channel,
+        policies=policies,
+    )
+    return {
+        "channel": channel,
+        "preview": result,
+        "policy_version_ids": [item["id"] for item in policies],
     }
 
 
@@ -324,6 +809,56 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
     goal = payload.content_goal or template.default_goal
     if goal not in {item["code"] for item in CONTENT_GOALS}:
         raise _content_error(422, "CONTENT_GOAL_INVALID", "内容目标无效")
+    bundle = await repo.get_rule_bundle(rule_version.id)
+    content_types = (bundle or {}).get("content_types") or []
+    content_type_code = payload.content_type_code
+    if content_types:
+        type_map = {item["code"]: item for item in content_types}
+        if content_type_code is None:
+            content_type_code = next(
+                (item["code"] for item in content_types if goal in (item.get("supported_goals") or [])),
+                content_types[0]["code"],
+            )
+        selected_type = type_map.get(content_type_code)
+        if selected_type is None:
+            raise _content_error(422, "CONTENT_TYPE_INVALID", "内容类型不存在或未发布")
+        if goal not in (selected_type.get("supported_goals") or []):
+            raise _content_error(422, "CONTENT_TYPE_GOAL_MISMATCH", "内容类型不支持当前内容目标")
+
+    industry_pack = None
+    if payload.industry_pack_version_id:
+        industry_pack = await repo.get_industry_pack(payload.industry_pack_version_id)
+    elif content_types:
+        industry_pack = await repo.get_published_industry_pack(template.slug)
+    if payload.industry_pack_version_id and (
+        industry_pack is None or industry_pack.status != "published" or industry_pack.slug != template.slug
+    ):
+        raise _content_error(422, "CONTENT_INDUSTRY_PACK_INVALID", "行业内容包不存在、未发布或与行业不匹配")
+
+    channel_profile_version_id = payload.channel_profile_version_id or (template.default_strategy or {}).get(
+        "channel_profile_version_id"
+    )
+    channel_version = None
+    if channel_profile_version_id:
+        channel_version = await repo.get_channel_version(channel_profile_version_id)
+        if channel_version is None or channel_version.status != "published":
+            raise _content_error(422, "CONTENT_CHANNEL_PROFILE_INVALID", "渠道配置不存在或未发布")
+
+    persona = None
+    if payload.persona_profile_version_id:
+        persona = await repo.get_persona_version_for_user(payload.persona_profile_version_id, user)
+        if persona is None or persona[0].status != "published":
+            raise _content_error(422, "CONTENT_PERSONA_INVALID", "人设档案不存在、未发布或无权访问")
+
+    runtime_snapshot = {
+        "schema_version": 2 if content_types else 1,
+        "rule_version_id": rule_version.id,
+        "industry_template_version_id": template.id,
+        "industry_pack_version_id": industry_pack.id if industry_pack else None,
+        "persona_profile_version_id": payload.persona_profile_version_id,
+        "channel_profile_version_id": channel_profile_version_id,
+        "content_type_code": content_type_code,
+    }
     task = await repo.create_task(
         task_id=f"ct_{uuid.uuid4().hex}",
         user=user,
@@ -333,12 +868,23 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
         mode=payload.mode,
         content_goal=goal,
         project_id=payload.project_id,
+        content_type_code=content_type_code,
+        industry_pack_version_id=industry_pack.id if industry_pack else None,
+        persona_profile_version_id=payload.persona_profile_version_id,
+        channel_profile_version_id=channel_profile_version_id,
+        runtime_config_snapshot=runtime_snapshot,
     )
     await repo.track(
         "content_task_created",
         uid=str(user.uid),
         task_id=task.id,
-        properties={"industry": template.slug, "mode": task.mode, "content_goal": goal},
+        properties={
+            "industry": template.slug,
+            "mode": task.mode,
+            "content_goal": goal,
+            "content_type_code": content_type_code,
+            "schema_version": runtime_snapshot["schema_version"],
+        },
     )
     await db.commit()
     return {"task": task.to_dict(), "template": {"id": template.id, "name": template.name, "slug": template.slug}}
@@ -385,13 +931,40 @@ async def update_content_task(
     changes = payload.model_dump(exclude_none=True)
     if "content_goal" in changes and changes["content_goal"] not in {item["code"] for item in CONTENT_GOALS}:
         raise _content_error(422, "CONTENT_GOAL_INVALID", "内容目标无效")
+    next_goal = changes.get("content_goal", task.content_goal)
+    next_type = changes.get("content_type_code", task.content_type_code)
+    if "content_type_code" in changes:
+        definition = await repo.get_content_type(task.rule_version_id, changes["content_type_code"])
+        if definition is None:
+            raise _content_error(422, "CONTENT_TYPE_INVALID", "内容类型不存在或未发布")
+        if next_goal not in (definition.supported_goals or []):
+            raise _content_error(422, "CONTENT_TYPE_GOAL_MISMATCH", "内容类型不支持当前内容目标")
+    elif "content_goal" in changes and next_type:
+        definition = await repo.get_content_type(task.rule_version_id, next_type)
+        if definition and next_goal not in (definition.supported_goals or []):
+            raise _content_error(422, "CONTENT_TYPE_GOAL_MISMATCH", "当前内容类型不支持新的内容目标")
+    if "persona_profile_version_id" in changes:
+        persona = await repo.get_persona_version_for_user(changes["persona_profile_version_id"], user)
+        if persona is None or persona[0].status != "published":
+            raise _content_error(422, "CONTENT_PERSONA_INVALID", "人设档案不存在、未发布或无权访问")
+    if "channel_profile_version_id" in changes:
+        channel = await repo.get_channel_version(changes["channel_profile_version_id"])
+        if channel is None or channel.status != "published":
+            raise _content_error(422, "CONTENT_CHANNEL_PROFILE_INVALID", "渠道配置不存在或未发布")
     for key, value in changes.items():
         setattr(task, key, value)
     task.updated_by = str(user.uid)
     task.updated_at = utc_now_naive()
-    if {"content_goal", "mode"} & changes.keys():
+    if {"content_goal", "content_type_code", "persona_profile_version_id", "channel_profile_version_id", "mode"} & changes.keys():
         task.strategy_json = {}
         task.current_stage = "brief"
+        task.runtime_config_snapshot_json = {
+            **(task.runtime_config_snapshot_json or {}),
+            "content_goal": task.content_goal,
+            "content_type_code": task.content_type_code,
+            "persona_profile_version_id": task.persona_profile_version_id,
+            "channel_profile_version_id": task.channel_profile_version_id,
+        }
     await db.commit()
     return {"task": task.to_dict()}
 
@@ -425,10 +998,17 @@ async def duplicate_content_task(db: AsyncSession, user: User, task_id: str) -> 
         mode=source.mode,
         content_goal=source.content_goal,
         project_id=source.project_id,
+        content_type_code=source.content_type_code,
+        industry_pack_version_id=source.industry_pack_version_id,
+        persona_profile_version_id=source.persona_profile_version_id,
+        channel_profile_version_id=source.channel_profile_version_id,
+        runtime_config_snapshot=deepcopy(source.runtime_config_snapshot_json or {}),
     )
     copy_task.brief_json = deepcopy(source.brief_json or {})
     copy_task.strategy_json = deepcopy(source.strategy_json or {})
     copy_task.evidence_json = deepcopy(source.evidence_json or {})
+    copy_task.selected_angle_json = deepcopy(source.selected_angle_json or {})
+    copy_task.primary_narrative_axis = source.primary_narrative_axis
     copy_task.current_stage = "strategy" if copy_task.brief_json else "brief"
     await db.commit()
     return {"task": copy_task.to_dict()}

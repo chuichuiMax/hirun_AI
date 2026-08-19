@@ -108,6 +108,9 @@ class PostgresManager(metaclass=SingletonMeta):
             )
             await conn.run_sync(KnowledgeBase.metadata.create_all)
             await conn.run_sync(BusinessBase.metadata.create_all)
+        # create_all 只会创建新表，不会为既有表补列。内容平台 V2 必须在不
+        # 重建 v1 数据库的情况下升级，因此显式执行幂等的兼容迁移。
+        await self.ensure_content_schema()
         logger.info("PostgreSQL tables created/checked (knowledge + business)")
 
     async def create_business_tables(self):
@@ -512,6 +515,61 @@ class PostgresManager(metaclass=SingletonMeta):
             "CREATE INDEX IF NOT EXISTS ix_model_providers_is_enabled ON model_providers(is_enabled)",
         ]
         async with self.async_engine.begin() as conn:
+            for stmt in stmts:
+                await conn.execute(text(stmt))
+
+    async def ensure_content_schema(self):
+        """为已存在的 contentSwarm v1 表补齐 V2 字段。
+
+        新表由 ``BusinessBase.metadata.create_all`` 创建；这里仅维护既有表的
+        ADD COLUMN/INDEX 语句。所有语句均幂等，API 与 Worker 重复启动安全。
+        """
+
+        self._check_initialized()
+        stmts = [
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS content_type_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS industry_scope JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS channel_scope JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS narrative_axis_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS title_pattern_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS body_pattern_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS required_evidence_types JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS hard_conditions JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS score_weights JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS fallback_rule_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS content_type_code VARCHAR(32)",
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS industry_pack_version_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS persona_profile_version_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS channel_profile_version_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS primary_narrative_axis VARCHAR(80)",
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS selected_angle_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS runtime_config_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "CREATE INDEX IF NOT EXISTS ix_content_tasks_content_type_code ON content_tasks(content_type_code)",
+            "CREATE INDEX IF NOT EXISTS ix_content_tasks_industry_pack_version_id ON content_tasks(industry_pack_version_id)",
+            "CREATE INDEX IF NOT EXISTS ix_content_tasks_persona_profile_version_id ON content_tasks(persona_profile_version_id)",
+            "CREATE INDEX IF NOT EXISTS ix_content_tasks_channel_profile_version_id ON content_tasks(channel_profile_version_id)",
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS content_type_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS angle_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS pattern_slot_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS persona_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS channel_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS compliance_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS runtime_config_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS edit_diff_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS content_type_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS angle_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS pattern_slot_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS persona_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS channel_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS compliance_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS runtime_config_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS edit_diff_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb",
+        ]
+        async with self.async_engine.begin() as conn:
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_id)"),
+                {"lock_id": self.SCHEMA_INIT_LOCK_ID},
+            )
             for stmt in stmts:
                 await conn.execute(text(stmt))
 
