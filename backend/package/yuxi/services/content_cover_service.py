@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -17,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content_cover import COVER_SIZES, COVER_TEMPLATES, COVER_THEMES
 from yuxi.content_cover.image2_client import image2_is_configured
-from yuxi.content_cover.schemas import CoverComposeCreate, CoverGenerateCreate, CoverRetryCreate
+from yuxi.content_cover.schemas import (
+    CoverComposeCreate,
+    CoverGenerateCreate,
+    CoverRetryCreate,
+)
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.services.run_queue_service import (
@@ -51,6 +56,62 @@ def _error(status_code: int, code: str, message: str, *, retryable: bool = False
 
 def _owner_uid(user: User) -> str:
     return str(user.uid)
+
+
+def _compact_cover_copy(value: str, *, limit: int) -> str:
+    normalized = re.sub(r"https?://\S+", "", value or "")
+    normalized = re.sub(r"[`#>*_\[\](){}]+", " ", normalized)
+    normalized = re.sub(r"^[\s\-—–•·\d.、]+", "", normalized)
+    normalized = re.sub(r"\s+", "", normalized).strip("，。！？；：,.!?;:—- ")
+    if len(normalized) <= limit:
+        return normalized
+    clauses = [
+        item.strip("，。！？；：,.!?;:—- ")
+        for item in re.split(r"[，。！？；：,.!?;:—|｜]+", normalized)
+        if item.strip()
+    ]
+    suitable = [item for item in clauses if 4 <= len(item) <= limit]
+    return (suitable[0] if suitable else normalized[:limit]).strip("，。！？；：,.!?;:—- ")
+
+
+def _template_texts(artifact: ContentArtifact | None, title: str) -> dict[str, Any]:
+    summarized_title = _compact_cover_copy(title, limit=14)
+    subtitle = ""
+    tags: list[str] = []
+    if artifact is not None:
+        body = re.sub(r"[`#>*_\[\](){}]+", " ", artifact.body or "")
+        sentences = [
+            _compact_cover_copy(item, limit=24)
+            for item in re.split(r"[。！？!?\n]+", body)
+        ]
+        sentences = [
+            item
+            for item in sentences
+            if 6 <= len(item) <= 24 and item != summarized_title
+        ]
+        preferred = [
+            item
+            for item in sentences
+            if any(keyword in item for keyword in ("帮助", "实现", "提升", "解决", "通过", "让", "适合"))
+        ]
+        subtitle = (preferred or sentences or [""])[0]
+        tags = [_compact_cover_copy(str(topic).lstrip("#"), limit=10) for topic in (artifact.topics or [])]
+        tags = [tag for tag in tags if tag][:3]
+    return {
+        "title": summarized_title,
+        "subtitle": subtitle,
+        "tags": tags,
+        "preserve_fixed_copy": True,
+        "source": "content_asset" if artifact is not None else "manual",
+    }
+
+
+def _linked_content_title(artifact: ContentArtifact | None, task: Any | None) -> str:
+    artifact_title = str(getattr(artifact, "title", "") or "").strip()
+    if artifact_title:
+        return artifact_title
+    selected = (getattr(task, "selected_title_json", None) or {}).get("title")
+    return str(selected or getattr(task, "name", "") or "").strip()
 
 
 def _tenant_id(user: User) -> str | None:
@@ -330,24 +391,29 @@ async def _content_prompt(
     user: User,
     task_id: str | None,
     prompt: str,
-) -> tuple[str, ContentArtifact | None]:
+    *,
+    allow_empty: bool = False,
+) -> tuple[str, ContentArtifact | None, str]:
     artifact = await _resolve_artifact(db, user, task_id)
     sections = [prompt.strip()] if prompt.strip() else []
+    linked_title = ""
     if task_id:
         task = await ContentRepository(db).get_task_for_user(task_id, user)
+        linked_title = _linked_content_title(artifact, task)
         if task and artifact:
             sections.append(
                 "根据以下内容资产生成小红书风格封面：\n"
-                f"标题：{artifact.title.strip()}\n"
+                f"标题：{linked_title}\n"
                 f"正文摘要：{artifact.body.strip()[:1500]}\n"
                 f"话题：{'、'.join(artifact.topics or [])}"
             )
         elif task:
-            selected = (task.selected_title_json or {}).get("title") or task.name
-            sections.append(f"根据内容任务《{selected}》生成小红书风格封面。")
+            sections.append(f"根据内容任务《{linked_title}》生成小红书风格封面。")
     if not sections:
-        raise _error(422, "COVER_PROMPT_REQUIRED", "请填写封面生成提示词")
-    return "\n\n".join(sections), artifact
+        if not allow_empty:
+            raise _error(422, "COVER_PROMPT_REQUIRED", "请填写封面生成提示词")
+        sections.append("仅替换模板底图为原图，其余上层样式保持一致。")
+    return "\n\n".join(sections), artifact, linked_title
 
 
 async def create_cover_generate_job(
@@ -373,27 +439,63 @@ async def create_cover_generate_job(
         source = source_assets[0]
         if (mask.image_width, mask.image_height) != (source.image_width, source.image_height):
             raise _error(422, "COVER_MASK_SIZE_MISMATCH", "蒙版尺寸必须与原图一致")
-    prompt, artifact = await _content_prompt(db, user, payload.content_task_id, payload.prompt)
-    title = payload.title.strip() or (artifact.title.strip()[:60] if artifact else "")
+    template_replicate = payload.mode == "multi_reference" and bool(payload.template_asset_id)
+    prompt, artifact, linked_title = await _content_prompt(
+        db,
+        user,
+        payload.content_task_id,
+        payload.prompt,
+        allow_empty=template_replicate,
+    )
+    title = payload.title.strip() or linked_title[:60]
+    template_texts = _template_texts(artifact, title) if template_replicate else None
     mode_guidance = {
         "text_to_image": "生成高点击率的小红书封面底图，构图简洁、主体突出、层次清晰。",
         "image_to_image": "保留原图主体身份与关键细节，优化构图、光影和小红书封面氛围，不要凭空替换主体。",
         "multi_reference": "综合所有参考图；保留原图主体，借鉴模板的布局与视觉语言，但不要照搬其中的文字或品牌元素。",
         "mask": "只优化蒙版指定区域，未指定区域保持原图结构与主体一致。",
     }
-    output_guidance = (
-        "输出完整的封面视觉底图，左上区域预留干净、低细节的标题安全区。"
-        "画面内不要生成任何文字、数字、字母、水印、平台 Logo 或伪造品牌标识；"
-        "系统会在生成后叠加准确的中文标题。"
-    )
+    if template_replicate:
+        mode_guidance["multi_reference"] = (
+            "严格模板复刻模式。参考图1是用户原图，参考图2是样式模板。最终封面必须以参考图1完整铺满画布，"
+            "保留其人物、商品、空间、视角和关键细节；参考图2只提供上层视觉系统，不得保留其中的"
+            "房间、人物、商品或任何底图内容。从参考图2迁移上层元素：标题和副标题的位置与层级、字体粗细和颜色关系、贴纸、图标、"
+            "色块、线条、边框及角标；这些元素的坐标、尺寸比例、间距和整体风格应尽量与模板一致。"
+            "严禁把参考图1缩小后塞入矩形、圆角卡片、相框或局部区域，"
+            "严禁形成模板旧底图加新图卡片的套图。"
+        )
+        output_guidance = (
+            "输出必须是单张完整、不透明的封面图。把参考图2视为透明上层，把其中所有可见文字、"
+            "字体粗细、描边、阴影、贴纸、图标、色块和圆角文字条按原坐标、原比例迁移到参考图1。"
+            "模板原文也是必须保留的上层样式，不得擦除、改写、翻译、模糊或变成伪文字；不得新增模板中"
+            "不存在的卡片或装饰。参考图1的底图内容、手写字、表格、商品和人物必须保持清晰。"
+            "系统会在生成后按内容资产需要精确替换主标题，因此不要自行扩写新口号或新段落。"
+        )
+    else:
+        output_guidance = (
+            "输出完整的封面视觉底图，左上区域预留干净、低细节的标题安全区。"
+            "画面内不要生成任何文字、数字、字母、水印、平台 Logo 或伪造品牌标识；"
+            "系统会在生成后叠加准确的中文标题。"
+        )
     prompt = f"{mode_guidance[payload.mode]}\n{output_guidance}\n\n{prompt}"
     default_negative_prompt = (
         "乱码文字、错误汉字、随机字母、数字、水印、平台 Logo、伪造品牌标识、"
         "低清晰度、主体变形、过度锐化、杂乱背景"
     )
+    if template_replicate:
+        default_negative_prompt += (
+            "、透明棋盘格、马赛克、模板旧底图残留、双重背景、画中画、原图缩小、"
+            "原图置于卡片、圆角相框、白色大面板、新增边框、左右分栏、参考板、深色分隔线"
+        )
     request = payload.model_dump()
     request["prompt"] = prompt
     request["title"] = title
+    request["template_texts"] = template_texts
+    request["template_replicate"] = template_replicate
+    request["parameters"] = {
+        **payload.parameters,
+        **({"template_replicate": True} if template_replicate else {}),
+    }
     request["negative_prompt"] = "，".join(
         item for item in ((payload.negative_prompt or "").strip(), default_negative_prompt) if item
     )

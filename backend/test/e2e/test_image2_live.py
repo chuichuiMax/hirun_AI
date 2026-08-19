@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import delete, select
 
 from yuxi.content_cover.image2_client import Image2Client, Image2Config
@@ -29,6 +29,11 @@ def _fixture_image(*, template: bool = False) -> bytes:
     draw = ImageDraw.Draw(image)
     if template:
         draw.rectangle((48, 48, 720, 360), fill="#D9473F")
+        try:
+            title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64)
+        except OSError:
+            title_font = ImageFont.load_default()
+        draw.text((82, 150), "TEMPLATE TITLE", fill="white", font=title_font)
         draw.rectangle((48, 400, 450, 976), fill="#263238")
         draw.rectangle((480, 400, 720, 675), fill="#E7B24B")
         draw.rectangle((480, 705, 720, 976), fill="#4F78C8")
@@ -132,6 +137,11 @@ async def test_live_worker_multi_reference_flow():
         pytest.skip("Set RUN_IMAGE2_LIVE_TESTS=1 to spend relay quota and run real image2 calls.")
 
     config = Image2Config.from_env()
+    live_title = os.getenv("IMAGE2_LIVE_TITLE", "内容生产新方式")
+    source_path = (os.getenv("IMAGE2_LIVE_SOURCE_PATH") or "").strip()
+    template_path = (os.getenv("IMAGE2_LIVE_TEMPLATE_PATH") or "").strip()
+    input_source = Path(source_path).read_bytes() if source_path else _fixture_image()
+    input_template = Path(template_path).read_bytes() if template_path else _fixture_image(template=True)
     owner_uid = f"live_cover_{uuid.uuid4().hex}"
     job_id = f"ccj_{uuid.uuid4().hex}"
     stored_objects: list[tuple[str, str]] = []
@@ -140,7 +150,9 @@ async def test_live_worker_multi_reference_flow():
         async with pg_manager.get_async_session_context() as db:
             repo = ContentCoverRepository(db)
             asset_ids: dict[str, str] = {}
-            for role, data in (("source", _fixture_image()), ("template", _fixture_image(template=True))):
+            for role, data in (("source", input_source), ("template", input_template)):
+                with Image.open(io.BytesIO(data)) as image:
+                    image_width, image_height = image.size
                 asset_id = f"cca_{uuid.uuid4().hex}"
                 object_name = f"content-covers/{owner_uid}/{asset_id}/image.png"
                 uploaded = await get_minio_client().aupload_file(
@@ -159,8 +171,8 @@ async def test_live_worker_multi_reference_flow():
                     original_file_name=f"{role}.png",
                     content_type="image/png",
                     file_size=len(data),
-                    image_width=768,
-                    image_height=1024,
+                    image_width=image_width,
+                    image_height=image_height,
                     sha256=hashlib.sha256(data).hexdigest(),
                     bucket_name=uploaded.bucket_name,
                     object_name=uploaded.object_name,
@@ -184,15 +196,23 @@ async def test_live_worker_multi_reference_flow():
                     "source_asset_ids": [asset_ids["source"]],
                     "template_asset_id": asset_ids["template"],
                     "mask_asset_id": None,
-                    "title": "内容生产新方式",
+                    "title": live_title,
                     "prompt": (
-                        "根据原图和版式参考生成简洁的小红书产品封面底图，"
-                        "左上留白，不要生成文字、水印或平台 Logo。"
+                        "严格模板复刻。参考图1是原图，必须成为唯一底图并完整铺满画布；参考图2是模板。"
+                        "把参考图2当作透明上层，原样迁移全部文字、字体、描边、阴影、贴纸、色块和圆角条，"
+                        "保持它们的坐标、比例和颜色；不得保留模板底图，不得把原图缩进卡片或相框，"
+                        "不得改写、翻译、模糊模板原文，也不得新增段落、口号、数字或其他文字。"
                     ),
-                    "negative_prompt": "低清晰度、变形、复杂水印",
+                    "negative_prompt": "低清晰度、变形、复杂水印、模板旧底图残留、画中画、卡片套图",
                     "size": "1080x1440",
                     "n": 1,
-                    "parameters": {},
+                    "parameters": {"template_replicate": True},
+                    "template_replicate": True,
+                    "template_texts": {
+                        "title": live_title,
+                        "subtitle": "",
+                        "tags": [],
+                    },
                 },
                 result_json={},
                 progress=0,
@@ -223,10 +243,13 @@ async def test_live_worker_multi_reference_flow():
             image.load()
             assert image.format == "PNG"
             assert image.size == (1080, 1440)
+            assert image.mode == "RGB"
 
         evidence_root = Path(os.getenv("IMAGE2_LIVE_OUTPUT_DIR", "saves/image2-live-smoke"))
         run_dir = evidence_root / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") / "worker_multi_reference"
         run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "input-source.png").write_bytes(input_source)
+        (run_dir / "input-template.png").write_bytes(input_template)
         (run_dir / "result-1.png").write_bytes(result_bytes)
         (run_dir / "manifest.json").write_text(
             json.dumps(

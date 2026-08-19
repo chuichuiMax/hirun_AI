@@ -78,6 +78,8 @@ class CoverGenerateCreate(BaseModel):
                 raise ValueError("多图参考至少需要两张参考图")
             if self.mask_asset_id:
                 raise ValueError("多图参考不能携带蒙版")
+            if self.template_asset_id and len(self.source_asset_ids) != 1:
+                raise ValueError("模板复刻需要且仅需要一张原图")
         if self.mode == "mask":
             if len(self.source_asset_ids) != 1:
                 raise ValueError("蒙版生成需要且仅需要一张原图")

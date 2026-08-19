@@ -16,6 +16,7 @@ from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
 import yuxi.services.content_cover_service as content_cover_service
 import yuxi.services.content_cover_worker as content_cover_worker
+import yuxi.content_cover.renderer as content_cover_renderer
 from yuxi.content_cover.schemas import Image2Output, Image2Submission
 from yuxi.content.rules import ensure_content_seed_data
 from yuxi.storage.minio.client import get_minio_client
@@ -325,6 +326,13 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
     monkeypatch.setattr(content_cover_worker, "clear_cancel_signal", no_event)
     monkeypatch.setattr(content_cover_worker, "Image2Client", FakeImage2Client)
     monkeypatch.setattr(content_cover_worker, "POLL_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(
+        content_cover_renderer,
+        "_extract_template_text_blocks",
+        lambda image: [
+            {"text": "OLD TITLE", "box": [[120, 80], [900, 80], [900, 220], [120, 220]]}
+        ],
+    )
 
     app = FastAPI()
     app.include_router(content_covers, prefix="/api")
@@ -358,7 +366,7 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
                     "source_asset_ids": [uploaded["source"]],
                     "template_asset_id": uploaded["template"],
                     "title": "新品通勤指南",
-                    "prompt": "为新品生成轻复古小红书封面",
+                    "prompt": "",
                     "size": "1080x1440",
                     "n": 1,
                     "idempotency_key": f"integration-{uuid.uuid4().hex}",
@@ -380,12 +388,19 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
         assert job.provider_task_id == "provider-task-1"
         assert captured_request["request"].mode == "multi_reference"
         assert len(captured_request["request"].source_images) == 1
-        assert captured_request["request"].template_image is not None
+        assert captured_request["request"].source_images[0].file_name.endswith("-reference.jpg")
+        assert captured_request["request"].template_image.file_name.endswith("-reference.jpg")
+        assert captured_request["request"].mask_image is None
         assert captured_request["idempotency_key"] == job_id
-        assert "小红书" in captured_request["request"].prompt
-        assert "不要生成任何文字" in captured_request["request"].prompt
+        assert "参考图1是用户原图" in captured_request["request"].prompt
+        assert "参考图2是样式模板" in captured_request["request"].prompt
+        assert "参考图1完整铺满画布" in captured_request["request"].prompt
         assert job.request_json["title"] == "新品通勤指南"
         assert "乱码文字" in captured_request["request"].negative_prompt
+        assert "模板旧底图残留" in captured_request["request"].negative_prompt
+        assert job.request_json["template_replicate"] is True
+        assert job.request_json["parameters"]["template_replicate"] is True
+        assert "template_settings" not in job.request_json
 
         output_asset = next(item for item in assets if item["role"] == "output")
         result_bytes = await get_minio_client().adownload_file(
@@ -393,6 +408,10 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
         )
         with Image.open(io.BytesIO(result_bytes)) as image:
             assert image.size == (1080, 1440)
+            assert image.mode == "RGB"
+            assert image.getpixel((20, 900)) == (214, 64, 69)
+            assert image.getpixel((540, 900)) == (214, 64, 69)
+            assert image.getpixel((540, 150)) != (214, 64, 69)
     finally:
         async with pg_manager.get_async_session_context() as db:
             assets = (

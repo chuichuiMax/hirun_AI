@@ -32,7 +32,7 @@ cp .env.template .env.prod
 - `JWT_SECRET_KEY`：至少 32 个字符的持久化随机密钥
 - `YUXI_INSTANCE_ID`：至少 12 个字符且部署后保持不变，避免令牌签发方在重启后变化
 - `SILICONFLOW_API_KEY` 等模型密钥
-- `IMAGE2_BASE_URL` / `IMAGE2_API_KEY` / `IMAGE2_MODEL`：封面生成使用的 image2 中转站地址、密钥和模型名；异步接口不是默认路径时同时设置 `IMAGE2_SUBMIT_PATH` 与 `IMAGE2_STATUS_PATH`
+- `IMAGE2_BASE_URL` / `IMAGE2_API_KEY` / `IMAGE2_MODEL`：封面生成使用的 image2 中转站地址、密钥和模型名；文生图、图片编辑或异步状态接口不是默认路径时，分别设置 `IMAGE2_SUBMIT_PATH`、`IMAGE2_EDIT_PATH` 与 `IMAGE2_STATUS_PATH`
 - `XHS_GATEWAY_TOKEN`：至少 32 个字符的随机内部浏览器网关密钥，不能使用开发默认值
 - `SANDBOX_IMAGE`：使用固定版本或 digest，禁止使用 `latest`
 - `YUXI_API_IMAGE`、`YUXI_WEB_IMAGE`、`YUXI_SANDBOX_PROVISIONER_IMAGE`：镜像仓库地址

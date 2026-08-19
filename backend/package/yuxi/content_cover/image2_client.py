@@ -27,6 +27,7 @@ class Image2Config:
     api_key: str
     model: str
     submit_path: str = "/images/generations"
+    edit_path: str = "/images/edits"
     status_path: str = "/images/generations/{task_id}"
     timeout_seconds: float = 120
     send_response_format: bool = False
@@ -46,10 +47,14 @@ class Image2Config:
         except ValueError as exc:
             raise Image2Error("IMAGE2_CONFIG_INVALID", "IMAGE2_BASE_URL 端口无效") from exc
         submit_path = (os.getenv("IMAGE2_SUBMIT_PATH") or "/images/generations").strip()
+        edit_path = (os.getenv("IMAGE2_EDIT_PATH") or "/images/edits").strip()
         status_path = (os.getenv("IMAGE2_STATUS_PATH") or "/images/generations/{task_id}").strip()
-        if not submit_path or not status_path:
+        if not submit_path or not edit_path or not status_path:
             raise Image2Error("IMAGE2_CONFIG_INVALID", "image2 接口路径不能为空")
-        if any(urlparse(path).scheme or urlparse(path).netloc for path in (submit_path, status_path)):
+        if any(
+            urlparse(path).scheme or urlparse(path).netloc
+            for path in (submit_path, edit_path, status_path)
+        ):
             raise Image2Error("IMAGE2_CONFIG_INVALID", "image2 接口路径必须是相对路径")
         if "{task_id}" not in status_path:
             raise Image2Error("IMAGE2_CONFIG_INVALID", "IMAGE2_STATUS_PATH 必须包含 {task_id}")
@@ -64,6 +69,7 @@ class Image2Config:
             api_key=api_key,
             model=model,
             submit_path=submit_path,
+            edit_path=edit_path,
             status_path=status_path,
             timeout_seconds=timeout_seconds,
             send_response_format=os.getenv("IMAGE2_SEND_RESPONSE_FORMAT", "false").lower() in {"1", "true", "yes"},
@@ -151,6 +157,7 @@ class Image2Client:
             "mask",
             "mode",
             "response_format",
+            "template_replicate",
         }
         for key, value in request.extra.items():
             if key not in reserved:
@@ -300,12 +307,51 @@ class Image2Client:
 
     async def submit(self, request: Image2Request, *, idempotency_key: str | None = None) -> Image2Submission:
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}
-        body = await self._request_json(
-            "POST",
-            self._url(self.config.submit_path),
-            json=self.build_payload(request),
-            headers=headers,
-        )
+        if request.extra.get("template_replicate") and request.source_images:
+            references = [*request.source_images]
+            if request.template_image:
+                references.append(request.template_image)
+            field_name = "image[]" if len(references) > 1 else "image"
+            files = [
+                (field_name, (item.file_name, item.data, item.content_type)) for item in references
+            ]
+            if request.mask_image:
+                files.append(
+                    (
+                        "mask",
+                        (
+                            request.mask_image.file_name,
+                            request.mask_image.data,
+                            request.mask_image.content_type,
+                        ),
+                    )
+                )
+            prompt = request.prompt
+            if request.negative_prompt:
+                prompt = f"{prompt}\n\n必须避免：{request.negative_prompt}"
+            form = {
+                "model": self.config.model,
+                "prompt": prompt,
+                "size": "1024x1024" if request.size == "1080x1080" else "1024x1536",
+                "n": str(request.n),
+                "quality": "high",
+            }
+            if self.config.send_response_format:
+                form["response_format"] = "b64_json"
+            body = await self._request_json(
+                "POST",
+                self._url(self.config.edit_path),
+                data=form,
+                files=files,
+                headers=headers,
+            )
+        else:
+            body = await self._request_json(
+                "POST",
+                self._url(self.config.submit_path),
+                json=self.build_payload(request),
+                headers=headers,
+            )
         result = self._normalize(body)
         if result.status == "failed":
             raise Image2Error("IMAGE2_GENERATION_FAILED", result.error_message or "image2 生成失败")

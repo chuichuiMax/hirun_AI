@@ -12,7 +12,9 @@ const store = useCoverGenerationStore()
 const tab = ref('compose')
 const sourceAssets = ref([])
 const templateAsset = ref(null)
+const templateSourceAsset = ref(null)
 const maskAsset = ref(null)
+const draggingRole = ref('')
 const previewUrls = new Map()
 const form = reactive({
   contentTaskId: '',
@@ -33,6 +35,13 @@ const themes = computed(() => store.bootstrap?.themes || [])
 const sizes = computed(() => store.bootstrap?.sizes || [])
 const tasks = computed(() => store.bootstrap?.content_tasks || [])
 const activeTemplate = computed(() => templates.value.find((item) => item.id === form.templateId))
+const templateAspectWarning = computed(() => {
+  if (!templateAsset.value?.image_width || !templateAsset.value?.image_height) return ''
+  const expected = form.size === '1080x1080' ? 1 : 0.75
+  const actual = templateAsset.value.image_width / templateAsset.value.image_height
+  if (Math.abs(actual - expected) / expected < 0.08) return ''
+  return '模板比例与输出尺寸差异较大，导出时会按画布居中裁切；建议选择匹配比例的模板或输出尺寸。'
+})
 const canCancel = computed(() => store.isRunning && !['saving', 'cancel_requested'].includes(store.currentJob?.status))
 const canSubmit = computed(() => {
   if (store.isRunning || store.loading.upload || store.loading.submit) return false
@@ -42,7 +51,9 @@ const canSubmit = computed(() => {
   }
   if (!store.bootstrap?.image2?.configured) return false
   if (sourceAssets.value.length > 9) return false
-  if (tab.value === 'template') return Boolean(templateAsset.value && sourceAssets.value.length)
+  if (tab.value === 'template') {
+    return Boolean(templateAsset.value && templateSourceAsset.value)
+  }
   if (maskAsset.value) return sourceAssets.value.length === 1 && Boolean(form.prompt.trim() || form.contentTaskId)
   return Boolean(form.prompt.trim() || form.contentTaskId)
 })
@@ -69,21 +80,33 @@ const trackPreview = (asset, file) => {
   return { ...asset, previewUrl: url }
 }
 
-async function uploadSource(event) {
-  const files = Array.from(event.target.files || [])
-  event.target.value = ''
+async function uploadSourceFiles(files) {
   if (!files.length) return
+  const acceptedFiles = tab.value === 'template' ? files.slice(0, 1) : files
+  if (tab.value === 'template' && files.length > 1) {
+    message.info('模板复刻只使用一张原图，已取第一张文件')
+  }
   try {
-    const uploaded = await store.upload(files, 'source', form.contentTaskId || null)
-    sourceAssets.value.push(...uploaded.map((asset, index) => trackPreview(asset, files[index])))
+    const uploaded = await store.upload(acceptedFiles, 'source', form.contentTaskId || null)
+    const items = uploaded.map((asset, index) => trackPreview(asset, acceptedFiles[index]))
+    if (tab.value === 'template') {
+      if (templateSourceAsset.value) await removeAsset(templateSourceAsset.value, 'template-source')
+      templateSourceAsset.value = items[0]
+    } else {
+      sourceAssets.value.push(...items)
+    }
   } catch (error) {
     message.error(error.message || '原图上传失败')
   }
 }
 
-async function uploadSingle(event, role) {
-  const file = event.target.files?.[0]
+async function uploadSource(event) {
+  const files = Array.from(event.target.files || [])
   event.target.value = ''
+  await uploadSourceFiles(files)
+}
+
+async function uploadSingleFile(file, role) {
   if (!file) return
   try {
     const [asset] = await store.upload([file], role, form.contentTaskId || null)
@@ -100,6 +123,34 @@ async function uploadSingle(event, role) {
   }
 }
 
+async function uploadSingle(event, role) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  await uploadSingleFile(file, role)
+}
+
+function onDragOver(role, event) {
+  if (store.isRunning) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'copy'
+  draggingRole.value = role
+}
+
+function onDragLeave(role, event) {
+  if (event.currentTarget.contains(event.relatedTarget)) return
+  if (draggingRole.value === role) draggingRole.value = ''
+}
+
+async function onDrop(role, event) {
+  event.preventDefault()
+  if (store.isRunning) return
+  draggingRole.value = ''
+  const files = Array.from(event.dataTransfer.files || [])
+  if (!files.length) return
+  if (role === 'source') await uploadSourceFiles(files)
+  else await uploadSingleFile(files[0], role)
+}
+
 async function removeAsset(asset, role = 'source') {
   if (!asset || store.isRunning) return
   try {
@@ -113,6 +164,7 @@ async function removeAsset(asset, role = 'source') {
   previewUrls.delete(asset.id)
   if (role === 'source') sourceAssets.value = sourceAssets.value.filter((item) => item.id !== asset.id)
   else if (role === 'template') templateAsset.value = null
+  else if (role === 'template-source') templateSourceAsset.value = null
   else maskAsset.value = null
 }
 
@@ -124,7 +176,9 @@ function buildGeneratePayload() {
   return {
     mode,
     content_task_id: form.contentTaskId || null,
-    source_asset_ids: sourceAssets.value.map((item) => item.id),
+    source_asset_ids: tab.value === 'template'
+      ? [templateSourceAsset.value.id]
+      : sourceAssets.value.map((item) => item.id),
     template_asset_id: tab.value === 'template' ? templateAsset.value?.id : null,
     mask_asset_id: mode === 'mask' ? maskAsset.value?.id : null,
     title: form.title,
@@ -332,24 +386,69 @@ onBeforeUnmount(() => {
 
         <div v-else class="section-block ai-fields">
           <div v-if="tab === 'template'" class="upload-group">
-            <div class="section-title"><span>模板图</span><small>image2 将参考模板的构图和视觉语言</small></div>
-            <label v-if="!templateAsset" class="upload-box compact-upload">
-              <ImagePlus :size="22" /><span>上传一张模板图</span><input type="file" accept="image/*" :disabled="store.isRunning" @change="uploadSingle($event, 'template')" />
-            </label>
-            <div v-else class="single-preview"><img :src="templateAsset.previewUrl" alt="模板图" /><button :disabled="store.isRunning" aria-label="移除模板图" @click="removeAsset(templateAsset, 'template')"><X :size="16" /></button></div>
+            <div class="section-title"><span>模板与原图</span><small>原图作为完整底图，image2 只迁移模板的文字版式和上层装饰</small></div>
+            <div class="template-upload-pair">
+              <article class="reference-upload-card">
+                <header><strong>① 模板图</strong><span>提供文字、图案与风格</span></header>
+                <label
+                  v-if="!templateAsset"
+                  class="upload-box compact-upload"
+                  :class="{ 'is-dragging': draggingRole === 'template' }"
+                  @dragover="onDragOver('template', $event)"
+                  @dragleave="onDragLeave('template', $event)"
+                  @drop="onDrop('template', $event)"
+                >
+                  <ImagePlus :size="22" /><strong>拖拽模板图到这里</strong><span>或点击上传</span><input type="file" accept="image/*" :disabled="store.isRunning" @change="uploadSingle($event, 'template')" />
+                </label>
+                <div v-else class="reference-preview" :style="{ aspectRatio: form.size === '1080x1080' ? '1 / 1' : '3 / 4' }">
+                  <img :src="templateAsset.previewUrl" alt="模板图" />
+                  <span>样式参考</span>
+                  <button :disabled="store.isRunning" aria-label="移除模板图" @click="removeAsset(templateAsset, 'template')"><X :size="16" /></button>
+                </div>
+              </article>
+              <article class="reference-upload-card">
+                <header><strong>② 原图</strong><span>作为最终完整底图与主体</span></header>
+                <label
+                  v-if="!templateSourceAsset"
+                  class="upload-box compact-upload"
+                  :class="{ 'is-dragging': draggingRole === 'source' }"
+                  @dragover="onDragOver('source', $event)"
+                  @dragleave="onDragLeave('source', $event)"
+                  @drop="onDrop('source', $event)"
+                >
+                  <ImagePlus :size="22" /><strong>拖拽原图到这里</strong><span>或点击上传</span><input type="file" accept="image/*" :disabled="store.isRunning" @change="uploadSource" />
+                </label>
+                <div v-else class="reference-preview" :style="{ aspectRatio: form.size === '1080x1080' ? '1 / 1' : '3 / 4' }">
+                  <img :src="templateSourceAsset.previewUrl" alt="原图" />
+                  <span>唯一底图</span>
+                  <button :disabled="store.isRunning" aria-label="移除原图" @click="removeAsset(templateSourceAsset, 'template-source')"><X :size="16" /></button>
+                </div>
+              </article>
+            </div>
+            <p v-if="templateAspectWarning" class="template-aspect-warning">{{ templateAspectWarning }}</p>
+            <div class="template-transfer-note"><strong>复刻规则</strong><span>原图铺满画布 → 迁移模板文字/贴纸/图案 → 依据内容资产替换文案</span></div>
           </div>
           <label class="wide-field"><span>封面标题 <small>推荐填写；留空时使用关联内容资产标题</small></span><input v-model="form.title" maxlength="60" placeholder="例如：内容生产新方式" /></label>
-          <label class="wide-field"><span>生成要求</span><textarea v-model="form.prompt" rows="5" maxlength="8000" placeholder="例如：轻复古生活方式，主体清晰，暖色自然光，左上留出呼吸感；关联内容任务后会自动拼入正文摘要与话题。" /></label>
+          <label class="wide-field"><span>生成要求 <small v-if="tab === 'template'">模板复刻只填写需要适配的内容差异</small></span><textarea v-model="form.prompt" rows="5" maxlength="8000" :placeholder="tab === 'template' ? '例如：只替换模板底图为原图，保留模板所有装饰、字体和版式；将文字适配为关联内容资产的标题与卖点。' : '例如：轻复古生活方式，主体清晰，暖色自然光，左上留出呼吸感；关联内容任务后会自动拼入正文摘要与话题。'" /></label>
           <label class="wide-field"><span>不希望出现</span><input v-model="form.negativePrompt" maxlength="4000" placeholder="例如：低清晰度、复杂水印、变形人物" /></label>
           <div class="form-grid compact">
             <label><span>生成数量</span><select v-model.number="form.count"><option :value="1">1 张</option><option :value="2">2 张</option><option :value="4">4 张</option></select></label>
-            <label v-if="tab === 'ai'" class="mask-field"><span>可选蒙版</span><input type="file" accept="image/*" :disabled="store.isRunning" @change="uploadSingle($event, 'mask')" /><small v-if="maskAsset">已上传 {{ maskAsset.localName }}；尺寸需与单张原图一致</small></label>
+            <label
+              v-if="tab === 'ai'"
+              class="mask-field mask-dropzone"
+              :class="{ 'is-dragging': draggingRole === 'mask' }"
+              @dragover="onDragOver('mask', $event)"
+              @dragleave="onDragLeave('mask', $event)"
+              @drop="onDrop('mask', $event)"
+            >
+              <span>可选蒙版</span><strong>拖拽蒙版图或点击上传</strong><small v-if="maskAsset">已上传 {{ maskAsset.localName }}；尺寸需与单张原图一致</small><input type="file" accept="image/*" :disabled="store.isRunning" @change="uploadSingle($event, 'mask')" />
+            </label>
           </div>
         </div>
 
-        <div class="section-block">
+        <div v-if="tab !== 'template'" class="section-block">
           <div class="section-title">
-            <span>{{ tab === 'template' ? '待优化原图' : '图片素材' }}</span>
+            <span>图片素材</span>
             <small v-if="tab === 'compose'">当前 {{ sourceAssets.length }} 张 · {{ activeTemplate?.name }}需要 {{ activeTemplate?.min_assets }}–{{ activeTemplate?.max_assets }} 张</small>
             <small v-else>支持单图图生图与多图参考 · 当前 {{ sourceAssets.length }}/9 张</small>
           </div>
@@ -358,8 +457,14 @@ onBeforeUnmount(() => {
               <img :src="asset.previewUrl" :alt="asset.localName" />
               <button :disabled="store.isRunning" aria-label="移除图片" @click="removeAsset(asset)"><X :size="15" /></button>
             </div>
-            <label class="upload-box">
-              <ImagePlus :size="24" /><strong>上传图片</strong><span>PNG / JPG / WebP，单张不超过 20 MB</span>
+            <label
+              class="upload-box"
+              :class="{ 'is-dragging': draggingRole === 'source' }"
+              @dragover="onDragOver('source', $event)"
+              @dragleave="onDragLeave('source', $event)"
+              @drop="onDrop('source', $event)"
+            >
+              <ImagePlus :size="24" /><strong>拖拽图片到这里</strong><span>或点击上传 · PNG / JPG / WebP，单张不超过 20 MB</span>
               <input type="file" accept="image/*" multiple :disabled="store.isRunning" @change="uploadSource" />
             </label>
           </div>
@@ -431,10 +536,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--main-500); box-s
 .layout-glyph { width: 100%; aspect-ratio: 4/3; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; } .layout-glyph i { background: var(--main-200); border-radius: 2px; }
 .layout-glyph[data-layout='split_horizontal'] { grid-template-columns: 1fr; }.layout-glyph[data-layout='grid_3x3'] { grid-template-columns: repeat(3, 1fr); }
 .wide-field { margin-top: 15px; }.asset-grid { margin-top: 13px; display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 12px; }
-.asset-card, .single-preview { position: relative; overflow: hidden; border-radius: 11px; background: var(--gray-100); }.asset-card { aspect-ratio: 1; }.asset-card img, .single-preview img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.asset-card, .single-preview { position: relative; overflow: hidden; border-radius: 11px; background: var(--gray-100); }.asset-card { aspect-ratio: 1; }.asset-card img, .single-preview img { width: 100%; height: 100%; display: block; object-fit: cover; }.single-preview.template-preview img { object-fit: contain; }
 .asset-card button, .single-preview button { position: absolute; top: 7px; right: 7px; width: 27px; height: 27px; border: 0; border-radius: 50%; display: grid; place-items: center; color: white; background: rgba(0,0,0,.65); cursor: pointer; }
-.upload-box { min-height: 130px; border: 1px dashed var(--main-300); border-radius: 11px; display: grid; place-content: center; justify-items: center; gap: 7px; text-align: center; color: var(--main-700); background: var(--main-30); cursor: pointer; }.upload-box span { color: var(--gray-500); font-size: 11px; }.upload-box input { display: none; }
-.compact-upload { min-height: 86px; margin-top: 12px; }.single-preview { width: 150px; height: 100px; margin-top: 12px; }.mask-field input { padding: 7px; }.mask-field small { display: block; }
+.template-upload-pair { margin-top: 13px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.reference-upload-card { min-width: 0; padding: 14px; border: 1px solid var(--gray-150); border-radius: 13px; background: var(--main-20); }
+.reference-upload-card header { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.reference-upload-card header strong { color: var(--gray-900); font-size: 13px; }.reference-upload-card header span { color: var(--gray-500); font-size: 11px; }
+.reference-preview { position: relative; width: min(100%, 280px); max-height: 360px; margin: 12px auto 0; overflow: hidden; border: 1px solid var(--gray-200); border-radius: 11px; background: var(--gray-100); }
+.reference-preview > img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.reference-preview > span { position: absolute; left: 8px; bottom: 8px; padding: 4px 7px; border-radius: 6px; color: white; background: rgba(0,0,0,.66); font-size: 10px; }
+.reference-preview > button { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: 0; border-radius: 50%; display: grid; place-items: center; color: white; background: rgba(0,0,0,.68); cursor: pointer; }
+.template-aspect-warning { margin: 10px 0 0; padding: 9px 11px; border-radius: 8px; color: var(--color-warning-700); background: var(--color-warning-10); font-size: 12px; }
+.template-transfer-note { margin-top: 11px; padding: 11px 13px; display: flex; gap: 12px; align-items: center; border: 1px solid var(--main-100); border-radius: 10px; color: var(--main-800); background: var(--main-30); font-size: 12px; }.template-transfer-note span { color: var(--gray-600); }
+.upload-box { min-height: 130px; border: 1px dashed var(--main-300); border-radius: 11px; display: grid; place-content: center; justify-items: center; gap: 7px; text-align: center; color: var(--main-700); background: var(--main-30); cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }.upload-box span { color: var(--gray-500); font-size: 11px; }.upload-box input { display: none; }.upload-box.is-dragging { border-color: var(--main-600); background: var(--main-50); box-shadow: 0 0 0 3px var(--main-100); }
+.compact-upload { min-height: 86px; margin-top: 12px; }.single-preview { width: 150px; height: 100px; margin-top: 12px; }.mask-field input { padding: 7px; }.mask-field small { display: block; }.mask-dropzone { min-height: 86px; padding: 12px; box-sizing: border-box; border: 1px dashed var(--main-300); border-radius: 11px; color: var(--main-700); background: var(--main-30); cursor: pointer; text-align: center; }.mask-dropzone input { display: none; }
 .compose-preview { display: grid; justify-items: center; gap: 8px; margin-top: 18px; padding: 16px; border: 1px solid var(--gray-150); border-radius: 12px; background: var(--main-20); }
 .compose-preview > small { color: var(--gray-500); text-align: center; }
 .preview-stage { --preview-gap: 5px; position: relative; display: grid; width: min(100%, 270px); aspect-ratio: 3 / 4; gap: var(--preview-gap); overflow: hidden; border-radius: 10px; padding: 7px; background: var(--main-0); box-shadow: 0 5px 18px rgba(1, 21, 31, .1); }
@@ -459,5 +574,5 @@ input:focus, select:focus, textarea:focus { border-color: var(--main-500); box-s
 .result-list { display: grid; gap: 13px; margin-top: 16px; }.result-list article { position: relative; overflow: hidden; border-radius: 13px; background: var(--gray-100); }.result-list img { width: 100%; max-height: 520px; object-fit: contain; display: block; }.result-actions { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 7px; }.result-list article button { padding: 8px 11px; background: rgba(255,255,255,.92); color: var(--main-900); }
 .error-state strong { color: var(--color-error-700); }.history { margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--gray-150); }.history-row { width: 100%; padding: 11px 0; border: 0; border-bottom: 1px solid var(--gray-100); display: flex; justify-content: space-between; align-items: center; text-align: left; background: transparent; cursor: pointer; }.history-row span { display: grid; gap: 3px; }.history-row em { color: var(--gray-500); font-size: 11px; font-style: normal; }.history-row em[data-status='succeeded'] { color: var(--color-success-700); }.history-row em[data-status='failed'] { color: var(--color-error-700); }.history-empty { color: var(--gray-500); font-size: 12px; }
 @media (max-width: 1100px) { .workspace-grid { grid-template-columns: 1fr; }.result-panel { position: static; }.template-grid { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 680px) { .cover-page { padding: 18px; }.page-head { display: grid; }.form-grid, .asset-grid { grid-template-columns: 1fr 1fr; }.template-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 680px) { .cover-page { padding: 18px; }.page-head { display: grid; }.form-grid, .asset-grid, .template-upload-pair { grid-template-columns: 1fr; }.template-grid { grid-template-columns: repeat(2, 1fr); }.template-transfer-note { align-items: flex-start; flex-direction: column; } }
 </style>

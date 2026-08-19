@@ -8,12 +8,17 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from fastapi import HTTPException
-from PIL import Image
+from PIL import Image, ImageDraw
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from yuxi.content_cover.image2_client import Image2Client, Image2Config, Image2Error, image2_is_configured
-from yuxi.content_cover.renderer import render_cover
+import yuxi.content_cover.renderer as content_cover_renderer
+from yuxi.content_cover.renderer import (
+    apply_template_title,
+    finalize_template_transfer,
+    render_cover,
+)
 from yuxi.content_cover.schemas import (
     CoverGenerateCreate,
     Image2Input,
@@ -24,7 +29,11 @@ from yuxi.content_cover.schemas import (
 from yuxi.content_cover.templates import COVER_TEMPLATES
 from yuxi.content.schemas import XiaohongshuDistributionCreate
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
-from yuxi.services.content_cover_service import _normalize_upload
+from yuxi.services.content_cover_service import (
+    _linked_content_title,
+    _normalize_upload,
+    _template_texts,
+)
 import yuxi.services.content_cover_worker as content_cover_worker
 import yuxi.services.xiaohongshu_service as xiaohongshu_service
 from yuxi.storage.postgres.models_content import ContentCoverJob
@@ -165,6 +174,101 @@ def test_cover_upload_rejects_unsupported_decodable_format():
     assert exc_info.value.detail["error"]["code"] == "COVER_IMAGE_FORMAT_UNSUPPORTED"
 
 
+def test_template_replica_requires_exactly_one_source():
+    with pytest.raises(ValidationError):
+        CoverGenerateCreate(
+            mode="multi_reference",
+            source_asset_ids=["source-1", "source-2"],
+            template_asset_id="template-1",
+            prompt="复刻模板",
+            idempotency_key="request-1234",
+        )
+
+
+def test_template_texts_are_derived_from_linked_content_asset():
+    artifact = SimpleNamespace(
+        body="# 开头\n本文通过封面模板帮助装修企业提升客户转化。后续内容不应进入副标题",
+        topics=["#家居", "装修获客", "签单转化", "多余话题"],
+    )
+
+    texts = _template_texts(artifact, "装修获客转化的完整方法与执行步骤")
+
+    assert texts == {
+        "title": "装修获客转化的完整方法与执行",
+        "subtitle": "本文通过封面模板帮助装修企业提升客户转化",
+        "tags": ["家居", "装修获客", "签单转化"],
+        "preserve_fixed_copy": True,
+        "source": "content_asset",
+    }
+
+
+def test_linked_content_title_falls_back_to_selected_task_title_or_name():
+    task = SimpleNamespace(selected_title_json={"title": "内容资产标题"}, name="专业服务")
+    assert _linked_content_title(SimpleNamespace(title=""), task) == "内容资产标题"
+    task.selected_title_json = {}
+    assert _linked_content_title(None, task) == "专业服务"
+
+
+def test_template_transfer_keeps_generated_full_canvas_instead_of_template_background(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(content_cover_renderer, "_extract_template_text_blocks", lambda image: [])
+    final = finalize_template_transfer(
+        _image("#225533", (100, 100)),
+        _image("#2244AA", (100, 100)),
+        _image("#EE4422", (100, 100)),
+        target_size=(100, 100),
+        title="",
+    )
+
+    with Image.open(io.BytesIO(final)) as result:
+        assert result.mode == "RGB"
+        assert result.getpixel((5, 5)) == (238, 68, 34)
+        assert result.getpixel((50, 50)) == (238, 68, 34)
+
+
+def test_template_transfer_rejects_missing_reference_placeholder(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        content_cover_renderer,
+        "_extract_template_text_blocks",
+        lambda image: [{"text": "缺少参考图1和参考图2", "box": [[10, 10], [90, 10], [90, 30], [10, 30]]}],
+    )
+
+    with pytest.raises(content_cover_renderer.CoverRenderError, match="未接收到模板复刻参考图"):
+        finalize_template_transfer(
+            _image("#225533", (100, 100)),
+            _image("#2244AA", (100, 100)),
+            _image("#EE4422", (100, 100)),
+            target_size=(100, 100),
+            title="",
+        )
+
+
+def test_template_transfer_rejects_output_that_drops_source_subject(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(content_cover_renderer, "_extract_template_text_blocks", lambda image: [])
+    source = Image.new("RGB", (400, 400), "white")
+    generated = Image.new("RGB", (400, 400), "#ECE2D7")
+    source_draw = ImageDraw.Draw(source)
+    generated_draw = ImageDraw.Draw(generated)
+    for offset in range(20, 380, 40):
+        source_draw.rectangle((offset, 20, offset + 14, 380), fill="#17324D")
+        source_draw.ellipse((20, offset, 380, offset + 18), outline="#D9473F", width=5)
+        generated_draw.line((0, offset, 400, 400 - offset), fill="#2E6B55", width=9)
+    source_output = io.BytesIO()
+    generated_output = io.BytesIO()
+    source.save(source_output, format="PNG")
+    generated.save(generated_output, format="PNG")
+
+    with pytest.raises(content_cover_renderer.CoverRenderError, match="未保留原图主体"):
+        finalize_template_transfer(
+            _image("#225533", (400, 400)),
+            source_output.getvalue(),
+            generated_output.getvalue(),
+            target_size=(400, 400),
+            title="",
+        )
+
+
 def test_worker_normalizes_model_result_to_requested_cover_size():
     normalized, width, height = content_cover_worker._normalize_output(
         _image("#52677A", (640, 480)),
@@ -194,6 +298,89 @@ def test_worker_adds_exact_title_overlay_after_model_output():
         assert result.size == (1080, 1440)
         assert result.format == "PNG"
     assert (width, height) == (1080, 1440)
+
+
+def test_template_title_replaces_detected_text_in_place(monkeypatch: pytest.MonkeyPatch):
+    source = _image("#52677A", (640, 480))
+    monkeypatch.setattr(
+        content_cover_renderer,
+        "_extract_template_text_blocks",
+        lambda image: [{"text": "OLD TITLE", "box": [[100, 80], [540, 80], [540, 220], [100, 220]]}],
+    )
+
+    normalized = apply_template_title(Image.open(io.BytesIO(source)), "内容生产新方式")
+
+    assert normalized.size == (640, 480)
+    output = io.BytesIO()
+    normalized.save(output, format="PNG")
+    assert output.getvalue() != source
+
+
+def test_template_transfer_replaces_title_without_generic_panel(monkeypatch: pytest.MonkeyPatch):
+    source = _image("#52677A", (640, 480))
+    monkeypatch.setattr(
+        content_cover_renderer,
+        "_extract_template_text_blocks",
+        lambda image: [{"text": "OLD TITLE", "box": [[100, 80], [540, 80], [540, 220], [100, 220]]}],
+    )
+    normalized = finalize_template_transfer(
+        source,
+        source,
+        source,
+        target_size=(640, 480),
+        title="内容生产新方式",
+    )
+
+    assert normalized != source
+
+
+def test_stacked_template_transfer_locks_source_and_rebuilds_overlay_layers():
+    size = (300, 400)
+    source = Image.new("RGBA", size, "#315A8C")
+    source_draw = ImageDraw.Draw(source)
+    source_draw.rectangle((20, 90, 280, 360), fill="#E8E1D5", outline="#17212B", width=3)
+    source_draw.line((20, 210, 280, 210), fill="#17212B", width=3)
+    template = Image.new("RGBA", size, "#C7C2BA")
+    template_draw = ImageDraw.Draw(template)
+    template_draw.rectangle((22, 20, 95, 42), fill="#FFD21C")
+    template_draw.rectangle((205, 20, 278, 42), fill="#FFD21C")
+    for left in (42, 92, 142, 192):
+        template_draw.rectangle((left, 88, left + 34, 144), fill="white")
+    template_draw.rounded_rectangle((18, 184, 282, 226), radius=10, fill="#B9B5AE")
+    for left in range(34, 254, 36):
+        template_draw.rectangle((left, 195, left + 22, 215), fill="#FFF2C8")
+    template_draw.rounded_rectangle((26, 342, 274, 390), radius=12, fill="#62605D")
+    for left in range(42, 244, 40):
+        template_draw.rectangle((left, 353, left + 25, 378), fill="white")
+    template_draw.rectangle((72, 380, 96, 384), fill="white")
+    generated = source.copy()
+    template_blocks = [
+        {"text": "TOP LEFT", "box": (22, 20, 95, 42)},
+        {"text": "TOP RIGHT", "box": (205, 20, 278, 42)},
+        {"text": "MAIN TITLE", "box": (35, 80, 265, 150)},
+        {"text": "A/B/C/D/E", "box": (25, 190, 275, 220)},
+        {"text": "BOTTOM SLOGAN", "box": (35, 350, 265, 382)},
+    ]
+
+    result = content_cover_renderer._stacked_poster_overlay(
+        source,
+        source,
+        generated,
+        template,
+        template_blocks,
+        [],
+        title="",
+        subtitle="",
+    )
+
+    assert result is not None
+    assert result.size == size
+    assert result.getpixel((150, 245))[:3] == source.getpixel((150, 245))[:3]
+    assert result.getpixel((45, 30))[:3] == template.getpixel((45, 30))[:3]
+    assert result.getpixel((150, 60))[:3] == source.getpixel((150, 60))[:3]
+    assert result.getpixel((112, 136))[:3] == (255, 255, 255)
+    assert max(result.getpixel((x, y))[0] for x in range(70, 99) for y in range(378, 384)) > 240
+    assert result.getpixel((150, 368))[0] < 130
 
 
 def _client(handler, *, resolver=None) -> Image2Client:
@@ -244,6 +431,42 @@ async def test_image2_payload_contains_source_template_and_mask_data_urls():
     assert captured["strength"] == 0.7
     assert content_type == "image/png"
     assert raw.startswith(b"\x89PNG")
+
+
+@pytest.mark.asyncio
+async def test_template_replicate_places_primary_source_before_style_reference():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["content_type"] = request.headers["content-type"]
+        captured["body"] = request.content
+        encoded = base64.b64encode(_image("#123456")).decode()
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
+
+    source = Image2Input(data=_image("#FFFFFF"), content_type="image/png", file_name="source.png")
+    template = Image2Input(data=_image("#000000"), content_type="image/png", file_name="template.png")
+    request = Image2Request(
+        mode="multi_reference",
+        prompt="严格保留模板版式，仅替换底图",
+        size="1080x1440",
+        source_images=[source],
+        template_image=template,
+        extra={"template_replicate": True},
+    )
+
+    async with _client(handler) as client:
+        result = await client.submit(request)
+
+    assert result.status == "completed"
+    assert captured["path"].endswith("/images/edits")
+    assert captured["content_type"].startswith("multipart/form-data; boundary=")
+    assert captured["body"].index(b'filename="source.png"') < captured["body"].index(
+        b'filename="template.png"'
+    )
+    assert b'name="image[]"' in captured["body"]
+    assert b'name="quality"' in captured["body"]
+    assert b"high" in captured["body"]
 
 
 @pytest.mark.asyncio
@@ -545,6 +768,87 @@ async def test_worker_generates_multiple_candidates_sequentially(monkeypatch: py
         (1, "ccj-serial:1"),
         (1, "ccj-serial:2"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_worker_template_replica_uses_two_references_and_full_generated_canvas(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured = {}
+    source_asset = SimpleNamespace(role="source", content_type="image/png", original_file_name="source.png")
+    template_asset = SimpleNamespace(
+        role="template", content_type="image/png", original_file_name="template.png"
+    )
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            del exc_type, exc, traceback
+
+        async def submit(self, request, *, idempotency_key=None):
+            captured["request"] = request
+            captured["idempotency_key"] = idempotency_key
+            return Image2Submission(
+                status="completed",
+                images=[Image2Output(b64_data="generated")],
+            )
+
+        async def read_output(self, output):
+            assert output.b64_data == "generated"
+            return _image("#EE4422", (1080, 1440)), "image/png"
+
+    async def load_assets(job):
+        del job
+        return [source_asset], template_asset, None
+
+    async def download(asset):
+        return _image("#2244AA" if asset.role == "source" else "#225533", (1080, 1440))
+
+    async def no_event(*args, **kwargs):
+        del args, kwargs
+
+    monkeypatch.setattr(content_cover_worker, "Image2Client", FakeClient)
+    monkeypatch.setattr(content_cover_worker, "_load_job_assets", load_assets)
+    monkeypatch.setattr(content_cover_worker, "_download_asset", download)
+    monkeypatch.setattr(content_cover_worker, "_check_cancelled", no_event)
+    monkeypatch.setattr(content_cover_worker, "_set_job", no_event)
+    monkeypatch.setattr(content_cover_worker, "_emit", no_event)
+    monkeypatch.setattr(content_cover_renderer, "_extract_template_text_blocks", lambda image: [])
+    job = SimpleNamespace(
+        id="ccj-template-transfer",
+        mode="multi_reference",
+        provider_task_id=None,
+        result_json={},
+        request_json={
+            "prompt": "使用原图作为完整底图并迁移模板上层样式",
+            "size": "1080x1440",
+            "n": 1,
+            "title": "",
+            "template_replicate": True,
+            "parameters": {"template_replicate": True},
+        },
+    )
+
+    [output] = await content_cover_worker._run_image2(job)
+
+    request = captured["request"]
+    assert request.mode == "multi_reference"
+    assert request.source_images[0].file_name == "source-reference.jpg"
+    assert request.source_images[0].content_type == "image/jpeg"
+    assert request.template_image.file_name == "template-reference.jpg"
+    assert request.template_image.content_type == "image/jpeg"
+    assert request.mask_image is None
+    with Image.open(io.BytesIO(request.source_images[0].data)) as source_reference:
+        assert source_reference.size == (1080, 1440)
+        assert source_reference.getpixel((200, 500))[2] > source_reference.getpixel((200, 500))[1]
+    with Image.open(io.BytesIO(request.template_image.data)) as template_reference:
+        assert template_reference.size == (1080, 1440)
+        assert template_reference.getpixel((200, 500))[1] > template_reference.getpixel((200, 500))[2]
+    with Image.open(io.BytesIO(output)) as result:
+        assert result.getpixel((10, 10)) == (238, 68, 34)
+        assert result.getpixel((540, 720)) == (238, 68, 34)
 
 
 @pytest.mark.asyncio

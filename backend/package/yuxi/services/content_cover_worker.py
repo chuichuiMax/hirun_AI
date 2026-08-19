@@ -10,7 +10,12 @@ from typing import Any
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from yuxi.content_cover.image2_client import Image2Client, Image2Error
-from yuxi.content_cover.renderer import CoverRenderError, apply_title_overlay, render_cover
+from yuxi.content_cover.renderer import (
+    CoverRenderError,
+    apply_title_overlay,
+    finalize_template_transfer,
+    render_cover,
+)
 from yuxi.content_cover.schemas import Image2Input, Image2Request, Image2Submission
 from yuxi.content_cover.templates import COVER_SIZES
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
@@ -114,6 +119,7 @@ def _normalize_output(
                 image = ImageOps.fit(image, target_size, Image.Resampling.LANCZOS, centering=(0.5, 0.5))
             if title.strip():
                 image = apply_title_overlay(image, title)
+            image = image.convert("RGB")
             width, height = image.size
             output = io.BytesIO()
             image.save(output, format="PNG", optimize=True)
@@ -134,6 +140,7 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
         else None
     )
     title = str((job.request_json or {}).get("title") or "").strip()
+    template_replicate = bool((job.request_json or {}).get("template_replicate"))
     try:
         async with pg_manager.get_async_session_context() as db:
             repo = ContentCoverRepository(db)
@@ -141,7 +148,7 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
                 normalized, width, height = _normalize_output(
                     raw,
                     target_size=target_size,
-                    title=title,
+                    title="" if template_replicate else title,
                 )
                 asset_id = f"cca_{uuid.uuid4().hex}"
                 object_name = f"content-covers/{job.owner_uid}/{job.id}/output-{index + 1}.png"
@@ -166,7 +173,14 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
                     sha256=hashlib.sha256(normalized).hexdigest(),
                     bucket_name=uploaded.bucket_name,
                     object_name=uploaded.object_name,
-                    metadata_json={"job_id": job.id, "mode": job.mode},
+                    metadata_json={
+                        "job_id": job.id,
+                        "mode": job.mode,
+                        "template_replicate": template_replicate,
+                        "generation_strategy": (
+                            "image2_multi_reference_full_canvas" if template_replicate else "default"
+                        ),
+                    },
                 )
                 asset_ids.append(asset_id)
             await db.commit()
@@ -228,6 +242,24 @@ async def _as_image2_input(asset: ContentCoverAsset) -> Image2Input:
     )
 
 
+def _compact_template_reference(data: bytes, file_name: str) -> Image2Input:
+    """Keep multipart references compact without changing their composition."""
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            image.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=90, optimize=True)
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise CoverRenderError("模板复刻素材不是有效图片") from exc
+    stem = file_name.rsplit(".", 1)[0] or "reference"
+    return Image2Input(
+        data=output.getvalue(),
+        content_type="image/jpeg",
+        file_name=f"{stem}-reference.jpg",
+    )
+
+
 async def _poll_image2(
     job: ContentCoverJob,
     client: Image2Client,
@@ -269,17 +301,46 @@ async def _run_image2(job: ContentCoverJob) -> list[bytes]:
     request_data = job.request_json or {}
     await _check_cancelled(job.id)
     requested_count = int(request_data.get("n") or 1)
-    image2_request = Image2Request(
-        mode=job.mode,
-        prompt=request_data.get("prompt") or "",
-        negative_prompt=request_data.get("negative_prompt"),
-        size=request_data.get("size") or "1080x1440",
-        n=1,
-        source_images=[await _as_image2_input(asset) for asset in sources],
-        template_image=await _as_image2_input(template) if template else None,
-        mask_image=await _as_image2_input(mask) if mask else None,
-        extra=request_data.get("parameters") or {},
-    )
+    template_replicate = bool(request_data.get("template_replicate"))
+    template_data = None
+    source_data = None
+    requested_size = COVER_SIZES.get(request_data.get("size") or "")
+    if template_replicate:
+        if template is None or len(sources) != 1:
+            raise CoverRenderError("模板复刻需要一张模板图和一张原图")
+        if requested_size is None:
+            raise CoverRenderError("模板复刻输出尺寸不支持")
+        template_data, source_data = await asyncio.gather(
+            _download_asset(template),
+            _download_asset(sources[0]),
+        )
+        image2_request = Image2Request(
+            mode="multi_reference",
+            prompt=request_data.get("prompt") or "",
+            negative_prompt=request_data.get("negative_prompt"),
+            size=request_data.get("size") or "1080x1440",
+            n=1,
+            source_images=[
+                _compact_template_reference(source_data, sources[0].original_file_name)
+            ],
+            template_image=_compact_template_reference(
+                template_data,
+                template.original_file_name,
+            ),
+            extra=request_data.get("parameters") or {},
+        )
+    else:
+        image2_request = Image2Request(
+            mode=job.mode,
+            prompt=request_data.get("prompt") or "",
+            negative_prompt=request_data.get("negative_prompt"),
+            size=request_data.get("size") or "1080x1440",
+            n=1,
+            source_images=[await _as_image2_input(asset) for asset in sources],
+            template_image=await _as_image2_input(template) if template else None,
+            mask_image=await _as_image2_input(mask) if mask else None,
+            extra=request_data.get("parameters") or {},
+        )
     provider_task_ids = list((job.result_json or {}).get("provider_task_ids") or [])
     if not provider_task_ids and job.provider_task_id:
         provider_task_ids.append(job.provider_task_id)
@@ -315,7 +376,22 @@ async def _run_image2(job: ContentCoverJob) -> list[bytes]:
                 "progress",
                 {"status": "downloading", "progress": download_progress},
             )
-            outputs.append((await client.read_output(result.images[0]))[0])
+            raw = (await client.read_output(result.images[0]))[0]
+            if template_replicate:
+                if template_data is None or source_data is None or requested_size is None:
+                    raise CoverRenderError("模板复刻上下文缺失")
+                template_texts = request_data.get("template_texts") or {}
+                raw = await asyncio.to_thread(
+                    finalize_template_transfer,
+                    template_data,
+                    source_data,
+                    raw,
+                    target_size=(requested_size["width"], requested_size["height"]),
+                    title=str(template_texts.get("title") or request_data.get("title") or ""),
+                    subtitle=str(template_texts.get("subtitle") or ""),
+                    tags=list(template_texts.get("tags") or []),
+                )
+            outputs.append(raw)
     return outputs
 
 
