@@ -11,6 +11,10 @@ class ContentTaskCreate(BaseModel):
     industry_template_id: str
     mode: ContentMode = "quick"
     content_goal: str | None = None
+    content_type_code: str | None = Field(default=None, pattern=r"^CT0[1-7]$")
+    industry_pack_version_id: str | None = None
+    persona_profile_version_id: str | None = None
+    channel_profile_version_id: str | None = None
     name: str | None = None
     project_id: str | None = None
 
@@ -18,6 +22,9 @@ class ContentTaskCreate(BaseModel):
 class ContentTaskUpdate(BaseModel):
     name: str | None = None
     content_goal: str | None = None
+    content_type_code: str | None = Field(default=None, pattern=r"^CT0[1-7]$")
+    persona_profile_version_id: str | None = None
+    channel_profile_version_id: str | None = None
     mode: ContentMode | None = None
 
 
@@ -32,6 +39,7 @@ class ContentBriefPayload(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     locked_fields: list[str] = Field(default_factory=list)
     form_values: dict[str, Any] = Field(default_factory=dict)
+    material_confirmations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ContentBriefSave(BaseModel):
@@ -47,6 +55,10 @@ class StrategySelection(BaseModel):
     scene_enhancer: str | None = None
     title_formula_code: str
     content_formula_code: str
+    title_pattern_code: str | None = None
+    body_pattern_code: str | None = None
+    content_angle: dict[str, Any] = Field(default_factory=dict)
+    primary_narrative_axis: str | None = None
 
 
 class StrategyValidateRequest(StrategySelection):
@@ -189,12 +201,22 @@ class ContentFormulaInput(RuleInputBase):
 
 class CombinationRuleInput(RuleInputBase):
     content_goal: str = Field(min_length=1, max_length=64)
+    content_type_codes: list[str] = Field(default_factory=list)
+    industry_scope: list[str] = Field(default_factory=list)
+    channel_scope: list[str] = Field(default_factory=list)
+    narrative_axis_codes: list[str] = Field(default_factory=list)
     methods: list[str] = Field(default_factory=list)
     title_formula_codes: list[str] = Field(default_factory=list)
+    title_pattern_codes: list[str] = Field(default_factory=list)
     content_formula_code: str = Field(min_length=1, max_length=32)
-    compatibility: Literal["compatible", "warning"] = "compatible"
+    body_pattern_codes: list[str] = Field(default_factory=list)
+    required_evidence_types: list[str] = Field(default_factory=list)
+    compatibility: Literal["compatible", "warning", "blocked"] = "compatible"
     priority: int = Field(default=0, ge=0, le=10000)
     conditions: dict[str, Any] = Field(default_factory=dict)
+    hard_conditions: dict[str, Any] = Field(default_factory=dict)
+    score_weights: dict[str, float] = Field(default_factory=dict)
+    fallback_rule_id: str | None = None
     recommendation_reason: str = Field(default="", max_length=4000)
 
 
@@ -210,6 +232,7 @@ class TitleCandidate(BaseModel):
     id: str
     text: str
     formula_code: str
+    pattern_code: str | None = None
     variable_mapping: dict[str, Any] = Field(default_factory=dict)
     evidence_ids: list[str] = Field(default_factory=list)
     risk_flags: list[str] = Field(default_factory=list)
@@ -219,6 +242,7 @@ class GeneratedContent(BaseModel):
     body: str
     topics: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
+    paragraph_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ReviewCheck(BaseModel):
@@ -233,3 +257,103 @@ class ReviewCheck(BaseModel):
 class ReviewReport(BaseModel):
     status: Literal["passed", "warning", "blocked"]
     checks: list[ReviewCheck] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# contentSwarm V2 配置与运行协议
+# ---------------------------------------------------------------------------
+
+
+class ContentTypeInput(RuleInputBase):
+    code: str = Field(pattern=r"^CT0[1-7]$")
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=4000)
+    supported_goals: list[str] = Field(default_factory=list)
+    required_variable_codes: list[str] = Field(default_factory=list)
+    evidence_policy: dict[str, Any] = Field(default_factory=dict)
+    default_narrative_axes: list[str] = Field(default_factory=list)
+    default_body_formula_codes: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    sort_order: int = Field(default=0, ge=0)
+
+
+class FormulaSlotInput(RuleInputBase):
+    slot_key: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
+    value_type: str = Field(default="string", max_length=32)
+    source_type: Literal["brief", "evidence", "evidence_or_goal", "persona", "lexicon", "system"]
+    source_path: str | None = Field(default=None, max_length=255)
+    alternative_sources: list[dict[str, Any]] = Field(default_factory=list)
+    lexicon_pack_codes: list[str] = Field(default_factory=list)
+    required: bool = True
+    evidence_required: bool = False
+    fallback_policy: Literal["block", "omit", "ask_user", "use_goal", "use_lexicon"] = "block"
+    validation_schema: dict[str, Any] = Field(default_factory=dict)
+    max_length: int | None = Field(default=None, ge=1, le=10000)
+    sort_order: int = Field(default=0, ge=0)
+
+
+class FormulaPatternInput(RuleInputBase):
+    code: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
+    formula_kind: Literal["title", "body"]
+    formula_code: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=160)
+    template_text: str = Field(min_length=1, max_length=20000)
+    paragraph_schema: list[dict[str, Any]] = Field(default_factory=list)
+    content_type_codes: list[str] = Field(default_factory=list)
+    channel_scope: list[str] = Field(default_factory=list)
+    risk_policy: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    sort_order: int = Field(default=0, ge=0)
+    slots: list[FormulaSlotInput] = Field(default_factory=list)
+
+
+class VariableDefinitionInput(RuleInputBase):
+    code: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
+    name: str = Field(min_length=1, max_length=120)
+    value_type: str = Field(default="string", max_length=32)
+    unit_schema: dict[str, Any] = Field(default_factory=dict)
+    evidence_policy: dict[str, Any] = Field(default_factory=dict)
+    sensitivity: Literal["normal", "sensitive", "high_risk"] = "normal"
+    allowed_usages: list[str] = Field(default_factory=list)
+    validation_schema: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    sort_order: int = Field(default=0, ge=0)
+
+
+class ContentAngleSelection(BaseModel):
+    angle_id: str
+    primary_narrative_axis: str = Field(min_length=1, max_length=80)
+
+
+class StrategyRecommendV2Request(BaseModel):
+    random_seed: int = 0
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+class SlotResolveRequest(BaseModel):
+    strategy: dict[str, Any] | None = None
+
+
+class ChannelPreviewRequest(BaseModel):
+    channel_profile_version_id: str
+    title: str
+    body: str
+    topics: list[str] = Field(default_factory=list)
+
+
+class MaterialCreate(BaseModel):
+    attachment_id: str = Field(min_length=1, max_length=128)
+    object_uri: str = Field(min_length=1)
+    media_type: Literal["image", "video", "document", "text", "audio"]
+    original_filename: str | None = Field(default=None, max_length=512)
+    extracted_text: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    source_hash: str = Field(min_length=8, max_length=128)
+    allowed_usage: list[str] = Field(default_factory=list)
+
+
+class MaterialConfirmation(BaseModel):
+    verified_status: Literal["pending", "confirmed", "rejected"]
+    privacy_status: Literal["unreviewed", "approved", "restricted", "blocked"]
+    allowed_usage: list[str] = Field(default_factory=list)
+    confirmed_facts: list[dict[str, Any]] = Field(default_factory=list)

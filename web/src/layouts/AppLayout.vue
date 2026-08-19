@@ -23,12 +23,15 @@ import { useDatabaseStore } from '@/stores/database'
 import { useInfoStore } from '@/stores/info'
 import { useTaskerStore } from '@/stores/tasker'
 import { useUserStore } from '@/stores/user'
+import { useContentStudioStore } from '@/stores/contentStudio'
 import { storeToRefs } from 'pinia'
+import { contentApi } from '@/apis/content_api'
 import UserInfoComponent from '@/components/UserInfoComponent.vue'
 import DebugComponent from '@/components/DebugComponent.vue'
 import TaskCenterDrawer from '@/components/TaskCenterDrawer.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
 import ConversationNavSection from '@/components/ConversationNavSection.vue'
+import RecentContentNavSection from '@/components/content/RecentContentNavSection.vue'
 
 const configStore = useConfigStore()
 const agentStore = useAgentStore()
@@ -38,6 +41,7 @@ const databaseStore = useDatabaseStore()
 const infoStore = useInfoStore()
 const taskerStore = useTaskerStore()
 const userStore = useUserStore()
+const contentStudioStore = useContentStudioStore()
 const { activeCount: activeCountRef, isDrawerOpen } = storeToRefs(taskerStore)
 const { threads, currentThreadId, hasMoreThreads, isLoadingMoreThreads } =
   storeToRefs(chatThreadsStore)
@@ -48,6 +52,8 @@ const showDebugModal = ref(false)
 // Add state for settings modal
 const showSettingsModal = ref(false)
 const settingsInitialTab = ref('')
+const recentContentTasks = ref([])
+const recentContentLoading = ref(false)
 
 const { sidebarCollapsed } = storeToRefs(chatUIStore)
 
@@ -96,6 +102,11 @@ const router = useRouter()
 const activeTaskCount = computed(() => activeCountRef.value || 0)
 const activeConversationThreadId = computed(() => {
   return route.path.startsWith('/agent') ? currentThreadId.value : null
+})
+const isContentRoute = computed(() => route.path.startsWith('/content'))
+const activeContentTaskId = computed(() => {
+  if (!isContentRoute.value) return null
+  return typeof route.params.taskId === 'string' ? route.params.taskId : null
 })
 
 // 下面是导航菜单部分，添加智能体项
@@ -197,10 +208,34 @@ const initAgentNavigation = async () => {
   }
 }
 
+const loadRecentContent = async () => {
+  if (!isContentRoute.value || recentContentLoading.value) return
+  recentContentLoading.value = true
+  try {
+    const response = await contentApi.listTasks({ page: 1, page_size: 100 })
+    recentContentTasks.value = (response.items || [])
+      .filter(
+        (item) =>
+          item.current_stage === 'review' &&
+          ['review_required', 'reviewed', 'review_blocked', 'completed'].includes(item.status)
+      )
+      .slice(0, 10)
+  } catch (error) {
+    console.warn('加载最近生成内容失败:', error)
+  } finally {
+    recentContentLoading.value = false
+  }
+}
+
 const handleSelectChat = (threadId) => {
   if (!threadId) return
   chatThreadsStore.setCurrentThreadId(threadId)
   router.push({ name: 'AgentCompWithThreadId', params: { thread_id: threadId } })
+}
+
+const handleSelectContent = (taskId) => {
+  if (!taskId) return
+  router.push({ name: 'ContentResult', params: { taskId } })
 }
 
 const handleDeleteChat = async (threadId) => {
@@ -247,6 +282,20 @@ watch(
   { immediate: true }
 )
 
+watch(
+  () => [
+    route.path,
+    contentStudioStore.task?.status,
+    contentStudioStore.artifact?.id,
+    contentStudioStore.artifact?.current_version,
+    contentStudioStore.artifact?.updated_at
+  ],
+  ([path]) => {
+    if (path.startsWith('/content')) void loadRecentContent()
+  },
+  { immediate: true }
+)
+
 // Provide settings modal methods to child components
 provide('settingsModal', {
   openSettingsModal
@@ -258,11 +307,7 @@ provide('settingsModal', {
     <div class="header">
       <div class="sidebar-brand" @click.stop>
         <router-link v-if="!sidebarCollapsed" to="/" class="brand-link">
-          <img
-            src="/contentflow-logo.svg"
-            alt="ContentFlow"
-            class="brand-logo"
-          />
+          <img src="/contentflow-logo.svg" alt="ContentFlow" class="brand-logo" />
         </router-link>
         <button
           v-else
@@ -313,7 +358,7 @@ provide('settingsModal', {
       </div>
       <div class="fill">
         <ConversationNavSection
-          v-if="!sidebarCollapsed"
+          v-if="!sidebarCollapsed && !isContentRoute"
           class="sidebar-conversations"
           :current-chat-id="activeConversationThreadId"
           :chats-list="threads"
@@ -324,6 +369,14 @@ provide('settingsModal', {
           @rename-chat="handleRenameChat"
           @toggle-pin="handleTogglePinChat"
           @load-more-chats="() => chatThreadsStore.loadMoreThreads()"
+        />
+        <RecentContentNavSection
+          v-else-if="!sidebarCollapsed"
+          class="sidebar-conversations"
+          :current-task-id="activeContentTaskId"
+          :items="recentContentTasks"
+          :loading="recentContentLoading"
+          @select="handleSelectContent"
         />
       </div>
       <div class="foo">

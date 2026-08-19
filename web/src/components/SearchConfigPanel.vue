@@ -121,8 +121,8 @@ const loadQueryParams = async () => {
   loading.value = true
   error.value = ''
   try {
-    const response = await queryApi.getKnowledgeBaseQueryParams(props.kbId)
-    queryParams.value = (response.params?.options || []).filter(
+    const availableParams = await store.loadQueryParams(props.kbId)
+    queryParams.value = (availableParams || []).filter(
       (param) => param.key !== 'include_distances'
     )
 

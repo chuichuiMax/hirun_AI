@@ -97,12 +97,22 @@ class ContentCombinationRule(Base):
         String(64), ForeignKey("content_rule_versions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     content_goal = Column(String(64), nullable=False, index=True)
+    content_type_codes = Column(JSON, nullable=False, default=list)
+    industry_scope = Column(JSON, nullable=False, default=list)
+    channel_scope = Column(JSON, nullable=False, default=list)
+    narrative_axis_codes = Column(JSON, nullable=False, default=list)
     methods = Column(JSON, nullable=False, default=list)
     title_formula_codes = Column(JSON, nullable=False, default=list)
+    title_pattern_codes = Column(JSON, nullable=False, default=list)
     content_formula_code = Column(String(32), nullable=False)
+    body_pattern_codes = Column(JSON, nullable=False, default=list)
+    required_evidence_types = Column(JSON, nullable=False, default=list)
     compatibility = Column(String(32), nullable=False, default="compatible")
     priority = Column(Integer, nullable=False, default=0)
     conditions = Column(JSON, nullable=False, default=dict)
+    hard_conditions = Column(JSON, nullable=False, default=dict)
+    score_weights = Column(JSON, nullable=False, default=dict)
+    fallback_rule_id = Column(String(64), nullable=True)
     recommendation_reason = Column(Text, nullable=False, default="")
 
 
@@ -151,6 +161,306 @@ class IndustryTemplateVersion(Base):
     __table_args__ = (UniqueConstraint("tenant_id", "slug", "version", name="uq_content_industry_template_version"),)
 
 
+class ContentTypeDefinition(Base):
+    """平台稳定内容类型；行业名称通过 IndustryContentPackVersion 做别名覆盖。"""
+
+    __tablename__ = "content_type_definitions"
+
+    id = Column(String(64), primary_key=True)
+    version_id = Column(
+        String(64), ForeignKey("content_rule_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code = Column(String(32), nullable=False)
+    name = Column(String(120), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    supported_goals = Column(JSON, nullable=False, default=list)
+    required_variable_codes = Column(JSON, nullable=False, default=list)
+    evidence_policy = Column(JSON, nullable=False, default=dict)
+    default_narrative_axes = Column(JSON, nullable=False, default=list)
+    default_body_formula_codes = Column(JSON, nullable=False, default=list)
+    enabled = Column(Boolean, nullable=False, default=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("version_id", "code", name="uq_content_type_definition_version_code"),)
+
+
+class FormulaPattern(Base):
+    """可执行的标题句式或正文段落模板。"""
+
+    __tablename__ = "content_formula_patterns"
+
+    id = Column(String(64), primary_key=True)
+    rule_version_id = Column(
+        String(64), ForeignKey("content_rule_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    formula_kind = Column(String(32), nullable=False, index=True)
+    formula_code = Column(String(32), nullable=False, index=True)
+    code = Column(String(64), nullable=False)
+    name = Column(String(160), nullable=False)
+    template_text = Column(Text, nullable=False)
+    paragraph_schema = Column(JSON, nullable=False, default=list)
+    content_type_codes = Column(JSON, nullable=False, default=list)
+    channel_scope = Column(JSON, nullable=False, default=list)
+    risk_policy = Column(JSON, nullable=False, default=dict)
+    enabled = Column(Boolean, nullable=False, default=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("rule_version_id", "code", name="uq_formula_pattern_rule_version_code"),)
+
+
+class FormulaSlotBinding(Base):
+    __tablename__ = "content_formula_slot_bindings"
+
+    id = Column(String(64), primary_key=True)
+    pattern_id = Column(
+        String(64), ForeignKey("content_formula_patterns.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    slot_key = Column(String(80), nullable=False)
+    value_type = Column(String(32), nullable=False, default="string")
+    source_type = Column(String(32), nullable=False)
+    source_path = Column(String(255), nullable=True)
+    alternative_sources = Column(JSON, nullable=False, default=list)
+    lexicon_pack_codes = Column(JSON, nullable=False, default=list)
+    required = Column(Boolean, nullable=False, default=True)
+    evidence_required = Column(Boolean, nullable=False, default=False)
+    fallback_policy = Column(String(32), nullable=False, default="block")
+    validation_schema = Column(JSON, nullable=False, default=dict)
+    max_length = Column(Integer, nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("pattern_id", "slot_key", name="uq_formula_slot_pattern_key"),)
+
+
+class LexiconPack(Base):
+    __tablename__ = "content_lexicon_packs"
+
+    id = Column(String(64), primary_key=True)
+    code = Column(String(80), nullable=False)
+    scope_type = Column(String(32), nullable=False, index=True)
+    scope_id = Column(String(64), nullable=True, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    name = Column(String(160), nullable=False)
+    semantic_category = Column(String(80), nullable=False, index=True)
+    description = Column(Text, nullable=False, default="")
+    created_by = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+
+    __table_args__ = (UniqueConstraint("tenant_id", "scope_type", "scope_id", "code", name="uq_lexicon_pack_scope_code"),)
+
+
+class LexiconVersion(Base):
+    __tablename__ = "content_lexicon_versions"
+
+    id = Column(String(64), primary_key=True)
+    pack_id = Column(String(64), ForeignKey("content_lexicon_packs.id", ondelete="CASCADE"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    changelog = Column(Text, nullable=False, default="")
+    source_metadata = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    published_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (UniqueConstraint("pack_id", "version", name="uq_lexicon_version_pack_version"),)
+
+
+class LexiconEntry(Base):
+    __tablename__ = "content_lexicon_entries"
+
+    id = Column(String(64), primary_key=True)
+    version_id = Column(
+        String(64), ForeignKey("content_lexicon_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    text = Column(Text, nullable=False)
+    normalized_text = Column(Text, nullable=False)
+    tags = Column(JSON, nullable=False, default=list)
+    risk_level = Column(String(32), nullable=False, default="safe")
+    applicable_formula_codes = Column(JSON, nullable=False, default=list)
+    applicable_slot_keys = Column(JSON, nullable=False, default=list)
+    replacement_text = Column(Text, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("version_id", "normalized_text", name="uq_lexicon_entry_version_text"),)
+
+
+class VariableDefinition(Base):
+    __tablename__ = "content_variable_definitions"
+
+    id = Column(String(64), primary_key=True)
+    rule_version_id = Column(
+        String(64), ForeignKey("content_rule_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code = Column(String(80), nullable=False)
+    name = Column(String(120), nullable=False)
+    value_type = Column(String(32), nullable=False, default="string")
+    unit_schema = Column(JSON, nullable=False, default=dict)
+    evidence_policy = Column(JSON, nullable=False, default=dict)
+    sensitivity = Column(String(32), nullable=False, default="normal")
+    allowed_usages = Column(JSON, nullable=False, default=list)
+    validation_schema = Column(JSON, nullable=False, default=dict)
+    enabled = Column(Boolean, nullable=False, default=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("rule_version_id", "code", name="uq_variable_definition_rule_code"),)
+
+
+class IndustryContentPackVersion(Base):
+    __tablename__ = "content_industry_pack_versions"
+
+    id = Column(String(64), primary_key=True)
+    slug = Column(String(80), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    version = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    name = Column(String(160), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    content_type_aliases = Column(JSON, nullable=False, default=dict)
+    variable_schema = Column(JSON, nullable=False, default=list)
+    lexicon_version_ids = Column(JSON, nullable=False, default=list)
+    pattern_ids = Column(JSON, nullable=False, default=list)
+    combination_overrides = Column(JSON, nullable=False, default=list)
+    persona_templates = Column(JSON, nullable=False, default=list)
+    knowledge_scope = Column(JSON, nullable=False, default=list)
+    evidence_policy = Column(JSON, nullable=False, default=dict)
+    review_policy = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    published_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (UniqueConstraint("tenant_id", "slug", "version", name="uq_content_industry_pack_version"),)
+
+
+class IndustryVariableMapping(Base):
+    __tablename__ = "content_industry_variable_mappings"
+
+    id = Column(String(64), primary_key=True)
+    industry_pack_version_id = Column(
+        String(64), ForeignKey("content_industry_pack_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    field_key = Column(String(120), nullable=False)
+    variable_code = Column(String(80), nullable=False, index=True)
+    transform_type = Column(String(32), nullable=False, default="identity")
+    transform_config = Column(JSON, nullable=False, default=dict)
+    required_by_content_types = Column(JSON, nullable=False, default=list)
+
+    __table_args__ = (UniqueConstraint("industry_pack_version_id", "field_key", name="uq_industry_variable_mapping_field"),)
+
+
+class PersonaProfile(Base):
+    __tablename__ = "content_persona_profiles"
+
+    id = Column(String(64), primary_key=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    name = Column(String(160), nullable=False)
+    status = Column(String(32), nullable=False, default="active", index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+
+class PersonaProfileVersion(Base):
+    __tablename__ = "content_persona_profile_versions"
+
+    id = Column(String(64), primary_key=True)
+    profile_id = Column(
+        String(64), ForeignKey("content_persona_profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    identity = Column(JSON, nullable=False, default=dict)
+    experience_facts = Column(JSON, nullable=False, default=list)
+    professional_background = Column(JSON, nullable=False, default=dict)
+    tone = Column(JSON, nullable=False, default=dict)
+    values = Column(JSON, nullable=False, default=list)
+    positions = Column(JSON, nullable=False, default=list)
+    service_boundaries = Column(JSON, nullable=False, default=list)
+    preferred_phrases = Column(JSON, nullable=False, default=list)
+    forbidden_phrases = Column(JSON, nullable=False, default=list)
+    evidence_ids = Column(JSON, nullable=False, default=list)
+    created_by = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=utc_now_naive)
+    published_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (UniqueConstraint("profile_id", "version", name="uq_persona_profile_version"),)
+
+
+class ChannelProfile(Base):
+    __tablename__ = "content_channel_profiles"
+
+    id = Column(String(64), primary_key=True)
+    code = Column(String(64), nullable=False, unique=True)
+    name = Column(String(120), nullable=False)
+    connector_type = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+
+
+class ChannelProfileVersion(Base):
+    __tablename__ = "content_channel_profile_versions"
+
+    id = Column(String(64), primary_key=True)
+    profile_id = Column(
+        String(64), ForeignKey("content_channel_profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    title_constraints = Column(JSON, nullable=False, default=dict)
+    body_constraints = Column(JSON, nullable=False, default=dict)
+    topic_constraints = Column(JSON, nullable=False, default=dict)
+    media_constraints = Column(JSON, nullable=False, default=dict)
+    cta_policy = Column(JSON, nullable=False, default=dict)
+    link_policy = Column(JSON, nullable=False, default=dict)
+    preview_schema = Column(JSON, nullable=False, default=dict)
+    connector_config_ref = Column(String(255), nullable=True)
+    created_by = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    published_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (UniqueConstraint("profile_id", "version", name="uq_channel_profile_version"),)
+
+
+class CompliancePolicyVersion(Base):
+    __tablename__ = "content_compliance_policy_versions"
+
+    id = Column(String(64), primary_key=True)
+    scope_type = Column(String(32), nullable=False, index=True)
+    scope_id = Column(String(64), nullable=True, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    version = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False, default="draft", index=True)
+    name = Column(String(160), nullable=False)
+    policy_config = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    published_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "scope_type", "scope_id", "version", name="uq_compliance_policy_scope_version"),
+    )
+
+
+class ReplacementRule(Base):
+    __tablename__ = "content_replacement_rules"
+
+    id = Column(String(64), primary_key=True)
+    policy_version_id = Column(
+        String(64), ForeignKey("content_compliance_policy_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rule_code = Column(String(80), nullable=False)
+    pattern = Column(Text, nullable=False)
+    match_type = Column(String(32), nullable=False, default="literal")
+    risk_level = Column(String(32), nullable=False, default="warning")
+    action = Column(String(32), nullable=False, default="warn")
+    replacement = Column(Text, nullable=True)
+    human_confirmation_required = Column(Boolean, nullable=False, default=False)
+    explanation = Column(Text, nullable=False, default="")
+    enabled = Column(Boolean, nullable=False, default=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("policy_version_id", "rule_code", name="uq_replacement_rule_policy_code"),)
+
+
 class ContentTask(Base):
     __tablename__ = "content_tasks"
 
@@ -167,6 +477,20 @@ class ContentTask(Base):
     rule_version_id = Column(String(64), ForeignKey("content_rule_versions.id", ondelete="RESTRICT"), nullable=False)
     mode = Column(String(32), nullable=False, default="quick")
     content_goal = Column(String(64), nullable=False, default="acquire")
+    # v1 历史任务允许为空；ContentService 对所有 v2 新任务强制写入唯一内容类型。
+    content_type_code = Column(String(32), nullable=True, index=True)
+    industry_pack_version_id = Column(
+        String(64), ForeignKey("content_industry_pack_versions.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    persona_profile_version_id = Column(
+        String(64), ForeignKey("content_persona_profile_versions.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    channel_profile_version_id = Column(
+        String(64), ForeignKey("content_channel_profile_versions.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    primary_narrative_axis = Column(String(80), nullable=True)
+    selected_angle_json = Column(JSON, nullable=False, default=dict)
+    runtime_config_snapshot_json = Column(JSON, nullable=False, default=dict)
     status = Column(String(32), nullable=False, default="draft", index=True)
     current_stage = Column(String(32), nullable=False, default="brief", index=True)
     brief_json = Column(JSON, nullable=False, default=dict)
@@ -199,6 +523,13 @@ class ContentTask(Base):
             "rule_version_id": self.rule_version_id,
             "mode": self.mode,
             "content_goal": self.content_goal,
+            "content_type_code": self.content_type_code,
+            "industry_pack_version_id": self.industry_pack_version_id,
+            "persona_profile_version_id": self.persona_profile_version_id,
+            "channel_profile_version_id": self.channel_profile_version_id,
+            "primary_narrative_axis": self.primary_narrative_axis,
+            "selected_angle": self.selected_angle_json or {},
+            "runtime_config_snapshot": self.runtime_config_snapshot_json or {},
             "status": self.status,
             "current_stage": self.current_stage,
             "brief": self.brief_json or {},
@@ -272,6 +603,31 @@ class ContentOCRResult(Base):
         }
 
 
+class MediaEvidenceItem(Base):
+    """原始素材、解析结果和人工确认状态的可追溯记录。"""
+
+    __tablename__ = "content_media_evidence_items"
+
+    id = Column(String(64), primary_key=True)
+    task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    attachment_id = Column(String(128), nullable=False, index=True)
+    object_uri = Column(Text, nullable=False)
+    media_type = Column(String(32), nullable=False)
+    original_filename = Column(String(512), nullable=True)
+    extracted_text = Column(Text, nullable=False, default="")
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    source_hash = Column(String(128), nullable=False, index=True)
+    verified_status = Column(String(32), nullable=False, default="pending", index=True)
+    privacy_status = Column(String(32), nullable=False, default="unreviewed", index=True)
+    allowed_usage = Column(JSON, nullable=False, default=list)
+    confirmed_facts = Column(JSON, nullable=False, default=list)
+    confirmed_by = Column(String(64), nullable=True)
+    confirmed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+
+    __table_args__ = (UniqueConstraint("task_id", "attachment_id", name="uq_media_evidence_task_attachment"),)
+
+
 class ContentNodeRun(Base):
     __tablename__ = "content_node_runs"
 
@@ -308,6 +664,14 @@ class ContentArtifact(Base):
     review_snapshot = Column(JSON, nullable=False, default=dict)
     cover_asset_id = Column(String(64), nullable=True, index=True)
     cover_job_id = Column(String(64), nullable=True, index=True)
+    content_type_snapshot = Column(JSON, nullable=False, default=dict)
+    angle_snapshot = Column(JSON, nullable=False, default=dict)
+    pattern_slot_snapshot = Column(JSON, nullable=False, default=dict)
+    persona_snapshot = Column(JSON, nullable=False, default=dict)
+    channel_snapshot = Column(JSON, nullable=False, default=dict)
+    compliance_snapshot = Column(JSON, nullable=False, default=dict)
+    runtime_config_snapshot = Column(JSON, nullable=False, default=dict)
+    edit_diff_snapshot = Column(JSON, nullable=False, default=list)
     created_by = Column(String(64), nullable=False)
     created_at = Column(DateTime, default=utc_now_naive)
     updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
@@ -327,6 +691,14 @@ class ContentArtifact(Base):
             "review_snapshot": self.review_snapshot or {},
             "cover_asset_id": self.cover_asset_id,
             "cover_job_id": self.cover_job_id,
+            "content_type_snapshot": self.content_type_snapshot or {},
+            "angle_snapshot": self.angle_snapshot or {},
+            "pattern_slot_snapshot": self.pattern_slot_snapshot or {},
+            "persona_snapshot": self.persona_snapshot or {},
+            "channel_snapshot": self.channel_snapshot or {},
+            "compliance_snapshot": self.compliance_snapshot or {},
+            "runtime_config_snapshot": self.runtime_config_snapshot or {},
+            "edit_diff_snapshot": self.edit_diff_snapshot or [],
             "created_by": self.created_by,
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
@@ -350,6 +722,14 @@ class ContentArtifactVersion(Base):
     review_snapshot = Column(JSON, nullable=False, default=dict)
     cover_asset_id = Column(String(64), nullable=True, index=True)
     cover_job_id = Column(String(64), nullable=True, index=True)
+    content_type_snapshot = Column(JSON, nullable=False, default=dict)
+    angle_snapshot = Column(JSON, nullable=False, default=dict)
+    pattern_slot_snapshot = Column(JSON, nullable=False, default=dict)
+    persona_snapshot = Column(JSON, nullable=False, default=dict)
+    channel_snapshot = Column(JSON, nullable=False, default=dict)
+    compliance_snapshot = Column(JSON, nullable=False, default=dict)
+    runtime_config_snapshot = Column(JSON, nullable=False, default=dict)
+    edit_diff_snapshot = Column(JSON, nullable=False, default=list)
     created_by = Column(String(64), nullable=False)
     created_at = Column(DateTime, default=utc_now_naive)
 

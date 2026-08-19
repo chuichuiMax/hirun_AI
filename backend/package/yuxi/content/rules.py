@@ -450,14 +450,25 @@ def recommend_strategy(bundle: dict[str, Any], *, brief: dict[str, Any], content
     if not candidates:
         raise ValueError(f"内容目标 {content_goal} 没有可用组合规则")
     selected = candidates[0]
-    title_code = selected["title_formula_codes"][0]
-    validation = validate_strategy_bundle(
-        bundle,
-        brief=brief,
-        content_goal=content_goal,
-        methods=selected["methods"],
-        title_formula_code=title_code,
-        content_formula_code=selected["content_formula_code"],
+    validated_titles = [
+        (
+            title_code,
+            validate_strategy_bundle(
+                bundle,
+                brief=brief,
+                content_goal=content_goal,
+                methods=selected["methods"],
+                title_formula_code=title_code,
+                content_formula_code=selected["content_formula_code"],
+            ),
+        )
+        for title_code in selected["title_formula_codes"]
+    ]
+    title_code, validation = next(
+        item
+        for compatibility in ("compatible", "warning", "blocked")
+        for item in validated_titles
+        if item[1]["compatibility"] == compatibility
     )
     return {
         "content_goal": content_goal,

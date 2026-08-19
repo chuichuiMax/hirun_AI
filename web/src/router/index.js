@@ -84,6 +84,12 @@ const router = createRouter({
           meta: { keepAlive: false, requiresAuth: true }
         },
         {
+          path: 'results/:taskId',
+          name: 'ContentResult',
+          component: () => import('../views/ContentResultView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
           path: 'history',
           name: 'ContentHistory',
           component: () => import('../views/ContentHistoryView.vue'),

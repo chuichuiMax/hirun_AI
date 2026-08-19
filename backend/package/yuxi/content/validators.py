@@ -54,6 +54,24 @@ def merge_evidence(base: dict[str, Any], additions: list[dict[str, Any]]) -> dic
     return {"items": items, "summary": summary}
 
 
+def evidence_number_tokens(evidence_bundle: dict[str, Any]) -> list[str]:
+    evidence_text = " ".join(
+        json.dumps(item.get("value"), ensure_ascii=False)
+        for item in evidence_bundle.get("items") or []
+        if item.get("value") is not None
+    )
+    return sorted(set(NUMBER_PATTERN.findall(evidence_text)))
+
+
+def unsupported_number_tokens(content: str, evidence_bundle: dict[str, Any]) -> list[str]:
+    evidence_text = " ".join(
+        json.dumps(item.get("value"), ensure_ascii=False)
+        for item in evidence_bundle.get("items") or []
+        if item.get("value") is not None
+    )
+    return sorted({number for number in NUMBER_PATTERN.findall(content) if number not in evidence_text})
+
+
 def validate_content(
     *,
     title: str,
@@ -65,23 +83,17 @@ def validate_content(
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     combined = f"{title}\n{body}\n{' '.join(topics)}"
-    evidence_items = evidence_bundle.get("items") or []
-    evidence_text = " ".join(
-        json.dumps(item.get("value"), ensure_ascii=False) for item in evidence_items if item.get("value") is not None
-    )
-
-    for number in sorted(set(NUMBER_PATTERN.findall(combined))):
-        if number and number not in evidence_text:
-            checks.append(
-                {
-                    "code": "FACT_NUMBER_WITHOUT_SOURCE",
-                    "level": "error",
-                    "location": "content",
-                    "message": f"数字“{number}”没有出现在证据包中",
-                    "evidence_ids": [],
-                    "suggestion": "删除该数字，或补充可追溯的业务事实/知识来源",
-                }
-            )
+    for number in unsupported_number_tokens(combined, evidence_bundle):
+        checks.append(
+            {
+                "code": "FACT_NUMBER_WITHOUT_SOURCE",
+                "level": "error",
+                "location": "content",
+                "message": f"数字“{number}”没有出现在证据包中",
+                "evidence_ids": [],
+                "suggestion": "删除该数字，或补充可追溯的业务事实/知识来源",
+            }
+        )
 
     forbidden_terms = brief.get("forbidden_terms") or []
     for term in forbidden_terms:
@@ -126,7 +138,7 @@ def validate_content(
     if (
         not strategy.get("methods")
         or not strategy.get("title_formula_code")
-        or not strategy.get("content_formula_code")
+        or not (strategy.get("body_formula_code") or strategy.get("content_formula_code"))
     ):
         checks.append(
             {

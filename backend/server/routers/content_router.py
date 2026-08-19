@@ -15,10 +15,16 @@ from yuxi.content.schemas import (
     ContentRunResume,
     ContentTaskCreate,
     ContentTaskUpdate,
+    ChannelPreviewRequest,
+    ContentAngleSelection,
+    MaterialConfirmation,
+    MaterialCreate,
+    SlotResolveRequest,
     RuleBundleUpdate,
     RuleDraftCreate,
     RuleVersionAction,
     StrategySelection,
+    StrategyRecommendV2Request,
     StrategyValidateRequest,
     XiaohongshuAccountCreate,
     XiaohongshuAccountUpdate,
@@ -46,11 +52,13 @@ from yuxi.services.content_service import (
     duplicate_content_task,
     finalize_content_artifact,
     get_content_bootstrap,
+    get_content_v2_catalog,
     get_content_run,
     get_content_task,
     get_task_artifact,
     list_content_artifact_versions,
     list_content_tasks,
+    list_task_materials,
     recommend_content_strategy,
     regenerate_content_artifact,
     resume_content_run,
@@ -59,6 +67,13 @@ from yuxi.services.content_service import (
     save_content_brief,
     save_content_rule_draft,
     save_content_strategy,
+    add_task_material,
+    confirm_task_material,
+    analyze_task_content_value,
+    preview_task_channel,
+    recommend_content_strategy_v2,
+    resolve_task_formula_slots,
+    select_task_content_angle,
     update_content_artifact,
     update_content_task,
     validate_content_strategy,
@@ -268,6 +283,13 @@ async def content_bootstrap(current_user: User = Depends(get_required_user), db:
     return await get_content_bootstrap(db, current_user)
 
 
+@content.get("/v2/catalog")
+async def content_v2_catalog(
+    current_user: User = Depends(get_required_user), db: AsyncSession = Depends(get_db)
+):
+    return await get_content_v2_catalog(db, current_user)
+
+
 @content.post("/tasks")
 async def create_task(
     payload: ContentTaskCreate,
@@ -344,6 +366,16 @@ async def list_ocr_results(
     return await list_content_ocr_results(db, current_user, task_id)
 
 
+@content.post("/tasks/{task_id}/materials")
+async def add_material(
+    task_id: str,
+    payload: MaterialCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await add_task_material(db, current_user, task_id, payload)
+
+
 @content.get("/ocr-results/{result_id}")
 async def get_ocr_result(
     result_id: str,
@@ -382,6 +414,26 @@ async def get_ocr_image(
     return Response(content=data, media_type=content_type, headers={"Cache-Control": "private, max-age=300"})
 
 
+@content.get("/tasks/{task_id}/materials")
+async def list_materials(
+    task_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_task_materials(db, current_user, task_id)
+
+
+@content.put("/tasks/{task_id}/materials/{evidence_id}/confirmation")
+async def confirm_material(
+    task_id: str,
+    evidence_id: str,
+    payload: MaterialConfirmation,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await confirm_task_material(db, current_user, task_id, evidence_id, payload)
+
+
 @content.put("/tasks/{task_id}/brief")
 async def save_brief(
     task_id: str,
@@ -402,6 +454,25 @@ async def compile_brief(
     return await save_content_brief(db, current_user, task_id, payload.brief, compile_now=True)
 
 
+@content.post("/tasks/{task_id}/analyze-value")
+async def analyze_content_value(
+    task_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await analyze_task_content_value(db, current_user, task_id)
+
+
+@content.put("/tasks/{task_id}/content-angle")
+async def select_content_angle(
+    task_id: str,
+    payload: ContentAngleSelection,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await select_task_content_angle(db, current_user, task_id, payload)
+
+
 @content.post("/tasks/{task_id}/strategy/recommend")
 async def recommend_strategy(
     task_id: str,
@@ -409,6 +480,36 @@ async def recommend_strategy(
     db: AsyncSession = Depends(get_db),
 ):
     return await recommend_content_strategy(db, current_user, task_id)
+
+
+@content.post("/tasks/{task_id}/strategy/recommend-v2")
+async def recommend_strategy_v2(
+    task_id: str,
+    payload: StrategyRecommendV2Request,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await recommend_content_strategy_v2(db, current_user, task_id, payload)
+
+
+@content.post("/tasks/{task_id}/slots/resolve")
+async def resolve_formula_slots(
+    task_id: str,
+    payload: SlotResolveRequest,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await resolve_task_formula_slots(db, current_user, task_id, payload)
+
+
+@content.post("/tasks/{task_id}/channel-preview")
+async def preview_channel(
+    task_id: str,
+    payload: ChannelPreviewRequest,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await preview_task_channel(db, current_user, task_id, payload)
 
 
 @content.put("/tasks/{task_id}/strategy")
