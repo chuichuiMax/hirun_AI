@@ -9,6 +9,22 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from yuxi.agents.middlewares.token_usage import TokenUsageMiddleware
 
 
+def test_content_token_budget_counts_generated_tokens_not_input_context() -> None:
+    context = SimpleNamespace(_content_node_token_budget=5)
+    request = SimpleNamespace(runtime=SimpleNamespace(context=context))
+
+    TokenUsageMiddleware._enforce_content_token_budget(
+        request,
+        {
+            "model_usage": {"input_tokens": 1000, "output_tokens": 4, "total_tokens": 1004},
+            "state_messages_tokens": 1004,
+            "state_messages_tokens_before_call": 0,
+        },
+    )
+
+    assert context._content_node_tokens_used == 4
+
+
 @pytest.mark.asyncio
 async def test_token_usage_middleware_records_request_and_state_tokens() -> None:
     middleware = TokenUsageMiddleware()

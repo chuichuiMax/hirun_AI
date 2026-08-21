@@ -8,7 +8,7 @@ import pytest
 pytestmark = pytest.mark.asyncio
 
 
-async def test_content_bootstrap_and_task_strategy_flow(test_client, admin_headers):
+async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
     bootstrap_response = await test_client.get("/api/content/bootstrap", headers=admin_headers)
     assert bootstrap_response.status_code == 200, bootstrap_response.text
     bootstrap = bootstrap_response.json()
@@ -30,6 +30,7 @@ async def test_content_bootstrap_and_task_strategy_flow(test_client, admin_heade
     )
     assert create_response.status_code == 200, create_response.text
     task_id = create_response.json()["task"]["id"]
+    assert create_response.json()["task"]["runtime_config_snapshot"]["schema_version"] == 3
 
     try:
         compile_response = await test_client.post(
@@ -53,16 +54,11 @@ async def test_content_bootstrap_and_task_strategy_flow(test_client, admin_heade
         assert compiled["task"]["status"] == "brief_ready"
         assert compiled["task"]["evidence_bundle"]["items"]
 
-        strategy_response = await test_client.post(
+        removed_strategy_response = await test_client.post(
             f"/api/content/tasks/{task_id}/strategy/recommend",
             headers=admin_headers,
         )
-        assert strategy_response.status_code == 200, strategy_response.text
-        strategy = strategy_response.json()["strategy"]
-        assert strategy["compatibility"] in {"auto_matched", "warning"}
-        assert strategy["methods"]
-        assert strategy["title_formula_code"].startswith("T")
-        assert strategy["content_formula_code"].startswith("C")
+        assert removed_strategy_response.status_code == 404
 
         missing_asset_response = await test_client.patch(
             "/api/content/artifacts/not-real",
@@ -70,10 +66,7 @@ async def test_content_bootstrap_and_task_strategy_flow(test_client, admin_heade
             json={"title": "标题", "body": "正文", "topics": []},
         )
         assert missing_asset_response.status_code == 404
-        assert (
-            missing_asset_response.json()["detail"]["error"]["code"]
-            == "CONTENT_ARTIFACT_NOT_FOUND"
-        )
+        assert missing_asset_response.json()["detail"]["error"]["code"] == "CONTENT_ARTIFACT_NOT_FOUND"
     finally:
         delete_response = await test_client.delete(f"/api/content/tasks/{task_id}", headers=admin_headers)
         assert delete_response.status_code == 200, delete_response.text

@@ -49,6 +49,10 @@ class TokenUsageState(AgentState):
     token_usage: NotRequired[TokenUsagePayload]
 
 
+class ContentTokenBudgetExceeded(RuntimeError):
+    """A deterministic content-node resource limit, not a transient model failure."""
+
+
 def _safe_int(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
@@ -158,9 +162,11 @@ class TokenUsageMiddleware(AgentMiddleware[TokenUsageState]):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ExtendedModelResponse:
         response = handler(request)
+        snapshot = self._build_snapshot(request, response)
+        self._enforce_content_token_budget(request, snapshot)
         return ExtendedModelResponse(
             model_response=response,
-            command=Command(update={"token_usage": self._build_snapshot(request, response)}),
+            command=Command(update={"token_usage": snapshot}),
         )
 
     async def awrap_model_call(
@@ -169,7 +175,31 @@ class TokenUsageMiddleware(AgentMiddleware[TokenUsageState]):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ExtendedModelResponse:
         response = await handler(request)
+        snapshot = self._build_snapshot(request, response)
+        self._enforce_content_token_budget(request, snapshot)
         return ExtendedModelResponse(
             model_response=response,
-            command=Command(update={"token_usage": self._build_snapshot(request, response)}),
+            command=Command(update={"token_usage": snapshot}),
         )
+
+    @staticmethod
+    def _enforce_content_token_budget(request: ModelRequest, snapshot: TokenUsagePayload) -> None:
+        runtime_context = getattr(request.runtime, "context", None)
+        configured = getattr(runtime_context, "_content_node_token_budget", None)
+        if configured is None:
+            return
+        model_usage = snapshot.get("model_usage") or {}
+        output_tokens = model_usage.get("output_tokens")
+        if isinstance(output_tokens, int):
+            current = output_tokens
+        else:
+            current = max(
+                int(snapshot.get("state_messages_tokens", 0))
+                - int(snapshot.get("state_messages_tokens_before_call", 0)),
+                0,
+            )
+        used = int(getattr(runtime_context, "_content_node_tokens_used", 0) or 0) + current
+        setattr(runtime_context, "_content_node_tokens_used", used)
+        maximum = int(configured)
+        if used > maximum:
+            raise ContentTokenBudgetExceeded(f"内容 Agent Token 使用超过节点预算（{maximum}）")

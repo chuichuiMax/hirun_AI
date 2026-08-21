@@ -198,6 +198,31 @@ def _find_query_target(
     return target_info, normalized_kb_id, None
 
 
+async def _emit_content_knowledge_event(runtime: ToolRuntime | None, kb_id: str, output: dict[str, Any]) -> None:
+    context = getattr(runtime, "context", None)
+    run_id = str(getattr(context, "run_id", "") or "").strip()
+    if not run_id or not getattr(context, "_content_node_output_contract", None):
+        return
+    results = output.get("results") if isinstance(output.get("results"), list) else []
+    source_ids = [
+        str(item.get("id") or item.get("file_id"))
+        for item in results
+        if isinstance(item, dict) and (item.get("id") or item.get("file_id"))
+    ]
+    from yuxi.services.run_queue_service import append_content_runtime_event
+
+    await append_content_runtime_event(
+        context,
+        "content.knowledge.retrieved",
+        {"knowledge_base_id": kb_id, "source_ids": source_ids, "result_count": len(results)},
+    )
+    await append_content_runtime_event(
+        context,
+        "content.tool.completed",
+        {"tool_name": "query_kb", "knowledge_base_id": kb_id, "result_count": len(results)},
+    )
+
+
 @tool(category="knowledge", tags=["知识库"], args_schema=QueryKBInput)
 async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, runtime: ToolRuntime = None) -> Any:
     """在指定知识库中检索内容
@@ -210,6 +235,20 @@ async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, ru
     if not query_text:
         return "请提供查询内容"
 
+    context = getattr(runtime, "context", None)
+    if context is not None and getattr(context, "_content_node_output_contract", None):
+        rounds = int(getattr(context, "_content_retrieval_rounds_used", 0) or 0)
+        maximum_rounds = int(getattr(context, "_content_max_retrieval_rounds", 0) or 0)
+        if maximum_rounds and rounds >= maximum_rounds:
+            raise ValueError(f"知识检索轮次超过节点上限（{maximum_rounds}）")
+        queried = set(getattr(context, "_content_queried_knowledge_bases", set()) or set())
+        maximum_bases = int(getattr(context, "_content_max_knowledge_bases", 0) or 0)
+        if kb_id not in queried and maximum_bases and len(queried) >= maximum_bases:
+            raise ValueError(f"知识库数量超过节点上限（{maximum_bases}）")
+        queried.add(kb_id)
+        context._content_retrieval_rounds_used = rounds + 1
+        context._content_queried_knowledge_bases = queried
+
     knowledge_base = _get_knowledge_base()
     retrievers = knowledge_base.get_retrievers()
     visible_kbs = await _resolve_visible_knowledge_bases_for_query(runtime)
@@ -221,6 +260,14 @@ async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, ru
     if target_error:
         return target_error
 
+    if context is not None and getattr(context, "_content_node_output_contract", None):
+        from yuxi.services.run_queue_service import append_content_runtime_event
+
+        await append_content_runtime_event(
+            context,
+            "content.tool.called",
+            {"tool_name": "query_kb", "knowledge_base_id": kb_id},
+        )
     try:
         retriever = target_info["retriever"]
         kwargs = {}
@@ -233,8 +280,14 @@ async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, ru
             result = retriever(query_text, **kwargs)
 
         if isinstance(result, dict) and result.get("kb_id") == target_kb_id and isinstance(result.get("results"), list):
-            return SearchOutputSchema(**result).model_dump()
-        return KnowledgeBase.build_search_output(target_kb_id, result)
+            output = SearchOutputSchema(**result).model_dump()
+        else:
+            output = KnowledgeBase.build_search_output(target_kb_id, result)
+        maximum_chunks = int(getattr(context, "_content_max_chunks_per_knowledge_base", 0) or 0)
+        if maximum_chunks and isinstance(output.get("results"), list):
+            output["results"] = output["results"][:maximum_chunks]
+        await _emit_content_knowledge_event(runtime, target_kb_id, output)
+        return output
 
     except Exception as e:
         logger.error(f"检索失败: {e}")

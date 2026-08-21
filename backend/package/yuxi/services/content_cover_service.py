@@ -8,6 +8,7 @@ import os
 import re
 import uuid
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -537,13 +538,19 @@ async def list_cover_jobs(
     return {"items": [serialize_job(item) for item in items], "total": total, "page": page, "page_size": page_size}
 
 
-async def retry_cover_job(db: AsyncSession, user: User, job_id: str, payload: CoverRetryCreate) -> dict[str, Any]:
+async def retry_cover_job(
+    db: AsyncSession,
+    user: User,
+    job_id: str,
+    payload: CoverRetryCreate,
+    *,
+    workflow_resume: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     old = await ContentCoverRepository(db).get_job_for_user(job_id, _owner_uid(user))
     if old is None:
         raise _error(404, "COVER_JOB_NOT_FOUND", "封面任务不存在")
     if old.status not in {"failed", "cancelled", "succeeded"}:
         raise _error(409, "COVER_JOB_NOT_RETRYABLE", "任务结束后才能重新生成")
-    request = dict(old.request_json or {})
     image2_config = None
     if old.mode != "compose":
         try:
@@ -563,6 +570,13 @@ async def retry_cover_job(db: AsyncSession, user: User, job_id: str, payload: Co
         provider_task_ids = list((old.result_json or {}).get("provider_task_ids") or [])
         if provider_task_ids:
             retry_result_json["provider_task_ids"] = provider_task_ids
+    request = deepcopy(old.request_json or {})
+    if workflow_resume:
+        resume_container = "layout" if old.mode == "compose" else "parameters"
+        request[resume_container] = {
+            **(request.get(resume_container) or {}),
+            "workflow_resume": workflow_resume,
+        }
     job, deduplicated = await _create_job(
         db,
         user,

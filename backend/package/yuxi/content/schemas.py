@@ -3,16 +3,18 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from yuxi.content.model.industry.pack import IndustryPackRegressionMetrics
 
 ContentMode = Literal["quick", "pro"]
 
 
 class ContentTaskCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     industry_template_id: str
     mode: ContentMode = "quick"
     content_goal: str | None = None
     content_type_code: str | None = Field(default=None, pattern=r"^CT0[1-7]$")
-    industry_pack_version_id: str | None = None
     persona_profile_version_id: str | None = None
     channel_profile_version_id: str | None = None
     name: str | None = None
@@ -48,23 +50,6 @@ class ContentBriefSave(BaseModel):
 
 class ContentOCRCorrection(BaseModel):
     corrected_text: str = Field(max_length=200_000)
-
-
-class StrategySelection(BaseModel):
-    methods: list[str]
-    scene_enhancer: str | None = None
-    title_formula_code: str
-    content_formula_code: str
-    title_pattern_code: str | None = None
-    body_pattern_code: str | None = None
-    content_angle: dict[str, Any] = Field(default_factory=dict)
-    primary_narrative_axis: str | None = None
-
-
-class StrategyValidateRequest(StrategySelection):
-    rule_version_id: str
-    content_goal: str
-    brief: ContentBriefPayload
 
 
 class ContentRunCreate(BaseModel):
@@ -147,6 +132,21 @@ class RuleVersionAction(BaseModel):
     note: str | None = None
 
 
+class IndustryPackTransitionRequest(BaseModel):
+    target_status: Literal["validated", "canary", "published", "deprecated"]
+    note: str | None = None
+
+
+class IndustryPackRegressionSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_run_ids: list[str] = Field(min_length=1)
+    sample_count: int = Field(ge=1)
+    metrics: IndustryPackRegressionMetrics
+    candidate_recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class RuleInputBase(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -199,33 +199,33 @@ class ContentFormulaInput(RuleInputBase):
     sort_order: int = Field(default=0, ge=0)
 
 
+class MethodMemberInput(RuleInputBase):
+    method_code: str = Field(min_length=1, max_length=32)
+    role: Literal["primary", "supporting"]
+    order: int = Field(ge=1, le=4)
+
+
 class CombinationRuleInput(RuleInputBase):
-    content_goal: str = Field(min_length=1, max_length=64)
+    schema_version: Literal[3] = 3
+    content_goal_codes: list[str] = Field(default_factory=list)
     content_type_codes: list[str] = Field(default_factory=list)
     industry_scope: list[str] = Field(default_factory=list)
     channel_scope: list[str] = Field(default_factory=list)
     narrative_axis_codes: list[str] = Field(default_factory=list)
-    methods: list[str] = Field(default_factory=list)
-    title_formula_codes: list[str] = Field(default_factory=list)
-    title_pattern_codes: list[str] = Field(default_factory=list)
-    content_formula_code: str = Field(min_length=1, max_length=32)
-    body_pattern_codes: list[str] = Field(default_factory=list)
+    combination_type: Literal["single", "double", "triple", "quadruple"]
+    method_members: list[MethodMemberInput] = Field(min_length=1, max_length=4)
+    title_formula_candidate_codes: list[str] = Field(min_length=1)
+    body_formula_candidate_codes: list[str] = Field(min_length=1)
+    scenario_description: str = Field(min_length=1, max_length=4000)
+    required_variable_codes: list[str] = Field(default_factory=list)
     required_evidence_types: list[str] = Field(default_factory=list)
-    compatibility: Literal["compatible", "warning", "blocked"] = "compatible"
     priority: int = Field(default=0, ge=0, le=10000)
     conditions: dict[str, Any] = Field(default_factory=dict)
     hard_conditions: dict[str, Any] = Field(default_factory=dict)
     score_weights: dict[str, float] = Field(default_factory=dict)
     fallback_rule_id: str | None = None
+    source_metadata: dict[str, Any] = Field(default_factory=dict)
     recommendation_reason: str = Field(default="", max_length=4000)
-
-
-class RuleBundleUpdate(RuleInputBase):
-    changelog: str = Field(default="", max_length=1000)
-    methods: list[CreationMethodInput] = Field(default_factory=list, max_length=200)
-    title_formulas: list[TitleFormulaInput] = Field(default_factory=list, max_length=500)
-    content_formulas: list[ContentFormulaInput] = Field(default_factory=list, max_length=500)
-    combination_rules: list[CombinationRuleInput] = Field(default_factory=list, max_length=1000)
 
 
 class TitleCandidate(BaseModel):
@@ -260,7 +260,7 @@ class ReviewReport(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# contentSwarm V2 配置与运行协议
+# contentSwarm V3 可发布规则协议
 # ---------------------------------------------------------------------------
 
 
@@ -320,18 +320,20 @@ class VariableDefinitionInput(RuleInputBase):
     sort_order: int = Field(default=0, ge=0)
 
 
-class ContentAngleSelection(BaseModel):
-    angle_id: str
-    primary_narrative_axis: str = Field(min_length=1, max_length=80)
+class RuleBundleUpdate(RuleInputBase):
+    changelog: str = Field(default="", max_length=1000)
+    methods: list[CreationMethodInput] = Field(default_factory=list, max_length=200)
+    title_formulas: list[TitleFormulaInput] = Field(default_factory=list, max_length=500)
+    content_formulas: list[ContentFormulaInput] = Field(default_factory=list, max_length=500)
+    combination_rules: list[CombinationRuleInput] = Field(default_factory=list, max_length=1000)
+    content_types: list[ContentTypeInput] = Field(default_factory=list, max_length=100)
+    formula_patterns: list[FormulaPatternInput] = Field(default_factory=list, max_length=1000)
+    variables: list[VariableDefinitionInput] = Field(default_factory=list, max_length=1000)
 
 
-class StrategyRecommendV2Request(BaseModel):
-    random_seed: int = 0
-    limit: int = Field(default=5, ge=1, le=20)
-
-
-class SlotResolveRequest(BaseModel):
-    strategy: dict[str, Any] | None = None
+class StrategyRecommendV3Request(BaseModel):
+    content_direction_code: str | None = Field(default=None, pattern=r"^CT0[1-7]$")
+    limit: int = Field(default=28, ge=1, le=28)
 
 
 class ChannelPreviewRequest(BaseModel):

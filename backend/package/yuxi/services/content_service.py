@@ -11,41 +11,42 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content.generation import SKILL_VERSIONS, review_generated_content
-from yuxi.content.rules import CONTENT_GOALS, recommend_strategy, validate_strategy_bundle
+from yuxi.content.rules import CONTENT_GOALS
 from yuxi.content.schemas import (
     ContentArtifactUpdate,
     ContentArtifactRegenerate,
     ContentBriefPayload,
     ChannelPreviewRequest,
-    ContentAngleSelection,
     ContentRunCreate,
     ContentRunResume,
     ContentTaskCreate,
     ContentTaskUpdate,
     MaterialConfirmation,
     MaterialCreate,
+    IndustryPackRegressionSubmission,
+    IndustryPackTransitionRequest,
     RuleBundleUpdate,
     RuleDraftCreate,
-    SlotResolveRequest,
-    StrategySelection,
-    StrategyRecommendV2Request,
-    StrategyValidateRequest,
 )
 from yuxi.content.validators import normalize_manual_evidence, validate_content
-from yuxi.content.v2 import (
-    CombinationEngineV2,
-    ComplianceEngine,
-    ContentValueAnalyzer,
-    FormulaSlotResolver,
-    LexiconResolver,
+from yuxi.content.validation import ComplianceEngine
+from yuxi.content.model.workflows.definition import workflow_definition_hash
+from yuxi.content.model.workflows.definition import WorkflowCatalog, WorkflowDefinitionPolicy
+from yuxi.content.model.industry.pack import CONTENT_TYPE_CODES, IndustryPackPolicy
+from yuxi.content.control.industry.pack import (
+    EvaluateIndustryPackRegressionHandler,
+    ValidateIndustryPackHandler,
 )
+from yuxi.content.v3.seed import PLATFORM_RULE_V3_ID
 from yuxi.models.providers.cache import model_cache
 from yuxi.repositories.agent_run_repository import AgentRunRepository
+from yuxi.repositories.agent_repository import AgentRepository
+from yuxi.agents.skills.repository import SkillRepository
 from yuxi.repositories.content_repository import ContentRepository
-from yuxi.services.run_queue_service import get_arq_pool
+from yuxi.services.run_queue_service import get_arq_pool, list_run_stream_events
 from yuxi.storage.postgres.models_business import AgentRun, User
 from yuxi.storage.postgres.models_content import ContentArtifactVersion, ContentTask
-from yuxi.utils.datetime_utils import utc_now_naive
+from yuxi.utils.datetime_utils import format_utc_datetime, utc_now_naive
 
 
 def _content_error(status_code: int, code: str, message: str, **extra: Any) -> HTTPException:
@@ -60,6 +61,19 @@ def _content_error(status_code: int, code: str, message: str, **extra: Any) -> H
             }
         },
     )
+
+
+def _require_v3_task(task: ContentTask | None) -> None:
+    if task is None:
+        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    schema_version = int((task.runtime_config_snapshot_json or {}).get("schema_version") or 1)
+    if schema_version != 3:
+        raise _content_error(
+            409,
+            "CONTENT_LEGACY_TASK_READ_ONLY",
+            "该任务由旧版内容工作流创建，仅保留历史查询；请新建 V3 任务继续生产",
+            schema_version=schema_version,
+        )
 
 
 def _validate_model_spec(model_spec: str | None) -> str | None:
@@ -102,11 +116,11 @@ def normalize_rule_bundle(payload: RuleBundleUpdate) -> dict[str, Any]:
             "industry_scope",
             "channel_scope",
             "narrative_axis_codes",
-            "methods",
-            "title_formula_codes",
-            "title_pattern_codes",
-            "body_pattern_codes",
             "required_evidence_types",
+            "content_goal_codes",
+            "required_variable_codes",
+            "title_formula_candidate_codes",
+            "body_formula_candidate_codes",
         ),
     }
     for section, fields in list_fields.items():
@@ -116,11 +130,20 @@ def normalize_rule_bundle(payload: RuleBundleUpdate) -> dict[str, Any]:
             if "code" in item:
                 item["code"] = item["code"].strip().upper()
             if section == "combination_rules":
-                item["content_goal"] = item["content_goal"].strip().lower()
-                item["content_formula_code"] = item["content_formula_code"].strip().upper()
-                item["methods"] = [code.upper() for code in item["methods"]]
-                item["title_formula_codes"] = [code.upper() for code in item["title_formula_codes"]]
-                for field in ("content_type_codes", "title_pattern_codes", "body_pattern_codes"):
+                if int(item.get("schema_version") or 0) != 3:
+                    raise _content_error(422, "CONTENT_RULES_V3_REQUIRED", "只能编辑 V3 组合规则")
+                item["method_members"] = [
+                    {
+                        **member,
+                        "method_code": str(member.get("method_code") or "").strip().upper(),
+                    }
+                    for member in item.get("method_members") or []
+                ]
+                for field in (
+                    "content_type_codes",
+                    "title_formula_candidate_codes",
+                    "body_formula_candidate_codes",
+                ):
                     item[field] = [code.upper() for code in item[field]]
             elif "compatible_methods" in item:
                 item["compatible_methods"] = [code.upper() for code in item["compatible_methods"]]
@@ -145,109 +168,73 @@ def validate_rule_bundle_for_publish(bundle: dict[str, Any]) -> dict[str, list[d
     warnings: list[dict[str, str]] = []
 
     methods = {item["code"]: item for item in bundle.get("methods") or [] if item.get("enabled", True)}
-    core_methods = {code for code, item in methods.items() if item.get("method_type") == "core"}
     titles = {item["code"]: item for item in bundle.get("title_formulas") or [] if item.get("enabled", True)}
     bodies = {item["code"]: item for item in bundle.get("content_formulas") or [] if item.get("enabled", True)}
+    combination_rules = bundle.get("combination_rules") or []
 
     def add_error(code: str, message: str, path: str) -> None:
         errors.append({"code": code, "message": message, "path": path})
 
-    if not core_methods:
-        add_error("METHOD_REQUIRED", "至少保留一个已启用的核心创作手法", "methods")
-    if "S01" not in methods:
-        add_error("SCENE_ENHANCER_REQUIRED", "系统工作流依赖已启用的 S01 场景增强", "methods.S01")
-    if not titles:
-        add_error("TITLE_FORMULA_REQUIRED", "至少保留一个已启用的标题公式", "title_formulas")
-    if not bodies:
-        add_error("CONTENT_FORMULA_REQUIRED", "至少保留一个已启用的正文公式", "content_formulas")
+    if not combination_rules or any(int(item.get("schema_version") or 0) != 3 for item in combination_rules):
+        add_error(
+            "V3_COMBINATION_RULES_REQUIRED",
+            "规则版本必须只包含 V3 组合组",
+            "combination_rules",
+        )
+        return {"errors": errors, "warnings": warnings}
 
-    for code, item in titles.items():
-        compatible = set(item.get("compatible_methods") or [])
-        missing = compatible - core_methods
-        if not compatible:
-            add_error("TITLE_METHOD_REQUIRED", f"标题公式 {code} 至少关联一个核心手法", f"title_formulas.{code}")
-        elif missing:
-            add_error(
-                "TITLE_METHOD_INVALID",
-                f"标题公式 {code} 引用了不可用手法：{', '.join(sorted(missing))}",
-                f"title_formulas.{code}.compatible_methods",
-            )
-
-    for code, item in bodies.items():
-        compatible = set(item.get("compatible_methods") or [])
-        missing = compatible - core_methods
-        if not item.get("structure_schema"):
-            add_error("CONTENT_STRUCTURE_REQUIRED", f"正文公式 {code} 至少包含一个结构段落", f"content_formulas.{code}")
-        if not compatible:
-            add_error("CONTENT_METHOD_REQUIRED", f"正文公式 {code} 至少关联一个核心手法", f"content_formulas.{code}")
-        elif missing:
-            add_error(
-                "CONTENT_METHOD_INVALID",
-                f"正文公式 {code} 引用了不可用手法：{', '.join(sorted(missing))}",
-                f"content_formulas.{code}.compatible_methods",
-            )
-
-    covered_goals: set[str] = set()
-    valid_goals = {item["code"] for item in CONTENT_GOALS}
-    for index, item in enumerate(bundle.get("combination_rules") or []):
+    valid_content_types = {item["code"] for item in bundle.get("content_types") or [] if item.get("enabled", True)}
+    for index, item in enumerate(combination_rules):
         path = f"combination_rules.{index}"
-        goal = item.get("content_goal")
-        if goal not in valid_goals:
-            add_error("COMBINATION_GOAL_INVALID", f"组合规则使用了无效内容目标：{goal}", f"{path}.content_goal")
-        else:
-            covered_goals.add(goal)
-        missing_methods = set(item.get("methods") or []) - core_methods
-        missing_titles = set(item.get("title_formula_codes") or []) - set(titles)
-        body_code = item.get("content_formula_code")
-        if not item.get("methods"):
-            add_error("COMBINATION_METHOD_REQUIRED", "组合规则至少选择一个核心手法", f"{path}.methods")
-        elif missing_methods:
+        members = [member for member in item.get("method_members") or [] if isinstance(member, dict)]
+        member_codes = {member.get("method_code") for member in members}
+        unknown_methods = member_codes - set(methods)
+        unknown_titles = set(item.get("title_formula_candidate_codes") or []) - set(titles)
+        unknown_bodies = set(item.get("body_formula_candidate_codes") or []) - set(bodies)
+        unknown_types = set(item.get("content_type_codes") or []) - valid_content_types
+        if item.get("combination_type") not in {"single", "double", "triple", "quadruple"}:
+            add_error("V3_COMBINATION_TYPE_INVALID", "V3 组合类型无效", f"{path}.combination_type")
+        expected_size = {"single": 1, "double": 2, "triple": 3, "quadruple": 4}.get(item.get("combination_type"))
+        if expected_size is not None and len(members) != expected_size:
             add_error(
-                "COMBINATION_METHOD_INVALID",
-                f"组合规则引用了不可用手法：{', '.join(sorted(missing_methods))}",
-                f"{path}.methods",
+                "V3_COMBINATION_SIZE_INVALID",
+                "V3 组合类型与创作手法数量不一致",
+                f"{path}.method_members",
             )
-        if not item.get("title_formula_codes"):
-            add_error("COMBINATION_TITLE_REQUIRED", "组合规则至少选择一个标题公式", f"{path}.title_formula_codes")
-        elif missing_titles:
+        if [member.get("order") for member in members] != list(range(1, len(members) + 1)):
             add_error(
-                "COMBINATION_TITLE_INVALID",
-                f"组合规则引用了不可用标题公式：{', '.join(sorted(missing_titles))}",
-                f"{path}.title_formula_codes",
+                "V3_METHOD_ORDER_INVALID",
+                "V3 创作手法顺序必须从 1 连续递增",
+                f"{path}.method_members",
             )
-        if body_code not in bodies:
+        if len(member_codes) != len(members):
             add_error(
-                "COMBINATION_CONTENT_INVALID",
-                f"组合规则引用了不可用正文公式：{body_code}",
-                f"{path}.content_formula_code",
+                "V3_METHOD_MEMBERS_DUPLICATED",
+                "V3 组合组不能重复引用同一创作手法",
+                f"{path}.method_members",
             )
-        selected_methods = set(item.get("methods") or [])
-        for title_code in item.get("title_formula_codes") or []:
-            title = titles.get(title_code)
-            if title and not selected_methods.intersection(title.get("compatible_methods") or []):
-                add_error(
-                    "COMBINATION_TITLE_METHOD_MISMATCH",
-                    f"组合规则的手法与标题公式 {title_code} 不兼容",
-                    f"{path}.title_formula_codes",
-                )
-        body = bodies.get(body_code)
-        if body and not selected_methods.intersection(body.get("compatible_methods") or []):
+        if not member_codes:
+            add_error("V3_METHOD_MEMBERS_REQUIRED", "V3 组合组至少包含一个创作手法", f"{path}.method_members")
+        elif unknown_methods:
             add_error(
-                "COMBINATION_CONTENT_METHOD_MISMATCH",
-                f"组合规则的手法与正文公式 {body_code} 不兼容",
-                f"{path}.content_formula_code",
+                "V3_METHOD_MEMBERS_INVALID",
+                f"V3 组合组引用了未知手法：{', '.join(sorted(unknown_methods))}",
+                f"{path}.method_members",
             )
-
-    for goal in CONTENT_GOALS:
-        if goal["code"] not in covered_goals:
+        if unknown_types or not item.get("content_type_codes"):
+            add_error("V3_CONTENT_TYPE_INVALID", "V3 组合组内容方向无效", f"{path}.content_type_codes")
+        if not item.get("title_formula_candidate_codes") or unknown_titles:
             add_error(
-                "COMBINATION_GOAL_UNCOVERED",
-                f"内容目标“{goal['name']}”至少需要一条组合规则",
-                "combination_rules",
+                "V3_TITLE_POOL_INVALID",
+                "V3 标题公式候选池为空或引用无效",
+                f"{path}.title_formula_candidate_codes",
             )
-
-    if not bundle.get("combination_rules"):
-        warnings.append({"code": "COMBINATION_EMPTY", "message": "尚未配置组合矩阵", "path": "combination_rules"})
+        if not item.get("body_formula_candidate_codes") or unknown_bodies:
+            add_error(
+                "V3_BODY_POOL_INVALID",
+                "V3 正文公式候选池为空或引用无效",
+                f"{path}.body_formula_candidate_codes",
+            )
     return {"errors": errors, "warnings": warnings}
 
 
@@ -282,7 +269,7 @@ def compile_content_brief(
         {key: value for key, value in form_values.items() if key not in reserved and value not in (None, "", [])}
     )
     fields = template.quick_form_schema if task.mode == "quick" else template.pro_form_schema
-    # V2 行业表单只负责行业语言，生成协议消费稳定的平台变量。字段映射来自
+    # 行业表单只负责行业语言，V3 生成协议消费稳定的平台变量。字段映射来自
     # 已发布表单/行业包配置，新增行业无需修改 Skill 或工作流代码。
     for field in fields or []:
         variable_code = field.get("variable_code")
@@ -336,7 +323,7 @@ def compile_content_brief(
 
 async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
     repo = ContentRepository(db)
-    version = await repo.get_published_rule_version()
+    version = await repo.get_published_rule_version(schema_version=3)
     if version is None:
         raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "创作规则库尚未初始化")
     knowledge_options: list[dict[str, Any]] = []
@@ -382,34 +369,12 @@ def _media_evidence_dict(item: Any) -> dict[str, Any]:
     }
 
 
-async def get_content_v2_catalog(db: AsyncSession, user: User) -> dict[str, Any]:
-    """规则管理端与工作台共享的 V2 已发布配置目录。"""
-
-    repo = ContentRepository(db)
-    version = await repo.get_published_rule_version()
-    if version is None:
-        raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "创作规则库尚未初始化")
-    bundle = await repo.get_rule_bundle(version.id)
-    return {
-        "rule_version": (bundle or {}).get("version"),
-        "content_types": (bundle or {}).get("content_types") or [],
-        "formula_patterns": (bundle or {}).get("formula_patterns") or [],
-        "variables": (bundle or {}).get("variables") or [],
-        "industry_packs": await repo.list_industry_packs(),
-        "lexicon_packs": await repo.list_lexicon_packs(),
-        "personas": await repo.list_personas(user),
-        "channel_profiles": await repo.list_channel_profiles(),
-        "compliance_policies": await repo.list_compliance_policies(),
-    }
-
-
-async def add_task_material(
-    db: AsyncSession, user: User, task_id: str, payload: MaterialCreate
-) -> dict[str, Any]:
+async def add_task_material(db: AsyncSession, user: User, task_id: str, payload: MaterialCreate) -> dict[str, Any]:
     repo = ContentRepository(db)
     task = await repo.get_task_for_user(task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    _require_v3_task(task)
     try:
         item = await repo.create_media_evidence(task_id=task.id, **payload.model_dump())
         task.brief_json = {
@@ -462,6 +427,7 @@ async def confirm_task_material(
     task = await repo.get_task_for_user(task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    _require_v3_task(task)
     item = await repo.get_media_evidence(evidence_id)
     if item is None or item.task_id != task.id:
         raise _content_error(404, "CONTENT_MATERIAL_NOT_FOUND", "任务素材不存在")
@@ -477,9 +443,7 @@ async def confirm_task_material(
         if (fact.get("variable_code") or fact.get("key")) and fact.get("value") not in (None, "", [])
     }
     evidence_items = [
-        evidence
-        for evidence in ((task.evidence_json or {}).get("items") or [])
-        if evidence.get("id") != item.id
+        evidence for evidence in ((task.evidence_json or {}).get("items") or []) if evidence.get("id") != item.id
     ]
     if payload.verified_status == "confirmed" and payload.privacy_status == "approved":
         evidence_items.append(
@@ -517,247 +481,6 @@ async def confirm_task_material(
     )
     await db.commit()
     return {"material": _media_evidence_dict(item)}
-
-
-async def _load_v2_runtime_context(
-    repo: ContentRepository, user: User, task: ContentTask
-) -> dict[str, Any]:
-    bundle = await repo.get_rule_bundle(task.rule_version_id)
-    if not bundle or not bundle.get("content_types"):
-        raise _content_error(409, "CONTENT_V2_RULES_REQUIRED", "该任务绑定的不是 V2 规则版本")
-    template = await repo.get_template(task.industry_template_version_id)
-    industry_pack = await repo.get_industry_pack(task.industry_pack_version_id) if task.industry_pack_version_id else None
-    channels = await repo.list_channel_profiles()
-    channel = next((item for item in channels if item["id"] == task.channel_profile_version_id), None)
-    persona: dict[str, Any] = {}
-    if task.persona_profile_version_id:
-        persona_row = await repo.get_persona_version_for_user(task.persona_profile_version_id, user)
-        if persona_row:
-            version, profile = persona_row
-            persona = {
-                "id": version.id,
-                "profile_id": profile.id,
-                "name": profile.name,
-                "version": version.version,
-                "identity": version.identity or {},
-                "experience_facts": version.experience_facts or [],
-                "professional_background": version.professional_background or {},
-                "tone": version.tone or {},
-                "values": version.values or [],
-                "positions": version.positions or [],
-                "service_boundaries": version.service_boundaries or [],
-                "preferred_phrases": version.preferred_phrases or [],
-                "forbidden_phrases": version.forbidden_phrases or [],
-                "evidence_ids": version.evidence_ids or [],
-            }
-
-    lexicon_catalog = await repo.list_lexicon_packs()
-    industry_lexicons = set(industry_pack.lexicon_version_ids or []) if industry_pack else set()
-    selected_lexicons = [
-        item
-        for item in lexicon_catalog
-        if item["scope_type"] == "platform"
-        or item["id"] in industry_lexicons
-        or (channel and item["scope_type"] == "channel" and item["scope_id"] == channel["code"])
-        or (item["scope_type"] == "enterprise" and item["tenant_id"] == task.tenant_id)
-    ]
-    lexicon_versions = []
-    for item in selected_lexicons:
-        lexicon_versions.append({**item, "entries": await repo.list_lexicon_entries(item["id"])})
-    resolved_lexicon = LexiconResolver().resolve(lexicon_versions)
-    return {
-        "bundle": bundle,
-        "template": template,
-        "industry_pack": industry_pack,
-        "channel": channel,
-        "persona": persona,
-        "lexicon": resolved_lexicon,
-    }
-
-
-async def analyze_task_content_value(db: AsyncSession, user: User, task_id: str) -> dict[str, Any]:
-    repo = ContentRepository(db)
-    task = await repo.get_task_for_user(task_id, user, for_update=True)
-    if task is None:
-        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    if not task.brief_json:
-        raise _content_error(409, "CONTENT_BRIEF_REQUIRED", "请先完成业务简报")
-    context = await _load_v2_runtime_context(repo, user, task)
-    angles = ContentValueAnalyzer().analyze(
-        brief=task.brief_json,
-        evidence_bundle=task.evidence_json or {"items": []},
-        content_types=context["bundle"]["content_types"],
-        preferred_content_type=task.content_type_code,
-        limit=3,
-    )
-    task.strategy_json = {**(task.strategy_json or {}), "content_angle_candidates": angles}
-    task.current_stage = "strategy"
-    task.updated_by = str(user.uid)
-    await repo.track(
-        "content_value_analyzed",
-        uid=str(user.uid),
-        task_id=task.id,
-        properties={"angle_count": len(angles), "content_type_code": task.content_type_code},
-    )
-    await db.commit()
-    return {"angles": angles, "task": task.to_dict()}
-
-
-async def select_task_content_angle(
-    db: AsyncSession,
-    user: User,
-    task_id: str,
-    payload: ContentAngleSelection,
-) -> dict[str, Any]:
-    repo = ContentRepository(db)
-    task = await repo.get_task_for_user(task_id, user, for_update=True)
-    if task is None:
-        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    candidates = (task.strategy_json or {}).get("content_angle_candidates") or []
-    selected = next((item for item in candidates if item.get("id") == payload.angle_id), None)
-    if selected is None:
-        raise _content_error(422, "CONTENT_ANGLE_INVALID", "创作角度不存在或已过期，请重新分析")
-    if selected.get("primary_narrative_axis") != payload.primary_narrative_axis:
-        raise _content_error(422, "CONTENT_NARRATIVE_AXIS_INVALID", "主要叙事轴必须来自所选角度")
-    task.selected_angle_json = selected
-    task.primary_narrative_axis = payload.primary_narrative_axis
-    task.content_type_code = selected["content_type_code"]
-    task.strategy_json = {
-        **(task.strategy_json or {}),
-        "content_angle": selected,
-        "primary_narrative_axis": payload.primary_narrative_axis,
-        "content_type_code": task.content_type_code,
-    }
-    task.runtime_config_snapshot_json = {
-        **(task.runtime_config_snapshot_json or {}),
-        "content_type_code": task.content_type_code,
-        "content_angle": selected,
-        "primary_narrative_axis": task.primary_narrative_axis,
-    }
-    await repo.track(
-        "content_angle_selected",
-        uid=str(user.uid),
-        task_id=task.id,
-        properties={"angle_id": payload.angle_id, "primary_narrative_axis": payload.primary_narrative_axis},
-    )
-    await db.commit()
-    return {"selected_angle": selected, "task": task.to_dict()}
-
-
-async def recommend_content_strategy_v2(
-    db: AsyncSession,
-    user: User,
-    task_id: str,
-    payload: StrategyRecommendV2Request,
-) -> dict[str, Any]:
-    repo = ContentRepository(db)
-    task = await repo.get_task_for_user(task_id, user, for_update=True)
-    if task is None:
-        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    if not task.brief_json:
-        raise _content_error(409, "CONTENT_BRIEF_REQUIRED", "请先完成业务简报")
-    context = await _load_v2_runtime_context(repo, user, task)
-    if not task.selected_angle_json:
-        angles = ContentValueAnalyzer().analyze(
-            brief=task.brief_json,
-            evidence_bundle=task.evidence_json or {"items": []},
-            content_types=context["bundle"]["content_types"],
-            preferred_content_type=task.content_type_code,
-            limit=3,
-        )
-        if not angles:
-            raise _content_error(409, "CONTENT_ANGLE_UNAVAILABLE", "当前事实不足以形成创作角度")
-        task.selected_angle_json = angles[0]
-        task.primary_narrative_axis = angles[0]["primary_narrative_axis"]
-        task.content_type_code = angles[0]["content_type_code"]
-    result = CombinationEngineV2().recommend(
-        context["bundle"],
-        brief=task.brief_json,
-        evidence_bundle=task.evidence_json or {"items": []},
-        content_goal=task.content_goal,
-        content_type_code=task.content_type_code,
-        industry_slug=context["industry_pack"].slug if context["industry_pack"] else (
-            context["template"].slug if context["template"] else None
-        ),
-        channel_code=context["channel"]["code"] if context["channel"] else None,
-        primary_narrative_axis=task.primary_narrative_axis,
-        lexicon_entries=context["lexicon"]["entries"],
-        persona=context["persona"],
-        limit=payload.limit,
-        random_seed=payload.random_seed,
-    )
-    selected = result.get("selected")
-    if selected:
-        task.strategy_json = {
-            **selected,
-            "content_formula_code": selected["body_formula_code"],
-            "content_angle": task.selected_angle_json,
-            "compatibility": result["compatibility"],
-            "recommendation_trace": {
-                "alternatives": result["alternatives"],
-                "rejected": result["rejected"],
-                "required_actions": result["required_actions"],
-            },
-            "rule_version_id": task.rule_version_id,
-        }
-        task.runtime_config_snapshot_json = {
-            **(task.runtime_config_snapshot_json or {}),
-            "content_type_code": task.content_type_code,
-            "primary_narrative_axis": task.primary_narrative_axis,
-            "industry_pack_version_id": task.industry_pack_version_id,
-            "channel_profile_version_id": task.channel_profile_version_id,
-            "persona_profile_version_id": task.persona_profile_version_id,
-            "lexicon_version_ids": context["lexicon"]["version_ids"],
-            "title_pattern_code": selected["title_pattern_code"],
-            "body_pattern_code": selected["body_pattern_code"],
-        }
-        task.status = "strategy_ready" if result["compatibility"] != "blocked" else "brief_ready"
-        task.current_stage = "generation" if result["compatibility"] != "blocked" else "strategy"
-    await repo.track(
-        "strategy_v2_auto_matched",
-        uid=str(user.uid),
-        task_id=task.id,
-        properties={"compatibility": result["compatibility"], "content_type_code": task.content_type_code},
-    )
-    await db.commit()
-    return {"recommendation": result, "strategy": task.strategy_json or {}, "task": task.to_dict()}
-
-
-async def resolve_task_formula_slots(
-    db: AsyncSession,
-    user: User,
-    task_id: str,
-    payload: SlotResolveRequest,
-) -> dict[str, Any]:
-    repo = ContentRepository(db)
-    task = await repo.get_task_for_user(task_id, user, for_update=True)
-    if task is None:
-        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    context = await _load_v2_runtime_context(repo, user, task)
-    strategy = payload.strategy or task.strategy_json or {}
-    patterns = {item["code"]: item for item in context["bundle"]["formula_patterns"]}
-    resolver = FormulaSlotResolver()
-    plans = {}
-    for kind, key in (("title", "title_pattern_code"), ("body", "body_pattern_code")):
-        pattern = patterns.get(strategy.get(key))
-        if pattern is None:
-            raise _content_error(422, "CONTENT_PATTERN_MISSING", f"策略缺少可执行的{kind} Pattern")
-        plans[kind] = resolver.resolve(
-            pattern,
-            brief=task.brief_json or {},
-            evidence_bundle=task.evidence_json or {"items": []},
-            lexicon_entries=context["lexicon"]["entries"],
-            persona=context["persona"],
-            content_goal=task.content_goal,
-        )
-    task.strategy_json = {**strategy, "slot_plan": plans}
-    task.runtime_config_snapshot_json = {
-        **(task.runtime_config_snapshot_json or {}),
-        "slot_plan": plans,
-    }
-    await db.commit()
-    status = "blocked" if any(value["compatibility"] == "blocked" for value in plans.values()) else "compatible"
-    return {"compatibility": status, "slot_plan": plans, "task": task.to_dict()}
 
 
 async def preview_task_channel(
@@ -803,9 +526,24 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
     template = await repo.get_template(payload.industry_template_id)
     if template is None or template.status != "published":
         raise _content_error(404, "CONTENT_INDUSTRY_TEMPLATE_NOT_FOUND", "行业模板不存在或未发布")
-    rule_version = await repo.get_published_rule_version()
+
+    workflow_version = await repo.get_workflow(template.default_workflow_version_id)
+    if workflow_version is None or workflow_version.status != "published":
+        raise _content_error(409, "CONTENT_WORKFLOW_VERSION_MISSING", "行业模板锁定的工作流版本不存在或未发布")
+    schema_version = int((workflow_version.definition_json or {}).get("schema_version") or 1)
+    if schema_version != 3:
+        raise _content_error(409, "CONTENT_WORKFLOW_V3_REQUIRED", "新任务只能使用 V3 工作流")
+
+    rule_version = await repo.get_published_rule_version(schema_version=schema_version)
     if rule_version is None:
-        raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "创作规则库尚未初始化")
+        raise _content_error(
+            503,
+            "CONTENT_RULES_NOT_INITIALIZED",
+            "V3 创作规则库尚未发布",
+        )
+    locked_workflow_hash = workflow_version.definition_hash or workflow_definition_hash(
+        workflow_version.definition_json or {}
+    )
     goal = payload.content_goal or template.default_goal
     if goal not in {item["code"] for item in CONTENT_GOALS}:
         raise _content_error(422, "CONTENT_GOAL_INVALID", "内容目标无效")
@@ -825,15 +563,11 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
         if goal not in (selected_type.get("supported_goals") or []):
             raise _content_error(422, "CONTENT_TYPE_GOAL_MISMATCH", "内容类型不支持当前内容目标")
 
-    industry_pack = None
-    if payload.industry_pack_version_id:
-        industry_pack = await repo.get_industry_pack(payload.industry_pack_version_id)
-    elif content_types:
-        industry_pack = await repo.get_published_industry_pack(template.slug)
-    if payload.industry_pack_version_id and (
-        industry_pack is None or industry_pack.status != "published" or industry_pack.slug != template.slug
-    ):
+    industry_pack = await repo.get_published_industry_pack(template.slug, schema_version=3)
+    if industry_pack is None or industry_pack.status != "published" or industry_pack.slug != template.slug:
         raise _content_error(422, "CONTENT_INDUSTRY_PACK_INVALID", "行业内容包不存在、未发布或与行业不匹配")
+    if industry_pack.schema_version != schema_version:
+        raise _content_error(422, "CONTENT_INDUSTRY_PACK_VERSION_MISMATCH", "行业内容包与工作流版本不匹配")
 
     channel_profile_version_id = payload.channel_profile_version_id or (template.default_strategy or {}).get(
         "channel_profile_version_id"
@@ -851,9 +585,11 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
             raise _content_error(422, "CONTENT_PERSONA_INVALID", "人设档案不存在、未发布或无权访问")
 
     runtime_snapshot = {
-        "schema_version": 2 if content_types else 1,
+        "schema_version": schema_version,
         "rule_version_id": rule_version.id,
         "industry_template_version_id": template.id,
+        "workflow_version_id": workflow_version.id,
+        "workflow_definition_hash": locked_workflow_hash,
         "industry_pack_version_id": industry_pack.id if industry_pack else None,
         "persona_profile_version_id": payload.persona_profile_version_id,
         "channel_profile_version_id": channel_profile_version_id,
@@ -872,6 +608,8 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
         industry_pack_version_id=industry_pack.id if industry_pack else None,
         persona_profile_version_id=payload.persona_profile_version_id,
         channel_profile_version_id=channel_profile_version_id,
+        workflow_definition_hash=locked_workflow_hash,
+        workflow_version=workflow_version,
         runtime_config_snapshot=runtime_snapshot,
     )
     await repo.track(
@@ -921,13 +659,12 @@ async def get_content_task(db: AsyncSession, user: User, task_id: str) -> dict[s
     }
 
 
-async def update_content_task(
-    db: AsyncSession, user: User, task_id: str, payload: ContentTaskUpdate
-) -> dict[str, Any]:
+async def update_content_task(db: AsyncSession, user: User, task_id: str, payload: ContentTaskUpdate) -> dict[str, Any]:
     repo = ContentRepository(db)
     task = await repo.get_task_for_user(task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    _require_v3_task(task)
     changes = payload.model_dump(exclude_none=True)
     if "content_goal" in changes and changes["content_goal"] not in {item["code"] for item in CONTENT_GOALS}:
         raise _content_error(422, "CONTENT_GOAL_INVALID", "内容目标无效")
@@ -955,7 +692,14 @@ async def update_content_task(
         setattr(task, key, value)
     task.updated_by = str(user.uid)
     task.updated_at = utc_now_naive()
-    if {"content_goal", "content_type_code", "persona_profile_version_id", "channel_profile_version_id", "mode"} & changes.keys():
+    strategy_fields = {
+        "content_goal",
+        "content_type_code",
+        "persona_profile_version_id",
+        "channel_profile_version_id",
+        "mode",
+    }
+    if strategy_fields & changes.keys():
         task.strategy_json = {}
         task.current_stage = "brief"
         task.runtime_config_snapshot_json = {
@@ -974,6 +718,7 @@ async def delete_content_task(db: AsyncSession, user: User, task_id: str) -> dic
     task = await repo.get_task_for_user(task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    _require_v3_task(task)
     task.deleted_at = utc_now_naive()
     task.status = "deleted"
     task.updated_by = str(user.uid)
@@ -986,6 +731,7 @@ async def duplicate_content_task(db: AsyncSession, user: User, task_id: str) -> 
     source = await repo.get_task_for_user(task_id, user)
     if source is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    _require_v3_task(source)
     template = await repo.get_template(source.industry_template_version_id)
     if template is None:
         raise _content_error(409, "CONTENT_TEMPLATE_VERSION_MISSING", "原任务的行业模板版本不存在")
@@ -1002,14 +748,15 @@ async def duplicate_content_task(db: AsyncSession, user: User, task_id: str) -> 
         industry_pack_version_id=source.industry_pack_version_id,
         persona_profile_version_id=source.persona_profile_version_id,
         channel_profile_version_id=source.channel_profile_version_id,
+        workflow_definition_hash=source.workflow_definition_hash,
         runtime_config_snapshot=deepcopy(source.runtime_config_snapshot_json or {}),
     )
     copy_task.brief_json = deepcopy(source.brief_json or {})
-    copy_task.strategy_json = deepcopy(source.strategy_json or {})
+    copy_task.strategy_json = {}
     copy_task.evidence_json = deepcopy(source.evidence_json or {})
-    copy_task.selected_angle_json = deepcopy(source.selected_angle_json or {})
-    copy_task.primary_narrative_axis = source.primary_narrative_axis
-    copy_task.current_stage = "strategy" if copy_task.brief_json else "brief"
+    copy_task.selected_angle_json = {}
+    copy_task.primary_narrative_axis = None
+    copy_task.current_stage = "generation" if copy_task.brief_json else "brief"
     await db.commit()
     return {"task": copy_task.to_dict()}
 
@@ -1021,6 +768,7 @@ async def save_content_brief(
     task = await repo.get_task_for_user(task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    _require_v3_task(task)
     template = await repo.get_template(task.industry_template_version_id)
     if template is None:
         raise _content_error(409, "CONTENT_TEMPLATE_VERSION_MISSING", "任务绑定的行业模板版本不存在")
@@ -1040,95 +788,11 @@ async def save_content_brief(
     if compile_now:
         task.evidence_json = normalize_manual_evidence(task.id, compiled)
         task.status = "brief_ready"
-        task.current_stage = "strategy"
+        task.current_stage = "generation"
         task.strategy_json = {}
         await repo.track("content_brief_completed", uid=str(user.uid), task_id=task.id)
     await db.commit()
     return {"task": task.to_dict(), "missing_fields": missing, "compiled": compile_now and not missing}
-
-
-async def recommend_content_strategy(db: AsyncSession, user: User, task_id: str) -> dict[str, Any]:
-    repo = ContentRepository(db)
-    task = await repo.get_task_for_user(task_id, user, for_update=True)
-    if task is None:
-        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    if not task.brief_json:
-        raise _content_error(409, "CONTENT_BRIEF_NOT_COMPILED", "请先完成业务简报")
-    bundle = await repo.get_rule_bundle(task.rule_version_id)
-    if bundle is None:
-        raise _content_error(409, "CONTENT_RULE_VERSION_MISSING", "任务绑定的规则版本不存在")
-    strategy = recommend_strategy(bundle, brief=task.brief_json, content_goal=task.content_goal)
-    task.strategy_json = strategy
-    task.status = "strategy_ready" if strategy["compatibility"] != "blocked" else "brief_ready"
-    task.current_stage = "strategy"
-    task.updated_by = str(user.uid)
-    await repo.track(
-        "strategy_auto_matched",
-        uid=str(user.uid),
-        task_id=task.id,
-        properties={"compatibility": strategy["compatibility"]},
-    )
-    await db.commit()
-    return {"strategy": strategy, "task": task.to_dict()}
-
-
-async def validate_content_strategy(db: AsyncSession, payload: StrategyValidateRequest) -> dict[str, Any]:
-    repo = ContentRepository(db)
-    bundle = await repo.get_rule_bundle(payload.rule_version_id)
-    if bundle is None:
-        raise _content_error(404, "CONTENT_RULE_VERSION_MISSING", "规则版本不存在")
-    return validate_strategy_bundle(
-        bundle,
-        brief=payload.brief.model_dump(),
-        content_goal=payload.content_goal,
-        methods=payload.methods,
-        title_formula_code=payload.title_formula_code,
-        content_formula_code=payload.content_formula_code,
-    )
-
-
-async def save_content_strategy(
-    db: AsyncSession, user: User, task_id: str, payload: StrategySelection
-) -> dict[str, Any]:
-    repo = ContentRepository(db)
-    task = await repo.get_task_for_user(task_id, user, for_update=True)
-    if task is None:
-        raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    bundle = await repo.get_rule_bundle(task.rule_version_id)
-    if bundle is None:
-        raise _content_error(409, "CONTENT_RULE_VERSION_MISSING", "任务绑定的规则版本不存在")
-    validation = validate_strategy_bundle(
-        bundle,
-        brief=task.brief_json or {},
-        content_goal=task.content_goal,
-        methods=payload.methods,
-        title_formula_code=payload.title_formula_code,
-        content_formula_code=payload.content_formula_code,
-    )
-    strategy = {
-        "content_goal": task.content_goal,
-        **payload.model_dump(),
-        "compatibility": validation["compatibility"],
-        "required_variables": validation["missing_variables"],
-        "rule_version_id": task.rule_version_id,
-        "reason_summary": "用户在专业模式中确认的创作组合",
-        "warnings": validation["reasons"],
-    }
-    task.strategy_json = strategy
-    task.updated_by = str(user.uid)
-    if validation["compatibility"] == "blocked":
-        task.status = "brief_ready"
-    else:
-        task.status = "strategy_ready"
-        task.current_stage = "generation"
-    await repo.track(
-        "strategy_manually_changed",
-        uid=str(user.uid),
-        task_id=task.id,
-        properties={"compatibility": validation["compatibility"]},
-    )
-    await db.commit()
-    return {"strategy": strategy, "validation": validation, "task": task.to_dict()}
 
 
 def _run_response(run: AgentRun) -> dict[str, Any]:
@@ -1219,17 +883,14 @@ async def _enqueue_content_run(
     return _run_response(run)
 
 
-async def create_content_run(
-    db: AsyncSession, user: User, task_id: str, payload: ContentRunCreate
-) -> dict[str, Any]:
+async def create_content_run(db: AsyncSession, user: User, task_id: str, payload: ContentRunCreate) -> dict[str, Any]:
     repo = ContentRepository(db)
     task = await repo.get_task_for_user(task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    if not task.brief_json or not task.strategy_json:
-        raise _content_error(409, "CONTENT_TASK_NOT_READY", "请先完成业务简报和创作策略")
-    if task.strategy_json.get("compatibility") == "blocked":
-        raise _content_error(409, "CONTENT_STRATEGY_BLOCKED", "当前创作组合不兼容，不能开始生成")
+    _require_v3_task(task)
+    if not task.brief_json:
+        raise _content_error(409, "CONTENT_TASK_NOT_READY", "请先完成业务简报")
     model_spec = _validate_model_spec(payload.model_spec)
     result = await _enqueue_content_run(
         db,
@@ -1242,9 +903,7 @@ async def create_content_run(
     return result
 
 
-async def resume_content_run(
-    db: AsyncSession, user: User, run_id: str, payload: ContentRunResume
-) -> dict[str, Any]:
+async def resume_content_run(db: AsyncSession, user: User, run_id: str, payload: ContentRunResume) -> dict[str, Any]:
     run_repo = AgentRunRepository(db)
     parent = await run_repo.get_run_for_user(run_id, str(user.uid))
     if parent is None or parent.run_type not in {"content", "content_resume"}:
@@ -1254,6 +913,7 @@ async def resume_content_run(
     task = await ContentRepository(db).get_task_for_user(parent.thread_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    _require_v3_task(task)
     model_spec = (parent.input_payload or {}).get("model_spec")
     return await _enqueue_content_run(
         db,
@@ -1285,6 +945,7 @@ async def retry_content_node(
     task = await ContentRepository(db).get_task_for_user(parent.thread_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    _require_v3_task(task)
     return await _enqueue_content_run(
         db,
         user=user,
@@ -1298,10 +959,85 @@ async def retry_content_node(
 
 
 async def get_content_run(db: AsyncSession, user: User, run_id: str) -> dict[str, Any]:
-    run = await AgentRunRepository(db).get_run_for_user(run_id, str(user.uid))
+    run_repo = AgentRunRepository(db)
+    run = await run_repo.get_run_for_user(run_id, str(user.uid))
     if run is None or run.run_type not in {"content", "content_resume"}:
         raise _content_error(404, "CONTENT_RUN_NOT_FOUND", "内容运行不存在")
-    return {"run": run.to_dict()}
+    root, content_runs, delegated_runs = await run_repo.list_content_run_family(run)
+    run_ids = [item.id for item in content_runs]
+    projection = await ContentRepository(db).get_v3_run_projection(
+        task_id=run.thread_id,
+        run_ids=run_ids,
+    )
+
+    async def collect_events(items: list[AgentRun]) -> list[dict[str, Any]]:
+        collected: list[dict[str, Any]] = []
+        for item in items:
+            for event in await list_run_stream_events(item.id, limit=500):
+                envelope = event.get("payload") or {}
+                event_payload = envelope.get("payload") if isinstance(envelope, dict) else {}
+                event_type = str(event.get("event_type") or "")
+                if not event_type.startswith("content.") and not (
+                    event_type == "custom" and (event_payload or {}).get("name") == "content.node"
+                ):
+                    continue
+                collected.append(
+                    {
+                        "seq": event.get("seq"),
+                        "run_id": item.id,
+                        "event_type": event_type,
+                        "created_at": envelope.get("created_at") if isinstance(envelope, dict) else None,
+                        "payload": event_payload or {},
+                    }
+                )
+        return collected
+
+    events = await collect_events(content_runs)
+    has_mirrored_runtime = any(
+        item["event_type"].startswith(("content.agent.", "content.skill.", "content.tool.", "content.knowledge."))
+        for item in events
+    )
+    if not has_mirrored_runtime:
+        events.extend(await collect_events(delegated_runs))
+    events.sort(key=lambda item: (item.get("created_at") or "", item.get("seq") or ""))
+    knowledge_events = [item for item in events if item["event_type"] == "content.knowledge.retrieved"]
+    skill_events = [item for item in events if item["event_type"] == "content.skill.activated"]
+    tool_events = [item for item in events if item["event_type"].startswith("content.tool.")]
+    return {
+        "run": run.to_dict(),
+        "root_run_id": root.id,
+        "continuations": [item.to_dict() for item in content_runs],
+        "nodes": projection["nodes"],
+        "match_decision": projection["match_decision"],
+        "formula_selection": projection["formula_selection"],
+        "delegated_agents": [
+            {
+                "run_id": item.id,
+                "agent_slug": item.agent_id,
+                "status": item.status,
+                "parent_run_id": item.parent_agent_run_id,
+                "node_id": (item.input_payload or {}).get("node_id"),
+                "runtime_config_snapshot": (item.input_payload or {}).get("runtime_config_snapshot"),
+                "error_type": item.error_type,
+                "error_message": item.error_message,
+                "started_at": format_utc_datetime(item.started_at),
+                "finished_at": format_utc_datetime(item.finished_at),
+            }
+            for item in delegated_runs
+        ],
+        "external_wait": projection["external_wait"],
+        "evidence": projection["evidence"],
+        "event_summary": {
+            "agent_run_count": len(delegated_runs),
+            "skill_activation_count": len(skill_events),
+            "tool_event_count": len(tool_events),
+            "knowledge_retrieval_count": len(knowledge_events),
+            "knowledge_result_count": sum(
+                int((item["payload"] or {}).get("result_count") or 0) for item in knowledge_events
+            ),
+        },
+        "events": events,
+    }
 
 
 async def get_task_artifact(db: AsyncSession, user: User, task_id: str) -> dict[str, Any]:
@@ -1326,6 +1062,7 @@ async def regenerate_content_artifact(
     task = await repo.get_task_for_user(artifact.task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
+    _require_v3_task(task)
     return await create_content_run(
         db,
         user,
@@ -1340,8 +1077,8 @@ async def create_content_rule_draft(
     payload: RuleDraftCreate,
 ) -> dict[str, Any]:
     repo = ContentRepository(db)
-    current = await repo.get_published_rule_version_for_update()
-    existing = await repo.get_platform_rule_draft()
+    current = await repo.get_published_rule_version_for_update(schema_version=3)
+    existing = await repo.get_platform_rule_draft(schema_version=3)
     if existing:
         raise _content_error(
             409,
@@ -1455,7 +1192,7 @@ async def activate_content_rule_version(
             validation=validation,
         )
 
-    current = await repo.get_published_rule_version_for_update()
+    current = await repo.get_published_rule_version_for_update(schema_version=3)
     if current and current.id != target.id:
         current.status = "archived"
     target.status = "published"
@@ -1482,6 +1219,287 @@ async def activate_content_rule_version(
     }
 
 
+async def activate_content_workflow_version(
+    db: AsyncSession,
+    user: User,
+    version_id: str,
+    *,
+    rollback: bool,
+    note: str | None,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    target = await repo.get_workflow_for_update(version_id)
+    if target is None or target.tenant_id is not None:
+        raise _content_error(404, "CONTENT_WORKFLOW_VERSION_MISSING", "平台工作流版本不存在")
+    allowed_statuses = (
+        {"archived", "published"} if rollback else {"draft", "validated", "canary", "archived", "published"}
+    )
+    if target.status not in allowed_statuses:
+        raise _content_error(409, "CONTENT_WORKFLOW_VERSION_NOT_PUBLISHABLE", "当前工作流版本不可发布")
+
+    definition = target.definition_json or {}
+    agent_slugs = {
+        item["agent_slug"]
+        for item in definition.get("nodes") or []
+        if isinstance(item, dict) and item.get("type") == "agent" and item.get("agent_slug")
+    }
+    skill_slugs = {
+        slug
+        for item in definition.get("nodes") or []
+        if isinstance(item, dict)
+        for slug in item.get("required_skills") or []
+    }
+    agents = await AgentRepository(db).list_by_slugs(sorted(agent_slugs))
+    skills = await SkillRepository(db).list_by_slugs(sorted(skill_slugs))
+    enabled_agents = {item.slug for item in agents if item.enabled}
+    enabled_skills = {item.slug for item in skills if item.enabled}
+    try:
+        WorkflowDefinitionPolicy.validate(
+            definition,
+            catalog=WorkflowCatalog(agents=frozenset(enabled_agents), skills=frozenset(enabled_skills)),
+        )
+    except ValueError as exc:
+        raise _content_error(
+            409,
+            "CONTENT_WORKFLOW_VERSION_INVALID",
+            str(exc),
+        ) from exc
+
+    schema_version = 3
+    current = await repo.get_published_workflow_for_update(target.slug, schema_version=3)
+    if current and current.id != target.id:
+        current.status = "archived"
+    target.status = "published"
+    target.definition_hash = workflow_definition_hash(definition)
+    target.published_at = utc_now_naive()
+    await repo.track(
+        "content_workflow_version_rolled_back" if rollback else "content_workflow_version_published",
+        uid=str(user.uid),
+        properties={
+            "version_id": target.id,
+            "version": target.version,
+            "schema_version": schema_version,
+            "previous_version_id": current.id if current and current.id != target.id else None,
+            "note": note,
+        },
+    )
+    await db.commit()
+    return {
+        "version": {
+            "id": target.id,
+            "version": target.version,
+            "status": target.status,
+            "definition_hash": target.definition_hash,
+            "published_at": format_utc_datetime(target.published_at),
+        },
+        "previous_version_id": current.id if current and current.id != target.id else None,
+    }
+
+
+async def validate_content_industry_pack(
+    db: AsyncSession,
+    user: User,
+    version_id: str,
+    *,
+    commit: bool = True,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    record = await repo.get_industry_pack(version_id)
+    if record is None or record.tenant_id is not None:
+        raise _content_error(404, "CONTENT_INDUSTRY_PACK_MISSING", "平台行业包版本不存在")
+    if record.schema_version != 3:
+        raise _content_error(409, "CONTENT_INDUSTRY_PACK_V3_REQUIRED", "只能校验 V3 Industry Pack")
+    mappings = await repo.list_industry_variable_mappings(record.id)
+    groups = await repo.list_combination_groups(record.combination_overrides or [])
+    rule_bundle = await repo.get_rule_bundle(PLATFORM_RULE_V3_ID, include_disabled=True)
+    if rule_bundle is None:
+        raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "V3 平台规则尚未初始化")
+    report = ValidateIndustryPackHandler().execute(
+        record=record,
+        variable_mappings=mappings,
+        combination_groups=groups,
+        rule_bundle=rule_bundle,
+    )
+    previous_regression = (record.evaluation_report or {}).get("regression")
+    if previous_regression:
+        report["regression"] = previous_regression
+    record.evaluation_report = report
+    await repo.track(
+        "content_industry_pack_validated",
+        uid=str(user.uid),
+        properties={
+            "version_id": record.id,
+            "slug": record.slug,
+            "valid": report["validation"]["valid"],
+            "evaluation_passed": report["evaluation"]["passed"],
+        },
+    )
+    if commit:
+        await db.commit()
+    return report
+
+
+async def transition_content_industry_pack(
+    db: AsyncSession,
+    user: User,
+    version_id: str,
+    payload: IndustryPackTransitionRequest,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    record = await repo.get_industry_pack_for_update(version_id)
+    if record is None or record.tenant_id is not None:
+        raise _content_error(404, "CONTENT_INDUSTRY_PACK_MISSING", "平台行业包版本不存在")
+    try:
+        IndustryPackPolicy.assert_transition(record.status, payload.target_status)
+    except ValueError as exc:
+        raise _content_error(409, "CONTENT_INDUSTRY_PACK_TRANSITION_INVALID", str(exc)) from exc
+
+    report = await validate_content_industry_pack(db, user, record.id, commit=False)
+    if payload.target_status in {"validated", "canary", "published"} and not (
+        report["validation"]["valid"] and report["evaluation"]["passed"]
+    ):
+        raise _content_error(
+            409,
+            "CONTENT_INDUSTRY_PACK_VALIDATION_FAILED",
+            "行业包校验或离线评测未通过",
+            report=report,
+        )
+    if payload.target_status == "published":
+        regression = report.get("regression") or {}
+        if (
+            regression.get("pack_version_id") != record.id
+            or regression.get("pack_hash") != report.get("pack_hash")
+            or not regression.get("passed")
+        ):
+            raise _content_error(
+                409,
+                "CONTENT_INDUSTRY_PACK_REGRESSION_REQUIRED",
+                "Industry Pack 发布前必须完成并通过真实 canary 全链路回归",
+                regression=regression,
+            )
+
+    previous = None
+    if payload.target_status == "published":
+        candidate = await repo.get_published_industry_pack_for_update(record.slug, exclude_id=record.id)
+        if candidate is not None and candidate.version >= 3:
+            candidate.status = "deprecated"
+            previous = candidate
+        record.rollback_target_version_id = previous.id if previous else record.rollback_target_version_id
+        record.published_at = utc_now_naive()
+    record.status = payload.target_status
+    await repo.track(
+        "content_industry_pack_transitioned",
+        uid=str(user.uid),
+        properties={
+            "version_id": record.id,
+            "slug": record.slug,
+            "target_status": payload.target_status,
+            "previous_version_id": previous.id if previous else None,
+            "note": payload.note,
+        },
+    )
+    await db.commit()
+    return {
+        "version": {
+            "id": record.id,
+            "slug": record.slug,
+            "version": record.version,
+            "status": record.status,
+            "rollback_target_version_id": record.rollback_target_version_id,
+            "published_at": format_utc_datetime(record.published_at),
+        },
+        "report": report,
+    }
+
+
+async def submit_content_industry_pack_regression(
+    db: AsyncSession,
+    user: User,
+    version_id: str,
+    payload: IndustryPackRegressionSubmission,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    record = await repo.get_industry_pack_for_update(version_id)
+    if record is None or record.tenant_id is not None:
+        raise _content_error(404, "CONTENT_INDUSTRY_PACK_MISSING", "平台行业包版本不存在")
+    if record.status != "canary":
+        raise _content_error(
+            409,
+            "CONTENT_INDUSTRY_PACK_CANARY_REQUIRED",
+            "只能为 canary 状态的 Industry Pack 提交全链路回归结果",
+        )
+
+    structural = await validate_content_industry_pack(db, user, version_id, commit=False)
+    if not (structural["validation"]["valid"] and structural["evaluation"]["passed"]):
+        raise _content_error(
+            409,
+            "CONTENT_INDUSTRY_PACK_VALIDATION_FAILED",
+            "行业包结构校验或离线样本评测未通过",
+            report=structural,
+        )
+    if len(set(payload.source_run_ids)) != len(payload.source_run_ids):
+        raise _content_error(422, "CONTENT_INDUSTRY_PACK_RUN_IDS_DUPLICATED", "source_run_ids 不能重复")
+    if payload.sample_count != len(payload.source_run_ids):
+        raise _content_error(
+            422,
+            "CONTENT_INDUSTRY_PACK_SAMPLE_COUNT_MISMATCH",
+            "sample_count 必须与可审计的 source_run_ids 数量一致",
+        )
+    canary_runs = await repo.list_industry_pack_canary_runs(record.id, payload.source_run_ids)
+    found_run_ids = {item["run_id"] for item in canary_runs}
+    missing_run_ids = sorted(set(payload.source_run_ids) - found_run_ids)
+    if missing_run_ids:
+        raise _content_error(
+            422,
+            "CONTENT_INDUSTRY_PACK_RUN_INVALID",
+            "回归报告包含不属于当前 Industry Pack 的 Run",
+            run_ids=missing_run_ids,
+        )
+    incomplete_run_ids = sorted(item["run_id"] for item in canary_runs if item["status"] != "completed")
+    if incomplete_run_ids:
+        raise _content_error(
+            409,
+            "CONTENT_INDUSTRY_PACK_RUN_INCOMPLETE",
+            "只能使用已完成的 canary Run 生成回归报告",
+            run_ids=incomplete_run_ids,
+        )
+    covered_directions = {item["content_type_code"] for item in canary_runs}
+    missing_directions = sorted(CONTENT_TYPE_CODES - covered_directions)
+    if missing_directions:
+        raise _content_error(
+            409,
+            "CONTENT_INDUSTRY_PACK_CANARY_COVERAGE_INCOMPLETE",
+            "canary 回归必须覆盖 CT01～CT07 全部内容方向",
+            missing_content_type_codes=missing_directions,
+        )
+
+    regression = EvaluateIndustryPackRegressionHandler().execute(
+        pack=structural["pack"],
+        metrics=payload.metrics,
+        source_run_ids=payload.source_run_ids,
+        sample_count=payload.sample_count,
+        candidate_recommendations=payload.candidate_recommendations,
+    )
+    regression["submitted_at"] = format_utc_datetime(utc_now_naive())
+    regression["submitted_by"] = str(user.uid)
+    regression["note"] = payload.note
+    record.evaluation_report = {**structural, "regression": regression}
+    await repo.track(
+        "content_industry_pack_regression_submitted",
+        uid=str(user.uid),
+        properties={
+            "version_id": record.id,
+            "slug": record.slug,
+            "sample_count": payload.sample_count,
+            "source_run_ids": payload.source_run_ids,
+            "passed": regression["passed"],
+            "failed_gates": regression["failed_gates"],
+        },
+    )
+    await db.commit()
+    return {"report": record.evaluation_report}
+
+
 async def update_content_artifact(
     db: AsyncSession, user: User, artifact_id: str, payload: ContentArtifactUpdate
 ) -> dict[str, Any]:
@@ -1490,6 +1508,7 @@ async def update_content_artifact(
     if artifact is None:
         raise _content_error(404, "CONTENT_ARTIFACT_NOT_FOUND", "内容资产不存在")
     task = await repo.get_task_for_user(artifact.task_id, user, for_update=True)
+    _require_v3_task(task)
     artifact.title = payload.title.strip()
     artifact.body = payload.body.strip()
     artifact.topics = payload.topics
@@ -1528,6 +1547,7 @@ async def review_content_artifact(
     if artifact is None:
         raise _content_error(404, "CONTENT_ARTIFACT_NOT_FOUND", "内容资产不存在")
     task = await repo.get_task_for_user(artifact.task_id, user, for_update=True)
+    _require_v3_task(task)
     deterministic = validate_content(
         title=artifact.title,
         body=artifact.body,
@@ -1542,7 +1562,7 @@ async def review_content_artifact(
         body=artifact.body,
         topics=artifact.topics or [],
         brief=task.brief_json or {},
-        strategy=task.strategy_json or {},
+        workflow_snapshot=task.strategy_json or {},
         evidence_bundle=task.evidence_json or {},
     )
     review = _merge_reviews(deterministic, llm)
@@ -1580,6 +1600,7 @@ async def finalize_content_artifact(db: AsyncSession, user: User, artifact_id: s
     if (artifact.review_snapshot or {}).get("status") not in {"passed", "warning"}:
         raise _content_error(409, "CONTENT_REVIEW_REQUIRED", "请先完成内容审核")
     task = await repo.get_task_for_user(artifact.task_id, user, for_update=True)
+    _require_v3_task(task)
     artifact.status = "final"
     artifact.updated_at = utc_now_naive()
     task.status = "completed"
@@ -1594,9 +1615,7 @@ async def finalize_content_artifact(db: AsyncSession, user: User, artifact_id: s
     return {"artifact": artifact.to_dict(), "task": task.to_dict()}
 
 
-async def list_content_artifact_versions(
-    db: AsyncSession, user: User, artifact_id: str
-) -> dict[str, Any]:
+async def list_content_artifact_versions(db: AsyncSession, user: User, artifact_id: str) -> dict[str, Any]:
     repo = ContentRepository(db)
     artifact = await repo.get_artifact_for_user(artifact_id, user)
     if artifact is None:

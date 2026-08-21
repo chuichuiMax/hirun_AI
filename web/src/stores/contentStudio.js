@@ -60,6 +60,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   const currentRun = ref(null)
   const interrupt = ref(null)
   const runEvents = ref([])
+  const runAudit = ref(null)
   const history = ref([])
   const historyTotal = ref(0)
   const versions = ref([])
@@ -80,7 +81,6 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   const templates = computed(() => bootstrap.value?.industry_templates || [])
   const contentGoals = computed(() => bootstrap.value?.content_goals || [])
   const knowledgeOptions = computed(() => bootstrap.value?.knowledge_options || [])
-  const strategy = computed(() => task.value?.strategy || {})
   const evidence = computed(() => task.value?.evidence_bundle || { items: [] })
 
   async function loadBootstrap(force = false) {
@@ -149,28 +149,6 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     }
   }
 
-  async function recommendStrategy() {
-    loading.saving = true
-    try {
-      const response = await contentApi.recommendStrategy(task.value.id)
-      task.value = response.task
-      return response.strategy
-    } finally {
-      loading.saving = false
-    }
-  }
-
-  async function saveStrategy(selection) {
-    loading.saving = true
-    try {
-      const response = await contentApi.saveStrategy(task.value.id, selection)
-      task.value = response.task
-      return response
-    } finally {
-      loading.saving = false
-    }
-  }
-
   function handleRunEvent(eventType, envelope, eventId) {
     if (eventId) lastRunSeq = eventId
     const payload = envelope?.payload || envelope || {}
@@ -184,6 +162,34 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
       interrupt.value = payload
     } else if (eventType === 'error') {
       lastError.value = new Error(payload.message || '内容运行失败')
+    }
+    if (eventType.startsWith('content.')) {
+      const events = runAudit.value?.events || []
+      runAudit.value = {
+        ...(runAudit.value || {}),
+        events: [...events, { event_type: eventType, payload, run_id: envelope?.run_id }]
+      }
+    }
+  }
+
+  async function loadRunAudit(runId) {
+    if (!runId) return null
+    const response = await contentApi.getRun(runId)
+    runAudit.value = response
+    return response
+  }
+
+  function applyStartedRun(response) {
+    currentRun.value = response
+    lastError.value = null
+    if (task.value) {
+      task.value = {
+        ...task.value,
+        status: response.status || 'queued',
+        latest_run_id: response.run_id,
+        error: null,
+        error_json: null
+      }
     }
   }
 
@@ -202,6 +208,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
           currentRun.value = { ...(currentRun.value || {}), status: data?.payload?.status }
         }
       })
+      await loadRunAudit(runId)
       await loadTask(task.value.id)
     } catch (error) {
       if (error.name !== 'AbortError') {
@@ -216,12 +223,13 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   async function startRun(modelSpec = null) {
     interrupt.value = null
     runEvents.value = []
+    runAudit.value = null
     lastRunSeq = '0-0'
     const response = await contentApi.createRun(task.value.id, {
       request_id: createClientRequestId(),
       model_spec: modelSpec || null
     })
-    currentRun.value = response
+    applyStartedRun(response)
     void subscribeRun(response.run_id)
     return response
   }
@@ -233,7 +241,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
       request_id: createClientRequestId(),
       resume
     })
-    currentRun.value = response
+    applyStartedRun(response)
     lastRunSeq = '0-0'
     void subscribeRun(response.run_id)
     return response
@@ -241,7 +249,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
 
   async function recoverRun(runId) {
     if (!runId) return
-    const response = await contentApi.getRun(runId)
+    const response = await loadRunAudit(runId)
     currentRun.value = {
       run_id: response.run.id,
       status: response.run.status,
@@ -258,8 +266,9 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
       node_id: nodeId,
       model_spec: modelSpec || null
     })
-    currentRun.value = response
+    applyStartedRun(response)
     runEvents.value = []
+    runAudit.value = null
     lastRunSeq = '0-0'
     void subscribeRun(response.run_id)
     return response
@@ -320,6 +329,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     currentRun.value = null
     interrupt.value = null
     runEvents.value = []
+    runAudit.value = null
     lastError.value = null
     versions.value = []
     saveStatus.value = 'idle'
@@ -333,6 +343,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     currentRun,
     interrupt,
     runEvents,
+    runAudit,
     history,
     historyTotal,
     versions,
@@ -343,18 +354,16 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     templates,
     contentGoals,
     knowledgeOptions,
-    strategy,
     evidence,
     loadBootstrap,
     createTask,
     loadTask,
     compileBrief,
     saveBrief,
-    recommendStrategy,
-    saveStrategy,
     startRun,
     resumeRun,
     recoverRun,
+    loadRunAudit,
     retryNode,
     saveArtifact,
     reviewArtifact,

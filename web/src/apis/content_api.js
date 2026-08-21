@@ -60,10 +60,6 @@ export const contentApi = {
   saveBrief: (taskId, brief) => apiPut(`/api/content/tasks/${taskId}/brief`, { brief }),
   compileBrief: (taskId, brief) =>
     apiPost(`/api/content/tasks/${taskId}/compile-brief`, { brief }),
-  recommendStrategy: (taskId) => apiPost(`/api/content/tasks/${taskId}/strategy/recommend`),
-  saveStrategy: (taskId, strategy) =>
-    apiPut(`/api/content/tasks/${taskId}/strategy`, strategy),
-  validateStrategy: (payload) => apiPost('/api/content/strategy/validate', payload),
   getRuleBundle: (versionId) =>
     apiGet(`/api/content/rule-versions/${versionId}/bundle`),
   createRun: (taskId, payload) => apiPost(`/api/content/tasks/${taskId}/runs`, payload),
@@ -135,5 +131,16 @@ export const contentApi = {
   rollbackRuleVersion: (versionId, payload = {}) =>
     apiPost(`/api/content/admin/rules/${versionId}/rollback`, payload),
   listIndustryTemplates: () => apiGet('/api/content/admin/industry-templates'),
-  listWorkflowTemplates: () => apiGet('/api/content/admin/workflow-templates')
+  listIndustryPacks: () => apiGet('/api/content/admin/industry-packs'),
+  validateIndustryPack: (versionId) =>
+    apiPost(`/api/content/admin/industry-packs/${versionId}/validate`),
+  transitionIndustryPack: (versionId, payload) =>
+    apiPost(`/api/content/admin/industry-packs/${versionId}/transition`, payload),
+  submitIndustryPackRegression: (versionId, payload) =>
+    apiPost(`/api/content/admin/industry-packs/${versionId}/regression`, payload),
+  listWorkflowTemplates: () => apiGet('/api/content/admin/workflow-templates'),
+  publishWorkflowVersion: (versionId, payload = {}) =>
+    apiPost(`/api/content/admin/workflows/${versionId}/publish`, payload),
+  rollbackWorkflowVersion: (versionId, payload = {}) =>
+    apiPost(`/api/content/admin/workflows/${versionId}/rollback`, payload)
 }

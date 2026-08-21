@@ -462,9 +462,12 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS agents ADD COLUMN IF NOT EXISTS backend_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS agents ADD COLUMN IF NOT EXISTS share_config JSONB NOT NULL DEFAULT '{}'::jsonb",
             "ALTER TABLE IF EXISTS agents ADD COLUMN IF NOT EXISTS is_subagent BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE IF EXISTS agents ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE IF EXISTS agents ADD COLUMN IF NOT EXISTS config_version INTEGER NOT NULL DEFAULT 1",
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_agents_slug ON agents(slug)",
             "CREATE INDEX IF NOT EXISTS ix_agents_backend_id ON agents(backend_id)",
             "CREATE INDEX IF NOT EXISTS ix_agents_is_subagent ON agents(is_subagent)",
+            "CREATE INDEX IF NOT EXISTS ix_agents_enabled ON agents(enabled)",
             "CREATE INDEX IF NOT EXISTS ix_agents_created_by ON agents(created_by)",
             """
             CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_default
@@ -527,43 +530,307 @@ class PostgresManager(metaclass=SingletonMeta):
 
         self._check_initialized()
         stmts = [
-            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS content_type_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
-            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS industry_scope JSONB NOT NULL DEFAULT '[]'::jsonb",
-            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS channel_scope JSONB NOT NULL DEFAULT '[]'::jsonb",
-            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS narrative_axis_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
-            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS title_pattern_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
-            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS body_pattern_codes JSONB NOT NULL DEFAULT '[]'::jsonb",
-            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS required_evidence_types JSONB NOT NULL DEFAULT '[]'::jsonb",
-            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS hard_conditions JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS score_weights JSONB NOT NULL DEFAULT '{}'::jsonb",
+            """
+            ALTER TABLE IF EXISTS content_combination_rules
+            ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 2
+            """,
+            "ALTER TABLE IF EXISTS content_combination_rules ALTER COLUMN content_goal DROP NOT NULL",
+            "ALTER TABLE IF EXISTS content_combination_rules ALTER COLUMN content_formula_code DROP NOT NULL",
+            """
+            ALTER TABLE IF EXISTS content_combination_rules
+            ADD COLUMN IF NOT EXISTS combination_type VARCHAR(32)
+            """,
+            """
+            ALTER TABLE IF EXISTS content_combination_rules
+            ADD COLUMN IF NOT EXISTS method_members JSONB NOT NULL DEFAULT '[]'::jsonb
+            """,
+            """
+            ALTER TABLE IF EXISTS content_combination_rules
+            ADD COLUMN IF NOT EXISTS content_goal_codes JSONB NOT NULL DEFAULT '[]'::jsonb
+            """,
+            """
+            ALTER TABLE IF EXISTS content_combination_rules
+            ADD COLUMN IF NOT EXISTS scenario_description TEXT NOT NULL DEFAULT ''
+            """,
+            """
+            ALTER TABLE IF EXISTS content_combination_rules
+            ADD COLUMN IF NOT EXISTS required_variable_codes JSONB NOT NULL DEFAULT '[]'::jsonb
+            """,
+            """
+            ALTER TABLE IF EXISTS content_combination_rules
+            ADD COLUMN IF NOT EXISTS source_metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+            """,
+            """
+            ALTER TABLE IF EXISTS content_combination_rules
+            ADD COLUMN IF NOT EXISTS title_formula_candidate_codes JSONB NOT NULL DEFAULT '[]'::jsonb
+            """,
+            """
+            ALTER TABLE IF EXISTS content_combination_rules
+            ADD COLUMN IF NOT EXISTS body_formula_candidate_codes JSONB NOT NULL DEFAULT '[]'::jsonb
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_content_combination_rules_schema_version
+            ON content_combination_rules(schema_version)
+            """,
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_content_combination_rule_schema_version'
+                ) THEN
+                    ALTER TABLE content_combination_rules
+                    ADD CONSTRAINT ck_content_combination_rule_schema_version
+                    CHECK (schema_version IN (2, 3));
+                END IF;
+            END $$
+            """,
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_content_combination_rule_v2_required_fields'
+                ) THEN
+                    ALTER TABLE content_combination_rules
+                    ADD CONSTRAINT ck_content_combination_rule_v2_required_fields
+                    CHECK (
+                        schema_version <> 2
+                        OR (content_goal IS NOT NULL AND content_formula_code IS NOT NULL)
+                    );
+                END IF;
+            END $$
+            """,
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_content_combination_rule_v3_required_fields'
+                ) THEN
+                    ALTER TABLE content_combination_rules
+                    ADD CONSTRAINT ck_content_combination_rule_v3_required_fields
+                    CHECK (
+                        schema_version <> 3
+                        OR (
+                            combination_type IN ('single', 'double', 'triple', 'quadruple')
+                            AND jsonb_array_length(method_members) > 0
+                            AND jsonb_array_length(title_formula_candidate_codes) > 0
+                            AND jsonb_array_length(body_formula_candidate_codes) > 0
+                        )
+                    );
+                END IF;
+            END $$
+            """,
+            (
+                "ALTER TABLE IF EXISTS content_combination_rules "
+                "ADD COLUMN IF NOT EXISTS content_type_codes JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_combination_rules "
+                "ADD COLUMN IF NOT EXISTS industry_scope JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_combination_rules "
+                "ADD COLUMN IF NOT EXISTS channel_scope JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_combination_rules "
+                "ADD COLUMN IF NOT EXISTS narrative_axis_codes JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_combination_rules "
+                "ADD COLUMN IF NOT EXISTS title_pattern_codes JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_combination_rules "
+                "ADD COLUMN IF NOT EXISTS body_pattern_codes JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_combination_rules "
+                "ADD COLUMN IF NOT EXISTS required_evidence_types JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_combination_rules "
+                "ADD COLUMN IF NOT EXISTS hard_conditions JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_combination_rules "
+                "ADD COLUMN IF NOT EXISTS score_weights JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
             "ALTER TABLE IF EXISTS content_combination_rules ADD COLUMN IF NOT EXISTS fallback_rule_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS content_type_code VARCHAR(32)",
+            (
+                "ALTER TABLE IF EXISTS content_workflow_versions "
+                "ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 2"
+            ),
+            (
+                "UPDATE content_workflow_versions SET schema_version = 3 "
+                "WHERE version >= 3 AND schema_version = 2 "
+                "AND COALESCE(definition_json->>'schema_version', '') = '3'"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_workflow_versions_schema_version "
+                "ON content_workflow_versions(schema_version)"
+            ),
+            "ALTER TABLE IF EXISTS content_workflow_versions ADD COLUMN IF NOT EXISTS definition_hash VARCHAR(64)",
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_workflow_versions_definition_hash "
+                "ON content_workflow_versions(definition_hash)"
+            ),
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS workflow_definition_hash VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS active_evidence_bundle_id VARCHAR(64)",
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_tasks_active_evidence_bundle_id "
+                "ON content_tasks(active_evidence_bundle_id)"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_media_evidence_items "
+                "ADD COLUMN IF NOT EXISTS parser_version VARCHAR(128) NOT NULL DEFAULT 'unknown'"
+            ),
+            "ALTER TABLE IF EXISTS content_node_runs ADD COLUMN IF NOT EXISTS delegated_agent_run_id VARCHAR(64)",
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_content_node_runs_delegated_agent_run_id "
+                "ON content_node_runs(delegated_agent_run_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_content_node_runs_parent_node_attempt "
+                "ON content_node_runs(agent_run_id, node_id, attempt)"
+            ),
             "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS industry_pack_version_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS persona_profile_version_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS channel_profile_version_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS primary_narrative_axis VARCHAR(80)",
-            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS selected_angle_json JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS runtime_config_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+            (
+                "ALTER TABLE IF EXISTS content_tasks "
+                "ADD COLUMN IF NOT EXISTS selected_angle_json JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_tasks "
+                "ADD COLUMN IF NOT EXISTS runtime_config_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 2"
+            ),
+            ("UPDATE content_industry_pack_versions SET schema_version = 3 WHERE version >= 3 AND schema_version = 2"),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_global_industry_pack_version "
+                "ON content_industry_pack_versions(slug, version) WHERE tenant_id IS NULL"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS compliance_policy JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS visual_policy JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS golden_samples JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS negative_examples JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS minimum_coverage DOUBLE PRECISION NOT NULL DEFAULT 1.0"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS source_metadata JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS changelog TEXT NOT NULL DEFAULT ''"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS rollback_target_version_id VARCHAR(64)"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_industry_pack_versions "
+                "ADD COLUMN IF NOT EXISTS evaluation_report JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
             "CREATE INDEX IF NOT EXISTS ix_content_tasks_content_type_code ON content_tasks(content_type_code)",
-            "CREATE INDEX IF NOT EXISTS ix_content_tasks_industry_pack_version_id ON content_tasks(industry_pack_version_id)",
-            "CREATE INDEX IF NOT EXISTS ix_content_tasks_persona_profile_version_id ON content_tasks(persona_profile_version_id)",
-            "CREATE INDEX IF NOT EXISTS ix_content_tasks_channel_profile_version_id ON content_tasks(channel_profile_version_id)",
-            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS content_type_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS angle_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS pattern_slot_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS persona_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS channel_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS compliance_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS runtime_config_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS edit_diff_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS content_type_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS angle_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS pattern_slot_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS persona_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS channel_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS compliance_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS runtime_config_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS edit_diff_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb",
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_tasks_industry_pack_version_id "
+                "ON content_tasks(industry_pack_version_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_tasks_persona_profile_version_id "
+                "ON content_tasks(persona_profile_version_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_tasks_channel_profile_version_id "
+                "ON content_tasks(channel_profile_version_id)"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifacts "
+                "ADD COLUMN IF NOT EXISTS content_type_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifacts "
+                "ADD COLUMN IF NOT EXISTS angle_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifacts "
+                "ADD COLUMN IF NOT EXISTS pattern_slot_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifacts "
+                "ADD COLUMN IF NOT EXISTS persona_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifacts "
+                "ADD COLUMN IF NOT EXISTS channel_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifacts "
+                "ADD COLUMN IF NOT EXISTS compliance_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifacts "
+                "ADD COLUMN IF NOT EXISTS runtime_config_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifacts "
+                "ADD COLUMN IF NOT EXISTS edit_diff_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions "
+                "ADD COLUMN IF NOT EXISTS content_type_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions "
+                "ADD COLUMN IF NOT EXISTS angle_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions "
+                "ADD COLUMN IF NOT EXISTS pattern_slot_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions "
+                "ADD COLUMN IF NOT EXISTS persona_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions "
+                "ADD COLUMN IF NOT EXISTS channel_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions "
+                "ADD COLUMN IF NOT EXISTS compliance_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions "
+                "ADD COLUMN IF NOT EXISTS runtime_config_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions "
+                "ADD COLUMN IF NOT EXISTS edit_diff_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
         ]
         async with self.async_engine.begin() as conn:
             await conn.execute(

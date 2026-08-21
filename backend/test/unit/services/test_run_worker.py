@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import yuxi.content as content_module
 import yuxi.services.run_worker as run_worker
 
 
@@ -243,6 +244,9 @@ async def test_worker_startup_ensures_builtin_mcp_servers(monkeypatch: pytest.Mo
     async def fake_ensure_business_schema():
         calls.append("ensure_business_schema")
 
+    async def fake_ensure_content_schema():
+        calls.append("ensure_content_schema")
+
     async def fake_ensure_builtin_mcp_servers_in_db():
         calls.append("ensure_builtin_mcp_servers_in_db")
 
@@ -254,12 +258,18 @@ async def test_worker_startup_ensures_builtin_mcp_servers(monkeypatch: pytest.Mo
         del session
         calls.append("init_builtin_skills")
 
+    async def fake_ensure_content_seed_data(session):
+        del session
+        calls.append("ensure_content_seed_data")
+
     monkeypatch.setattr(run_worker.pg_manager, "initialize", fake_initialize)
     monkeypatch.setattr(run_worker.pg_manager, "create_business_tables", fake_create_business_tables)
     monkeypatch.setattr(run_worker.pg_manager, "ensure_business_schema", fake_ensure_business_schema)
+    monkeypatch.setattr(run_worker.pg_manager, "ensure_content_schema", fake_ensure_content_schema)
     monkeypatch.setattr(run_worker.pg_manager, "get_async_session_context", fake_session_ctx)
     monkeypatch.setattr(run_worker, "ensure_builtin_mcp_servers_in_db", fake_ensure_builtin_mcp_servers_in_db)
     monkeypatch.setattr(run_worker, "init_builtin_skills", fake_init_builtin_skills)
+    monkeypatch.setattr(content_module, "ensure_content_seed_data", fake_ensure_content_seed_data)
 
     await run_worker._worker_startup({})
 
@@ -267,6 +277,8 @@ async def test_worker_startup_ensures_builtin_mcp_servers(monkeypatch: pytest.Mo
         "initialize",
         "create_business_tables",
         "ensure_business_schema",
+        "ensure_content_schema",
         "ensure_builtin_mcp_servers_in_db",
         "init_builtin_skills",
+        "ensure_content_seed_data",
     ]

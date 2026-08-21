@@ -214,6 +214,36 @@ async def append_run_stream_event(run_id: str, event_type: str, payload: dict, *
     return str(event_id)
 
 
+async def append_content_runtime_event(context, event_type: str, payload: dict | None = None) -> None:
+    """将内容子 Agent 事件同时写入子 Run 与父内容 Run，便于单时间线审计。"""
+
+    child_run_id = str(getattr(context, "run_id", "") or "").strip()
+    parent_run_id = str(getattr(context, "_content_parent_run_id", "") or "").strip()
+    if not child_run_id:
+        return
+    common = {
+        "task_id": getattr(context, "_content_task_id", None),
+        "parent_run_id": parent_run_id or None,
+        "node_id": getattr(context, "_content_node_id", None),
+        "attempt": getattr(context, "_content_node_attempt", None),
+        "delegated_agent_run_id": getattr(context, "_content_delegated_agent_run_id", None),
+        **(payload or {}),
+    }
+    await append_run_stream_event(
+        child_run_id,
+        event_type,
+        common,
+        thread_id=str(getattr(context, "thread_id", "") or "") or None,
+    )
+    if parent_run_id and parent_run_id != child_run_id:
+        await append_run_stream_event(
+            parent_run_id,
+            event_type,
+            common,
+            thread_id=str(getattr(context, "_content_parent_thread_id", "") or "") or None,
+        )
+
+
 async def list_run_stream_events(
     run_id: str,
     *,

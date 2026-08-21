@@ -13,6 +13,8 @@ from yuxi.agents.context import (
     prepare_agent_runtime_context,
 )
 from yuxi.agents.middlewares import (
+    ContentNodeResultMiddleware,
+    ContentTokenBudgetExceeded,
     TokenUsageMiddleware,
     create_summary_middleware,
     save_attachments_to_fs,
@@ -29,6 +31,19 @@ from .state import ChatBotState
 
 async def _build_middlewares(context):
     """构建中间件列表"""
+    if getattr(context, "_content_node_result_collector", None) is not None:
+        return [
+            KnowledgeBaseMiddleware(),
+            SkillsMiddleware(),
+            ContentNodeResultMiddleware(),
+            ModelRetryMiddleware(
+                max_retries=getattr(context, "model_retry_times", 2),
+                retry_on=lambda exc: not isinstance(exc, ContentTokenBudgetExceeded),
+                on_failure="error",
+            ),
+            TokenUsageMiddleware(),
+        ]
+
     # summary middleware
     # 主 Agent 上下文优化：默认 100k tokens 触发压缩，压缩后保留最近 10 条消息
     summary_trigger_tokens = getattr(context, "summary_threshold", DEFAULT_SUMMARY_THRESHOLD_K) * 1024
@@ -91,12 +106,20 @@ class ChatbotAgent(BaseAgent):
 
         # 使用 create_agent 创建智能体
         model_spec = resolve_chat_model_spec(context.model)
+        tools = await resolve_configured_runtime_tools(context)
+        result_collector = getattr(context, "_content_node_result_collector", None)
+        if result_collector is not None:
+            from yuxi.content.model.contracts import build_content_result_tool
+
+            tools = [tool for tool in tools if tool.name != "submit_content_node_result"]
+            tools.append(build_content_result_tool(result_collector))
         graph = create_agent(
             model=load_chat_model(fully_specified_name=model_spec),
-            tools=await resolve_configured_runtime_tools(context),
+            tools=tools,
             system_prompt=build_prompt_with_context(context),
             middleware=await _build_middlewares(context),
             state_schema=ChatBotState,
+            context_schema=self.context_schema,
             checkpointer=await self._get_checkpointer(),
         )
 

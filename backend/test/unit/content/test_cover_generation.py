@@ -638,6 +638,40 @@ async def test_image2_allows_admin_configured_relay_origin_for_result_download()
 
 
 @pytest.mark.asyncio
+async def test_image2_allows_admin_configured_output_origin_with_proxy_dns():
+    seen_headers = {}
+
+    async def proxy_resolver(host: str, port: int) -> list[str]:
+        assert (host, port) == ("s3.siliconflow.cn", 443)
+        return ["198.18.0.39"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.update(request.headers)
+        return httpx.Response(
+            200,
+            content=_image("#223344"),
+            headers={"content-type": "application/octet-stream"},
+        )
+
+    client = Image2Client(
+        Image2Config(
+            base_url="https://api.siliconflow.cn/v1",
+            api_key="test-key",
+            model="Qwen/Qwen-Image",
+            trusted_output_origins=("https://s3.siliconflow.cn",),
+        ),
+        transport=httpx.MockTransport(handler),
+        resolver=proxy_resolver,
+    )
+    async with client:
+        data, content_type = await client.read_output(Image2Output(url="https://s3.siliconflow.cn/outputs/result.png"))
+
+    assert data.startswith(b"\x89PNG")
+    assert content_type == "application/octet-stream"
+    assert seen_headers["authorization"] == "Bearer test-key"
+
+
+@pytest.mark.asyncio
 async def test_image2_rejects_hostname_that_resolves_to_private_network():
     async def private_resolver(host: str, port: int) -> list[str]:
         assert (host, port) == ("cdn.example.com", 443)

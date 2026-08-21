@@ -10,7 +10,7 @@ const props = defineProps({
   methodOptions: { type: Array, default: () => [] },
   titleOptions: { type: Array, default: () => [] },
   contentOptions: { type: Array, default: () => [] },
-  goalOptions: { type: Array, default: () => [] }
+  contentTypeOptions: { type: Array, default: () => [] }
 })
 
 const emit = defineEmits(['close', 'save'])
@@ -47,10 +47,40 @@ const defaults = () => {
     }
   }
   return {
-    content_goal: '', methods: [], title_formula_codes: [], content_formula_code: '',
-    compatibility: 'compatible', priority: 100, conditions: {}, recommendation_reason: ''
+    schema_version: 3,
+    content_goal_codes: [],
+    content_type_codes: [],
+    industry_scope: [],
+    channel_scope: [],
+    narrative_axis_codes: [],
+    combination_type: 'single',
+    method_members: [],
+    title_formula_candidate_codes: [],
+    body_formula_candidate_codes: [],
+    scenario_description: '',
+    required_variable_codes: [],
+    required_evidence_types: [],
+    priority: 100,
+    conditions: {},
+    hard_conditions: {},
+    score_weights: {},
+    fallback_rule_id: null,
+    source_metadata: {},
+    recommendation_reason: ''
   }
 }
+
+const combinationMethodCodes = computed({
+  get: () => (form.method_members || []).map((item) => item.method_code),
+  set: (codes) => {
+    form.method_members = codes.map((methodCode, index) => ({
+      method_code: methodCode,
+      role: index === 0 ? 'primary' : 'supporting',
+      order: index + 1
+    }))
+    form.combination_type = ['single', 'double', 'triple', 'quadruple'][codes.length - 1] || 'single'
+  }
+})
 
 watch(
   () => [props.open, props.type, props.item],
@@ -65,10 +95,11 @@ watch(
 const rules = computed(() => {
   if (props.type === 'combination_rules') {
     return {
-      content_goal: [{ required: true, message: '请选择内容目标' }],
-      methods: [{ required: true, type: 'array', min: 1, message: '至少选择一个创作手法' }],
-      title_formula_codes: [{ required: true, type: 'array', min: 1, message: '至少选择一个标题公式' }],
-      content_formula_code: [{ required: true, message: '请选择正文公式' }]
+      content_type_codes: [{ required: true, type: 'array', min: 1, message: '至少选择一个内容方向' }],
+      method_members: [{ required: true, type: 'array', min: 1, max: 4, message: '请选择 1～4 个创作手法' }],
+      title_formula_candidate_codes: [{ required: true, type: 'array', min: 1, message: '至少选择一个标题公式' }],
+      body_formula_candidate_codes: [{ required: true, type: 'array', min: 1, message: '至少选择一个正文公式' }],
+      scenario_description: [{ required: true, message: '请填写本组适用场景' }]
     }
   }
   const result = {
@@ -231,32 +262,36 @@ const submit = async () => {
       </template>
 
       <template v-else>
-        <a-form-item label="内容目标" name="content_goal">
-          <a-select v-model:value="form.content_goal" placeholder="选择内容目标">
-            <a-select-option v-for="item in goalOptions" :key="item.code" :value="item.code">{{ item.name }}</a-select-option>
+        <a-alert class="drawer-alert" type="info" show-icon message="V3 组合组" description="内容方向 → 手法组合 → 候选公式池；生产时最终只锁定一个标题公式和一个正文公式。" />
+        <a-form-item label="内容方向" name="content_type_codes">
+          <a-select v-model:value="form.content_type_codes" mode="multiple" placeholder="选择 CT01～CT07 内容方向">
+            <a-select-option v-for="item in contentTypeOptions" :key="item.code" :value="item.code">{{ item.code }} · {{ item.name }}</a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item label="创作手法" name="methods">
-          <a-select v-model:value="form.methods" mode="multiple" placeholder="可组合多个核心手法">
+        <a-form-item label="创作手法（按选择顺序）" name="method_members">
+          <a-select v-model:value="combinationMethodCodes" mode="multiple" :max-count="4" placeholder="选择 1～4 个手法">
             <a-select-option v-for="item in methodOptions" :key="item.code" :value="item.code">{{ item.code }} · {{ item.name }}</a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item label="标题候选" name="title_formula_codes">
-          <a-select v-model:value="form.title_formula_codes" mode="multiple" placeholder="选择可推荐的标题公式">
+        <a-form-item label="组合类型">
+          <a-input :value="form.combination_type" disabled />
+        </a-form-item>
+        <a-form-item label="标题公式候选池" name="title_formula_candidate_codes">
+          <a-select v-model:value="form.title_formula_candidate_codes" mode="multiple" placeholder="选择本组可用的标题公式">
             <a-select-option v-for="item in titleOptions" :key="item.code" :value="item.code">{{ item.code }} · {{ item.name }}</a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item label="正文公式" name="content_formula_code">
-          <a-select v-model:value="form.content_formula_code" placeholder="选择正文承接结构">
+        <a-form-item label="正文公式候选池" name="body_formula_candidate_codes">
+          <a-select v-model:value="form.body_formula_candidate_codes" mode="multiple" placeholder="选择本组可用的正文公式">
             <a-select-option v-for="item in contentOptions" :key="item.code" :value="item.code">{{ item.code }} · {{ item.name }}</a-select-option>
           </a-select>
         </a-form-item>
+        <a-form-item label="适用场景" name="scenario_description">
+          <a-textarea v-model:value="form.scenario_description" :rows="3" placeholder="说明该内容方向与手法组合的适用场景" />
+        </a-form-item>
         <div class="field-row">
-          <a-form-item label="兼容级别">
-            <a-select v-model:value="form.compatibility">
-              <a-select-option value="compatible">推荐</a-select-option>
-              <a-select-option value="warning">谨慎使用</a-select-option>
-            </a-select>
+          <a-form-item label="行业范围">
+            <a-select v-model:value="form.industry_scope" mode="tags" placeholder="例如 decoration" />
           </a-form-item>
           <a-form-item label="推荐优先级">
             <a-input-number v-model:value="form.priority" :min="0" :max="10000" style="width: 100%" />
