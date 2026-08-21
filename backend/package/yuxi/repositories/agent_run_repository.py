@@ -36,6 +36,49 @@ class AgentRunRepository:
         result = await self.db.execute(select(AgentRun).where(and_(AgentRun.id == run_id, AgentRun.uid == str(uid))))
         return result.scalar_one_or_none()
 
+    async def list_content_run_family(self, run: AgentRun) -> tuple[AgentRun, list[AgentRun], list[AgentRun]]:
+        root = run
+        visited: set[str] = set()
+        while root.parent_run_id and root.id not in visited:
+            visited.add(root.id)
+            parent = await self.get_run(root.parent_run_id)
+            if parent is None:
+                break
+            root = parent
+
+        content_runs = [root]
+        known_ids = {root.id}
+        while True:
+            children = list(
+                (
+                    await self.db.execute(
+                        select(AgentRun).where(
+                            AgentRun.parent_run_id.in_(known_ids),
+                            AgentRun.run_type.in_(("content", "content_resume")),
+                        )
+                    )
+                ).scalars()
+            )
+            additions = [item for item in children if item.id not in known_ids]
+            if not additions:
+                break
+            content_runs.extend(additions)
+            known_ids.update(item.id for item in additions)
+        content_runs.sort(key=lambda item: item.created_at)
+        delegated = list(
+            (
+                await self.db.execute(
+                    select(AgentRun)
+                    .where(
+                        AgentRun.parent_agent_run_id.in_(known_ids),
+                        AgentRun.run_type == "content_node_agent",
+                    )
+                    .order_by(AgentRun.created_at)
+                )
+            ).scalars()
+        )
+        return root, content_runs, delegated
+
     async def get_latest_subagent_run_by_thread_for_user(self, thread_id: str, uid: str) -> AgentRun | None:
         result = await self.db.execute(
             select(AgentRun)

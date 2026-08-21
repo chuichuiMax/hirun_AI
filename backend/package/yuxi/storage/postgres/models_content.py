@@ -2,7 +2,21 @@
 
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from yuxi.storage.postgres.models_business import Base
 from yuxi.utils.datetime_utils import format_utc_datetime, utc_now_naive
 
@@ -96,7 +110,8 @@ class ContentCombinationRule(Base):
     version_id = Column(
         String(64), ForeignKey("content_rule_versions.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    content_goal = Column(String(64), nullable=False, index=True)
+    schema_version = Column(Integer, nullable=False, default=2, index=True)
+    content_goal = Column(String(64), nullable=True, index=True)
     content_type_codes = Column(JSON, nullable=False, default=list)
     industry_scope = Column(JSON, nullable=False, default=list)
     channel_scope = Column(JSON, nullable=False, default=list)
@@ -104,7 +119,7 @@ class ContentCombinationRule(Base):
     methods = Column(JSON, nullable=False, default=list)
     title_formula_codes = Column(JSON, nullable=False, default=list)
     title_pattern_codes = Column(JSON, nullable=False, default=list)
-    content_formula_code = Column(String(32), nullable=False)
+    content_formula_code = Column(String(32), nullable=True)
     body_pattern_codes = Column(JSON, nullable=False, default=list)
     required_evidence_types = Column(JSON, nullable=False, default=list)
     compatibility = Column(String(32), nullable=False, default="compatible")
@@ -114,6 +129,22 @@ class ContentCombinationRule(Base):
     score_weights = Column(JSON, nullable=False, default=dict)
     fallback_rule_id = Column(String(64), nullable=True)
     recommendation_reason = Column(Text, nullable=False, default="")
+    combination_type = Column(String(32), nullable=True)
+    method_members = Column(JSON, nullable=False, default=list)
+    content_goal_codes = Column(JSON, nullable=False, default=list)
+    scenario_description = Column(Text, nullable=False, default="")
+    required_variable_codes = Column(JSON, nullable=False, default=list)
+    source_metadata = Column(JSON, nullable=False, default=dict)
+    title_formula_candidate_codes = Column(JSON, nullable=False, default=list)
+    body_formula_candidate_codes = Column(JSON, nullable=False, default=list)
+
+    __table_args__ = (
+        CheckConstraint("schema_version IN (2, 3)", name="ck_content_combination_rule_schema_version"),
+        CheckConstraint(
+            "schema_version <> 2 OR (content_goal IS NOT NULL AND content_formula_code IS NOT NULL)",
+            name="ck_content_combination_rule_v2_required_fields",
+        ),
+    )
 
 
 class ContentWorkflowVersion(Base):
@@ -123,10 +154,12 @@ class ContentWorkflowVersion(Base):
     slug = Column(String(80), nullable=False, index=True)
     tenant_id = Column(String(64), nullable=True, index=True)
     version = Column(Integer, nullable=False)
+    schema_version = Column(Integer, nullable=False, default=2)
     status = Column(String(32), nullable=False, default="draft", index=True)
     definition_json = Column(JSON, nullable=False, default=dict)
     input_schema = Column(JSON, nullable=False, default=dict)
     output_schema = Column(JSON, nullable=False, default=dict)
+    definition_hash = Column(String(64), nullable=True, index=True)
     created_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=utc_now_naive)
     published_at = Column(DateTime, nullable=True)
@@ -245,7 +278,9 @@ class LexiconPack(Base):
     created_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=utc_now_naive)
 
-    __table_args__ = (UniqueConstraint("tenant_id", "scope_type", "scope_id", "code", name="uq_lexicon_pack_scope_code"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "scope_type", "scope_id", "code", name="uq_lexicon_pack_scope_code"),
+    )
 
 
 class LexiconVersion(Base):
@@ -312,6 +347,7 @@ class IndustryContentPackVersion(Base):
     slug = Column(String(80), nullable=False, index=True)
     tenant_id = Column(String(64), nullable=True, index=True)
     version = Column(Integer, nullable=False)
+    schema_version = Column(Integer, nullable=False, default=2, index=True)
     status = Column(String(32), nullable=False, default="draft", index=True)
     name = Column(String(160), nullable=False)
     description = Column(Text, nullable=False, default="")
@@ -324,11 +360,29 @@ class IndustryContentPackVersion(Base):
     knowledge_scope = Column(JSON, nullable=False, default=list)
     evidence_policy = Column(JSON, nullable=False, default=dict)
     review_policy = Column(JSON, nullable=False, default=dict)
+    compliance_policy = Column(JSON, nullable=False, default=dict)
+    visual_policy = Column(JSON, nullable=False, default=dict)
+    golden_samples = Column(JSON, nullable=False, default=list)
+    negative_examples = Column(JSON, nullable=False, default=list)
+    minimum_coverage = Column(Float, nullable=False, default=1.0)
+    source_metadata = Column(JSON, nullable=False, default=dict)
+    changelog = Column(Text, nullable=False, default="")
+    rollback_target_version_id = Column(String(64), nullable=True)
+    evaluation_report = Column(JSON, nullable=False, default=dict)
     created_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=utc_now_naive)
     published_at = Column(DateTime, nullable=True)
 
-    __table_args__ = (UniqueConstraint("tenant_id", "slug", "version", name="uq_content_industry_pack_version"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "slug", "version", name="uq_content_industry_pack_version"),
+        Index(
+            "uq_content_global_industry_pack_version",
+            "slug",
+            "version",
+            unique=True,
+            postgresql_where=text("tenant_id IS NULL"),
+        ),
+    )
 
 
 class IndustryVariableMapping(Base):
@@ -344,7 +398,9 @@ class IndustryVariableMapping(Base):
     transform_config = Column(JSON, nullable=False, default=dict)
     required_by_content_types = Column(JSON, nullable=False, default=list)
 
-    __table_args__ = (UniqueConstraint("industry_pack_version_id", "field_key", name="uq_industry_variable_mapping_field"),)
+    __table_args__ = (
+        UniqueConstraint("industry_pack_version_id", "field_key", name="uq_industry_variable_mapping_field"),
+    )
 
 
 class PersonaProfile(Base):
@@ -474,10 +530,11 @@ class ContentTask(Base):
     workflow_version_id = Column(
         String(64), ForeignKey("content_workflow_versions.id", ondelete="RESTRICT"), nullable=False
     )
+    workflow_definition_hash = Column(String(64), nullable=True)
     rule_version_id = Column(String(64), ForeignKey("content_rule_versions.id", ondelete="RESTRICT"), nullable=False)
     mode = Column(String(32), nullable=False, default="quick")
     content_goal = Column(String(64), nullable=False, default="acquire")
-    # v1 历史任务允许为空；ContentService 对所有 v2 新任务强制写入唯一内容类型。
+    # 历史任务允许为空；ContentService 对所有 V3 新任务强制写入唯一内容类型。
     content_type_code = Column(String(32), nullable=True, index=True)
     industry_pack_version_id = Column(
         String(64), ForeignKey("content_industry_pack_versions.id", ondelete="RESTRICT"), nullable=True, index=True
@@ -496,6 +553,7 @@ class ContentTask(Base):
     brief_json = Column(JSON, nullable=False, default=dict)
     strategy_json = Column(JSON, nullable=False, default=dict)
     evidence_json = Column(JSON, nullable=False, default=dict)
+    active_evidence_bundle_id = Column(String(64), nullable=True, index=True)
     title_candidates_json = Column(JSON, nullable=False, default=list)
     selected_title_json = Column(JSON, nullable=True)
     review_json = Column(JSON, nullable=False, default=dict)
@@ -520,6 +578,7 @@ class ContentTask(Base):
             "name": self.name,
             "industry_template_version_id": self.industry_template_version_id,
             "workflow_version_id": self.workflow_version_id,
+            "workflow_definition_hash": self.workflow_definition_hash,
             "rule_version_id": self.rule_version_id,
             "mode": self.mode,
             "content_goal": self.content_goal,
@@ -535,6 +594,7 @@ class ContentTask(Base):
             "brief": self.brief_json or {},
             "strategy": self.strategy_json or {},
             "evidence_bundle": self.evidence_json or {},
+            "active_evidence_bundle_id": self.active_evidence_bundle_id,
             "title_candidates": self.title_candidates_json or [],
             "selected_title": self.selected_title_json,
             "review": self.review_json or {},
@@ -615,6 +675,7 @@ class MediaEvidenceItem(Base):
     media_type = Column(String(32), nullable=False)
     original_filename = Column(String(512), nullable=True)
     extracted_text = Column(Text, nullable=False, default="")
+    parser_version = Column(String(128), nullable=False, default="unknown")
     metadata_json = Column(JSON, nullable=False, default=dict)
     source_hash = Column(String(128), nullable=False, index=True)
     verified_status = Column(String(32), nullable=False, default="pending", index=True)
@@ -628,6 +689,62 @@ class MediaEvidenceItem(Base):
     __table_args__ = (UniqueConstraint("task_id", "attachment_id", name="uq_media_evidence_task_attachment"),)
 
 
+class ContentEvidenceItem(Base):
+    """V3 不可变事实证据；词库值不得进入本表。"""
+
+    __tablename__ = "content_evidence_items"
+
+    id = Column(String(64), primary_key=True)
+    task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    variable_codes = Column(JSON, nullable=False, default=list)
+    value_json = Column(JSON, nullable=False)
+    source_type = Column(String(32), nullable=False, index=True)
+    source_id = Column(String(255), nullable=False, index=True)
+    source_version = Column(String(128), nullable=False)
+    verified_status = Column(String(32), nullable=False, index=True)
+    allowed_usage = Column(JSON, nullable=False, default=list)
+    risk_level = Column(String(32), nullable=False, default="normal", index=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    source_hash = Column(String(128), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "source_type IN ('manual_input', 'business_record', 'media', 'knowledge_base', 'human_confirmation')",
+            name="ck_content_evidence_source_type",
+        ),
+        CheckConstraint(
+            "verified_status IN ('retrieved', 'confirmed', 'user_confirmed', 'rejected')",
+            name="ck_content_evidence_verified_status",
+        ),
+    )
+
+
+class ContentEvidenceBundleVersion(Base):
+    """不可变 EvidenceBundle 版本。"""
+
+    __tablename__ = "content_evidence_bundle_versions"
+
+    id = Column(String(64), primary_key=True)
+    task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False, default="frozen", index=True)
+    evidence_ids = Column(JSON, nullable=False, default=list)
+    source_counts = Column(JSON, nullable=False, default=dict)
+    citations = Column(JSON, nullable=False, default=list)
+    bundle_hash = Column(String(64), nullable=False, unique=True, index=True)
+    supersedes_id = Column(
+        String(64), ForeignKey("content_evidence_bundle_versions.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    frozen_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("task_id", "version", name="uq_content_evidence_bundle_task_version"),
+        CheckConstraint("status = 'frozen'", name="ck_content_evidence_bundle_frozen"),
+    )
+
+
 class ContentNodeRun(Base):
     __tablename__ = "content_node_runs"
 
@@ -638,6 +755,9 @@ class ContentNodeRun(Base):
     node_type = Column(String(64), nullable=False)
     status = Column(String(32), nullable=False, default="pending", index=True)
     attempt = Column(Integer, nullable=False, default=1)
+    delegated_agent_run_id = Column(
+        String(64), ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, unique=True, index=True
+    )
     input_snapshot = Column(JSON, nullable=False, default=dict)
     output_snapshot = Column(JSON, nullable=False, default=dict)
     error_type = Column(String(80), nullable=True)
@@ -645,7 +765,109 @@ class ContentNodeRun(Base):
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
 
-    __table_args__ = (Index("idx_content_node_runs_task_node", "task_id", "node_id", "attempt"),)
+    __table_args__ = (
+        Index("idx_content_node_runs_task_node", "task_id", "node_id", "attempt"),
+        Index("idx_content_node_runs_parent_node_attempt", "agent_run_id", "node_id", "attempt"),
+    )
+
+
+class ContentMatchDecisionSnapshot(Base):
+    """一次 V3 组合组匹配的不可变决策证据。"""
+
+    __tablename__ = "content_match_decision_snapshots"
+
+    id = Column(String(64), primary_key=True)
+    task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    content_run_id = Column(String(64), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    node_run_id = Column(String(64), ForeignKey("content_node_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    rule_version_id = Column(
+        String(64), ForeignKey("content_rule_versions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    industry_pack_version_id = Column(
+        String(64), ForeignKey("content_industry_pack_versions.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    channel_profile_version_id = Column(
+        String(64), ForeignKey("content_channel_profile_versions.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    content_direction = Column(String(32), nullable=False, index=True)
+    eligible_group_ids = Column(JSON, nullable=False, default=list)
+    rejected_groups = Column(JSON, nullable=False, default=list)
+    score_details = Column(JSON, nullable=False, default=dict)
+    selected_group_id = Column(
+        String(64), ForeignKey("content_combination_rules.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    selection_mode = Column(String(32), nullable=False, default="deterministic")
+    selected_by = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="active", index=True)
+    supersedes_id = Column(
+        String(64), ForeignKey("content_match_decision_snapshots.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'superseded')", name="ck_content_match_snapshot_status"),
+        Index(
+            "uq_content_match_snapshot_active_run",
+            "content_run_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+
+class ContentFormulaSelectionSnapshot(Base):
+    """一次 V3 标题/正文公式选择的不可变决策证据。"""
+
+    __tablename__ = "content_formula_selection_snapshots"
+
+    id = Column(String(64), primary_key=True)
+    task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    content_run_id = Column(String(64), ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    node_run_id = Column(String(64), ForeignKey("content_node_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    match_snapshot_id = Column(
+        String(64),
+        ForeignKey("content_match_decision_snapshots.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    combination_group_id = Column(
+        String(64), ForeignKey("content_combination_rules.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    eligible_title_formula_codes = Column(JSON, nullable=False, default=list)
+    eligible_body_formula_codes = Column(JSON, nullable=False, default=list)
+    title_score_details = Column(JSON, nullable=False, default=dict)
+    body_score_details = Column(JSON, nullable=False, default=dict)
+    selected_title_formula_code = Column(String(32), nullable=True)
+    selected_body_formula_code = Column(String(32), nullable=True)
+    title_selection_reason = Column(Text, nullable=True)
+    body_selection_reason = Column(Text, nullable=True)
+    selection_mode = Column(String(32), nullable=False, default="deterministic")
+    selected_by = Column(String(64), nullable=False)
+    delegated_agent_run_id = Column(
+        String(64), ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    rule_version_id = Column(
+        String(64), ForeignKey("content_rule_versions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    evidence_bundle_hash = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="active", index=True)
+    supersedes_id = Column(
+        String(64),
+        ForeignKey("content_formula_selection_snapshots.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'superseded')", name="ck_content_formula_snapshot_status"),
+        Index(
+            "uq_content_formula_snapshot_active_run",
+            "content_run_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
 
 
 class ContentArtifact(Base):

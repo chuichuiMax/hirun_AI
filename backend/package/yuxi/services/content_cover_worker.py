@@ -20,7 +20,12 @@ from yuxi.content_cover.renderer import (
 from yuxi.content_cover.schemas import Image2Input, Image2Request, Image2Submission
 from yuxi.content_cover.templates import COVER_SIZES
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
-from yuxi.services.run_queue_service import append_run_stream_event, clear_cancel_signal, has_cancel_signal
+from yuxi.services.run_queue_service import (
+    append_run_stream_event,
+    clear_cancel_signal,
+    get_arq_pool,
+    has_cancel_signal,
+)
 from yuxi.storage.minio.client import StorageError, get_minio_client
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_content import ContentCoverAsset, ContentCoverJob
@@ -42,6 +47,18 @@ class CoverJobCancelled(Exception):
 
 async def _emit(job_id: str, event_type: str, payload: dict[str, Any]) -> None:
     await append_run_stream_event(job_id, event_type, payload)
+
+
+async def _notify_content_workflow(job_id: str) -> None:
+    try:
+        queue = await get_arq_pool()
+        await queue.enqueue_job(
+            "resume_content_run_from_cover",
+            job_id,
+            _job_id=f"content-cover-resume:{job_id}",
+        )
+    except Exception:
+        logger.warning("Failed to enqueue content workflow cover resume: %s", job_id, exc_info=True)
 
 
 async def _set_job(job_id: str, **values: Any) -> ContentCoverJob | None:
@@ -423,6 +440,7 @@ async def process_content_cover_job(ctx: dict, job_id: str) -> None:
     if cancelled_before_start:
         await _emit(job_id, "end", {"status": "cancelled"})
         await clear_cancel_signal(job_id)
+        await _notify_content_workflow(job_id)
         return
 
     await _emit(job_id, "metadata", {"job_id": job_id, "mode": job.mode})
@@ -482,3 +500,4 @@ async def process_content_cover_job(ctx: dict, job_id: str) -> None:
         await _emit(job_id, "end", {"status": "failed"})
     finally:
         await clear_cancel_signal(job_id)
+        await _notify_content_workflow(job_id)

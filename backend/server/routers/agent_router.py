@@ -49,6 +49,7 @@ class AgentUpdate(BaseModel):
     config_json: dict | None = None
     share_config: dict | None = None
     is_subagent: bool | None = None
+    enabled: bool | None = None
 
 
 class AgentRunCreate(BaseModel):
@@ -206,6 +207,7 @@ async def update_agent(
             else None,
             share_config=payload.share_config,
             is_subagent=payload.is_subagent,
+            enabled=payload.enabled,
             updated_by=str(current_user.uid),
             updater=current_user,
         )

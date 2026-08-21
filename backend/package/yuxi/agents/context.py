@@ -221,6 +221,27 @@ class BaseContext:
         },
     )
 
+    required_skills: list[str] = field(
+        default_factory=list,
+        metadata={
+            "name": "必需 Skills",
+            "configurable": False,
+            "hide": True,
+            "description": "由工作流节点约束并在推理前强制激活的 Skills。",
+        },
+    )
+
+    skill_tool_allowlist: list[str] = field(
+        default_factory=list,
+        metadata={
+            "name": "Skill 工具授权",
+            "description": "允许 Skill 依赖挂载的工具白名单。",
+            "type": "list",
+            "auth": "admin",
+            "hide": True,
+        },
+    )
+
     summary_threshold: int = field(
         default=DEFAULT_SUMMARY_THRESHOLD_K,
         metadata={
@@ -239,8 +260,7 @@ class BaseContext:
         metadata={
             "name": "摘要后保留消息数",
             "description": (
-                f"上下文摘要触发后，除摘要消息外保留最近的消息数量，默认 "
-                f"{DEFAULT_SUMMARY_KEEP_MESSAGES} 条。"
+                f"上下文摘要触发后，除摘要消息外保留最近的消息数量，默认 {DEFAULT_SUMMARY_KEEP_MESSAGES} 条。"
             ),
             "type": "number",
             "auth": "admin",
@@ -515,6 +535,10 @@ async def prepare_agent_runtime_context(
             setattr(context, "_readable_skills", [])
             setattr(context, "_runtime_skill_metadata", {})
             setattr(context, "_runtime_skill_dependency_map", {})
+            setattr(context, "_required_skill_closure", [])
+            setattr(context, "_required_skill_tools", [])
+            setattr(context, "_required_skill_mcps", [])
+            setattr(context, "_runtime_skill_snapshots", [])
             return context
 
         raw_resources = {
@@ -539,5 +563,9 @@ async def prepare_agent_runtime_context(
         setattr(context, "_readable_skills", skill_scope["readable_skills"])
         setattr(context, "_runtime_skill_metadata", skill_scope["runtime_skill_metadata"])
         setattr(context, "_runtime_skill_dependency_map", skill_scope["runtime_skill_dependency_map"])
+        setattr(context, "_required_skill_closure", skill_scope.get("required_skill_closure", []))
+        setattr(context, "_required_skill_tools", skill_scope.get("required_skill_tools", []))
+        setattr(context, "_required_skill_mcps", skill_scope.get("required_skill_mcps", []))
+        setattr(context, "_runtime_skill_snapshots", skill_scope.get("runtime_skill_snapshots", []))
 
     return context

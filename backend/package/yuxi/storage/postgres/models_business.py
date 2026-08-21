@@ -170,6 +170,8 @@ class Agent(Base):
     config_json = Column(JSON, nullable=False, default=dict)
     share_config = Column(JSON, nullable=False, default=dict)
 
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    config_version = Column(Integer, nullable=False, default=1)
     is_default = Column(Boolean, nullable=False, default=False, index=True)
     is_subagent = Column(Boolean, nullable=False, default=False, index=True)
 
@@ -192,6 +194,8 @@ class Agent(Base):
             "pics": self.pics or [],
             "config_json": self.config_json or {},
             "share_config": self.share_config or {},
+            "enabled": bool(self.enabled),
+            "config_version": int(self.config_version or 1),
             "is_default": bool(self.is_default),
             "is_subagent": bool(self.is_subagent),
             "created_by": self.created_by,

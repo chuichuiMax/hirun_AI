@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
   ArrowLeft,
+  Bot,
   CheckCircle2,
   CircleAlert,
   Clock3,
@@ -14,7 +15,8 @@ import {
   LoaderCircle,
   Send,
   ShieldCheck,
-  UserRoundCog
+  UserRoundCog,
+  Workflow
 } from 'lucide-vue-next'
 import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import XiaohongshuDistributionDrawer from '@/components/content/XiaohongshuDistributionDrawer.vue'
@@ -29,6 +31,7 @@ const task = ref(null)
 const template = ref(null)
 const artifact = ref(null)
 const versions = ref([])
+const runAudit = ref(null)
 const distributionOpen = ref(false)
 const coverUrl = ref('')
 
@@ -38,6 +41,13 @@ const reviewChecks = computed(() => review.value.checks || [])
 const evidenceItems = computed(() => artifact.value?.evidence_snapshot?.items || [])
 const strategy = computed(() => artifact.value?.strategy_snapshot || task.value?.strategy || {})
 const reviewStatus = computed(() => review.value.status || 'pending')
+const matchDecision = computed(() => runAudit.value?.match_decision || {})
+const formulaSelection = computed(() => runAudit.value?.formula_selection || {})
+const delegatedAgents = computed(() => runAudit.value?.delegated_agents || [])
+const auditSummary = computed(() => runAudit.value?.event_summary || {})
+const skillEvents = computed(() =>
+  (runAudit.value?.events || []).filter((item) => item.event_type === 'content.skill.activated')
+)
 const canDistribute = computed(
   () => artifact.value && ['passed', 'warning'].includes(reviewStatus.value)
 )
@@ -90,6 +100,9 @@ const loadResult = async () => {
     } else {
       versions.value = []
     }
+    runAudit.value = task.value?.latest_run_id
+      ? await contentApi.getRun(task.value.latest_run_id)
+      : null
     if (artifact.value?.cover_asset_id) {
       try {
         const coverResponse = await contentApi.getCoverAssetFile(artifact.value.cover_asset_id)
@@ -195,6 +208,43 @@ onBeforeUnmount(() => {
 
           <section class="detail-card">
             <div class="card-heading">
+              <Workflow :size="18" />
+              <h2>V3 运行审计</h2>
+              <span>{{ delegatedAgents.length }} 个 Agent 子运行</span>
+            </div>
+            <dl class="trace-grid audit-grid">
+              <dt>命中组合组</dt>
+              <dd>{{ matchDecision.selected_group_id || '-' }}</dd>
+              <dt>标题公式</dt>
+              <dd>{{ formulaSelection.selected_title_formula_code || '-' }}</dd>
+              <dt>正文公式</dt>
+              <dd>{{ formulaSelection.selected_body_formula_code || '-' }}</dd>
+              <dt>Skill 激活</dt>
+              <dd>{{ auditSummary.skill_activation_count ?? 0 }} 次</dd>
+              <dt>工具事件</dt>
+              <dd>{{ auditSummary.tool_event_count ?? 0 }} 条</dd>
+              <dt>知识库检索</dt>
+              <dd>{{ auditSummary.knowledge_retrieval_count ?? 0 }} 次 / {{ auditSummary.knowledge_result_count ?? 0 }} 条引用</dd>
+            </dl>
+            <div v-if="delegatedAgents.length" class="agent-trace-list">
+              <div v-for="item in delegatedAgents" :key="item.run_id" class="agent-trace-item">
+                <Bot :size="15" />
+                <div>
+                  <strong>{{ item.agent_slug }} · {{ item.node_id }}</strong>
+                  <span>{{ item.status }} · {{ item.runtime_config_snapshot?.model || '默认模型' }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty-detail">本次运行没有 Agent 子运行记录</div>
+            <div v-if="skillEvents.length" class="skill-trace-list">
+              <span v-for="(item, index) in skillEvents" :key="`${item.run_id}-${item.payload.skill_slug}-${index}`">
+                {{ item.payload.skill_slug }}@{{ item.payload.skill_version }}
+              </span>
+            </div>
+          </section>
+
+          <section class="detail-card">
+            <div class="card-heading">
               <Link2 :size="18" />
               <h2>来源追溯</h2>
               <span>{{ evidenceItems.length }} 条</span>
@@ -221,9 +271,9 @@ onBeforeUnmount(() => {
               <dt>创作手法</dt>
               <dd>{{ strategy.methods?.join('、') || '-' }}</dd>
               <dt>标题公式</dt>
-              <dd>{{ strategy.title_formula_code || '-' }}</dd>
+              <dd>{{ formulaSelection.selected_title_formula_code || strategy.title_formula_code || '-' }}</dd>
               <dt>正文公式</dt>
-              <dd>{{ strategy.content_formula_code || '-' }}</dd>
+              <dd>{{ formulaSelection.selected_body_formula_code || strategy.content_formula_code || '-' }}</dd>
               <dt>规则版本</dt>
               <dd>{{ task.rule_version_id || '-' }}</dd>
             </dl>
@@ -573,6 +623,43 @@ onBeforeUnmount(() => {
 .version-list {
   padding-top: 14px;
   border-top: 1px solid var(--gray-100);
+}
+
+.audit-grid {
+  grid-template-columns: 86px minmax(0, 1fr);
+}
+
+.agent-trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--gray-100);
+}
+
+.agent-trace-item {
+  display: flex;
+  gap: 8px;
+  color: var(--main-700);
+
+  svg { flex: 0 0 auto; margin-top: 2px; }
+  strong, span { display: block; font-size: 11px; }
+  span { margin-top: 2px; color: var(--color-text-tertiary); }
+}
+
+.skill-trace-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 12px;
+
+  span {
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: var(--main-30);
+    color: var(--main-700);
+    font-size: 10px;
+  }
 }
 
 .version-item {

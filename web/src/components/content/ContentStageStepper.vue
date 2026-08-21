@@ -9,9 +9,8 @@ defineEmits(['select'])
 
 const steps = [
   { index: 1, label: '业务素材', description: '形成统一简报' },
-  { index: 2, label: '创作策略', description: '锁定公式组合' },
-  { index: 3, label: '内容生成', description: '人工选择标题' },
-  { index: 4, label: '审核交付', description: '编辑、审核与版本' }
+  { index: 2, label: 'V3 内容生产', description: 'Agent、Skill 与人工审批' },
+  { index: 3, label: '审核交付', description: '编辑、审核与版本' }
 ]
 </script>
 
@@ -43,7 +42,7 @@ const steps = [
 <style scoped lang="less">
 .content-stage-stepper {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   list-style: none;
   margin: 0;
   padding: 0;
@@ -126,7 +125,7 @@ const steps = [
 
 @media (max-width: 800px) {
   .content-stage-stepper {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
 
     button {
       min-height: 52px;

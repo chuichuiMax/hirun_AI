@@ -1,0 +1,723 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from types import SimpleNamespace
+
+import pytest
+from langchain.agents.middleware import ModelResponse
+from langchain_core.messages import AIMessage, SystemMessage
+
+import yuxi.agents.middlewares.skills as skills_middleware
+import yuxi.services.agent_delegation_service as delegation_module
+from yuxi.agents.middlewares.content_node_result import ContentNodeResultMiddleware
+from yuxi.agents.buildin.chatbot.graph import _build_middlewares
+from yuxi.agents.middlewares.skills import (
+    RequiredSkillResolutionError,
+    SkillsMiddleware,
+    resolve_runtime_skills_for_context,
+)
+from yuxi.content.control.errors import ContentApplicationError
+from yuxi.content.v3.agents import (
+    CONTENT_AGENT_SPECS,
+    migrate_system_content_agent,
+    validate_existing_content_agent,
+)
+from yuxi.services.agent_delegation_service import (
+    AgentDelegationRequest,
+    AgentDelegationService,
+    _bounded_run_identifier,
+    build_runtime_config_snapshot,
+)
+from yuxi.storage.postgres.models_business import Agent
+from yuxi.storage.postgres.models_content import ContentNodeRun
+
+
+def _skill(
+    slug: str,
+    *,
+    dependencies: list[str] | None = None,
+    tools: list[str] | None = None,
+    enabled: bool = True,
+    share_config: dict | None = None,
+):
+    return SimpleNamespace(
+        slug=slug,
+        name=slug,
+        description=f"{slug} description",
+        instructions=f"# {slug}\nFollow {slug} instructions.",
+        version="1.2.3",
+        content_hash=f"hash-{slug}",
+        dir_path=None,
+        enabled=enabled,
+        created_by="system",
+        share_config=share_config or {"access_level": "global"},
+        tool_dependencies=tools or [],
+        mcp_dependencies=[],
+        skill_dependencies=dependencies or [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_required_skills_expand_and_freeze_dependency_closure(monkeypatch):
+    skills = [_skill("alpha", dependencies=["beta"], tools=["tool-a"]), _skill("beta", tools=["tool-b"])]
+
+    async def fake_list(db=None, user=None):
+        del db, user
+        return skills
+
+    monkeypatch.setattr(skills_middleware, "_list_skills_from_db", fake_list)
+    monkeypatch.setattr(
+        skills_middleware,
+        "get_all_tool_instances",
+        lambda: [SimpleNamespace(name="tool-a"), SimpleNamespace(name="tool-b")],
+    )
+    context = SimpleNamespace(
+        skills=["alpha"],
+        required_skills=["alpha"],
+        skill_tool_allowlist=["tool-a", "tool-b"],
+        mcps=[],
+    )
+
+    scope = await resolve_runtime_skills_for_context(context)
+
+    assert scope["required_skill_closure"] == ["alpha", "beta"]
+    assert scope["required_skill_tools"] == ["tool-a", "tool-b"]
+    assert scope["runtime_skill_snapshots"] == [
+        {"slug": "alpha", "version": "1.2.3", "content_hash": "hash-alpha"},
+        {"slug": "beta", "version": "1.2.3", "content_hash": "hash-beta"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("required", "selected", "tools", "allowlist", "expected_code"),
+    [
+        (["missing"], ["missing"], [], [], "required_skill_missing"),
+        (["alpha"], [], [], [], "required_skill_unauthorized"),
+        (["alpha"], ["alpha"], ["tool-a"], [], "required_skill_tool_unauthorized"),
+        (["alpha"], ["alpha"], ["not-installed"], ["not-installed"], "required_skill_tool_unavailable"),
+    ],
+)
+async def test_required_skill_configuration_fails_closed(
+    monkeypatch, required, selected, tools, allowlist, expected_code
+):
+    items = [] if required == ["missing"] else [_skill("alpha", tools=tools)]
+
+    async def fake_list(db=None, user=None):
+        del db, user
+        return items
+
+    monkeypatch.setattr(skills_middleware, "_list_skills_from_db", fake_list)
+    monkeypatch.setattr(skills_middleware, "get_all_tool_instances", lambda: [])
+    context = SimpleNamespace(
+        skills=selected,
+        required_skills=required,
+        skill_tool_allowlist=allowlist,
+        mcps=[],
+    )
+
+    with pytest.raises(RequiredSkillResolutionError) as exc_info:
+        await resolve_runtime_skills_for_context(context)
+
+    assert exc_info.value.code == expected_code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("item", "expected_code"),
+    [
+        (_skill("alpha", enabled=False), "required_skill_disabled"),
+        (
+            _skill("alpha", share_config={"access_level": "user", "user_uids": ["someone-else"]}),
+            "required_skill_unauthorized",
+        ),
+    ],
+)
+async def test_required_skill_disabled_and_permission_are_distinguished(monkeypatch, item, expected_code):
+    async def fake_list(db=None, user=None):
+        del db, user
+        return []
+
+    class FakeSkillRepository:
+        def __init__(self, db):
+            del db
+
+        async def list_all(self):
+            return [item]
+
+    monkeypatch.setattr(skills_middleware, "_list_skills_from_db", fake_list)
+    monkeypatch.setattr(skills_middleware, "SkillRepository", FakeSkillRepository)
+    context = SimpleNamespace(skills=["alpha"], required_skills=["alpha"], skill_tool_allowlist=[], mcps=[])
+    user = SimpleNamespace(uid="u1", role="user", department_id=None)
+
+    with pytest.raises(RequiredSkillResolutionError) as exc_info:
+        await resolve_runtime_skills_for_context(context, db=object(), user=user)
+
+    assert exc_info.value.code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_middleware_auto_activates_required_skills_and_intersects_tools(monkeypatch):
+    events = []
+
+    async def fake_append(run_id, event_type, payload, *, thread_id=None):
+        events.append((run_id, event_type, payload, thread_id))
+
+    monkeypatch.setattr(delegation_module, "append_run_stream_event", fake_append)
+    import yuxi.services.run_queue_service as run_queue_service
+
+    monkeypatch.setattr(run_queue_service, "append_run_stream_event", fake_append)
+    monkeypatch.setattr(
+        skills_middleware,
+        "get_all_tool_instances",
+        lambda: [SimpleNamespace(name="tool-a"), SimpleNamespace(name="tool-b")],
+    )
+    context = SimpleNamespace(
+        run_id="child-run",
+        thread_id="content:task:node:1",
+        _prompt_skills=["alpha", "beta"],
+        _readable_skills=["alpha", "beta"],
+        _required_skill_closure=["alpha", "beta"],
+        _content_node_tool_scope=["tool-a", "submit_content_node_result"],
+        _runtime_skill_metadata={
+            "alpha": {
+                "name": "Alpha",
+                "description": "alpha",
+                "path": "/home/gem/skills/alpha/SKILL.md",
+                "instructions": "# Alpha\nalpha rules",
+            },
+            "beta": {
+                "name": "Beta",
+                "description": "beta",
+                "path": "/home/gem/skills/beta/SKILL.md",
+                "instructions": "# Beta\nbeta rules",
+            },
+        },
+        _runtime_skill_dependency_map={
+            "alpha": {"tools": ["tool-a"], "mcps": [], "skills": ["beta"]},
+            "beta": {"tools": ["tool-b"], "mcps": [], "skills": []},
+        },
+        _runtime_skill_snapshots=[
+            {"slug": "alpha", "version": "1", "content_hash": "ha"},
+            {"slug": "beta", "version": "2", "content_hash": "hb"},
+        ],
+        mcps=[],
+    )
+
+    class FakeRequest:
+        def __init__(self, *, system_message=None, tools=None):
+            self.runtime = SimpleNamespace(context=context)
+            self.state = {}
+            self.tools = tools or [SimpleNamespace(name="tool-x"), SimpleNamespace(name="submit_content_node_result")]
+            self.system_message = system_message or SystemMessage(content="base")
+
+        def override(self, **kwargs):
+            request = FakeRequest(
+                system_message=kwargs.get("system_message", self.system_message),
+                tools=kwargs.get("tools", self.tools),
+            )
+            request.state = self.state
+            return request
+
+    captured = {}
+
+    async def handler(request):
+        captured["prompt"] = str(request.system_message.content)
+        captured["tools"] = [tool.name for tool in request.tools]
+        return "ok"
+
+    result = await SkillsMiddleware().awrap_model_call(FakeRequest(), handler)
+
+    assert result == "ok"
+    assert "alpha rules" in captured["prompt"] and "beta rules" in captured["prompt"]
+    assert "不要再调用 read_file" in captured["prompt"]
+    assert captured["tools"] == ["submit_content_node_result", "tool-a"]
+    assert context._activated_required_skills == ["alpha", "beta"]
+    assert [(event[2]["skill_slug"], event[2]["content_hash"]) for event in events] == [
+        ("alpha", "ha"),
+        ("beta", "hb"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_content_node_with_only_result_tool_forces_it_on_first_call():
+    collector = SimpleNamespace(submission_count=0)
+    context = SimpleNamespace(
+        _content_node_result_collector=collector,
+        _content_node_tool_scope=["submit_content_node_result"],
+        _required_skill_closure=[],
+        _readable_skills=[],
+        _runtime_skill_dependency_map={},
+    )
+
+    class FakeRequest:
+        def __init__(self, *, tools=None, tool_choice=None):
+            self.runtime = SimpleNamespace(context=context)
+            self.state = {}
+            self.tools = tools or [SimpleNamespace(name="submit_content_node_result")]
+            self.system_message = SystemMessage(content="base")
+            self.tool_choice = tool_choice
+
+        def override(self, **kwargs):
+            return FakeRequest(
+                tools=kwargs.get("tools", self.tools),
+                tool_choice=kwargs.get("tool_choice", self.tool_choice),
+            )
+
+    calls = []
+
+    async def handler(request):
+        calls.append(request.tool_choice)
+        if request.tool_choice:
+            return ModelResponse(
+                result=[
+                    AIMessage(
+                        content="",
+                        tool_calls=[{"id": "call-1", "name": request.tool_choice, "args": {}}],
+                    )
+                ]
+            )
+        return ModelResponse(result=[AIMessage(content="plain result")])
+
+    response = await ContentNodeResultMiddleware().awrap_model_call(FakeRequest(), handler)
+
+    assert calls == ["submit_content_node_result"]
+    assert response.result[0].tool_calls[0]["name"] == "submit_content_node_result"
+
+
+@pytest.mark.asyncio
+async def test_content_node_result_tool_is_removed_after_submission():
+    collector = SimpleNamespace(submission_count=1)
+    context = SimpleNamespace(
+        _content_node_result_collector=collector,
+        _content_node_tool_scope=["tool-a", "submit_content_node_result"],
+        _required_skill_closure=[],
+        _readable_skills=[],
+        _runtime_skill_dependency_map={},
+    )
+
+    class FakeRequest:
+        def __init__(self, *, tools=None):
+            self.runtime = SimpleNamespace(context=context)
+            self.state = {}
+            self.tools = tools or [
+                SimpleNamespace(name="tool-a"),
+                SimpleNamespace(name="submit_content_node_result"),
+            ]
+            self.system_message = SystemMessage(content="base")
+
+        def override(self, **kwargs):
+            return FakeRequest(tools=kwargs.get("tools", self.tools))
+
+    captured = []
+
+    async def handler(request):
+        captured.extend(tool.name for tool in request.tools)
+        return ModelResponse(result=[AIMessage(content="done")])
+
+    await ContentNodeResultMiddleware().awrap_model_call(FakeRequest(), handler)
+
+    assert captured == ["tool-a"]
+
+
+@pytest.mark.asyncio
+async def test_successful_cover_creation_forces_structured_result_as_second_tool_call():
+    collector = SimpleNamespace(submission_count=0)
+    context = SimpleNamespace(
+        _content_node_result_collector=collector,
+        _content_cover_job_submission={
+            "cover_job_id": "job-1",
+            "plan_hash": "a" * 64,
+            "source_asset_ids": [],
+        },
+    )
+
+    class FakeRequest:
+        def __init__(self, *, tools=None, tool_choice=None):
+            self.runtime = SimpleNamespace(context=context)
+            self.tools = tools or [
+                SimpleNamespace(name="create_content_cover_job"),
+                SimpleNamespace(name="submit_content_node_result"),
+            ]
+            self.tool_choice = tool_choice
+
+        def override(self, **kwargs):
+            return FakeRequest(
+                tools=kwargs.get("tools", self.tools),
+                tool_choice=kwargs.get("tool_choice", self.tool_choice),
+            )
+
+    captured = {}
+
+    async def handler(request):
+        captured["tools"] = [tool.name for tool in request.tools]
+        captured["tool_choice"] = request.tool_choice
+        return ModelResponse(result=[AIMessage(content="")])
+
+    await ContentNodeResultMiddleware().awrap_model_call(FakeRequest(), handler)
+
+    assert captured == {
+        "tools": ["submit_content_node_result"],
+        "tool_choice": "submit_content_node_result",
+    }
+
+
+@pytest.mark.asyncio
+async def test_content_agent_uses_minimal_runtime_middlewares():
+    middlewares = await _build_middlewares(
+        SimpleNamespace(_content_node_result_collector=object(), model_retry_times=2)
+    )
+
+    assert [type(item).__name__ for item in middlewares] == [
+        "KnowledgeBaseMiddleware",
+        "SkillsMiddleware",
+        "ContentNodeResultMiddleware",
+        "ModelRetryMiddleware",
+        "TokenUsageMiddleware",
+    ]
+
+
+def _delegation_request(**overrides):
+    values = {
+        "task_id": "task-1",
+        "parent_content_run_id": "parent-run",
+        "node_run": SimpleNamespace(id="node-run-1", node_id="generate_body", node_type="agent", attempt=1),
+        "user": SimpleNamespace(uid="u1", role="user", department_id=None),
+        "agent_slug": "content-body-agent",
+        "required_skills": ("content-body-generator",),
+        "input_payload": {
+            "content_brief": {"brand": {"name": "x"}},
+            "match_decision_snapshot": {"selected_group_id": "group-1"},
+            "formula_selection_snapshot": {
+                "combination_group_id": "group-1",
+                "eligible_title_formula_codes": ["T1"],
+                "eligible_body_formula_codes": ["B1"],
+                "selected_title_formula_code": "T1",
+                "selected_body_formula_code": "B1",
+            },
+            "evidence_bundle": {
+                "items": [
+                    {
+                        "id": "e-body",
+                        "value": "fact",
+                        "verified_status": "confirmed",
+                        "allowed_usage": ["body"],
+                    }
+                ]
+            },
+            "evidence_bundle_hash": "evidence-hash",
+            "locked_versions": {
+                "industry_pack_version_id": "industry-v3",
+                "channel_profile_version_id": "channel-v1",
+                "persona_profile_version_id": None,
+                "rule_version_id": "rules-v3",
+                "title_formula_code": "T1",
+                "body_formula_code": "B1",
+                "artifact_version_id": None,
+            },
+            "locked_values": {"selected_title": "locked title"},
+        },
+        "prompt": "generate",
+        "output_contract": "ContentDraftResultV1",
+    }
+    values.update(overrides)
+    return AgentDelegationRequest(**values)
+
+
+def test_delegated_run_identifiers_fit_database_columns_and_remain_stable():
+    short = "content:task-1:generate_body:1"
+    long_value = "content-node:85ef3eaa-fa49-4ba9-8fcf-5e360f699f0c:cnr_e293eb9d814c427f8e797b0226a293df"
+
+    assert _bounded_run_identifier(short) == short
+    assert len(_bounded_run_identifier(long_value)) == 64
+    assert _bounded_run_identifier(long_value) == _bounded_run_identifier(long_value)
+    assert _bounded_run_identifier(long_value).startswith("content-node:")
+
+
+@pytest.mark.asyncio
+async def test_delegation_creates_traceable_child_run_and_runtime_snapshot(monkeypatch):
+    context_holder = {}
+
+    class FakeContext:
+        def __init__(self, *, thread_id, uid):
+            self.thread_id = thread_id
+            self.uid = uid
+            self.model = "provider:model"
+            self.skills = []
+            self.skill_tool_allowlist = []
+            self.knowledges = ["kb-a", "kb-b"]
+            self.mcps = []
+            self.max_execution_steps = 30
+            context_holder["context"] = self
+
+        def update_from_dict(self, data):
+            for key, value in data.items():
+                setattr(self, key, value)
+
+    class FakeGraph:
+        async def ainvoke(self, state, *, context, config):
+            model_input = json.loads(state["messages"][0])
+            assert model_input["node_id"] == "generate_body"
+            assert "output_json_schema" not in model_input
+            assert "runtime_config_snapshot" not in model_input
+            assert config["recursion_limit"] == 12
+            context._activated_required_skills = ["content-body-generator"]
+            await context._content_node_result_collector.submit(
+                body="body text",
+                topics=["topic"],
+                paragraph_evidence=[{"paragraph_id": "p1", "evidence_ids": ["e-body"]}],
+                body_formula_code="B1",
+            )
+            return {"messages": []}
+
+    class FakeBackend:
+        context_schema = FakeContext
+
+        async def get_graph(self, *, context):
+            assert context.run_id.startswith("run_")
+            return FakeGraph()
+
+    agent = SimpleNamespace(
+        slug="content-body-agent",
+        backend_id="ChatbotAgent",
+        config_version=4,
+        config_json={"context": {}},
+    )
+
+    async def fake_normalize(*args, **kwargs):
+        return {
+            "model": "provider:model",
+            "skills": ["content-body-generator"],
+            "skill_tool_allowlist": ["get_business_facts"],
+            "knowledges": ["kb-a", "kb-b"],
+        }
+
+    async def fake_prepare(context, **kwargs):
+        context._required_skill_closure = ["content-body-generator"]
+        context._required_skill_tools = ["get_business_facts"]
+        context._required_skill_mcps = []
+        context._runtime_skill_snapshots = [
+            {"slug": "content-body-generator", "version": "2.0.0", "content_hash": "hash-2"}
+        ]
+        return context
+
+    created = {}
+
+    class FakeRunRepo:
+        async def create_run(self, **kwargs):
+            created.update(kwargs)
+            return SimpleNamespace(id=kwargs["run_id"])
+
+        async def mark_running(self, run_id):
+            created["running"] = run_id
+
+        async def set_terminal_status(self, run_id, **kwargs):
+            created["terminal"] = (run_id, kwargs)
+
+    class FakeContentRepo:
+        async def attach_delegated_agent_run(self, node_run, run_id):
+            node_run.delegated_agent_run_id = run_id
+
+    class FakeDB:
+        async def commit(self):
+            created["commits"] = created.get("commits", 0) + 1
+
+    events = []
+
+    async def fake_append(run_id, event_type, payload, *, thread_id=None):
+        events.append((run_id, event_type, payload, thread_id))
+
+    monkeypatch.setattr(delegation_module, "normalize_agent_context_config", fake_normalize)
+    monkeypatch.setattr(delegation_module, "prepare_agent_runtime_context", fake_prepare)
+    monkeypatch.setattr(delegation_module, "append_run_stream_event", fake_append)
+    import yuxi.services.run_queue_service as run_queue_service
+
+    monkeypatch.setattr(run_queue_service, "append_run_stream_event", fake_append)
+    service = AgentDelegationService.__new__(AgentDelegationService)
+    service.db = FakeDB()
+    service.run_repo = FakeRunRepo()
+    service.content_repo = FakeContentRepo()
+
+    async def fake_resolve(_request):
+        return agent, FakeBackend()
+
+    service._resolve_agent = fake_resolve
+    request = _delegation_request()
+
+    result = await service.execute(request)
+
+    assert created["run_type"] == "content_node_agent"
+    assert created["parent_agent_run_id"] == "parent-run"
+    assert created["thread_id"] == "content:task-1:generate_body:1"
+    assert created["agent_id"] == "content-body-agent"
+    assert request.node_run.delegated_agent_run_id == result.delegated_agent_run_id
+    assert result.runtime_config_snapshot["agent"]["config_version"] == 4
+    assert result.runtime_config_snapshot["skills"][0]["content_hash"] == "hash-2"
+    assert result.runtime_config_snapshot["knowledges"] == []
+    assert result.runtime_config_snapshot["tools"] == [
+        "get_business_facts",
+        "submit_content_node_result",
+    ]
+    assert created["terminal"][1]["status"] == "completed"
+    assert [event[1] for event in events] == [
+        "content.agent.started",
+        "content.agent.started",
+        "content.tool.called",
+        "content.tool.called",
+        "content.tool.completed",
+        "content.tool.completed",
+        "content.agent.completed",
+        "content.agent.completed",
+    ]
+    assert {event[0] for event in events} == {result.delegated_agent_run_id, "parent-run"}
+    assert all(event[2]["delegated_agent_run_id"] == result.delegated_agent_run_id for event in events)
+
+
+@pytest.mark.asyncio
+async def test_delegation_timeout_and_cancel_are_not_swallowed():
+    class SlowGraph:
+        async def ainvoke(self, *args, **kwargs):
+            await asyncio.sleep(1)
+            return {}
+
+    context = SimpleNamespace(thread_id="thread", uid="u1")
+    timeout_request = _delegation_request(timeout_seconds=0.01)
+    with pytest.raises(TimeoutError):
+        await AgentDelegationService._invoke_graph(SlowGraph(), context, timeout_request)
+
+    cancel_event = asyncio.Event()
+    cancel_event.set()
+    cancel_request = _delegation_request(cancel_event=cancel_event)
+    with pytest.raises(asyncio.CancelledError):
+        await AgentDelegationService._invoke_graph(SlowGraph(), context, cancel_request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent", "accessible", "backend_error", "expected_code"),
+    [
+        (None, True, False, "agent_not_found"),
+        (SimpleNamespace(enabled=False, slug="a", backend_id="ChatbotAgent"), True, False, "agent_disabled"),
+        (SimpleNamespace(enabled=True, slug="a", backend_id="ChatbotAgent"), False, False, "agent_forbidden"),
+        (SimpleNamespace(enabled=True, slug="a", backend_id="MissingBackend"), True, True, "agent_backend_unavailable"),
+    ],
+)
+async def test_delegation_agent_resolution_fails_closed(monkeypatch, agent, accessible, backend_error, expected_code):
+    class FakeAgentRepo:
+        async def get_by_slug(self, slug):
+            del slug
+            return agent
+
+    service = AgentDelegationService.__new__(AgentDelegationService)
+    service.agent_repo = FakeAgentRepo()
+    monkeypatch.setattr(delegation_module, "user_can_access_agent", lambda user, item: accessible)
+
+    def fake_get_agent(backend_id):
+        if backend_error:
+            raise KeyError(backend_id)
+        return object()
+
+    monkeypatch.setattr(delegation_module.agent_manager, "get_agent", fake_get_agent)
+
+    with pytest.raises(ContentApplicationError) as exc_info:
+        await service._resolve_agent(_delegation_request(agent_slug="a"))
+
+    assert exc_info.value.code == expected_code
+
+
+def test_formal_content_agent_catalog_and_conflict_policy():
+    assert len(CONTENT_AGENT_SPECS) == 6
+    assert {item.slug for item in CONTENT_AGENT_SPECS} == {
+        "content-strategy-agent",
+        "content-research-agent",
+        "content-title-agent",
+        "content-body-agent",
+        "content-review-agent",
+        "content-visual-agent",
+    }
+    title_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-title-agent")
+    assert title_spec.skill_tools == ("get_creation_rule_bundle",)
+    assert title_spec.config_version == 2
+    spec = CONTENT_AGENT_SPECS[0]
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="SubAgentBackend",
+        name="conflict",
+        config_json={"context": {}},
+        enabled=True,
+        is_subagent=True,
+    )
+    with pytest.raises(ValueError, match="显式迁移"):
+        validate_existing_content_agent(existing, spec)
+
+
+def test_system_content_agent_migration_is_versioned_and_preserves_extra_context():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-review-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={
+            "context": {
+                "system_prompt": "旧提示词",
+                "skills": ["content-reviewer"],
+                "skill_tool_allowlist": ["validate_content_facts"],
+                "model": "provider:model",
+            }
+        },
+        enabled=True,
+        config_version=1,
+        is_subagent=False,
+        created_by="system",
+        updated_by="system",
+    )
+
+    assert migrate_system_content_agent(existing, spec) is True
+    assert existing.config_version == 2
+    assert existing.config_json["context"]["model"] == "provider:model"
+    assert set(existing.config_json["context"]["skill_tool_allowlist"]) == set(spec.skill_tools)
+    validate_existing_content_agent(existing, spec)
+
+
+def test_system_content_agent_migration_does_not_overwrite_user_changes():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-visual-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={"context": {"skills": list(spec.skills), "skill_tool_allowlist": []}},
+        enabled=True,
+        config_version=1,
+        is_subagent=False,
+        created_by="system",
+        updated_by="user-1",
+    )
+
+    with pytest.raises(ValueError, match="已被用户修改"):
+        migrate_system_content_agent(existing, spec)
+
+
+def test_delegation_schema_has_unique_child_run_and_parent_node_index():
+    delegated = ContentNodeRun.__table__.c.delegated_agent_run_id
+    assert delegated.unique is True
+    indexes = {index.name: tuple(column.name for column in index.columns) for index in ContentNodeRun.__table__.indexes}
+    assert indexes["idx_content_node_runs_parent_node_attempt"] == ("agent_run_id", "node_id", "attempt")
+    assert Agent.__table__.c.enabled.nullable is False
+    assert Agent.__table__.c.config_version.default.arg == 1
+
+
+def test_runtime_snapshot_hash_changes_with_skill_hash():
+    agent = SimpleNamespace(slug="a", backend_id="ChatbotAgent", config_version=1)
+    request = _delegation_request()
+    context = SimpleNamespace(
+        model="m",
+        _runtime_skill_snapshots=[{"slug": "s", "version": "1", "content_hash": "h1"}],
+        _required_skill_tools=[],
+        _required_skill_mcps=[],
+        knowledges=[],
+    )
+    first = build_runtime_config_snapshot(agent=agent, context=context, request=request)
+    context._runtime_skill_snapshots[0]["content_hash"] = "h2"
+    second = build_runtime_config_snapshot(agent=agent, context=context, request=request)
+    assert first["snapshot_hash"] != second["snapshot_hash"]

@@ -12,6 +12,7 @@ from urllib.parse import quote, urljoin, urlparse
 import httpx
 
 from yuxi.content_cover.schemas import Image2Input, Image2Output, Image2Request, Image2Submission
+from yuxi.utils.logging_config import logger
 
 
 class Image2Error(RuntimeError):
@@ -31,6 +32,7 @@ class Image2Config:
     status_path: str = "/images/generations/{task_id}"
     timeout_seconds: float = 120
     send_response_format: bool = False
+    trusted_output_origins: tuple[str, ...] = ()
 
     @classmethod
     def from_values(cls, *, base_url: str, api_key: str, model: str) -> Image2Config:
@@ -61,6 +63,33 @@ class Image2Config:
             raise Image2Error("IMAGE2_CONFIG_INVALID", "IMAGE2_TIMEOUT_SECONDS 必须是数字") from exc
         if timeout_seconds <= 0:
             raise Image2Error("IMAGE2_CONFIG_INVALID", "IMAGE2_TIMEOUT_SECONDS 必须大于 0")
+        trusted_output_origins = tuple(
+            item.strip().rstrip("/")
+            for item in (os.getenv("IMAGE2_TRUSTED_OUTPUT_ORIGINS") or "").split(",")
+            if item.strip()
+        )
+        for origin in trusted_output_origins:
+            parsed_origin = urlparse(origin)
+            if (
+                parsed_origin.scheme not in {"http", "https"}
+                or not parsed_origin.hostname
+                or parsed_origin.username
+                or parsed_origin.password
+                or parsed_origin.path
+                or parsed_origin.query
+                or parsed_origin.fragment
+            ):
+                raise Image2Error(
+                    "IMAGE2_CONFIG_INVALID",
+                    "IMAGE2_TRUSTED_OUTPUT_ORIGINS 必须是逗号分隔的 HTTP(S) origin",
+                )
+            try:
+                parsed_origin.port
+            except ValueError as exc:
+                raise Image2Error(
+                    "IMAGE2_CONFIG_INVALID",
+                    "IMAGE2_TRUSTED_OUTPUT_ORIGINS 端口无效",
+                ) from exc
         return cls(
             base_url=base_url,
             api_key=api_key,
@@ -70,6 +99,7 @@ class Image2Config:
             status_path=status_path,
             timeout_seconds=timeout_seconds,
             send_response_format=os.getenv("IMAGE2_SEND_RESPONSE_FORMAT", "false").lower() in {"1", "true", "yes"},
+            trusted_output_origins=trusted_output_origins,
         )
 
     @classmethod
@@ -388,7 +418,7 @@ class Image2Client:
             ) from exc
         return list({record[4][0] for record in records})
 
-    async def _validate_output_url(self, url: str) -> None:
+    async def _validate_output_url(self, url: str) -> bool:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise Image2Error("IMAGE2_OUTPUT_URL_INVALID", "image2 返回了不安全的图片地址")
@@ -398,8 +428,13 @@ class Image2Client:
             relay_port = relay.port or (443 if relay.scheme == "https" else 80)
         except ValueError as exc:
             raise Image2Error("IMAGE2_OUTPUT_URL_INVALID", "image2 返回的图片地址端口无效") from exc
-        if (parsed.scheme, parsed.hostname, parsed_port) == (relay.scheme, relay.hostname, relay_port):
-            return
+        trusted_origins = {(relay.scheme, relay.hostname, relay_port)}
+        for origin in self.config.trusted_output_origins:
+            configured = urlparse(origin)
+            configured_port = configured.port or (443 if configured.scheme == "https" else 80)
+            trusted_origins.add((configured.scheme, configured.hostname, configured_port))
+        if (parsed.scheme, parsed.hostname, parsed_port) in trusted_origins:
+            return True
         try:
             address = ipaddress.ip_address(parsed.hostname)
         except ValueError:
@@ -407,7 +442,16 @@ class Image2Client:
         else:
             addresses = [address]
         if not addresses or any(not address.is_global for address in addresses):
-            raise Image2Error("IMAGE2_OUTPUT_URL_INVALID", "image2 返回了不允许访问的内部地址")
+            logger.warning(
+                "Blocked image2 output host after DNS validation: host={} addresses={}",
+                parsed.hostname,
+                [str(address) for address in addresses],
+            )
+            raise Image2Error(
+                "IMAGE2_OUTPUT_URL_INVALID",
+                f"image2 返回了不允许访问的地址域名：{parsed.hostname}",
+            )
+        return False
 
     async def read_output(self, output: Image2Output, *, max_bytes: int = 30 * 1024 * 1024) -> tuple[bytes, str]:
         if output.b64_data:
@@ -428,8 +472,11 @@ class Image2Client:
         current_url = urljoin(f"{self.config.base_url}/", output.url)
         try:
             for redirect_count in range(6):
-                await self._validate_output_url(current_url)
-                async with self._client.stream("GET", current_url, headers={"Accept": "image/*"}) as response:
+                trusted_origin = await self._validate_output_url(current_url)
+                download_headers = {"Accept": "image/*"}
+                if trusted_origin:
+                    download_headers["Authorization"] = f"Bearer {self.config.api_key}"
+                async with self._client.stream("GET", current_url, headers=download_headers) as response:
                     if response.is_redirect:
                         location = response.headers.get("location")
                         if not location or redirect_count == 5:
@@ -438,7 +485,7 @@ class Image2Client:
                         continue
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "image/png").split(";", 1)[0]
-                    if not content_type.startswith("image/"):
+                    if not content_type.startswith("image/") and content_type != "application/octet-stream":
                         raise Image2Error("IMAGE2_INVALID_IMAGE", "image2 返回地址不是图片")
                     chunks = bytearray()
                     async for chunk in response.aiter_bytes():

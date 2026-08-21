@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from langgraph.prebuilt.tool_node import ToolRuntime
@@ -7,24 +11,32 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from yuxi.agents.toolkits.registry import tool
-from yuxi.content.rules import validate_strategy_bundle
+from yuxi.content_cover.schemas import CoverComposeCreate, CoverGenerateCreate
 from yuxi.content.validators import normalize_manual_evidence, validate_content
 from yuxi.repositories.content_repository import ContentRepository
+from yuxi.services.content_cover_service import create_cover_compose_job, create_cover_generate_job
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_business import User
 
 
+_CONTENT_TOOL_RUNTIME: ContextVar[ToolRuntime | None] = ContextVar("content_tool_runtime", default=None)
+
+
+@contextmanager
+def content_tool_runtime(runtime: ToolRuntime):
+    token = _CONTENT_TOOL_RUNTIME.set(runtime)
+    try:
+        yield
+    finally:
+        _CONTENT_TOOL_RUNTIME.reset(token)
+
+
+def _effective_runtime(runtime: ToolRuntime | None) -> ToolRuntime | None:
+    return runtime or _CONTENT_TOOL_RUNTIME.get()
+
+
 class RuleBundleInput(BaseModel):
     rule_version_id: str = Field(description="任务锁定的创作规则版本 ID")
-
-
-class CombinationInput(BaseModel):
-    rule_version_id: str
-    content_goal: str
-    methods: list[str]
-    title_formula_code: str
-    content_formula_code: str
-    brief: dict[str, Any]
 
 
 class TaskFactsInput(BaseModel):
@@ -49,11 +61,32 @@ class ValidateFactsInput(BaseModel):
     strategy: dict[str, Any]
 
 
+class CreateContentCoverJobInput(BaseModel):
+    task_id: str = Field(description="当前内容任务 ID；视觉方案由运行时锁定快照提供")
+
+
 def _runtime_uid(runtime: ToolRuntime | None) -> str:
-    uid = getattr(getattr(runtime, "context", None), "uid", None)
+    runtime = _effective_runtime(runtime)
+    context = getattr(runtime, "context", None)
+    uid = context.get("uid") if isinstance(context, Mapping) else getattr(context, "uid", None)
+    if not uid:
+        config = getattr(runtime, "config", None)
+        configurable = config.get("configurable") if isinstance(config, Mapping) else None
+        uid = configurable.get("uid") if isinstance(configurable, Mapping) else None
     if not uid:
         raise ValueError("无法获取当前用户")
     return str(uid)
+
+
+async def _emit_content_tool_event(runtime: ToolRuntime | None, event_type: str, payload: dict[str, Any]) -> None:
+    runtime = _effective_runtime(runtime)
+    context = getattr(runtime, "context", None)
+    run_id = str(getattr(context, "run_id", "") or "").strip()
+    if not run_id or not getattr(context, "_content_node_output_contract", None):
+        return
+    from yuxi.services.run_queue_service import append_content_runtime_event
+
+    await append_content_runtime_event(context, event_type, payload)
 
 
 @tool(
@@ -74,37 +107,6 @@ async def get_creation_rule_bundle(rule_version_id: str, runtime: ToolRuntime = 
 
 @tool(
     category="buildin",
-    tags=["内容生产", "规则"],
-    display_name="校验内容公式组合",
-    args_schema=CombinationInput,
-)
-async def validate_formula_combination(
-    rule_version_id: str,
-    content_goal: str,
-    methods: list[str],
-    title_formula_code: str,
-    content_formula_code: str,
-    brief: dict[str, Any],
-    runtime: ToolRuntime = None,
-) -> dict[str, Any]:
-    """确定性校验创作手法、标题公式、正文公式与内容目标。"""
-    _runtime_uid(runtime)
-    async with pg_manager.get_async_session_context() as db:
-        bundle = await ContentRepository(db).get_rule_bundle(rule_version_id)
-        if bundle is None:
-            raise ValueError("规则版本不存在")
-        return validate_strategy_bundle(
-            bundle,
-            brief=brief,
-            content_goal=content_goal,
-            methods=methods,
-            title_formula_code=title_formula_code,
-            content_formula_code=content_formula_code,
-        )
-
-
-@tool(
-    category="buildin",
     tags=["内容生产", "业务事实"],
     display_name="读取内容任务业务事实",
     args_schema=TaskFactsInput,
@@ -112,6 +114,11 @@ async def validate_formula_combination(
 async def get_business_facts(task_id: str, runtime: ToolRuntime = None) -> dict[str, Any]:
     """读取当前用户可访问任务中已经冻结的业务事实和证据包。"""
     uid = _runtime_uid(runtime)
+    await _emit_content_tool_event(
+        runtime,
+        "content.tool.called",
+        {"tool_name": "get_business_facts", "task_id": task_id},
+    )
     async with pg_manager.get_async_session_context() as db:
         user = (await db.execute(select(User).where(User.uid == uid))).scalar_one_or_none()
         if user is None:
@@ -119,11 +126,44 @@ async def get_business_facts(task_id: str, runtime: ToolRuntime = None) -> dict[
         task = await ContentRepository(db).get_task_for_user(task_id, user)
         if task is None:
             raise ValueError("内容任务不存在或无权访问")
-        return {
+        brief = task.brief_json or {}
+        record_version = task.updated_at.isoformat() if task.updated_at else "unknown"
+        fields = [
+            {
+                "field_path": key,
+                "value": value,
+                "source": {
+                    "record_id": task.id,
+                    "record_version": record_version,
+                    "field_path": key,
+                },
+            }
+            for key, value in sorted(brief.items())
+        ]
+        result = {
             "task_id": task.id,
-            "brief": task.brief_json or {},
+            "brief": brief,
             "evidence_bundle": task.evidence_json or {"items": []},
+            "records": [
+                {
+                    "record_id": task.id,
+                    "record_version": record_version,
+                    "record_type": "content_task_brief",
+                    "fields": fields,
+                }
+            ],
         }
+        await _emit_content_tool_event(
+            runtime,
+            "content.business_data.retrieved",
+            {"source_ids": [task.id], "record_count": 1, "field_count": len(fields)},
+        )
+        await _emit_content_tool_event(
+            runtime,
+            "content.tool.completed",
+            {"tool_name": "get_business_facts", "task_id": task.id, "record_count": 1},
+        )
+        return result
 
 
 @tool(
@@ -186,3 +226,138 @@ async def validate_content_facts(
         evidence_bundle=evidence_bundle,
         strategy=strategy,
     )
+
+
+@tool(
+    category="buildin",
+    tags=["内容生产", "封面"],
+    display_name="创建内容封面任务",
+    args_schema=CreateContentCoverJobInput,
+)
+async def create_content_cover_job(
+    task_id: str,
+    runtime: ToolRuntime = None,
+) -> dict[str, Any]:
+    """根据已锁定 VisualPlan 幂等创建 CoverJob；本工具不等待任务完成。"""
+
+    runtime = _effective_runtime(runtime)
+    uid = _runtime_uid(runtime)
+    context = getattr(runtime, "context", None)
+    if getattr(context, "_content_node_output_contract", None) != "CoverJobSubmissionResultV1":
+        raise ValueError("create_content_cover_job 只允许在封面提交节点调用")
+    collector = getattr(context, "_content_node_result_collector", None)
+    domain = getattr(collector, "domain_context", None)
+    node_input = getattr(context, "_content_node_input", None)
+    if node_input is None or node_input.task_id != task_id:
+        raise ValueError("封面任务与当前内容节点不一致")
+    locked_values = node_input.locked_values
+    visual_plan_payload = locked_values.get("visual_plan")
+    if not isinstance(visual_plan_payload, dict) or not visual_plan_payload:
+        raise ValueError("封面提交节点缺少锁定 VisualPlan")
+
+    from yuxi.content.model.contracts.content_nodes import VisualPlanResultV1
+
+    plan_hash = str(locked_values.get("visual_plan_hash") or "")
+    visual_plan = VisualPlanResultV1.model_validate(
+        {key: value for key, value in visual_plan_payload.items() if key != "plan_hash"}
+    )
+    if domain is None or domain.visual_plan_hash != plan_hash:
+        raise ValueError("plan_hash 与锁定 VisualPlan 不一致")
+    if visual_plan_payload.get("plan_hash") != plan_hash:
+        raise ValueError("锁定 VisualPlan 快照 hash 不一致")
+    source_asset_ids = list(visual_plan.source_asset_ids)
+    if not set(source_asset_ids).issubset(domain.allowed_asset_ids):
+        raise ValueError("封面任务引用了未授权素材")
+
+    mode = visual_plan.mode
+    size = f"{visual_plan.size.width}x{visual_plan.size.height}"
+    text = list(visual_plan.text)
+    workflow_resume = {
+        "parent_run_id": node_input.parent_run_id,
+        "node_id": "wait_cover_job",
+        "expected_state_version": int(node_input.locked_values.get("state_version") or 0),
+    }
+    await _emit_content_tool_event(
+        runtime,
+        "content.tool.called",
+        {"tool_name": "create_content_cover_job", "task_id": task_id},
+    )
+
+    idempotency_key = "content-v3-" + hashlib.sha256(f"{uid}:{task_id}:{plan_hash}".encode()).hexdigest()
+    async with pg_manager.get_async_session_context() as db:
+        user = (await db.execute(select(User).where(User.uid == uid))).scalar_one_or_none()
+        if user is None:
+            raise ValueError("用户不存在")
+        if mode == "template":
+            result = await create_cover_compose_job(
+                db,
+                user,
+                CoverComposeCreate(
+                    asset_ids=source_asset_ids,
+                    template_id="grid_3x3",
+                    theme_id="editorial_ink",
+                    size=size,
+                    layout={
+                        "title": text[0],
+                        "subtitle": text[1] if len(text) > 1 else "",
+                        "workflow_resume": workflow_resume,
+                        "visual_plan_hash": plan_hash,
+                    },
+                    content_task_id=task_id,
+                    idempotency_key=idempotency_key,
+                ),
+            )
+        else:
+            if mode == "mixed":
+                resolved_provider_mode = "multi_reference"
+            elif not source_asset_ids:
+                resolved_provider_mode = "text_to_image"
+            elif len(source_asset_ids) == 1:
+                resolved_provider_mode = "image_to_image"
+            else:
+                resolved_provider_mode = "multi_reference"
+            result = await create_cover_generate_job(
+                db,
+                user,
+                CoverGenerateCreate(
+                    mode=resolved_provider_mode,
+                    content_task_id=task_id,
+                    source_asset_ids=source_asset_ids,
+                    title=text[0],
+                    prompt="；".join(text),
+                    size=size,
+                    n=1,
+                    parameters={
+                        "visual_plan_hash": plan_hash,
+                        "workflow_resume": workflow_resume,
+                    },
+                    idempotency_key=idempotency_key,
+                ),
+            )
+    job = result["job"]
+    await _emit_content_tool_event(
+        runtime,
+        "content.cover.started",
+        {
+            "task_id": task_id,
+            "cover_job_id": job["id"],
+            "mode": job["mode"],
+            "deduplicated": result["deduplicated"],
+        },
+    )
+    await _emit_content_tool_event(
+        runtime,
+        "content.tool.completed",
+        {
+            "tool_name": "create_content_cover_job",
+            "task_id": task_id,
+            "cover_job_id": job["id"],
+        },
+    )
+    submission = {
+        "cover_job_id": job["id"],
+        "plan_hash": plan_hash,
+        "source_asset_ids": source_asset_ids,
+    }
+    setattr(context, "_content_cover_job_submission", submission)
+    return submission

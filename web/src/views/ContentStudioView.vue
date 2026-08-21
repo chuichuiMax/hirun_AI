@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
-  ArrowLeft,
   BookOpenCheck,
   CheckCircle2,
   CircleAlert,
@@ -39,14 +38,11 @@ const creation = reactive({
   name: ''
 })
 const formValues = reactive({})
-const strategySelection = reactive({
-  methods: [],
-  scene_enhancer: 'S01',
-  title_formula_code: '',
-  content_formula_code: ''
-})
 const selectedAngleId = ref('')
 const selectedTitleId = ref('')
+const selectedTitleFormulaCode = ref('')
+const selectedBodyFormulaCode = ref('')
+const selectedCoverAssetId = ref('')
 const confirmedEvidenceIds = ref([])
 const approvalNote = ref('')
 const modelSpec = ref('')
@@ -90,63 +86,52 @@ const activeFields = computed(() => {
     : store.template?.pro_form_schema || []
 })
 const isQuickMode = computed(() => (store.task ? store.task.mode : creation.mode) === 'quick')
-const methodOptions = computed(() =>
-  (store.ruleBundle?.methods || []).filter((item) => item.method_type === 'core')
-)
-const titleFormulaOptions = computed(() => store.ruleBundle?.title_formulas || [])
-const bodyFormulaOptions = computed(() => store.ruleBundle?.content_formulas || [])
-const compatibilityClass = computed(() => {
-  const value = store.strategy?.compatibility
-  if (value === 'blocked') return 'blocked'
-  if (value === 'warning') return 'warning'
-  return 'compatible'
-})
 const titleOptions = computed(
   () => store.interrupt?.options || store.task?.title_candidates || []
 )
 const angleOptions = computed(() =>
-  store.interrupt?.interrupt_type === 'select_content_angle' ? store.interrupt.options || [] : []
+  store.interrupt?.interrupt_type === 'content_direction' ? store.interrupt.options || [] : []
 )
 const nodeTimeline = computed(() => {
-  const v1Labels = {
-    compile_brief: '构建业务简报',
-    plan_strategy: '规划创作策略',
-    collect_evidence: '检索并冻结证据',
-    confirm_facts: '确认关键事实',
-    generate_titles: '生成标题候选',
-    select_title: '人工选择标题',
-    generate_body: '生成正文与话题',
-    validate: '确定性校验',
-    review: '内容质量审核',
-    save: '保存内容版本'
-  }
-  const v2Labels = {
-    compile_context: '编译运行上下文',
-    ingest_materials: '导入真实素材',
-    assemble_facts: '组装事实与证据',
-    analyze_content_value: '分析内容价值',
-    select_content_angle: '选择内容角度',
-    match_strategy_v2: '匹配创作策略',
-    resolve_formula_slots: '解析公式变量',
-    collect_evidence: '检索并冻结证据',
-    confirm_high_risk_facts: '确认高风险事实',
-    generate_title_candidates: '生成标题候选',
+  const v3Labels = {
+    compile_runtime_snapshot: '冻结运行配置',
+    ingest_real_materials: '导入真实素材',
+    normalize_evidence: '规范化证据',
+    analyze_content_value: 'Agent 分析内容价值',
+    select_content_direction: '人工锁定内容方向',
+    match_combination_group: '固定规则匹配组合组',
+    explain_strategy: 'Agent 解释策略',
+    resolve_formula_requirements: '解析公式所需事实',
+    collect_missing_evidence: 'Agent 收集缺失证据',
+    confirm_high_risk_facts: '人工确认高风险事实',
+    freeze_evidence_bundle: '冻结证据包',
+    rank_formula_candidates: 'Agent 排序公式候选',
+    lock_formula_selection: '锁定标题与正文公式',
+    generate_title_candidates: '标题 Agent 生成候选',
     validate_title_candidates: '校验标题候选',
     select_title: '人工选择标题',
-    build_content_outline: '构建内容大纲',
-    generate_body_draft: '生成正文初稿',
-    persona_style_polish: '调整人设语气',
+    build_outline: '正文 Agent 构建大纲',
+    generate_body: '正文 Agent 生成正文',
+    persona_style_polish: '按人设润色表达',
     adapt_to_channel: '适配发布渠道',
     deterministic_validate: '执行确定性校验',
-    semantic_review: '语义质量审核',
-    human_approval: '人工审批',
-    save_artifact_and_snapshots: '保存内容与快照'
+    semantic_review: '审核 Agent 复核内容',
+    revise_if_needed: '按失败原因定点回修',
+    human_content_approval: '人工批准最终文案',
+    plan_visuals: '视觉 Agent 制定方案',
+    submit_cover_job: '提交封面任务',
+    wait_cover_job: '等待封面服务',
+    visual_review: '视觉 Agent 审核图片',
+    select_cover: '人工选择封面',
+    save_artifact_snapshot: '保存统一内容版本',
+    package_for_distribution: '生成不可变发布包'
   }
-  const labels = Number(store.task?.runtime_config_snapshot?.schema_version || 1) >= 2
-    ? v2Labels
-    : v1Labels
   const byNode = new Map(store.runEvents.map((item) => [item.node_id, item]))
-  return Object.entries(labels).map(([id, label]) => ({ id, label, status: byNode.get(id)?.status || 'pending' }))
+  return Object.entries(v3Labels).map(([id, label]) => ({
+    id,
+    label,
+    status: byNode.get(id)?.status || 'pending'
+  }))
 })
 const reviewChecks = computed(() => store.artifact?.review_snapshot?.checks || store.task?.review?.checks || [])
 const canFinalize = computed(() => ['passed', 'warning'].includes(store.artifact?.review_snapshot?.status))
@@ -165,9 +150,8 @@ const saveStatusLabel = computed(() => {
 
 const stageFromTask = (task) => {
   if (!task) return 1
-  if (task.current_stage === 'review') return 4
-  if (task.current_stage === 'generation') return 3
-  if (task.current_stage === 'strategy') return 2
+  if (task.current_stage === 'review') return 3
+  if (['generation', 'strategy'].includes(task.current_stage)) return 2
   return 1
 }
 
@@ -188,13 +172,6 @@ const initializeFormValues = () => {
   })
 }
 
-const syncStrategy = (strategy = store.strategy) => {
-  strategySelection.methods = [...(strategy?.methods || [])]
-  strategySelection.scene_enhancer = strategy?.scene_enhancer || 'S01'
-  strategySelection.title_formula_code = strategy?.title_formula_code || ''
-  strategySelection.content_formula_code = strategy?.content_formula_code || ''
-}
-
 const syncEditor = () => {
   editor.title = store.artifact?.title || ''
   editor.body = store.artifact?.body || ''
@@ -206,8 +183,22 @@ watch(
   (task) => {
     if (!task) return
     stage.value = stageFromTask(task)
-    syncStrategy(task.strategy)
     syncEditor()
+  },
+  { deep: true }
+)
+
+watch(
+  () => store.interrupt,
+  (interrupt) => {
+    selectedAngleId.value = ''
+    selectedTitleId.value = ''
+    selectedTitleFormulaCode.value = ''
+    selectedBodyFormulaCode.value = ''
+    selectedCoverAssetId.value = ''
+    confirmedEvidenceIds.value =
+      interrupt?.interrupt_type === 'high_risk_facts' ? [...(interrupt.evidence_ids || [])] : []
+    approvalNote.value = ''
   },
   { deep: true }
 )
@@ -227,19 +218,14 @@ onMounted(async () => {
     if (taskId.value) {
       await store.loadTask(taskId.value)
       initializeFormValues()
-      syncStrategy()
       syncEditor()
       if (
         store.task?.latest_run_id &&
         [
           'queued',
           'running',
-          'planning_strategy',
-          'collecting_evidence',
-          'waiting_title',
           'waiting_human',
-          'generating_body',
-          'reviewing',
+          'waiting_external',
           'failed',
           'cancelled'
         ].includes(store.task.status)
@@ -309,34 +295,9 @@ const compileBrief = async () => {
     window.clearTimeout(draftSaveTimer)
     await store.compileBrief(buildBrief())
     stage.value = 2
-    const strategy = await store.recommendStrategy()
-    syncStrategy(strategy)
-    message.success('业务简报已形成，系统已匹配创作策略')
+    message.success('业务简报已形成，可启动 V3 内容工作流')
   } catch (error) {
     message.error(error.message || '请补充必填业务信息')
-  }
-}
-
-const refreshRecommendation = async () => {
-  try {
-    const strategy = await store.recommendStrategy()
-    syncStrategy(strategy)
-  } catch (error) {
-    message.error(error.message || '策略匹配失败')
-  }
-}
-
-const confirmStrategy = async () => {
-  try {
-    const response = await store.saveStrategy({ ...strategySelection })
-    if (response.validation.compatibility === 'blocked') {
-      message.error('当前组合不兼容，请根据提示调整')
-      return
-    }
-    stage.value = 3
-    message.success('创作策略已锁定')
-  } catch (error) {
-    message.error(error.message || '保存策略失败')
   }
 }
 
@@ -359,24 +320,48 @@ const retryFailedRun = async () => {
 
 const submitHumanReview = async () => {
   try {
-    if (store.interrupt?.interrupt_type === 'select_content_angle') {
-      const selected = angleOptions.value.find((item) => item.id === selectedAngleId.value)
+    const metadata = {
+      run_id: store.interrupt?.run_id,
+      node_id: store.interrupt?.node_id,
+      expected_state_version: store.interrupt?.expected_state_version
+    }
+    if (store.interrupt?.interrupt_type === 'content_direction') {
+      const selected = angleOptions.value.find((item) => item.direction_code === selectedAngleId.value)
       if (!selected) {
-        message.warning('请选择一个内容角度')
+        message.warning('请选择一个内容方向')
         return
       }
       await store.resumeRun({
-        interrupt_type: 'select_content_angle',
-        angle_id: selected.id,
-        primary_narrative_axis: selected.primary_narrative_axis
+        ...metadata,
+        direction_code: selected.direction_code
       })
       return
     }
-    if (store.interrupt?.interrupt_type === 'confirm_facts') {
+    if (store.interrupt?.interrupt_type === 'high_risk_facts') {
       await store.resumeRun({
-        interrupt_type: 'confirm_facts',
+        ...metadata,
         confirmed_evidence_ids: confirmedEvidenceIds.value
       })
+      return
+    }
+    if (store.interrupt?.interrupt_type === 'formula_selection') {
+      if (!selectedTitleFormulaCode.value || !selectedBodyFormulaCode.value) {
+        message.warning('请各选择一个标题公式和正文公式')
+        return
+      }
+      await store.resumeRun({
+        ...metadata,
+        title_formula_code: selectedTitleFormulaCode.value,
+        body_formula_code: selectedBodyFormulaCode.value
+      })
+      return
+    }
+    if (store.interrupt?.interrupt_type === 'cover_selection') {
+      if (!selectedCoverAssetId.value) {
+        message.warning('请选择一张封面')
+        return
+      }
+      await store.resumeRun({ ...metadata, asset_id: selectedCoverAssetId.value })
       return
     }
     if (!selectedTitleId.value) {
@@ -384,8 +369,8 @@ const submitHumanReview = async () => {
       return
     }
     await store.resumeRun({
-      interrupt_type: 'select_title',
-      selected_candidate_id: selectedTitleId.value
+      ...metadata,
+      title_id: selectedTitleId.value
     })
   } catch (error) {
     message.error(error.message || '恢复工作流失败')
@@ -395,8 +380,10 @@ const submitHumanReview = async () => {
 const submitHumanApproval = async (approved) => {
   try {
     await store.resumeRun({
-      interrupt_type: 'human_approval',
-      approved,
+      run_id: store.interrupt?.run_id,
+      node_id: store.interrupt?.node_id,
+      expected_state_version: store.interrupt?.expected_state_version,
+      decision: approved ? 'approved' : 'rejected',
       note: approvalNote.value.trim() || null
     })
   } catch (error) {
@@ -476,7 +463,7 @@ const openVersions = async () => {
             <label class="field-block">
               <span>使用模式</span>
               <a-segmented v-model:value="creation.mode" :options="[{ label: '简化版', value: 'quick' }, { label: '专业版', value: 'pro' }]" />
-              <small>简化版由系统自动匹配公式；专业版可逐项确认策略。</small>
+              <small>简化版由 V3 自动锁定公式；专业版会在人工节点确认公式对。</small>
             </label>
             <label class="field-block">
               <span>内容目标</span>
@@ -565,7 +552,7 @@ const openVersions = async () => {
           </div>
           <div class="stage-actions">
             <a-button type="primary" :loading="store.loading.saving" @click="compileBrief">
-              形成事实简报并进入策略
+              形成事实简报并进入 V3 生产
             </a-button>
           </div>
         </template>
@@ -573,80 +560,14 @@ const openVersions = async () => {
 
       <section v-else-if="stage === 2" class="stage-panel">
         <div class="panel-heading">
-          <div><span>阶段 2</span><h2>创作策略与组合校验</h2></div>
-          <a-button :loading="store.loading.saving" @click="refreshRecommendation"><RefreshCw :size="15" />重新匹配</a-button>
-        </div>
-
-        <div class="strategy-grid">
-          <div class="form-card">
-            <label class="field-block">
-              <span>核心创作手法</span>
-              <a-select v-model:value="strategySelection.methods" mode="multiple" :disabled="isQuickMode">
-                <a-select-option v-for="item in methodOptions" :key="item.code" :value="item.code">
-                  {{ item.name }} · {{ item.principle }}
-                </a-select-option>
-              </a-select>
-            </label>
-            <label class="field-block">
-              <span>标题公式</span>
-              <a-select v-model:value="strategySelection.title_formula_code" :disabled="isQuickMode">
-                <a-select-option v-for="item in titleFormulaOptions" :key="item.code" :value="item.code">
-                  {{ item.code }} · {{ item.name }}
-                </a-select-option>
-              </a-select>
-            </label>
-            <label class="field-block">
-              <span>正文公式</span>
-              <a-select v-model:value="strategySelection.content_formula_code" :disabled="isQuickMode">
-                <a-select-option v-for="item in bodyFormulaOptions" :key="item.code" :value="item.code">
-                  {{ item.code }} · {{ item.name }}
-                </a-select-option>
-              </a-select>
-            </label>
-            <label class="field-check">
-              <a-checkbox
-                :checked="Boolean(strategySelection.scene_enhancer)"
-                @change="strategySelection.scene_enhancer = $event.target.checked ? 'S01' : ''"
-              >启用场景增强</a-checkbox>
-            </label>
-          </div>
-
-          <aside class="compatibility-card" :class="compatibilityClass">
-            <CheckCircle2 v-if="compatibilityClass === 'compatible'" :size="24" />
-            <CircleAlert v-else :size="24" />
-            <h3>{{ compatibilityClass === 'blocked' ? '组合被阻断' : compatibilityClass === 'warning' ? '组合可用但需注意' : '组合已匹配' }}</h3>
-            <p>{{ store.strategy?.reason_summary || '系统会根据内容目标和规则矩阵给出组合原因。' }}</p>
-            <ul v-if="store.strategy?.warnings?.length">
-              <li v-for="warning in store.strategy.warnings" :key="warning">{{ warning }}</li>
-            </ul>
-            <div class="strategy-snapshot">
-              <span>规则版本</span><code>{{ store.task?.rule_version_id }}</code>
-              <span>证据条目</span><strong>{{ store.evidence?.items?.length || 0 }}</strong>
-            </div>
-          </aside>
-        </div>
-
-        <div class="stage-actions split">
-          <a-button @click="stage = 1"><ArrowLeft :size="15" />返回素材</a-button>
-          <a-button
-            type="primary"
-            :loading="store.loading.saving"
-            :disabled="compatibilityClass === 'blocked'"
-            @click="confirmStrategy"
-          >锁定策略并进入生成</a-button>
-        </div>
-      </section>
-
-      <section v-else-if="stage === 3" class="stage-panel">
-        <div class="panel-heading">
-          <div><span>阶段 3</span><h2>内容生成与人工选择</h2></div>
+          <div><span>阶段 2</span><h2>V3 内容工作流</h2></div>
           <span v-if="store.currentRun" class="run-id">Run {{ store.currentRun.run_id }}</span>
         </div>
 
         <div v-if="!store.currentRun && !store.interrupt" class="generation-start">
           <Sparkles :size="30" />
-          <h3>策略和证据已锁定</h3>
-          <p>工作流会依次执行策略、证据、标题、正文和审核节点，并在标题候选处暂停。</p>
+          <h3>事实简报已锁定</h3>
+          <p>固定工作流会在动态节点调用 Agent，Agent 再使用 Skill、知识库和工具，关键选择会暂停等待人工确认。</p>
           <a-input v-if="!isQuickMode" v-model:value="modelSpec" placeholder="可选：指定模型 spec；留空使用系统默认模型" />
           <a-button type="primary" size="large" @click="startGeneration"><Play :size="17" />开始生成</a-button>
         </div>
@@ -662,19 +583,19 @@ const openVersions = async () => {
             </div>
           </div>
 
-          <div v-if="store.interrupt?.interrupt_type === 'select_content_angle'" class="human-review-card">
-            <div class="human-heading"><Sparkles :size="20" /><div><h3>选择本次内容角度</h3><p>系统已根据目标、事实和证据生成可执行方向，选择后将继续匹配公式。</p></div></div>
+          <div v-if="store.interrupt?.interrupt_type === 'content_direction'" class="human-review-card">
+            <div class="human-heading"><Sparkles :size="20" /><div><h3>选择本次内容方向</h3><p>Agent 已根据目标、事实和证据生成候选方向，选择后将由固定规则匹配组合组。</p></div></div>
             <a-radio-group v-model:value="selectedAngleId" class="title-options angle-options">
-              <a-radio v-for="item in angleOptions" :key="item.id" :value="item.id">
-                <strong>{{ item.value_proposition }}</strong>
-                <span>{{ item.recommendation_reason }}</span>
-                <small v-if="item.target_audience?.length">目标人群：{{ item.target_audience.join('、') }}</small>
+              <a-radio v-for="item in angleOptions" :key="item.direction_code" :value="item.direction_code">
+                <strong>{{ item.direction_code }}</strong>
+                <span>{{ item.reason }}</span>
+                <small v-if="item.evidence_ids?.length">引用证据：{{ item.evidence_ids.join('、') }}</small>
               </a-radio>
             </a-radio-group>
-            <a-button type="primary" :disabled="!selectedAngleId" @click="submitHumanReview">确认角度并继续</a-button>
+            <a-button type="primary" :disabled="!selectedAngleId" @click="submitHumanReview">确认方向并继续</a-button>
           </div>
 
-          <div v-else-if="store.interrupt?.interrupt_type === 'select_title'" class="human-review-card">
+          <div v-else-if="store.interrupt?.interrupt_type === 'title_selection'" class="human-review-card">
             <div class="human-heading"><Send :size="20" /><div><h3>请选择最终标题</h3><p>选择后 LangGraph 从 checkpoint 恢复，无需重新检索证据。</p></div></div>
             <a-radio-group v-model:value="selectedTitleId" class="title-options">
               <a-radio v-for="item in titleOptions" :key="item.id" :value="item.id">
@@ -685,20 +606,35 @@ const openVersions = async () => {
             <a-button type="primary" @click="submitHumanReview">确认标题并继续生成</a-button>
           </div>
 
-          <div v-else-if="store.interrupt?.interrupt_type === 'confirm_facts'" class="human-review-card">
+          <div v-else-if="store.interrupt?.interrupt_type === 'high_risk_facts'" class="human-review-card">
             <div class="human-heading"><ShieldCheck :size="20" /><div><h3>确认关键事实</h3><p>价格、效果或高风险表达必须确认后才能用于生成。</p></div></div>
             <a-checkbox-group v-model:value="confirmedEvidenceIds" class="fact-options">
-              <a-checkbox v-for="item in store.interrupt.options" :key="item.id" :value="item.id">
-                {{ item.key }}：{{ item.value }}
+              <a-checkbox v-for="item in store.interrupt.evidence_ids" :key="item" :value="item">
+                {{ item }}
               </a-checkbox>
             </a-checkbox-group>
             <a-button type="primary" @click="submitHumanReview">确认选中事实并继续</a-button>
           </div>
 
-          <div v-else-if="store.interrupt?.interrupt_type === 'human_approval'" class="human-review-card">
+          <div v-else-if="store.interrupt?.interrupt_type === 'formula_selection'" class="human-review-card">
+            <div class="human-heading"><Sparkles :size="20" /><div><h3>选择公式对</h3><p>专业模式下，从当前组合组的合法候选池中各选一个标题公式和正文公式。</p></div></div>
+            <label class="field-block"><span>标题公式</span>
+              <a-select v-model:value="selectedTitleFormulaCode">
+                <a-select-option v-for="code in store.interrupt.title_formula_codes" :key="code" :value="code">{{ code }}</a-select-option>
+              </a-select>
+            </label>
+            <label class="field-block"><span>正文公式</span>
+              <a-select v-model:value="selectedBodyFormulaCode">
+                <a-select-option v-for="code in store.interrupt.body_formula_codes" :key="code" :value="code">{{ code }}</a-select-option>
+              </a-select>
+            </label>
+            <a-button type="primary" @click="submitHumanReview">锁定公式并继续</a-button>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'content_approval'" class="human-review-card">
             <div class="human-heading"><ShieldCheck :size="20" /><div><h3>最终人工审批</h3><p>请根据审核结果确认是否允许保存内容资产。</p></div></div>
-            <div v-if="store.interrupt.review?.checks?.length" class="approval-checks">
-              <div v-for="check in store.interrupt.review.checks" :key="`${check.code}-${check.message}`">
+            <div v-if="store.interrupt.review_report?.checks?.length" class="approval-checks">
+              <div v-for="check in store.interrupt.review_report.checks" :key="`${check.code}-${check.message}`">
                 <strong>{{ check.message }}</strong>
                 <span v-if="check.suggestion">{{ check.suggestion }}</span>
               </div>
@@ -708,6 +644,16 @@ const openVersions = async () => {
               <a-button danger @click="submitHumanApproval(false)">驳回</a-button>
               <a-button type="primary" @click="submitHumanApproval(true)">通过并继续</a-button>
             </div>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'cover_selection'" class="human-review-card">
+            <div class="human-heading"><Send :size="20" /><div><h3>选择最终封面</h3><p>只可从通过视觉审核的资产中选择。</p></div></div>
+            <a-radio-group v-model:value="selectedCoverAssetId" class="title-options">
+              <a-radio v-for="assetId in store.interrupt.asset_ids" :key="assetId" :value="assetId">
+                <strong>{{ assetId }}</strong>
+              </a-radio>
+            </a-radio-group>
+            <a-button type="primary" @click="submitHumanReview">确认封面并保存</a-button>
           </div>
 
           <div v-else-if="runFailed" class="running-card failure-card">
@@ -733,7 +679,7 @@ const openVersions = async () => {
 
       <section v-else class="stage-panel">
         <div class="panel-heading">
-          <div><span>阶段 4</span><h2>审核、编辑与正式版本</h2></div>
+          <div><span>阶段 3</span><h2>审核、编辑与正式版本</h2></div>
           <div class="status-badge" :class="store.artifact?.review_snapshot?.status || 'pending'">
             {{ store.artifact?.review_snapshot?.status || '待审核' }}
           </div>
@@ -830,7 +776,7 @@ const openVersions = async () => {
 .panel-heading h2 { margin: 2px 0 0; font-size: 20px; }
 .panel-heading p { max-width: 460px; margin: 0; color: var(--color-text-secondary); }
 
-.setup-grid, .brief-layout, .strategy-grid, .run-layout, .review-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr); gap: 20px; }
+.setup-grid, .brief-layout, .run-layout, .review-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr); gap: 20px; }
 .setup-grid { grid-template-columns: 1fr 1fr; margin-bottom: 20px; }
 .template-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .template-card { min-height: 116px; padding: 16px; display: flex; flex-direction: column; gap: 7px; text-align: left; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); color: var(--color-text); cursor: pointer; }
@@ -839,7 +785,7 @@ const openVersions = async () => {
 .template-card strong { font-size: 15px; }
 .template-card span, .template-card small { color: var(--color-text-secondary); }
 
-.form-card, .facts-preview, .compatibility-card, .run-timeline, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
+.form-card, .facts-preview, .run-timeline, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
 .form-card, .content-editor-card { display: flex; flex-direction: column; gap: 18px; }
 .dynamic-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .dynamic-form .field-block:has(textarea), .dynamic-form .field-block:has(.ant-select-multiple) { grid-column: 1 / -1; }
@@ -858,15 +804,6 @@ const openVersions = async () => {
 .stage-actions { margin-top: 22px; display: flex; justify-content: flex-end; gap: 10px; }
 .stage-actions.split { justify-content: space-between; }
 
-.compatibility-card.compatible { background: var(--color-success-10); border-color: var(--color-success-100); }
-.compatibility-card.warning { background: var(--color-warning-10); border-color: var(--color-warning-100); }
-.compatibility-card.blocked { background: var(--color-error-10); border-color: var(--color-error-100); }
-.compatibility-card h3 { margin: 10px 0 6px; }
-.compatibility-card p, .compatibility-card li { color: var(--color-text-secondary); }
-.strategy-snapshot { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--gray-150); }
-.strategy-snapshot span { color: var(--color-text-secondary); }
-.strategy-snapshot code { overflow-wrap: anywhere; }
-.field-check { color: var(--color-text-secondary); }
 
 .generation-start { max-width: 560px; margin: 50px auto; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
 .generation-start h3, .generation-start p { margin: 0; }
@@ -920,7 +857,7 @@ const openVersions = async () => {
 
 @media (max-width: 900px) {
   .studio-header, .panel-heading { flex-direction: column; }
-  .setup-grid, .brief-layout, .strategy-grid, .run-layout, .review-layout { grid-template-columns: 1fr; }
+  .setup-grid, .brief-layout, .run-layout, .review-layout { grid-template-columns: 1fr; }
   .template-grid { grid-template-columns: 1fr 1fr; }
 }
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Annotated, Any, NotRequired, TypedDict
 
@@ -16,8 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.agents.mcp.service import get_enabled_mcp_tools
 from yuxi.agents.skills.repository import SkillRepository
-from yuxi.agents.skills.service import is_valid_skill_slug, list_accessible_skills, normalize_string_list
+from yuxi.agents.skills.service import (
+    is_valid_skill_slug,
+    list_accessible_skills,
+    normalize_string_list,
+    user_can_access_skill,
+)
 from yuxi.agents.toolkits import get_all_tool_instances
+from yuxi import config as sys_config
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.utils.logging_config import logger
 
@@ -30,6 +37,9 @@ class SkillPromptMetadata(TypedDict):
     name: str
     description: str
     path: str
+    instructions: str
+    version: str
+    content_hash: str
 
 
 class SkillDependencyNode(TypedDict):
@@ -59,11 +69,29 @@ async def _list_skills_from_db(db: AsyncSession | None = None, user=None) -> lis
 
 
 def build_prompt_metadata(skills: list) -> dict[str, SkillPromptMetadata]:
+    def read_instructions(item) -> str:
+        explicit = getattr(item, "instructions", None)
+        if isinstance(explicit, str):
+            return explicit.strip()
+        raw_path = getattr(item, "dir_path", None)
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return ""
+        directory = Path(raw_path)
+        if not directory.is_absolute():
+            directory = Path(sys_config.save_dir) / directory
+        try:
+            return (directory / "SKILL.md").read_text(encoding="utf-8").strip()
+        except (FileNotFoundError, IsADirectoryError, OSError):
+            return ""
+
     return {
         item.slug: {
             "name": item.name,
             "description": item.description,
             "path": f"/home/gem/skills/{item.slug}/SKILL.md",
+            "instructions": read_instructions(item),
+            "version": str(getattr(item, "version", None) or "unversioned"),
+            "content_hash": str(getattr(item, "content_hash", None) or ""),
         }
         for item in skills
         if item.slug
@@ -129,6 +157,42 @@ def expand_skill_closure(
     return result
 
 
+class RequiredSkillResolutionError(ValueError):
+    """必需 Skill 无法在当前 Agent 权限内完整激活。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def expand_required_skill_closure(
+    slugs: list[str] | None,
+    dependency_map: dict[str, SkillDependencyNode],
+) -> list[str]:
+    """严格展开 required Skills；任何缺失或循环都必须显式失败。"""
+
+    result: list[str] = []
+    seen: set[str] = set()
+
+    def dfs(slug: str, stack: tuple[str, ...]) -> None:
+        if slug in stack:
+            cycle = " -> ".join((*stack, slug))
+            raise RequiredSkillResolutionError("required_skill_cycle", f"Skill 依赖存在循环: {cycle}")
+        if slug in seen:
+            return
+        node = dependency_map.get(slug)
+        if node is None:
+            raise RequiredSkillResolutionError("required_skill_missing", f"必需 Skill 不存在或不可访问: {slug}")
+        seen.add(slug)
+        result.append(slug)
+        for dependency in node.get("skills", []):
+            dfs(dependency, (*stack, slug))
+
+    for root in normalize_string_list(slugs):
+        dfs(root, ())
+    return result
+
+
 async def resolve_runtime_skills_for_context(context, *, db: AsyncSession | None = None, user=None) -> dict[str, Any]:
     skill_items = await _list_skills_from_db(db, user)
     dependency_map = build_dependency_map(skill_items)
@@ -136,13 +200,95 @@ async def resolve_runtime_skills_for_context(context, *, db: AsyncSession | None
     available = set(dependency_map)
     selected = normalize_string_list(getattr(context, "skills", None))
     context_skills = [slug for slug in selected if slug in available]
+    required_roots = normalize_string_list(getattr(context, "required_skills", None))
+    if required_roots and db is not None and user is not None:
+        all_items = await SkillRepository(db).list_all()
+        all_by_slug = {item.slug: item for item in all_items if item.slug}
+        inspected: set[str] = set()
+
+        def validate_access(slug: str) -> None:
+            if slug in inspected:
+                return
+            inspected.add(slug)
+            item = all_by_slug.get(slug)
+            if item is None:
+                raise RequiredSkillResolutionError("required_skill_missing", f"必需 Skill 不存在: {slug}")
+            if not item.enabled:
+                raise RequiredSkillResolutionError("required_skill_disabled", f"必需 Skill 已停用: {slug}")
+            if not user_can_access_skill(user, item):
+                raise RequiredSkillResolutionError("required_skill_unauthorized", f"无权使用必需 Skill: {slug}")
+            for dependency in normalize_string_list(item.skill_dependencies or []):
+                validate_access(dependency)
+
+        for slug in required_roots:
+            validate_access(slug)
+    required_closure = expand_required_skill_closure(required_roots, dependency_map)
+    if required_roots:
+        unauthorized = [slug for slug in required_roots if slug not in context_skills]
+        if unauthorized:
+            raise RequiredSkillResolutionError(
+                "required_skill_unauthorized",
+                f"Agent 未授权必需 Skill: {', '.join(unauthorized)}",
+            )
     prompt_skills = expand_skill_closure(context_skills, dependency_map)
+    for slug in required_closure:
+        if slug not in prompt_skills:
+            prompt_skills.append(slug)
+
+    missing_instructions = [slug for slug in required_closure if not prompt_metadata[slug]["instructions"]]
+    if missing_instructions:
+        raise RequiredSkillResolutionError(
+            "required_skill_instructions_unavailable",
+            f"必需 Skill 的 SKILL.md 不可读: {', '.join(missing_instructions)}",
+        )
+
+    required_tools: list[str] = []
+    required_mcps: list[str] = []
+    for slug in required_closure:
+        node = dependency_map[slug]
+        required_tools.extend(node.get("tools", []))
+        required_mcps.extend(node.get("mcps", []))
+    required_tools = normalize_string_list(required_tools)
+    required_mcps = normalize_string_list(required_mcps)
+    tool_allowlist = set(normalize_string_list(getattr(context, "skill_tool_allowlist", None)))
+    unauthorized_tools = [name for name in required_tools if name not in tool_allowlist]
+    if unauthorized_tools:
+        raise RequiredSkillResolutionError(
+            "required_skill_tool_unauthorized",
+            f"Agent 未授权 Skill 依赖工具: {', '.join(unauthorized_tools)}",
+        )
+    installed_tools = {tool.name for tool in get_all_tool_instances()}
+    missing_tools = [name for name in required_tools if name not in installed_tools]
+    if missing_tools:
+        raise RequiredSkillResolutionError(
+            "required_skill_tool_unavailable",
+            f"Skill 依赖工具不可用: {', '.join(missing_tools)}",
+        )
+    authorized_mcps = set(normalize_string_list(getattr(context, "mcps", None)))
+    unauthorized_mcps = [name for name in required_mcps if name not in authorized_mcps]
+    if unauthorized_mcps:
+        raise RequiredSkillResolutionError(
+            "required_skill_mcp_unavailable",
+            f"Skill 依赖 MCP 不可用: {', '.join(unauthorized_mcps)}",
+        )
+
     return {
         "context_skills": context_skills,
         "prompt_skills": prompt_skills,
         "readable_skills": prompt_skills,
         "runtime_skill_metadata": prompt_metadata,
         "runtime_skill_dependency_map": dependency_map,
+        "required_skill_closure": required_closure,
+        "required_skill_tools": required_tools,
+        "required_skill_mcps": required_mcps,
+        "runtime_skill_snapshots": [
+            {
+                "slug": slug,
+                "version": prompt_metadata[slug]["version"],
+                "content_hash": prompt_metadata[slug]["content_hash"],
+            }
+            for slug in required_closure
+        ],
     }
 
 
@@ -203,6 +349,7 @@ class SkillsMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """包装模型调用，处理 skills 提示词注入、动态激活和依赖展开"""
         runtime_context = request.runtime.context
+        required_skills = normalize_string_list(getattr(runtime_context, "_required_skill_closure", None))
 
         if self.enable_skills_prompt:
             prompt_skills = getattr(runtime_context, "_prompt_skills", None)
@@ -213,6 +360,10 @@ class SkillsMiddleware(AgentMiddleware):
                     skills_section = self._build_skills_section(skills_meta)
                     system_message = append_to_system_message(getattr(request, "system_message", None), skills_section)
                     request = request.override(system_message=system_message)
+            if required_skills:
+                required_section = self._build_required_skills_section(required_skills, runtime_context)
+                system_message = append_to_system_message(getattr(request, "system_message", None), required_section)
+                request = request.override(system_message=system_message)
 
         state = request.state if isinstance(request.state, dict) else {}
         activated = state.get("activated_skills", []) or []
@@ -221,6 +372,16 @@ class SkillsMiddleware(AgentMiddleware):
 
         readable_skills = self._get_readable_skills(runtime_context)
         activated = [slug for slug in normalize_string_list(activated) if slug in readable_skills]
+        for slug in required_skills:
+            if slug not in readable_skills:
+                raise RequiredSkillResolutionError(
+                    "required_skill_not_activated",
+                    f"必需 Skill 未进入可读范围: {slug}",
+                )
+            if slug not in activated:
+                activated.append(slug)
+        setattr(runtime_context, "_activated_required_skills", list(required_skills))
+        await self._emit_required_skill_events(required_skills, runtime_context)
 
         deps_bundle = self._build_dependency_bundle(activated, runtime_context)
 
@@ -247,7 +408,45 @@ class SkillsMiddleware(AgentMiddleware):
                     merged_tools.append(t)
             request = request.override(tools=merged_tools)
 
+        content_node_scope = getattr(runtime_context, "_content_node_tool_scope", None)
+        if isinstance(content_node_scope, list):
+            allowed_names = set(normalize_string_list(content_node_scope))
+            scoped_tools = [tool for tool in request.tools or [] if tool.name in allowed_names]
+            request = request.override(tools=scoped_tools)
+
         return await handler(request)
+
+    async def _emit_required_skill_events(self, required_skills: list[str], runtime_context) -> None:
+        if not required_skills:
+            return
+        emitted = getattr(runtime_context, "_emitted_required_skill_events", None)
+        if not isinstance(emitted, set):
+            emitted = set()
+            setattr(runtime_context, "_emitted_required_skill_events", emitted)
+        snapshots = {
+            item.get("slug"): item
+            for item in getattr(runtime_context, "_runtime_skill_snapshots", [])
+            if isinstance(item, dict) and item.get("slug")
+        }
+        run_id = str(getattr(runtime_context, "run_id", "") or "").strip()
+        if not run_id:
+            raise RequiredSkillResolutionError("required_skill_run_missing", "必需 Skill 激活缺少子 Run ID")
+        from yuxi.services.run_queue_service import append_content_runtime_event
+
+        for slug in required_skills:
+            if slug in emitted:
+                continue
+            snapshot = snapshots.get(slug) or {}
+            await append_content_runtime_event(
+                runtime_context,
+                "content.skill.activated",
+                {
+                    "skill_slug": slug,
+                    "skill_version": snapshot.get("version") or "unversioned",
+                    "content_hash": snapshot.get("content_hash") or "",
+                },
+            )
+            emitted.add(slug)
 
     def _build_dependency_bundle(self, activated_skills: list[str], runtime_context) -> dict[str, list[str]]:
         """根据直接激活的 skills 构建依赖包（不包含闭包展开的依赖）"""
@@ -295,6 +494,22 @@ class SkillsMiddleware(AgentMiddleware):
             result.append(dict(item))
 
         return result
+
+    def _build_required_skills_section(self, slugs: list[str], runtime_context) -> str:
+        metadata = self._get_runtime_prompt_metadata(runtime_context)
+        sections = [
+            "以下 Skill 是本节点已强制激活的完整执行指令，必须遵守；SKILL.md 全文已经注入，不要再调用 read_file："
+        ]
+        for slug in slugs:
+            item = metadata.get(slug) or {}
+            instructions = str(item.get("instructions") or "").strip()
+            if not instructions:
+                raise RequiredSkillResolutionError(
+                    "required_skill_instructions_unavailable",
+                    f"必需 Skill 的 SKILL.md 不可读: {slug}",
+                )
+            sections.append(f'\n<required-skill slug="{slug}">\n{instructions}\n</required-skill>')
+        return "\n".join(sections)
 
     async def _get_mcp_tools_from_context(
         self,
@@ -362,6 +577,7 @@ class SkillsMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Any],
     ):
         """包装工具调用，处理 skill 动态激活"""
+        self._claim_content_tool_call(request)
         result = await handler(request)
         return self._process_tool_call_result(result, request)
 
@@ -371,8 +587,25 @@ class SkillsMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Any],
     ):
         """同步版本的工具调用包装"""
+        self._claim_content_tool_call(request)
         result = handler(request)
         return self._process_tool_call_result(result, request)
+
+    @staticmethod
+    def _claim_content_tool_call(request: ToolCallRequest) -> None:
+        runtime_context = request.runtime.context
+        configured = getattr(runtime_context, "_content_node_max_tool_calls", None)
+        if configured is None:
+            return
+        tool_name = str(request.tool_call.get("name") or "")
+        scope = getattr(runtime_context, "_content_node_tool_scope", None)
+        if isinstance(scope, list) and tool_name not in set(normalize_string_list(scope)):
+            raise RuntimeError(f"内容 Agent 工具 {tool_name} 不在当前节点许可范围")
+        maximum = int(configured)
+        used = int(getattr(runtime_context, "_content_node_tool_calls_used", 0) or 0)
+        if used >= maximum:
+            raise RuntimeError(f"内容 Agent 工具调用超过节点上限（{maximum}）")
+        setattr(runtime_context, "_content_node_tool_calls_used", used + 1)
 
     def _extract_skill_slug_from_skill_md_path(self, file_path: Any) -> str | None:
         """从文件路径中提取 skill slug"""

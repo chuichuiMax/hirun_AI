@@ -16,16 +16,14 @@ from yuxi.content.schemas import (
     ContentTaskCreate,
     ContentTaskUpdate,
     ChannelPreviewRequest,
-    ContentAngleSelection,
     MaterialConfirmation,
     MaterialCreate,
-    SlotResolveRequest,
+    IndustryPackRegressionSubmission,
+    IndustryPackTransitionRequest,
     RuleBundleUpdate,
     RuleDraftCreate,
     RuleVersionAction,
-    StrategySelection,
-    StrategyRecommendV2Request,
-    StrategyValidateRequest,
+    StrategyRecommendV3Request,
     XiaohongshuAccountCreate,
     XiaohongshuAccountUpdate,
     XiaohongshuBrowserAction,
@@ -33,6 +31,13 @@ from yuxi.content.schemas import (
     XiaohongshuDistributionCreate,
 )
 from yuxi.repositories.content_repository import ContentRepository
+from yuxi.content.control.errors import ContentApplicationError
+from yuxi.content.control.strategy.recommend_v3 import (
+    PreviewV3StrategyCommand,
+    PreviewV3StrategyHandler,
+    StrategyPreviewActor,
+)
+from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
 from yuxi.services.agent_run_service import cancel_agent_run_view, stream_agent_run_events
 from yuxi.services.content_ocr_service import (
     create_content_ocr_result,
@@ -44,6 +49,7 @@ from yuxi.services.content_ocr_service import (
 )
 from yuxi.services.content_service import (
     activate_content_rule_version,
+    activate_content_workflow_version,
     create_content_rule_draft,
     create_content_run,
     create_content_task,
@@ -52,32 +58,27 @@ from yuxi.services.content_service import (
     duplicate_content_task,
     finalize_content_artifact,
     get_content_bootstrap,
-    get_content_v2_catalog,
     get_content_run,
     get_content_task,
     get_task_artifact,
     list_content_artifact_versions,
     list_content_tasks,
     list_task_materials,
-    recommend_content_strategy,
     regenerate_content_artifact,
     resume_content_run,
     retry_content_node,
     review_content_artifact,
     save_content_brief,
     save_content_rule_draft,
-    save_content_strategy,
     add_task_material,
     confirm_task_material,
-    analyze_task_content_value,
     preview_task_channel,
-    recommend_content_strategy_v2,
-    resolve_task_formula_slots,
-    select_task_content_angle,
     update_content_artifact,
     update_content_task,
-    validate_content_strategy,
     validate_rule_bundle_for_publish,
+    validate_content_industry_pack,
+    submit_content_industry_pack_regression,
+    transition_content_industry_pack,
 )
 from yuxi.services.xiaohongshu_service import (
     check_account_login,
@@ -102,6 +103,7 @@ from yuxi.services.xiaohongshu_service import (
 from yuxi.storage.postgres.models_business import User
 
 from server.utils.auth_middleware import get_admin_user, get_db, get_required_user, get_superadmin_user
+from server.utils.content_presenter import present_content_error
 
 content = APIRouter(prefix="/content", tags=["content"])
 
@@ -283,13 +285,6 @@ async def content_bootstrap(current_user: User = Depends(get_required_user), db:
     return await get_content_bootstrap(db, current_user)
 
 
-@content.get("/v2/catalog")
-async def content_v2_catalog(
-    current_user: User = Depends(get_required_user), db: AsyncSession = Depends(get_db)
-):
-    return await get_content_v2_catalog(db, current_user)
-
-
 @content.post("/tasks")
 async def create_task(
     payload: ContentTaskCreate,
@@ -454,52 +449,29 @@ async def compile_brief(
     return await save_content_brief(db, current_user, task_id, payload.brief, compile_now=True)
 
 
-@content.post("/tasks/{task_id}/analyze-value")
-async def analyze_content_value(
+@content.post("/tasks/{task_id}/strategy/recommend-v3")
+async def recommend_strategy_v3(
     task_id: str,
+    payload: StrategyRecommendV3Request,
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await analyze_task_content_value(db, current_user, task_id)
-
-
-@content.put("/tasks/{task_id}/content-angle")
-async def select_content_angle(
-    task_id: str,
-    payload: ContentAngleSelection,
-    current_user: User = Depends(get_required_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await select_task_content_angle(db, current_user, task_id, payload)
-
-
-@content.post("/tasks/{task_id}/strategy/recommend")
-async def recommend_strategy(
-    task_id: str,
-    current_user: User = Depends(get_required_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await recommend_content_strategy(db, current_user, task_id)
-
-
-@content.post("/tasks/{task_id}/strategy/recommend-v2")
-async def recommend_strategy_v2(
-    task_id: str,
-    payload: StrategyRecommendV2Request,
-    current_user: User = Depends(get_required_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await recommend_content_strategy_v2(db, current_user, task_id, payload)
-
-
-@content.post("/tasks/{task_id}/slots/resolve")
-async def resolve_formula_slots(
-    task_id: str,
-    payload: SlotResolveRequest,
-    current_user: User = Depends(get_required_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await resolve_task_formula_slots(db, current_user, task_id, payload)
+    handler = PreviewV3StrategyHandler(PostgresStrategyPreviewRepository(db))
+    try:
+        return await handler.execute(
+            PreviewV3StrategyCommand(
+                task_id=task_id,
+                actor=StrategyPreviewActor(
+                    uid=str(current_user.uid),
+                    role=current_user.role,
+                    tenant_id=str(current_user.department_id) if current_user.department_id is not None else None,
+                ),
+                content_direction_code=payload.content_direction_code,
+                limit=payload.limit,
+            )
+        )
+    except ContentApplicationError as exc:
+        raise present_content_error(exc) from exc
 
 
 @content.post("/tasks/{task_id}/channel-preview")
@@ -510,26 +482,6 @@ async def preview_channel(
     db: AsyncSession = Depends(get_db),
 ):
     return await preview_task_channel(db, current_user, task_id, payload)
-
-
-@content.put("/tasks/{task_id}/strategy")
-async def save_strategy(
-    task_id: str,
-    payload: StrategySelection,
-    current_user: User = Depends(get_required_user),
-    db: AsyncSession = Depends(get_db),
-):
-    return await save_content_strategy(db, current_user, task_id, payload)
-
-
-@content.post("/strategy/validate")
-async def validate_strategy(
-    payload: StrategyValidateRequest,
-    current_user: User = Depends(get_required_user),
-    db: AsyncSession = Depends(get_db),
-):
-    del current_user
-    return await validate_content_strategy(db, payload)
 
 
 @content.get("/rule-versions/{version_id}/bundle")
@@ -758,7 +710,74 @@ async def list_industry_templates(current_user: User = Depends(get_admin_user), 
     return {"items": await ContentRepository(db).list_templates(published_only=False)}
 
 
+@content.get("/admin/industry-packs")
+async def list_industry_packs(current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db)):
+    del current_user
+    return {"items": await ContentRepository(db).list_industry_packs(published_only=False)}
+
+
+@content.post("/admin/industry-packs/{version_id}/validate")
+async def validate_industry_pack(
+    version_id: str,
+    current_user: User = Depends(get_superadmin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await validate_content_industry_pack(db, current_user, version_id)
+
+
+@content.post("/admin/industry-packs/{version_id}/transition")
+async def transition_industry_pack(
+    version_id: str,
+    payload: IndustryPackTransitionRequest,
+    current_user: User = Depends(get_superadmin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await transition_content_industry_pack(db, current_user, version_id, payload)
+
+
+@content.post("/admin/industry-packs/{version_id}/regression")
+async def submit_industry_pack_regression(
+    version_id: str,
+    payload: IndustryPackRegressionSubmission,
+    current_user: User = Depends(get_superadmin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await submit_content_industry_pack_regression(db, current_user, version_id, payload)
+
+
 @content.get("/admin/workflow-templates")
 async def list_workflow_templates(current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db)):
     del current_user
     return {"items": await ContentRepository(db).list_workflows(published_only=False)}
+
+
+@content.post("/admin/workflows/{version_id}/publish")
+async def publish_workflow_version(
+    version_id: str,
+    payload: RuleVersionAction,
+    current_user: User = Depends(get_superadmin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await activate_content_workflow_version(
+        db,
+        current_user,
+        version_id,
+        rollback=False,
+        note=payload.note,
+    )
+
+
+@content.post("/admin/workflows/{version_id}/rollback")
+async def rollback_workflow_version(
+    version_id: str,
+    payload: RuleVersionAction,
+    current_user: User = Depends(get_superadmin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await activate_content_workflow_version(
+        db,
+        current_user,
+        version_id,
+        rollback=True,
+        note=payload.note,
+    )

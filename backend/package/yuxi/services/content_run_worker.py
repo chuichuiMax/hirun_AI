@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 from langgraph.types import Command
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from yuxi.agents.buildin import agent_manager
 from yuxi.agents.buildin.content_workflow.context import ContentWorkflowContext
-from yuxi.repositories.agent_run_repository import TERMINAL_RUN_STATUSES, AgentRunRepository
+from yuxi.content_cover.schemas import CoverRetryCreate
+from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
+from yuxi.repositories.agent_run_repository import TERMINAL_RUN_STATUSES, AgentRunRepository
 from yuxi.services.run_queue_service import append_run_stream_event, clear_cancel_signal, has_cancel_signal
 from yuxi.storage.postgres.manager import pg_manager
+from yuxi.storage.postgres.models_business import User
 from yuxi.utils.logging_config import logger
 
 
@@ -50,6 +55,35 @@ async def _set_content_run_status(
             )
 
 
+async def _retry_failed_cover_job(run, state: dict[str, Any]) -> dict[str, Any]:
+    cover_job_id = str((state.get("cover_job") or {}).get("cover_job_id") or "")
+    if not cover_job_id:
+        raise RuntimeError("封面等待节点缺少可重试的 CoverJob")
+    async with pg_manager.get_async_session_context() as db:
+        cover_job = await ContentCoverRepository(db).get_job_for_user(cover_job_id, run.uid)
+        if cover_job is None or cover_job.content_task_id != run.thread_id:
+            raise RuntimeError("待重试的 CoverJob 不存在或不属于当前内容任务")
+        if cover_job.status not in {"failed", "cancelled"}:
+            return cover_job.to_dict()
+        user = (await db.execute(select(User).where(User.uid == run.uid, User.is_deleted == 0))).scalar_one_or_none()
+        if user is None:
+            raise RuntimeError("内容任务所属用户不存在")
+        from yuxi.services.content_cover_service import retry_cover_job
+
+        result = await retry_cover_job(
+            db,
+            user,
+            cover_job.id,
+            CoverRetryCreate(idempotency_key=f"content-workflow-cover:{run.id}"),
+            workflow_resume={
+                "parent_run_id": run.id,
+                "node_id": "wait_cover_job",
+                "expected_state_version": int(state.get("state_version") or 0),
+            },
+        )
+        return result["job"]
+
+
 async def process_content_run(ctx, run_id: str):
     run, task, workflow, rule_bundle = await _load_content_run(run_id)
     if run is None:
@@ -63,6 +97,16 @@ async def process_content_run(ctx, run_id: str):
             status="failed",
             error_type="content_configuration_missing",
             error_message="内容任务、工作流或规则版本不存在",
+        )
+        return
+    task_schema_version = int((task.runtime_config_snapshot_json or {}).get("schema_version") or 1)
+    workflow_schema_version = int((workflow.definition_json or {}).get("schema_version") or 1)
+    if task_schema_version != 3 or workflow_schema_version != 3:
+        await _set_content_run_status(
+            run_id,
+            status="failed",
+            error_type="content_legacy_task_read_only",
+            error_message="旧版内容任务仅保留历史查询，Worker 只执行 V3 工作流",
         )
         return
 
@@ -82,27 +126,34 @@ async def process_content_run(ctx, run_id: str):
         thread_id=task.id,
     )
 
-    agent = agent_manager.get_agent("ContentWorkflowAgent")
-    context = ContentWorkflowContext(
-        uid=run.uid,
-        thread_id=run.checkpoint_thread_id or f"content:{task.id}",
-        run_id=run.id,
-        request_id=run.request_id,
-        task_id=task.id,
-        workflow_definition=workflow.definition_json or {},
-        rule_bundle=rule_bundle,
-        model_spec=payload.get("model_spec"),
-    )
-    graph = await agent.get_graph(context=context)
-    config = {
-        "configurable": {"thread_id": context.thread_id, "uid": run.uid},
-        "recursion_limit": 100,
-    }
     try:
+        agent = agent_manager.get_agent("ContentWorkflowAgent")
+        context = ContentWorkflowContext(
+            uid=run.uid,
+            thread_id=run.checkpoint_thread_id or f"content:{task.id}",
+            run_id=run.id,
+            request_id=run.request_id,
+            task_id=task.id,
+            workflow_definition=workflow.definition_json or {},
+            rule_bundle=rule_bundle,
+            model_spec=payload.get("model_spec"),
+        )
+        graph = await agent.get_graph(context=context)
+        runtime_limits = (workflow.definition_json or {}).get("runtime_limits") or {}
+        max_steps = int(runtime_limits.get("max_steps") or 100)
+        config = {
+            "configurable": {"thread_id": context.thread_id, "uid": run.uid},
+            "recursion_limit": min(max(max_steps, 31), 200),
+        }
         if action == "resume":
             await graph.aupdate_state(
                 config,
-                {"run_id": run.id, "uid": run.uid, "model_spec": payload.get("model_spec")},
+                {
+                    "run_id": run.id,
+                    "resume_parent_run_id": payload.get("parent_run_id"),
+                    "uid": run.uid,
+                    "model_spec": payload.get("model_spec"),
+                },
             )
             graph_input = Command(resume=payload.get("resume") or {})
         elif action == "retry" or job_try > 1:
@@ -113,9 +164,23 @@ async def process_content_run(ctx, run_id: str):
                 raise RuntimeError("工作流 checkpoint 中没有可重试的失败节点")
             if requested_node and requested_node not in pending_nodes:
                 raise RuntimeError(f"节点 {requested_node} 不是当前可重试节点")
+            state_values = getattr(snapshot, "values", {}) or {}
+            state_update = {
+                "run_id": run.id,
+                "uid": run.uid,
+                "model_spec": payload.get("model_spec"),
+                "resume_parent_run_id": None,
+            }
+            if requested_node == "wait_cover_job":
+                retried_cover = await _retry_failed_cover_job(run, state_values)
+                state_update["cover_job"] = {
+                    **(state_values.get("cover_job") or {}),
+                    "cover_job_id": retried_cover["id"],
+                    "status": retried_cover["status"],
+                }
             await graph.aupdate_state(
                 config,
-                {"run_id": run.id, "uid": run.uid, "model_spec": payload.get("model_spec")},
+                state_update,
             )
             graph_input = None
         else:
@@ -127,7 +192,7 @@ async def process_content_run(ctx, run_id: str):
                 "workflow_version_id": task.workflow_version_id,
                 "rule_version_id": task.rule_version_id,
                 "industry_template_version_id": task.industry_template_version_id,
-                "schema_version": int((task.runtime_config_snapshot_json or {}).get("schema_version") or 1),
+                "schema_version": 3,
                 "runtime_config_snapshot": task.runtime_config_snapshot_json or {},
                 "content_type": {},
                 "industry_pack": {},
@@ -137,12 +202,9 @@ async def process_content_run(ctx, run_id: str):
                 "lexicon_entries": [],
                 "media_evidence_items": [],
                 "content_brief": task.brief_json or {},
-                "content_angles": (task.strategy_json or {}).get("content_angle_candidates") or [],
-                "selected_angle": task.selected_angle_json or None,
-                "strategy_plan": task.strategy_json or {},
-                "slot_plan": (task.strategy_json or {}).get("slot_plan") or {},
-                "content_outline": (task.strategy_json or {}).get("content_outline") or {},
-                "evidence_usage_plan": (task.strategy_json or {}).get("evidence_usage_plan") or {},
+                "content_angles": [],
+                "selected_angle": None,
+                "content_outline": {},
                 "evidence_bundle": task.evidence_json or {"items": []},
                 "title_candidates": [],
                 "selected_title": None,
@@ -156,6 +218,9 @@ async def process_content_run(ctx, run_id: str):
                 "artifact_id": None,
                 "current_node": "queued",
                 "retry_counts": {},
+                "state_version": 0,
+                "task_mode": getattr(task, "mode", "quick"),
+                "resume_parent_run_id": None,
             }
 
         await graph.ainvoke(graph_input, config=config, context=context)
@@ -165,7 +230,11 @@ async def process_content_run(ctx, run_id: str):
             interrupt_payload = interrupts[0].value if interrupts else {"interrupt_type": "human_review"}
             async with pg_manager.get_async_session_context() as db:
                 persisted_task = await ContentRepository(db).get_task(task.id, for_update=True)
-                persisted_task.status = "waiting_human"
+                persisted_task.status = (
+                    "waiting_external"
+                    if interrupt_payload.get("interrupt_type") == "external_wait"
+                    else "waiting_human"
+                )
                 persisted_task.current_stage = "generation"
                 persisted_task.latest_run_id = run.id
                 await ContentRepository(db).track(
@@ -188,6 +257,8 @@ async def process_content_run(ctx, run_id: str):
                 {"status": "interrupted", "interrupt": interrupt_payload},
                 thread_id=task.id,
             )
+            if interrupt_payload.get("interrupt_type") == "external_wait" and interrupt_payload.get("cover_job_id"):
+                await resume_content_run_from_cover({}, interrupt_payload["cover_job_id"])
             return
 
         if await has_cancel_signal(run_id):
@@ -263,3 +334,51 @@ async def process_content_run(ctx, run_id: str):
         await append_run_stream_event(run_id, "end", {"status": "failed"}, thread_id=task.id)
     finally:
         await clear_cancel_signal(run_id)
+
+
+async def resume_content_run_from_cover(ctx, job_id: str) -> dict[str, Any]:
+    """Cover Worker 终态事件触发的幂等恢复入口。"""
+
+    del ctx
+    async with pg_manager.get_async_session_context() as db:
+        job = await ContentCoverRepository(db).get_job(job_id)
+        if job is None or job.status not in {"succeeded", "failed", "cancelled"}:
+            return {"scheduled": False, "reason": "cover_not_terminal"}
+        request = job.request_json or {}
+        workflow_resume = (request.get("parameters") or {}).get("workflow_resume") or (request.get("layout") or {}).get(
+            "workflow_resume"
+        )
+        if not workflow_resume:
+            return {"scheduled": False, "reason": "workflow_not_linked"}
+        parent_run_id = str(workflow_resume.get("parent_run_id") or "")
+        parent = await AgentRunRepository(db).get_run(parent_run_id)
+        if (
+            parent is None
+            or parent.status != "interrupted"
+            or parent.uid != job.owner_uid
+            or parent.thread_id != job.content_task_id
+        ):
+            return {"scheduled": False, "reason": "parent_not_waiting"}
+        task = await ContentRepository(db).get_task(parent.thread_id, for_update=True)
+        user = (await db.execute(select(User).where(User.uid == parent.uid, User.is_deleted == 0))).scalar_one_or_none()
+        if task is None or user is None:
+            return {"scheduled": False, "reason": "owner_or_task_missing"}
+
+        from yuxi.services.content_service import _enqueue_content_run
+
+        result = await _enqueue_content_run(
+            db,
+            user=user,
+            task=task,
+            request_id=f"cover-resume:{job.id}:{job.status}",
+            action="resume",
+            model_spec=(parent.input_payload or {}).get("model_spec"),
+            parent_run_id=parent.id,
+            resume={
+                "run_id": parent.id,
+                "node_id": str(workflow_resume.get("node_id") or "wait_cover_job"),
+                "expected_state_version": int(workflow_resume.get("expected_state_version") or 0),
+                "cover_job_id": job.id,
+            },
+        )
+        return {"scheduled": True, **result}

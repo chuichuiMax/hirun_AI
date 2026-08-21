@@ -206,6 +206,8 @@ class AgentRepository:
             pics=[],
             config_json={"context": {}},
             share_config=DEFAULT_SHARE_CONFIG.copy(),
+            enabled=True,
+            config_version=1,
             is_default=True,
             is_subagent=False,
             created_by=created_by,
@@ -232,6 +234,8 @@ class AgentRepository:
             pics=[],
             config_json={"context": {"system_prompt": WEB_SEARCH_SYSTEM_PROMPT}},
             share_config=DEFAULT_SHARE_CONFIG.copy(),
+            enabled=True,
+            config_version=1,
             is_default=False,
             is_subagent=True,
             created_by=created_by,
@@ -280,6 +284,8 @@ class AgentRepository:
             pics=[],
             config_json={"context": config_context},
             share_config=DEFAULT_SHARE_CONFIG.copy(),
+            enabled=True,
+            config_version=1,
             is_default=False,
             is_subagent=is_subagent,
             created_by=created_by,
@@ -440,6 +446,8 @@ class AgentRepository:
             pics=pics or [],
             config_json=config_json or {"context": {}},
             share_config=normalized_share_config,
+            enabled=True,
+            config_version=1,
             is_default=False,
             is_subagent=resolved_is_subagent,
             created_by=created_by,
@@ -465,6 +473,7 @@ class AgentRepository:
         config_json: dict | None = None,
         share_config: dict | None = None,
         is_subagent: bool | None = None,
+        enabled: bool | None = None,
         updated_by: str | None = None,
         updater: User | None = None,
     ) -> Agent:
@@ -480,6 +489,9 @@ class AgentRepository:
             agent.pics = pics
         if config_json is not None:
             agent.config_json = config_json
+            agent.config_version = int(agent.config_version or 1) + 1
+        if enabled is not None:
+            agent.enabled = enabled
         if share_config is not None:
             if is_builtin_agent(agent):
                 agent.share_config = DEFAULT_SHARE_CONFIG.copy()

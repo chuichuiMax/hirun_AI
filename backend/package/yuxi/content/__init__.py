@@ -2,14 +2,17 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yuxi.content.rules import ensure_content_seed_data as ensure_content_v1_seed_data
-from yuxi.content.v2.seed import ensure_content_v2_seed_data
+from yuxi.content.foundation_seed import ensure_content_foundation_seed_data
+from yuxi.content.v3.agents import ensure_content_v3_agents
+from yuxi.content.v3.seed import ensure_content_v3_seed_data
 
 
 async def ensure_content_seed_data(db: AsyncSession) -> None:
-    """先保留 V1 历史基线，再幂等发布 V2 平台配置。"""
+    """幂等初始化 V3 单轨生产所需的全部配置。"""
 
-    await ensure_content_v1_seed_data(db)
-    await ensure_content_v2_seed_data(db)
+    await ensure_content_foundation_seed_data(db)
+    await ensure_content_v3_seed_data(db)
+    await ensure_content_v3_agents(db)
+
 
 __all__ = ["ensure_content_seed_data"]

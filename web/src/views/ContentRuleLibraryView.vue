@@ -28,6 +28,7 @@ const store = useContentStudioStore()
 const userStore = useUserStore()
 const ruleVersions = ref([])
 const industries = ref([])
+const industryPacks = ref([])
 const workflows = ref([])
 const activeTab = ref('methods')
 const selectedVersionId = ref('')
@@ -48,10 +49,10 @@ const selectedVersion = computed(() =>
   ruleVersions.value.find((item) => item.id === selectedVersionId.value)
 )
 const publishedVersion = computed(() =>
-  ruleVersions.value.find((item) => item.status === 'published')
+  ruleVersions.value.find((item) => item.status === 'published' && item.schema_version === 3)
 )
 const draftVersion = computed(() =>
-  ruleVersions.value.find((item) => item.status === 'draft')
+  ruleVersions.value.find((item) => item.status === 'draft' && item.schema_version === 3)
 )
 const canEdit = computed(() => userStore.isSuperAdmin && selectedVersion.value?.status === 'draft')
 const coreMethods = computed(() =>
@@ -69,7 +70,8 @@ const filteredMethods = computed(() => filterItems(ruleBundle.value?.methods, ['
 const filteredTitles = computed(() => filterItems(ruleBundle.value?.title_formulas, ['code', 'name', 'core_goal']))
 const filteredBodies = computed(() => filterItems(ruleBundle.value?.content_formulas, ['code', 'name']))
 const filteredCombinations = computed(() => filterItems(ruleBundle.value?.combination_rules, [
-  'content_goal', 'content_formula_code', 'recommendation_reason'
+  'content_type_codes', 'title_formula_candidate_codes', 'body_formula_candidate_codes',
+  'scenario_description', 'recommendation_reason'
 ]))
 
 const withoutId = (item) => {
@@ -83,7 +85,13 @@ const payloadFromBundle = (bundle) => ({
   methods: (bundle?.methods || []).map((item, index) => ({ ...withoutId(item), sort_order: index })),
   title_formulas: (bundle?.title_formulas || []).map((item, index) => ({ ...withoutId(item), sort_order: index })),
   content_formulas: (bundle?.content_formulas || []).map((item, index) => ({ ...withoutId(item), sort_order: index })),
-  combination_rules: (bundle?.combination_rules || []).map(withoutId)
+  combination_rules: (bundle?.combination_rules || []).map(withoutId),
+  content_types: (bundle?.content_types || []).map(withoutId),
+  formula_patterns: (bundle?.formula_patterns || []).map((item) => ({
+    ...withoutId(item),
+    slots: (item.slots || []).map(withoutId)
+  })),
+  variables: (bundle?.variables || []).map(withoutId)
 })
 
 const currentSnapshot = computed(() => JSON.stringify(payloadFromBundle(ruleBundle.value)))
@@ -119,13 +127,15 @@ const load = async (force = false, preferredVersionId = '') => {
   loading.value = true
   try {
     await store.loadBootstrap(force)
-    const [rules, templates, flowList] = await Promise.all([
+    const [rules, templates, packs, flowList] = await Promise.all([
       contentApi.listRuleVersions(),
       contentApi.listIndustryTemplates(),
+      contentApi.listIndustryPacks(),
       contentApi.listWorkflowTemplates()
     ])
     ruleVersions.value = rules.items || []
     industries.value = templates.items || []
+    industryPacks.value = packs.items || []
     workflows.value = flowList.items || []
     const targetId = preferredVersionId
       || (userStore.isSuperAdmin ? draftVersion.value?.id : '')
@@ -136,6 +146,65 @@ const load = async (force = false, preferredVersionId = '') => {
     message.error(error.message || '加载创作规则库失败')
   } finally {
     loading.value = false
+  }
+}
+
+const nextPackStatus = (status) => ({
+  draft: 'validated',
+  validated: 'canary',
+  canary: 'published',
+  published: 'deprecated',
+  deprecated: 'published'
+})[status]
+
+const packStatusText = (status) => ({
+  draft: '草稿',
+  validated: '已校验',
+  canary: '灰度',
+  published: '已发布',
+  deprecated: '已停用'
+})[status] || status
+
+const canTransitionPack = (item) =>
+  item.status !== 'canary' || item.evaluation_report?.regression?.passed === true
+
+const packActionText = (item) =>
+  item.status === 'canary' && !canTransitionPack(item)
+    ? '等待全链路回归'
+    : packStatusText(nextPackStatus(item.status))
+
+const validatePack = async (item) => {
+  try {
+    const report = await contentApi.validateIndustryPack(item.id)
+    item.evaluation_report = report
+    if (report.validation.valid && report.evaluation.passed) message.success(`${item.name} 校验与离线评测通过`)
+    else message.warning(`${item.name} 仍有 ${report.validation.errors.length} 项问题`)
+  } catch (error) {
+    message.error(error.message || '行业包校验失败')
+  }
+}
+
+const transitionPack = async (item) => {
+  const targetStatus = nextPackStatus(item.status)
+  if (!targetStatus) return
+  try {
+    await contentApi.transitionIndustryPack(item.id, { target_status: targetStatus })
+    const response = await contentApi.listIndustryPacks()
+    industryPacks.value = response.items || []
+    message.success(`${item.name} 已更新为${packStatusText(targetStatus)}`)
+  } catch (error) {
+    message.error(error.message || '行业包状态更新失败')
+  }
+}
+
+const publishWorkflow = async (item) => {
+  try {
+    await contentApi.publishWorkflowVersion(item.id, {})
+    const response = await contentApi.listWorkflowTemplates()
+    workflows.value = response.items || []
+    message.success(`${item.slug} v${item.version} 已发布`)
+  } catch (error) {
+    message.error(error.message || '工作流发布失败')
   }
 }
 
@@ -222,16 +291,22 @@ const impactOfDelete = (type, item) => {
   if (type === 'methods') {
     const titles = bundle.title_formulas.filter((entry) => entry.compatible_methods.includes(item.code)).length
     const bodies = bundle.content_formulas.filter((entry) => entry.compatible_methods.includes(item.code)).length
-    const combinations = bundle.combination_rules.filter((entry) => entry.methods.includes(item.code)).length
+    const combinations = bundle.combination_rules.filter((entry) =>
+      entry.method_members.some((member) => member.method_code === item.code)
+    ).length
     return { count: titles + bodies + combinations, text: `将同步清理 ${titles} 个标题公式、${bodies} 个正文公式和 ${combinations} 条组合规则中的引用。` }
   }
   if (type === 'title_formulas') {
-    const count = bundle.combination_rules.filter((entry) => entry.title_formula_codes.includes(item.code)).length
+    const count = bundle.combination_rules.filter((entry) =>
+      entry.title_formula_candidate_codes.includes(item.code)
+    ).length
     return { count, text: `将同步清理 ${count} 条组合规则中的标题引用；没有其他标题可用的组合会一并删除。` }
   }
   if (type === 'content_formulas') {
-    const count = bundle.combination_rules.filter((entry) => entry.content_formula_code === item.code).length
-    return { count, text: `将一并删除 ${count} 条依赖该正文公式的组合规则。` }
+    const count = bundle.combination_rules.filter((entry) =>
+      entry.body_formula_candidate_codes.includes(item.code)
+    ).length
+    return { count, text: `将同步清理 ${count} 个组合组中的正文公式引用；候选池为空的组合会一并删除。` }
   }
   return { count: 0, text: '该组合规则会从当前草稿中删除。' }
 }
@@ -243,7 +318,7 @@ const deleteItem = (type, item, index) => {
   }
   const impact = impactOfDelete(type, item)
   Modal.confirm({
-    title: `从草稿删除“${item.name || item.content_goal}”`,
+    title: `从草稿删除“${item.name || item.scenario_description}”`,
     content: impact.text,
     okText: '确认删除',
     okType: 'danger',
@@ -259,18 +334,35 @@ const deleteItem = (type, item, index) => {
           entry.compatible_methods = entry.compatible_methods.filter((code) => code !== item.code)
         })
         bundle.combination_rules = bundle.combination_rules
-          .map((entry) => ({ ...entry, methods: entry.methods.filter((code) => code !== item.code) }))
-          .filter((entry) => entry.methods.length)
+          .map((entry) => {
+            const methodMembers = entry.method_members
+              .filter((member) => member.method_code !== item.code)
+              .map((member, memberIndex) => ({
+                ...member,
+                role: memberIndex === 0 ? 'primary' : 'supporting',
+                order: memberIndex + 1
+              }))
+            return {
+              ...entry,
+              method_members: methodMembers,
+              combination_type: ['single', 'double', 'triple', 'quadruple'][methodMembers.length - 1]
+            }
+          })
+          .filter((entry) => entry.method_members.length)
       } else if (type === 'title_formulas') {
         bundle.combination_rules = bundle.combination_rules
           .map((entry) => ({
             ...entry,
-            title_formula_codes: entry.title_formula_codes.filter((code) => code !== item.code)
+            title_formula_candidate_codes: entry.title_formula_candidate_codes.filter((code) => code !== item.code)
           }))
-          .filter((entry) => entry.title_formula_codes.length)
+          .filter((entry) => entry.title_formula_candidate_codes.length)
       } else if (type === 'content_formulas') {
         bundle.combination_rules = bundle.combination_rules
-          .filter((entry) => entry.content_formula_code !== item.code)
+          .map((entry) => ({
+            ...entry,
+            body_formula_candidate_codes: entry.body_formula_candidate_codes.filter((code) => code !== item.code)
+          }))
+          .filter((entry) => entry.body_formula_candidate_codes.length)
       }
       message.success(`已从草稿删除${impact.count ? '并同步处理关联项' : ''}，请记得保存`)
     }
@@ -336,7 +428,6 @@ const discardDraft = () => {
   })
 }
 
-const goalName = (code) => store.contentGoals.find((item) => item.code === code)?.name || code
 const beforeUnload = (event) => {
   if (!isDirty.value) return
   event.preventDefault()
@@ -364,7 +455,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
     <div class="overview-grid">
       <div><Layers3 :size="20" /><strong>{{ ruleBundle?.methods?.filter(item => item.enabled).length || 0 }}</strong><span>启用的创作手法</span></div>
       <div><Database :size="20" /><strong>{{ enabledTitles.length }} / {{ enabledBodies.length }}</strong><span>启用的标题 / 正文公式</span></div>
-      <div><GitBranch :size="20" /><strong>{{ ruleBundle?.combination_rules?.length || 0 }}</strong><span>目标组合规则</span></div>
+      <div><GitBranch :size="20" /><strong>{{ ruleBundle?.combination_rules?.length || 0 }}</strong><span>V3 组合组</span></div>
     </div>
 
     <section class="workspace-bar">
@@ -472,27 +563,42 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
 
         <a-tab-pane key="combinations" :tab="`组合矩阵 ${ruleBundle?.combination_rules?.length || 0}`">
           <div class="tab-toolbar">
-            <a-input v-model:value="searchText" allow-clear placeholder="搜索目标、正文编码或推荐原因"><template #prefix><Search :size="15" /></template></a-input>
+          <a-input v-model:value="searchText" allow-clear placeholder="搜索内容方向、公式编码或适用场景"><template #prefix><Search :size="15" /></template></a-input>
             <a-button v-if="canEdit" type="primary" @click="openEditor('combination_rules')"><Plus :size="16" />新增组合</a-button>
           </div>
           <a-table :data-source="filteredCombinations" row-key="id" :pagination="false" :scroll="{ x: 980 }">
-            <a-table-column title="内容目标" width="110"><template #default="{ record }">{{ goalName(record.content_goal) }}</template></a-table-column>
-            <a-table-column title="创作手法" width="150"><template #default="{ record }">{{ record.methods.join(' + ') }}</template></a-table-column>
-            <a-table-column title="标题候选" width="190"><template #default="{ record }">{{ record.title_formula_codes.join('、') }}</template></a-table-column>
-            <a-table-column title="正文" data-index="content_formula_code" width="90" />
-            <a-table-column title="推荐原因" data-index="recommendation_reason" />
+            <a-table-column title="内容方向" width="110"><template #default="{ record }">{{ record.content_type_codes.join('、') }}</template></a-table-column>
+            <a-table-column title="组合类型" data-index="combination_type" width="100" />
+            <a-table-column title="创作手法" width="160"><template #default="{ record }">{{ record.method_members.map(item => item.method_code).join(' + ') }}</template></a-table-column>
+            <a-table-column title="标题候选池" width="190"><template #default="{ record }">{{ record.title_formula_candidate_codes.join('、') }}</template></a-table-column>
+            <a-table-column title="正文候选池" width="150"><template #default="{ record }">{{ record.body_formula_candidate_codes.join('、') }}</template></a-table-column>
+            <a-table-column title="适用场景" data-index="scenario_description" />
             <a-table-column title="优先级" data-index="priority" width="74" />
             <a-table-column v-if="canEdit" title="操作" width="100" fixed="right"><template #default="{ record }"><div class="table-actions"><button type="button" class="lucide-icon-btn" @click="openEditor('combination_rules', record, ruleBundle.combination_rules.indexOf(record))"><Pencil :size="16" /></button><button type="button" class="lucide-icon-btn danger" @click="deleteItem('combination_rules', record, ruleBundle.combination_rules.indexOf(record))"><Trash2 :size="16" /></button></div></template></a-table-column>
           </a-table>
         </a-tab-pane>
 
-        <a-tab-pane key="industries" :tab="`行业模板 ${industries.length}`">
-          <div class="readonly-note">行业模板采用独立版本管理，本次规则草稿不会修改这些配置。</div>
-          <div class="rule-grid"><article v-for="item in industries" :key="item.id"><code>{{ item.slug }} · v{{ item.version }}</code><h3>{{ item.name }}</h3><p>{{ item.description }}</p><small>{{ item.quick_form_schema.length }} 个简化字段 · {{ item.pro_form_schema.length }} 个专业字段</small></article></div>
+        <a-tab-pane key="industries" :tab="`行业包 ${industryPacks.length}`">
+          <div class="readonly-note">行业包采用独立版本管理，并按“草稿 → 校验 → 灰度 → 发布”晋级；规则草稿不会直接修改行业包。</div>
+          <div class="workflow-list industry-pack-list">
+            <article v-for="item in industryPacks" :key="item.id">
+              <div><code>{{ item.id }}</code><h3>{{ item.name }}</h3></div>
+              <span>{{ packStatusText(item.status) }}</span>
+              <p>{{ Object.keys(item.content_type_aliases || {}).length }} 个方向 · {{ item.combination_overrides?.length || 0 }} 个组合组 · {{ item.golden_samples?.length || 0 }} 个黄金样本</p>
+              <small>离线评测：{{ item.evaluation_report?.evaluation?.passed ? '通过' : '待校验' }} · canary 全链路回归：{{ item.evaluation_report?.regression?.passed ? '通过' : '待完成' }} · 最低覆盖率 {{ Math.round((item.minimum_coverage || 0) * 100) }}%</small>
+              <div v-if="userStore.isSuperAdmin && item.schema_version === 3" class="pack-actions">
+                <a-button size="small" @click="validatePack(item)">校验与评测</a-button>
+                <a-button size="small" type="primary" :disabled="!canTransitionPack(item)" @click="transitionPack(item)">{{ packActionText(item) }}</a-button>
+              </div>
+            </article>
+          </div>
+          <details class="legacy-templates"><summary>查看行业表单模板（{{ industries.length }}）</summary>
+            <div class="rule-grid"><article v-for="item in industries" :key="item.id"><code>{{ item.slug }} · v{{ item.version }}</code><h3>{{ item.name }}</h3><p>{{ item.description }}</p><small>{{ item.quick_form_schema.length }} 个简化字段 · {{ item.pro_form_schema.length }} 个专业字段</small></article></div>
+          </details>
         </a-tab-pane>
         <a-tab-pane key="workflows" :tab="`工作流版本 ${workflows.length}`">
           <div class="readonly-note">工作流是独立的可执行版本，需要单独设计和发布。</div>
-          <div class="workflow-list"><article v-for="item in workflows" :key="item.id"><div><code>{{ item.id }}</code><h3>{{ item.slug }} · v{{ item.version }}</h3></div><span>{{ item.status }}</span><p>{{ item.definition.nodes?.length || 0 }} 个节点 · {{ item.definition.edges?.length || 0 }} 条连线</p></article></div>
+          <div class="workflow-list"><article v-for="item in workflows" :key="item.id"><div><code>{{ item.id }}</code><h3>{{ item.slug }} · v{{ item.version }}</h3></div><span>{{ item.status }}</span><p>{{ item.definition.nodes?.length || 0 }} 个节点 · {{ item.definition.edges?.length || 0 }} 条连线</p><small>定义哈希：{{ item.definition_hash || '草稿未冻结' }}</small><a-button v-if="userStore.isSuperAdmin && item.definition.schema_version === 3 && item.status !== 'published'" class="workflow-action" size="small" type="primary" @click="publishWorkflow(item)">校验并发布</a-button><details><summary>查看工作流 JSON 定义</summary><pre>{{ JSON.stringify(item.definition, null, 2) }}</pre></details></article></div>
         </a-tab-pane>
       </a-tabs>
     </section>
@@ -514,7 +620,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
       :method-options="coreMethods"
       :title-options="enabledTitles"
       :content-options="enabledBodies"
-      :goal-options="store.contentGoals"
+      :content-type-options="ruleBundle?.content_types || []"
       @close="editorOpen = false"
       @save="saveEditor"
     />
@@ -581,6 +687,15 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
 .workflow-list article { display: grid; grid-template-columns: 1fr auto; padding: 14px; border: 1px solid var(--gray-150); border-radius: 8px; }
 .workflow-list h3, .workflow-list p { margin: 3px 0; }
 .workflow-list p { grid-column: 1 / -1; color: var(--color-text-secondary); }
+.workflow-list small, .workflow-list details { grid-column: 1 / -1; }
+.workflow-list small { color: var(--color-text-tertiary); overflow-wrap: anywhere; }
+.workflow-list details { margin-top: 10px; }
+.workflow-list summary { color: var(--main-700); cursor: pointer; font-size: 12px; }
+.workflow-list pre { max-height: 360px; overflow: auto; padding: 12px; border-radius: 6px; background: var(--gray-25); font-size: 11px; white-space: pre-wrap; }
+.pack-actions, .workflow-action { grid-column: 1 / -1; margin-top: 10px; }
+.pack-actions { display: flex; gap: 8px; }
+.legacy-templates { margin-top: 16px; }
+.legacy-templates > summary { color: var(--main-700); cursor: pointer; }
 .version-list { margin-top: 16px; }
 .section-heading h2 { margin: 0; font-size: 17px; }
 .section-heading p { margin: 4px 0 12px; color: var(--color-text-secondary); font-size: 13px; }
