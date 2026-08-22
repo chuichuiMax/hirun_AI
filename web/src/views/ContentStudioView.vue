@@ -22,6 +22,7 @@ import {
 } from 'lucide-vue-next'
 import ContentStageStepper from '@/components/content/ContentStageStepper.vue'
 import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
+import { contentApi } from '@/apis/content_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
 
@@ -49,7 +50,10 @@ const modelSpec = ref('')
 const editor = reactive({ title: '', body: '', topics: [] })
 const versionDrawerOpen = ref(false)
 const ocrModalOpen = ref(false)
+const coverUrl = ref('')
+const coverLoading = ref(false)
 let draftSaveTimer = null
+let coverLoadGeneration = 0
 
 const testFormDefaults = {
   decoration: {
@@ -138,6 +142,23 @@ const canFinalize = computed(() => ['passed', 'warning'].includes(store.artifact
 const runFailed = computed(() =>
   ['failed', 'cancelled'].includes(store.currentRun?.status) || store.task?.status === 'failed'
 )
+const externalWaitProgress = computed(() =>
+  Math.min(100, Math.max(0, Number(store.interrupt?.progress || 0)))
+)
+const externalWaitStatusLabel = computed(() => {
+  const labels = {
+    queued: '封面任务已进入队列',
+    running: '封面服务正在生成图片',
+    submitting: '正在提交封面生成请求',
+    polling: '正在等待封面生成结果',
+    downloading: '正在下载封面结果',
+    saving: '正在保存封面资产',
+    succeeded: '封面生成完成，正在自动继续工作流',
+    failed: '封面生成失败，正在同步失败结果',
+    cancelled: '封面任务已取消，正在同步任务状态'
+  }
+  return labels[store.interrupt?.status] || '正在等待封面服务'
+})
 const failedNodeId = computed(
   () => [...store.runEvents].reverse().find((item) => item.status === 'failed')?.node_id || null
 )
@@ -201,6 +222,35 @@ watch(
     approvalNote.value = ''
   },
   { deep: true }
+)
+
+watch(
+  () => store.artifact?.cover_asset_id,
+  async (assetId) => {
+    const generation = ++coverLoadGeneration
+    if (coverUrl.value) {
+      URL.revokeObjectURL(coverUrl.value)
+      coverUrl.value = ''
+    }
+    if (!assetId) return
+    coverLoading.value = true
+    try {
+      const response = await contentApi.getCoverAssetFile(assetId)
+      const nextUrl = URL.createObjectURL(await response.blob())
+      if (generation !== coverLoadGeneration) {
+        URL.revokeObjectURL(nextUrl)
+        return
+      }
+      coverUrl.value = nextUrl
+    } catch (error) {
+      if (generation === coverLoadGeneration) {
+        message.warning(error.message || '当前封面暂时无法预览')
+      }
+    } finally {
+      if (generation === coverLoadGeneration) coverLoading.value = false
+    }
+  },
+  { immediate: true }
 )
 
 watch(
@@ -288,7 +338,11 @@ watch(
   { deep: true }
 )
 
-onBeforeUnmount(() => window.clearTimeout(draftSaveTimer))
+onBeforeUnmount(() => {
+  window.clearTimeout(draftSaveTimer)
+  coverLoadGeneration += 1
+  if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
+})
 
 const compileBrief = async () => {
   try {
@@ -656,6 +710,14 @@ const openVersions = async () => {
             <a-button type="primary" @click="submitHumanReview">确认封面并保存</a-button>
           </div>
 
+          <div v-else-if="store.interrupt?.interrupt_type === 'external_wait'" class="running-card external-wait-card">
+            <LoaderCircle class="spin" :size="26" />
+            <h3>封面正在生成</h3>
+            <p>这是系统等待节点，无需人工操作；封面服务完成后会自动继续后续审核。</p>
+            <a-progress :percent="externalWaitProgress" :show-info="externalWaitProgress > 0" status="active" />
+            <small>{{ externalWaitStatusLabel }}</small>
+          </div>
+
           <div v-else-if="runFailed" class="running-card failure-card">
             <CircleAlert :size="26" />
             <h3>工作流执行失败</h3>
@@ -687,6 +749,17 @@ const openVersions = async () => {
 
         <div v-if="store.artifact" class="review-layout">
           <div class="content-editor-card">
+            <section v-if="store.artifact.cover_asset_id" class="artifact-cover-preview">
+              <div class="artifact-cover-heading">
+                <div><strong>本次生成封面</strong><span>已与当前内容版本绑定</span></div>
+                <small>{{ store.artifact.cover_asset_id }}</small>
+              </div>
+              <div v-if="coverLoading" class="cover-preview-loading">
+                <LoaderCircle class="spin" :size="24" />正在加载封面
+              </div>
+              <img v-else-if="coverUrl" :src="coverUrl" alt="本次生成封面" />
+              <a-empty v-else description="封面暂时无法预览" />
+            </section>
             <label class="field-block"><span>标题</span><a-input v-model:value="editor.title" /></label>
             <label class="field-block"><span>正文</span><a-textarea v-model:value="editor.body" :rows="18" /></label>
             <label class="field-block">
@@ -817,6 +890,10 @@ const openVersions = async () => {
 .run-node.failed { background: var(--color-error-50); color: var(--color-error-700); }
 .human-review-card, .running-card { align-self: start; }
 .failure-card { color: var(--color-error-700); background: var(--color-error-50); }
+.external-wait-card { gap: 10px; background: var(--color-info-50); color: var(--color-info-700); }
+.external-wait-card h3, .external-wait-card p { margin: 0; }
+.external-wait-card p, .external-wait-card small { color: var(--color-text-secondary); }
+.external-wait-card :deep(.ant-progress) { width: 100%; }
 .human-heading { display: flex; gap: 10px; margin-bottom: 16px; }
 .human-heading h3, .human-heading p { margin: 0; }
 .human-heading p { margin-top: 3px; color: var(--color-text-secondary); }
@@ -835,6 +912,13 @@ const openVersions = async () => {
 .running-card { display: flex; flex-direction: column; align-items: center; text-align: center; }
 
 .content-editor-card textarea { resize: vertical; }
+.artifact-cover-preview { display: flex; flex-direction: column; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--gray-150); }
+.artifact-cover-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.artifact-cover-heading div { display: grid; gap: 3px; }
+.artifact-cover-heading span, .artifact-cover-heading small { color: var(--color-text-tertiary); font-size: 12px; }
+.artifact-cover-heading small { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-cover-preview img { width: min(100%, 320px); aspect-ratio: 3 / 4; align-self: center; border-radius: 8px; object-fit: cover; box-shadow: 0 8px 24px var(--shadow-3); }
+.cover-preview-loading { min-height: 240px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-secondary); background: var(--gray-25); border-radius: 8px; }
 .editor-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .review-sidebar { display: flex; flex-direction: column; gap: 16px; align-self: start; }
 .review-sidebar section { border-bottom: 1px solid var(--gray-150); padding-bottom: 14px; }
