@@ -193,13 +193,50 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     }
   }
 
+  async function followExternalWait(parentRunId, externalWait, signal) {
+    const coverJobId = externalWait?.cover_job_id
+    if (!coverJobId) return
+    const terminalStatuses = new Set(['succeeded', 'failed', 'cancelled'])
+
+    while (!signal.aborted) {
+      const response = await contentApi.getCoverJob(coverJobId)
+      const job = response.job
+      if (
+        interrupt.value?.interrupt_type === 'external_wait' &&
+        interrupt.value.cover_job_id === coverJobId
+      ) {
+        interrupt.value = {
+          ...interrupt.value,
+          status: job.status,
+          progress: job.progress,
+          error_code: job.error_code,
+          error_message: job.error_message
+        }
+      }
+
+      if (terminalStatuses.has(job.status)) {
+        await loadTask(task.value.id)
+        const continuationRunId = task.value?.latest_run_id
+        if (continuationRunId && continuationRunId !== parentRunId) {
+          interrupt.value = null
+          await recoverRun(continuationRunId)
+          return
+        }
+        if (task.value?.status === 'failed') return
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1500))
+    }
+  }
+
   async function subscribeRun(runId) {
     runAbortController?.abort()
-    runAbortController = new AbortController()
+    const controller = new AbortController()
+    runAbortController = controller
     loading.running = true
     try {
       const response = await contentApi.streamRunEvents(runId, lastRunSeq, {
-        signal: runAbortController.signal
+        signal: controller.signal
       })
       if (!response.ok) throw new Error(`运行事件连接失败：${response.status}`)
       await parseSse(response, (eventType, data, eventId) => {
@@ -208,8 +245,11 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
           currentRun.value = { ...(currentRun.value || {}), status: data?.payload?.status }
         }
       })
+      const externalWait =
+        interrupt.value?.interrupt_type === 'external_wait' ? { ...interrupt.value } : null
       await loadRunAudit(runId)
       await loadTask(task.value.id)
+      if (externalWait) await followExternalWait(runId, externalWait, controller.signal)
     } catch (error) {
       if (error.name !== 'AbortError') {
         lastError.value = error
