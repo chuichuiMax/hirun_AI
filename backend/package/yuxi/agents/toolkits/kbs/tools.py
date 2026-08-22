@@ -223,6 +223,36 @@ async def _emit_content_knowledge_event(runtime: ToolRuntime | None, kb_id: str,
     )
 
 
+async def _reject_content_knowledge_query(
+    runtime: ToolRuntime | None,
+    *,
+    kb_id: str,
+    reason_code: str,
+    limit: int,
+    used: int,
+    message: str,
+) -> str:
+    context = getattr(runtime, "context", None)
+    if context is not None:
+        context._content_force_result_submission_reason = reason_code
+    run_id = str(getattr(context, "run_id", "") or "").strip()
+    if run_id and getattr(context, "_content_node_output_contract", None):
+        from yuxi.services.run_queue_service import append_content_runtime_event
+
+        await append_content_runtime_event(
+            context,
+            "content.tool.rejected",
+            {
+                "tool_name": "query_kb",
+                "knowledge_base_id": kb_id,
+                "reason_code": reason_code,
+                "limit": limit,
+                "used": used,
+            },
+        )
+    return message
+
+
 @tool(category="knowledge", tags=["知识库"], args_schema=QueryKBInput)
 async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, runtime: ToolRuntime = None) -> Any:
     """在指定知识库中检索内容
@@ -236,19 +266,6 @@ async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, ru
         return "请提供查询内容"
 
     context = getattr(runtime, "context", None)
-    if context is not None and getattr(context, "_content_node_output_contract", None):
-        rounds = int(getattr(context, "_content_retrieval_rounds_used", 0) or 0)
-        maximum_rounds = int(getattr(context, "_content_max_retrieval_rounds", 0) or 0)
-        if maximum_rounds and rounds >= maximum_rounds:
-            raise ValueError(f"知识检索轮次超过节点上限（{maximum_rounds}）")
-        queried = set(getattr(context, "_content_queried_knowledge_bases", set()) or set())
-        maximum_bases = int(getattr(context, "_content_max_knowledge_bases", 0) or 0)
-        if kb_id not in queried and maximum_bases and len(queried) >= maximum_bases:
-            raise ValueError(f"知识库数量超过节点上限（{maximum_bases}）")
-        queried.add(kb_id)
-        context._content_retrieval_rounds_used = rounds + 1
-        context._content_queried_knowledge_bases = queried
-
     knowledge_base = _get_knowledge_base()
     retrievers = knowledge_base.get_retrievers()
     visible_kbs = await _resolve_visible_knowledge_bases_for_query(runtime)
@@ -259,6 +276,43 @@ async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, ru
     )
     if target_error:
         return target_error
+
+    if context is not None and getattr(context, "_content_node_output_contract", None):
+        rounds = int(getattr(context, "_content_retrieval_rounds_used", 0) or 0)
+        maximum_rounds = int(getattr(context, "_content_max_retrieval_rounds", 0) or 0)
+        if maximum_rounds and rounds >= maximum_rounds:
+            return await _reject_content_knowledge_query(
+                runtime,
+                kb_id=target_kb_id,
+                reason_code="retrieval_round_limit_reached",
+                limit=maximum_rounds,
+                used=rounds,
+                message=(
+                    f"本节点知识检索轮次预算已用完（{rounds}/{maximum_rounds}），本次查询未执行。"
+                    "请停止继续检索，基于已有结果调用 submit_content_node_result；"
+                    "证据不足时按 Skill 要求写入 unresolved_questions。"
+                ),
+            )
+        queried = set(getattr(context, "_content_queried_knowledge_bases", set()) or set())
+        maximum_bases = int(getattr(context, "_content_max_knowledge_bases", 0) or 0)
+        if target_kb_id not in queried and maximum_bases and len(queried) >= maximum_bases:
+            return await _reject_content_knowledge_query(
+                runtime,
+                kb_id=target_kb_id,
+                reason_code="knowledge_base_limit_reached",
+                limit=maximum_bases,
+                used=len(queried),
+                message=(
+                    f"本节点不同知识库预算已用完（{len(queried)}/{maximum_bases}），本次查询未执行。"
+                    "请只使用已检索结果调用 submit_content_node_result；"
+                    "证据不足时按 Skill 要求写入 unresolved_questions。"
+                ),
+            )
+        queried.add(target_kb_id)
+        context._content_retrieval_rounds_used = rounds + 1
+        context._content_queried_knowledge_bases = queried
+        if maximum_rounds and rounds + 1 >= maximum_rounds:
+            context._content_force_result_submission_reason = "retrieval_round_limit_reached"
 
     if context is not None and getattr(context, "_content_node_output_contract", None):
         from yuxi.services.run_queue_service import append_content_runtime_event

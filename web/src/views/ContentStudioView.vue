@@ -53,8 +53,11 @@ const versionDrawerOpen = ref(false)
 const ocrModalOpen = ref(false)
 const coverUrl = ref('')
 const coverLoading = ref(false)
+const coverCandidateUrls = ref({})
+const coverCandidatesLoading = ref(false)
 let draftSaveTimer = null
 let coverLoadGeneration = 0
+let coverCandidateLoadGeneration = 0
 
 const testFormDefaults = {
   decoration: {
@@ -295,6 +298,41 @@ watch(
 )
 
 watch(
+  () =>
+    store.interrupt?.interrupt_type === 'cover_selection'
+      ? (store.interrupt.asset_ids || []).join('|')
+      : '',
+  async (assetKey) => {
+    const generation = ++coverCandidateLoadGeneration
+    Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
+    coverCandidateUrls.value = {}
+    if (!assetKey) return
+
+    coverCandidatesLoading.value = true
+    const nextUrls = {}
+    await Promise.all(
+      assetKey.split('|').map(async (assetId) => {
+        try {
+          const response = await contentApi.getCoverAssetFile(assetId)
+          nextUrls[assetId] = URL.createObjectURL(await response.blob())
+        } catch {
+          nextUrls[assetId] = ''
+        }
+      })
+    )
+    if (generation !== coverCandidateLoadGeneration) {
+      Object.values(nextUrls).forEach((url) => {
+        if (url) URL.revokeObjectURL(url)
+      })
+      return
+    }
+    coverCandidateUrls.value = nextUrls
+    coverCandidatesLoading.value = false
+  },
+  { immediate: true }
+)
+
+watch(
   () => creation.industry_template_id,
   () => {
     const template = selectedTemplate.value
@@ -381,7 +419,9 @@ watch(
 onBeforeUnmount(() => {
   window.clearTimeout(draftSaveTimer)
   coverLoadGeneration += 1
+  coverCandidateLoadGeneration += 1
   if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
+  Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
 })
 
 const compileBrief = async () => {
@@ -677,9 +717,14 @@ const openVersions = async () => {
               <a-radio v-for="item in angleOptions" :key="item.direction_code" :value="item.direction_code">
                 <strong>{{ item.direction_code }}</strong>
                 <span>{{ item.reason }}</span>
-                <small v-if="item.evidence_ids?.length" class="evidence-references">
-                  引用证据：{{ item.evidence_ids.map(evidenceReferenceText).join('；') }}
-                </small>
+                <div v-if="item.evidence_ids?.length" class="evidence-references">
+                  <div class="evidence-references-title">引用证据</div>
+                  <ol>
+                    <li v-for="(evidenceId, index) in item.evidence_ids" :key="evidenceId">
+                      {{ evidenceReferenceText(evidenceId, index) }}
+                    </li>
+                  </ol>
+                </div>
               </a-radio>
             </a-radio-group>
             <a-button type="primary" :disabled="!selectedAngleId" @click="submitHumanReview">确认方向并继续</a-button>
@@ -752,9 +797,19 @@ const openVersions = async () => {
 
           <div v-else-if="store.interrupt?.interrupt_type === 'cover_selection'" class="human-review-card">
             <div class="human-heading"><Send :size="20" /><div><h3>选择最终封面</h3><p>只可从通过视觉审核的资产中选择。</p></div></div>
-            <a-radio-group v-model:value="selectedCoverAssetId" class="title-options">
-              <a-radio v-for="assetId in store.interrupt.asset_ids" :key="assetId" :value="assetId">
-                <strong>{{ assetId }}</strong>
+            <a-radio-group v-model:value="selectedCoverAssetId" class="title-options cover-options">
+              <a-radio v-for="(assetId, index) in store.interrupt.asset_ids" :key="assetId" :value="assetId">
+                <div class="cover-option">
+                  <div class="cover-candidate-preview">
+                    <img v-if="coverCandidateUrls[assetId]" :src="coverCandidateUrls[assetId]" :alt="`封面候选 ${index + 1}`" />
+                    <div v-else class="cover-candidate-placeholder">
+                      <LoaderCircle v-if="coverCandidatesLoading" class="spin" :size="22" />
+                      <span v-else>封面暂时无法预览</span>
+                    </div>
+                  </div>
+                  <strong>封面候选 {{ index + 1 }}</strong>
+                  <span>{{ assetId }}</span>
+                </div>
               </a-radio>
             </a-radio-group>
             <a-button type="primary" @click="submitHumanReview">确认封面并保存</a-button>
@@ -950,8 +1005,13 @@ const openVersions = async () => {
 .title-options, .fact-options { width: 100%; display: flex; flex-direction: column; gap: 9px; margin-bottom: 16px; }
 .title-options :deep(.ant-radio-wrapper), .fact-options :deep(.ant-checkbox-wrapper) { width: 100%; margin-inline-start: 0; padding: 12px; border: 1px solid var(--gray-150); border-radius: 6px; align-items: flex-start; }
 .angle-options :deep(.ant-radio-wrapper-checked) { border-color: var(--main-color); background: var(--main-30); }
-.angle-options strong, .angle-options span, .angle-options small { display: block; }
-.angle-options span, .angle-options small { margin-top: 4px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.angle-options strong, .angle-options span { display: block; }
+.angle-options span { margin-top: 4px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.evidence-references { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--gray-150); color: var(--color-text-secondary); }
+.evidence-references-title { margin-bottom: 6px; font-size: 12px; font-weight: 600; line-height: 1.5; }
+.evidence-references ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: evidence-reference; }
+.evidence-references li { display: grid; grid-template-columns: 24px minmax(0, 1fr); margin: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; counter-increment: evidence-reference; }
+.evidence-references li::before { content: counter(evidence-reference) '、'; color: var(--main-color); font-weight: 600; }
 .approval-checks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .approval-checks > div { padding: 10px 12px; border-radius: 6px; background: var(--color-warning-50); color: var(--color-warning-900); }
 .approval-checks strong, .approval-checks span { display: block; font-size: 12px; }
@@ -960,6 +1020,13 @@ const openVersions = async () => {
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .title-options strong, .title-options span { display: block; }
 .title-options span { margin-top: 3px; color: var(--color-text-tertiary); font-size: 12px; }
+.cover-options :deep(.ant-radio-wrapper) { align-items: center; }
+.cover-options :deep(.ant-radio + span) { min-width: 0; flex: 1; }
+.cover-option { display: grid; gap: 4px; min-width: 0; }
+.cover-candidate-preview { width: 100%; margin-bottom: 7px; overflow: hidden; border-radius: 8px; background: var(--gray-25); }
+.cover-candidate-preview img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; }
+.cover-candidate-placeholder { min-height: 220px; display: flex; align-items: center; justify-content: center; color: var(--color-text-tertiary); }
+.cover-option > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .running-card { display: flex; flex-direction: column; align-items: center; text-align: center; }
 
 .content-editor-card textarea { resize: vertical; }

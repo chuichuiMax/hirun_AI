@@ -3,9 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-LEGACY_PLATFORM_WORKFLOW_V3_IDS = frozenset(
-    {"content-workflow-enterprise-v3", "content-workflow-enterprise-v3.1"}
-)
+LEGACY_PLATFORM_WORKFLOW_V3_IDS = frozenset({"content-workflow-enterprise-v3", "content-workflow-enterprise-v3.1"})
 LEGACY_PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.1"
 PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.2"
 
@@ -37,6 +35,7 @@ def _agent(
     max_retrieval_rounds: int = 0,
     max_knowledge_bases: int = 0,
     max_chunks_per_knowledge_base: int = 0,
+    token_budget: int = 8000,
 ) -> dict[str, Any]:
     node = {
         "id": node_id,
@@ -52,7 +51,7 @@ def _agent(
         "timeout_seconds": 120,
         "max_execution_steps": 12,
         "max_tool_calls": max_tool_calls,
-        "token_budget": 8000,
+        "token_budget": token_budget,
         "result_tool_name": "submit_content_node_result",
     }
     if knowledge_policy == "agent_scope":
@@ -116,6 +115,7 @@ WORKFLOW_V3_NODES = [
         max_retrieval_rounds=4,
         max_knowledge_bases=3,
         max_chunks_per_knowledge_base=5,
+        token_budget=12000,
     ),
     _human("confirm_high_risk_facts", "high_risk_facts"),
     _fixed("freeze_evidence_bundle"),
@@ -158,6 +158,7 @@ WORKFLOW_V3_NODES = [
         max_retrieval_rounds=4,
         max_knowledge_bases=3,
         max_chunks_per_knowledge_base=5,
+        token_budget=12000,
     ),
     _human("confirm_strategy_product_facts", "strategy_product_facts"),
     _fixed("freeze_product_evidence_bundle"),

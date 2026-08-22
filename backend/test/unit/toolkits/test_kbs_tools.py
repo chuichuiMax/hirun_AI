@@ -70,17 +70,24 @@ def _build_test_window(content: str, offset: int = 0, limit: int = 1800) -> dict
 
 
 def _patch_retrievers(monkeypatch, *, kb_type: str = "milvus", retriever=None):
-    monkeypatch.setattr(
-        tools.knowledge_base,
-        "get_retrievers",
-        lambda: {
+    fake_knowledge_base = SimpleNamespace(
+        get_retrievers=lambda: {
             "db-1": {
                 "name": "FAQ",
                 "retriever": retriever or object(),
                 "metadata": {"kb_type": kb_type},
             }
         },
+        find_file_content=None,
+        open_file_content=None,
     )
+    monkeypatch.setattr(
+        tools,
+        "knowledge_base",
+        fake_knowledge_base,
+        raising=False,
+    )
+    monkeypatch.setattr(tools, "_get_knowledge_base", lambda: fake_knowledge_base)
 
 
 async def _fake_visible_kbs(runtime):
@@ -174,6 +181,137 @@ async def test_query_kb_returns_plain_result_without_path_injection(monkeypatch)
     result = await _run_query_kb(kb_id="db-1", query_text="auth", runtime=runtime)
 
     assert result == "Milvus context"
+
+
+@pytest.mark.asyncio
+async def test_invalid_kb_id_does_not_consume_content_retrieval_budget(monkeypatch) -> None:
+    async def _fake_retriever(query_text: str, **kwargs):
+        return [{"content": query_text, "metadata": {}}]
+
+    fake_knowledge_base = SimpleNamespace(
+        get_retrievers=lambda: {
+            "db-1": {
+                "name": "FAQ",
+                "retriever": _fake_retriever,
+                "metadata": {"kb_type": "milvus"},
+            }
+        }
+    )
+    monkeypatch.setattr(tools, "_get_knowledge_base", lambda: fake_knowledge_base)
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_kbs)
+    context = SimpleNamespace(
+        _content_node_output_contract="EvidenceCollectionResultV1",
+        _content_max_retrieval_rounds=4,
+        _content_max_knowledge_bases=3,
+        _content_max_chunks_per_knowledge_base=5,
+    )
+    runtime = SimpleNamespace(context=context)
+
+    for index in range(4):
+        result = await _run_query_kb(kb_id=f"invented-{index}", query_text="auth", runtime=runtime)
+        assert "不存在或当前会话未启用" in result
+
+    assert not hasattr(context, "_content_retrieval_rounds_used")
+    assert not hasattr(context, "_content_queried_knowledge_bases")
+
+    result = await _run_query_kb(kb_id="db-1", query_text="auth", runtime=runtime)
+
+    assert result["kb_id"] == "db-1"
+    assert context._content_retrieval_rounds_used == 1
+    assert context._content_queried_knowledge_bases == {"db-1"}
+
+
+@pytest.mark.asyncio
+async def test_retrieval_round_limit_returns_recoverable_tool_result(monkeypatch) -> None:
+    retriever_called = False
+
+    async def _fake_retriever(query_text: str, **kwargs):
+        nonlocal retriever_called
+        retriever_called = True
+        return [{"content": query_text, "metadata": {}}]
+
+    _patch_retrievers(monkeypatch, retriever=_fake_retriever)
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_kbs)
+    context = SimpleNamespace(
+        _content_node_output_contract="EvidenceCollectionResultV1",
+        _content_max_retrieval_rounds=4,
+        _content_retrieval_rounds_used=4,
+        _content_max_knowledge_bases=3,
+        _content_queried_knowledge_bases={"db-1"},
+    )
+
+    result = await _run_query_kb(kb_id="db-1", query_text="more", runtime=SimpleNamespace(context=context))
+
+    assert "检索轮次预算已用完（4/4）" in result
+    assert "submit_content_node_result" in result
+    assert retriever_called is False
+    assert context._content_retrieval_rounds_used == 4
+    assert context._content_force_result_submission_reason == "retrieval_round_limit_reached"
+
+
+@pytest.mark.asyncio
+async def test_last_allowed_retrieval_round_forces_result_submission(monkeypatch) -> None:
+    async def _fake_retriever(query_text: str, **kwargs):
+        return [{"content": query_text, "metadata": {}}]
+
+    _patch_retrievers(monkeypatch, retriever=_fake_retriever)
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_kbs)
+    context = SimpleNamespace(
+        _content_node_output_contract="EvidenceCollectionResultV1",
+        _content_max_retrieval_rounds=4,
+        _content_retrieval_rounds_used=3,
+        _content_max_knowledge_bases=3,
+        _content_queried_knowledge_bases={"db-1"},
+        _content_max_chunks_per_knowledge_base=5,
+    )
+
+    result = await _run_query_kb(
+        kb_id="db-1",
+        query_text="last allowed query",
+        runtime=SimpleNamespace(context=context),
+    )
+
+    assert result["results"][0]["content"] == "last allowed query"
+    assert context._content_retrieval_rounds_used == 4
+    assert context._content_force_result_submission_reason == "retrieval_round_limit_reached"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_base_limit_returns_recoverable_tool_result(monkeypatch) -> None:
+    retriever_called = False
+
+    async def _fake_retriever(query_text: str, **kwargs):
+        nonlocal retriever_called
+        retriever_called = True
+        return [{"content": query_text, "metadata": {}}]
+
+    fake_knowledge_base = SimpleNamespace(
+        get_retrievers=lambda: {
+            "db-1": {"name": "First", "retriever": _fake_retriever, "metadata": {"kb_type": "milvus"}},
+            "db-2": {"name": "Second", "retriever": _fake_retriever, "metadata": {"kb_type": "milvus"}},
+        }
+    )
+    monkeypatch.setattr(tools, "_get_knowledge_base", lambda: fake_knowledge_base)
+
+    async def _visible_kbs(_runtime):
+        return [{"kb_id": "db-1", "name": "First"}, {"kb_id": "db-2", "name": "Second"}]
+
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _visible_kbs)
+    context = SimpleNamespace(
+        _content_node_output_contract="EvidenceCollectionResultV1",
+        _content_max_retrieval_rounds=4,
+        _content_retrieval_rounds_used=1,
+        _content_max_knowledge_bases=1,
+        _content_queried_knowledge_bases={"db-1"},
+    )
+
+    result = await _run_query_kb(kb_id="db-2", query_text="more", runtime=SimpleNamespace(context=context))
+
+    assert "不同知识库预算已用完（1/1）" in result
+    assert "submit_content_node_result" in result
+    assert retriever_called is False
+    assert context._content_queried_knowledge_bases == {"db-1"}
+    assert context._content_force_result_submission_reason == "knowledge_base_limit_reached"
 
 
 @pytest.mark.asyncio

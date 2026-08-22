@@ -174,6 +174,13 @@ def test_agent_nodes_require_agent_skill_contract_backend_policy_and_budgets(fie
 
 
 @pytest.mark.unit
+def test_research_nodes_reserve_enough_tokens_for_retrieval_and_final_submission():
+    assert _node(WORKFLOW_V3, "collect_missing_evidence")["token_budget"] == 12000
+    assert _node(WORKFLOW_V3, "collect_strategy_product_evidence")["token_budget"] == 12000
+    assert _node(WORKFLOW_V3, "generate_title_candidates")["token_budget"] == 8000
+
+
+@pytest.mark.unit
 def test_unknown_agent_skill_contract_and_backend_fail_publication_validation():
     cases = [
         ("agent_slug", "missing-agent", "未知 Agent"),

@@ -552,12 +552,8 @@ class ContractDomainContext:
             body_formula_pool=frozenset(
                 match.get("eligible_body_formula_codes") or formula.get("eligible_body_formula_codes") or []
             ),
-            locked_title_formula_code=(
-                formula.get("selected_title_formula_code") or versions.title_formula_code
-            ),
-            locked_body_formula_code=(
-                formula.get("selected_body_formula_code") or versions.body_formula_code
-            ),
+            locked_title_formula_code=(formula.get("selected_title_formula_code") or versions.title_formula_code),
+            locked_body_formula_code=(formula.get("selected_body_formula_code") or versions.body_formula_code),
             allowed_evidence_by_usage={key: frozenset(value) for key, value in evidence_by_usage.items()},
             allowed_asset_ids=frozenset(locks.get("source_asset_ids") or []),
             locked_title=locks.get("selected_title"),
@@ -571,9 +567,7 @@ class ContractDomainContext:
                 for requirement in material_requirements
             },
             product_material_slot_types={
-                requirement["requirement_id"]: str(
-                    requirement.get("material_type") or requirement["requirement_id"]
-                )
+                requirement["requirement_id"]: str(requirement.get("material_type") or requirement["requirement_id"])
                 for requirement in material_requirements
             },
         )
@@ -641,10 +635,24 @@ def validate_content_node_result(
         new_ids = [item.id for item in result.evidence_items]
         if len(new_ids) != len(set(new_ids)):
             raise ContractDomainValidationError("duplicate_id", "evidence_items", "新 Evidence ID 不能重复")
+        reused_ids = sorted(set(new_ids) & set(context.allowed_evidence_by_usage.get("any", frozenset())))
+        if reused_ids:
+            raise ContractDomainValidationError(
+                "evidence_id_reused",
+                "evidence_items",
+                f"已有 Evidence ID 只能直接引用，不能作为新证据重复提交: {', '.join(reused_ids)}",
+            )
     elif isinstance(result, ProductEvidenceCollectionResultV1):
         new_ids = [item.id for item in result.evidence_items]
         if len(new_ids) != len(set(new_ids)):
             raise ContractDomainValidationError("duplicate_id", "evidence_items", "新产品 Evidence ID 不能重复")
+        reused_ids = sorted(set(new_ids) & set(context.allowed_evidence_by_usage.get("any", frozenset())))
+        if reused_ids:
+            raise ContractDomainValidationError(
+                "evidence_id_reused",
+                "evidence_items",
+                f"已有 Evidence ID 只能在 slot_mappings 中引用，不能作为新产品证据重复提交: {', '.join(reused_ids)}",
+            )
         new_by_id = {item.id: item for item in result.evidence_items}
         available_ids = set(context.allowed_evidence_by_usage.get("any", frozenset())) | set(new_ids)
         for index, mapping in enumerate(result.slot_mappings):
@@ -669,8 +677,7 @@ def validate_content_node_result(
                 if (
                     mapping.target_usage not in new_by_id[evidence_id].allowed_usage
                     if evidence_id in new_by_id
-                    else evidence_id
-                    not in context.allowed_evidence_by_usage.get(mapping.target_usage, frozenset())
+                    else evidence_id not in context.allowed_evidence_by_usage.get(mapping.target_usage, frozenset())
                 )
             ]
             if forbidden_ids:

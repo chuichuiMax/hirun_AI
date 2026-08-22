@@ -88,15 +88,11 @@ async def test_locked_strategy_resolves_formula_specific_product_material_requir
         node_run_id="node-1",
     )
 
-    requirements = {
-        item["requirement_id"]: item for item in result["product_material_requirements"]["requirements"]
-    }
+    requirements = {item["requirement_id"]: item for item in result["product_material_requirements"]["requirements"]}
     assert requirements["product_profile"]["required"] is True
     assert requirements["case_proof"]["required"] is True
     assert requirements["viral_example"]["target_usages"] == ["style_reference"]
-    assert result["product_material_requirements"]["strategy_snapshot_hash"] == _strategy_snapshot()[
-        "snapshot_hash"
-    ]
+    assert result["product_material_requirements"]["strategy_snapshot_hash"] == _strategy_snapshot()["snapshot_hash"]
 
 
 @pytest.mark.unit
@@ -186,6 +182,45 @@ def test_case_evidence_cannot_fill_viral_style_reference_slot():
     }
 
     with pytest.raises(ContractDomainValidationError, match="其他资料类型"):
+        validate_content_node_result("ProductEvidenceCollectionResultV1", payload, context)
+
+
+@pytest.mark.unit
+def test_product_research_cannot_resubmit_an_existing_evidence_id_as_new():
+    existing = EvidenceItemV1(
+        id="ev-existing",
+        variable_codes=("area",),
+        value="89㎡",
+        source_type="manual_input",
+        source_id="field-area",
+        source_version="v1",
+        verified_status="user_confirmed",
+        allowed_usage=("title", "body"),
+        source_hash="a" * 64,
+    )
+    bundle = freeze_evidence_bundle(task_id="task-1", version=1, items=[existing]).model_dump(mode="json")
+    context = _domain_context(bundle, slots=("case_proof",))
+    payload = {
+        "evidence_items": [
+            {
+                **existing.model_dump(mode="json", exclude={"created_at"}),
+                "source_hash": "b" * 64,
+                "metadata": {"material_type": "case_proof"},
+            }
+        ],
+        "citations": [],
+        "slot_mappings": [
+            {
+                "slot": "case_proof",
+                "target_usage": "title",
+                "evidence_ids": ["ev-existing"],
+                "integration_instruction": "引用既有面积证据",
+            }
+        ],
+        "unresolved_questions": [],
+    }
+
+    with pytest.raises(ContractDomainValidationError, match="只能在 slot_mappings 中引用"):
         validate_content_node_result("ProductEvidenceCollectionResultV1", payload, context)
 
 
@@ -306,6 +341,65 @@ async def test_freeze_product_evidence_builds_pack_bound_to_strategy_and_bundle(
     assert pack["strategy_snapshot_hash"] == strategy["snapshot_hash"]
     assert pack["evidence_bundle_hash"] == bundle["bundle_hash"]
     assert len(pack["pack_hash"]) == 64
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_freeze_product_evidence_uses_frozen_item_when_legacy_result_repeats_its_id():
+    product = EvidenceItemV1(
+        id="ev-product",
+        variable_codes=("product",),
+        value="全屋收纳设计服务",
+        source_type="manual_input",
+        source_id="field-product",
+        source_version="v1",
+        verified_status="user_confirmed",
+        allowed_usage=("body",),
+        source_hash="a" * 64,
+        metadata={"material_type": "product_profile"},
+    )
+    bundle = freeze_evidence_bundle(task_id="task-1", version=1, items=[product]).model_dump(mode="json")
+    strategy = _strategy_snapshot()
+    repeated = product.model_dump(mode="json", exclude={"created_at"})
+    repeated["source_hash"] = "b" * 64
+    state = {
+        "task_id": "task-1",
+        "run_id": "run-1",
+        "evidence_bundle": bundle,
+        "product_material_requirements": {
+            "strategy_snapshot_hash": strategy["snapshot_hash"],
+            "requirements": [
+                {
+                    "requirement_id": "product_profile",
+                    "required": True,
+                    "target_usages": ["body"],
+                }
+            ],
+        },
+        "product_evidence_collection": {
+            "evidence_items": [repeated],
+            "citations": [],
+            "slot_mappings": [
+                {
+                    "slot": "product_profile",
+                    "target_usage": "body",
+                    "evidence_ids": ["ev-product"],
+                    "integration_instruction": "引用已冻结产品证据",
+                }
+            ],
+            "unresolved_questions": [],
+        },
+    }
+
+    result = await V3DeterministicNodeHandler().execute(
+        db=object(),
+        node={"id": "freeze_product_evidence_bundle"},
+        state=state,
+        node_run_id="node-1",
+    )
+
+    assert result["evidence_bundle"] == bundle
+    assert result["product_evidence_pack"]["slot_mappings"][0]["evidence_ids"] == ["ev-product"]
 
 
 @pytest.mark.unit

@@ -11,6 +11,7 @@ from deepagents.middleware._utils import append_to_system_message
 from deepagents.middleware.skills import SKILLS_SYSTEM_PROMPT
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain_core.messages import ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -577,6 +578,8 @@ class SkillsMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Any],
     ):
         """包装工具调用，处理 skill 动态激活"""
+        if redundant_read := self._handle_redundant_required_skill_read(request):
+            return redundant_read
         self._claim_content_tool_call(request)
         result = await handler(request)
         return self._process_tool_call_result(result, request)
@@ -587,9 +590,45 @@ class SkillsMiddleware(AgentMiddleware):
         handler: Callable[[ToolCallRequest], Any],
     ):
         """同步版本的工具调用包装"""
+        if redundant_read := self._handle_redundant_required_skill_read(request):
+            return redundant_read
         self._claim_content_tool_call(request)
         result = handler(request)
         return self._process_tool_call_result(result, request)
+
+    def _handle_redundant_required_skill_read(self, request: ToolCallRequest) -> ToolMessage | None:
+        """阻止内容节点重复读取已完整注入的必需 Skill，同时保留严格文件权限。"""
+        runtime_context = request.runtime.context
+        if getattr(runtime_context, "_content_node_max_tool_calls", None) is None:
+            return None
+        if request.tool_call.get("name") != "read_file":
+            return None
+
+        scope = getattr(runtime_context, "_content_node_tool_scope", None)
+        if not isinstance(scope, list) or "read_file" in set(normalize_string_list(scope)):
+            return None
+
+        args = request.tool_call.get("args") or {}
+        file_path = args.get("file_path") if isinstance(args, dict) else None
+        slug = self._extract_skill_slug_from_skill_md_path(file_path)
+        required_skills = set(normalize_string_list(getattr(runtime_context, "_required_skill_closure", []) or []))
+        self._consume_content_tool_call_budget(runtime_context)
+        if slug and slug in required_skills:
+            logger.info(f"内容 Agent 忽略对已注入必需 Skill 的重复 read_file: {slug}")
+            content = (
+                f"Skill `{slug}` 的完整指令已经在本节点运行前注入并激活，无需再次调用 read_file。"
+                "请直接依据已注入的 Skill、节点 payload 和当前许可工具继续执行。"
+            )
+        else:
+            content = (
+                "当前内容节点不开放 read_file；本节点所需 Skill 全文已在运行前注入并激活。"
+                "请停止读取文件，直接依据已注入的 Skill、节点 payload 和当前许可工具继续执行。"
+            )
+        return ToolMessage(
+            content=content,
+            tool_call_id=str(request.tool_call.get("id") or "content-required-skill-read"),
+            name="read_file",
+        )
 
     @staticmethod
     def _claim_content_tool_call(request: ToolCallRequest) -> None:
@@ -601,6 +640,13 @@ class SkillsMiddleware(AgentMiddleware):
         scope = getattr(runtime_context, "_content_node_tool_scope", None)
         if isinstance(scope, list) and tool_name not in set(normalize_string_list(scope)):
             raise RuntimeError(f"内容 Agent 工具 {tool_name} 不在当前节点许可范围")
+        SkillsMiddleware._consume_content_tool_call_budget(runtime_context)
+
+    @staticmethod
+    def _consume_content_tool_call_budget(runtime_context) -> None:
+        configured = getattr(runtime_context, "_content_node_max_tool_calls", None)
+        if configured is None:
+            return
         maximum = int(configured)
         used = int(getattr(runtime_context, "_content_node_tool_calls_used", 0) or 0)
         if used >= maximum:
@@ -648,8 +694,6 @@ class SkillsMiddleware(AgentMiddleware):
 
     def _merge_activated_skill_update(self, result: Any, slug: str):
         """合并动态激活的 skill 更新"""
-        from langchain_core.messages import ToolMessage
-
         if isinstance(result, Command):
             update = dict(result.update or {})
             current = update.get("activated_skills") or []

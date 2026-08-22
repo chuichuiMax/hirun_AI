@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 from langchain.agents.middleware import ModelResponse
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langgraph.graph import END
+from langgraph.types import Command
 
 import yuxi.agents.middlewares.skills as skills_middleware
 import yuxi.services.agent_delegation_service as delegation_module
@@ -243,6 +245,70 @@ async def test_middleware_auto_activates_required_skills_and_intersects_tools(mo
 
 
 @pytest.mark.asyncio
+async def test_content_node_redundant_required_skill_read_is_safe_and_budgeted():
+    context = SimpleNamespace(
+        _content_node_max_tool_calls=1,
+        _content_node_tool_scope=["submit_content_node_result"],
+        _required_skill_closure=["content-evidence-researcher"],
+    )
+    request = SimpleNamespace(
+        runtime=SimpleNamespace(context=context),
+        tool_call={
+            "id": "call-read-skill",
+            "name": "read_file",
+            "args": {"file_path": "/home/gem/skills/content-evidence-researcher/SKILL.md"},
+        },
+    )
+    handler_called = False
+
+    async def handler(_request):
+        nonlocal handler_called
+        handler_called = True
+        return ToolMessage(content="unexpected", tool_call_id="call-read-skill", name="read_file")
+
+    result = await SkillsMiddleware().awrap_tool_call(request, handler)
+
+    assert isinstance(result, ToolMessage)
+    assert "已经在本节点运行前注入并激活" in result.content
+    assert handler_called is False
+    assert context._content_node_tool_calls_used == 1
+
+    with pytest.raises(RuntimeError, match="工具调用超过节点上限"):
+        await SkillsMiddleware().awrap_tool_call(request, handler)
+
+
+@pytest.mark.asyncio
+async def test_content_node_read_file_outside_required_skill_is_rejected_without_failing_node():
+    context = SimpleNamespace(
+        _content_node_max_tool_calls=2,
+        _content_node_tool_scope=["submit_content_node_result"],
+        _required_skill_closure=["content-evidence-researcher"],
+    )
+    request = SimpleNamespace(
+        runtime=SimpleNamespace(context=context),
+        tool_call={
+            "id": "call-read-other",
+            "name": "read_file",
+            "args": {"file_path": "/home/gem/skills/other-skill/SKILL.md"},
+        },
+    )
+
+    handler_called = False
+
+    async def handler(_request):
+        nonlocal handler_called
+        handler_called = True
+        return ToolMessage(content="unexpected", tool_call_id="call-read-other", name="read_file")
+
+    result = await SkillsMiddleware().awrap_tool_call(request, handler)
+
+    assert isinstance(result, ToolMessage)
+    assert "不开放 read_file" in result.content
+    assert handler_called is False
+    assert context._content_node_tool_calls_used == 1
+
+
+@pytest.mark.asyncio
 async def test_content_node_with_only_result_tool_forces_it_on_first_call():
     collector = SimpleNamespace(submission_count=0)
     context = SimpleNamespace(
@@ -289,6 +355,99 @@ async def test_content_node_with_only_result_tool_forces_it_on_first_call():
 
 
 @pytest.mark.asyncio
+async def test_content_node_retries_once_when_provider_ignores_forced_result_tool():
+    collector = SimpleNamespace(submission_count=0)
+    context = SimpleNamespace(_content_node_result_collector=collector)
+
+    class FakeRequest:
+        def __init__(self, *, system_message=None, tools=None, tool_choice=None):
+            self.runtime = SimpleNamespace(context=context)
+            self.tools = tools or [SimpleNamespace(name="submit_content_node_result")]
+            self.system_message = system_message or SystemMessage(content="base")
+            self.tool_choice = tool_choice
+
+        def override(self, **kwargs):
+            return FakeRequest(
+                system_message=kwargs.get("system_message", self.system_message),
+                tools=kwargs.get("tools", self.tools),
+                tool_choice=kwargs.get("tool_choice", self.tool_choice),
+            )
+
+    calls = []
+
+    async def handler(request):
+        calls.append((request.tool_choice, str(request.system_message.content)))
+        if len(calls) == 1:
+            return ModelResponse(result=[AIMessage(content="plain result")])
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call-result",
+                            "name": "submit_content_node_result",
+                            "args": {},
+                        }
+                    ],
+                )
+            ]
+        )
+
+    response = await ContentNodeResultMiddleware().awrap_model_call(FakeRequest(), handler)
+
+    assert len(calls) == 2
+    assert all(call[0] == "submit_content_node_result" for call in calls)
+    assert "禁止返回普通文本" in calls[1][1]
+    assert response.result[0].tool_calls[0]["name"] == "submit_content_node_result"
+
+
+def test_forced_result_submission_removes_historical_tool_call_scaffolding():
+    messages = [
+        HumanMessage(content="节点输入"),
+        AIMessage(
+            content="",
+            tool_calls=[{"id": "call-query", "name": "query_kb", "args": {"query_text": "价格"}}],
+        ),
+        ToolMessage(content='{"results":[{"content":"标准价"}]}', tool_call_id="call-query", name="query_kb"),
+    ]
+
+    sanitized = ContentNodeResultMiddleware._result_submission_messages(messages)
+
+    assert len(sanitized) == 2
+    assert all(isinstance(message, HumanMessage) for message in sanitized)
+    assert sanitized[0].content == "节点输入"
+    assert "标准价" in str(sanitized[1].content)
+    assert "已经完成的工具返回数据" in str(sanitized[1].content)
+
+
+@pytest.mark.asyncio
+async def test_content_node_fails_explicitly_after_two_missing_result_tool_calls():
+    collector = SimpleNamespace(submission_count=0)
+    context = SimpleNamespace(_content_node_result_collector=collector)
+
+    class FakeRequest:
+        def __init__(self, *, system_message=None, tools=None, tool_choice=None):
+            self.runtime = SimpleNamespace(context=context)
+            self.tools = tools or [SimpleNamespace(name="submit_content_node_result")]
+            self.system_message = system_message or SystemMessage(content="base")
+            self.tool_choice = tool_choice
+
+        def override(self, **kwargs):
+            return FakeRequest(
+                system_message=kwargs.get("system_message", self.system_message),
+                tools=kwargs.get("tools", self.tools),
+                tool_choice=kwargs.get("tool_choice", self.tool_choice),
+            )
+
+    async def handler(_request):
+        return ModelResponse(result=[AIMessage(content="plain result")])
+
+    with pytest.raises(RuntimeError, match="连续两次未调用结构化结果工具"):
+        await ContentNodeResultMiddleware().awrap_model_call(FakeRequest(), handler)
+
+
+@pytest.mark.asyncio
 async def test_content_node_result_tool_is_removed_after_submission():
     collector = SimpleNamespace(submission_count=1)
     context = SimpleNamespace(
@@ -324,6 +483,105 @@ async def test_content_node_result_tool_is_removed_after_submission():
 
 
 @pytest.mark.asyncio
+async def test_knowledge_budget_rejection_forces_structured_result_on_next_model_call():
+    collector = SimpleNamespace(submission_count=0)
+    context = SimpleNamespace(
+        _content_node_result_collector=collector,
+        _content_force_result_submission_reason="retrieval_round_limit_reached",
+    )
+
+    class FakeRequest:
+        def __init__(self, *, tools=None, tool_choice=None):
+            self.runtime = SimpleNamespace(context=context)
+            self.tools = tools or [
+                SimpleNamespace(name="query_kb"),
+                SimpleNamespace(name="submit_content_node_result"),
+            ]
+            self.tool_choice = tool_choice
+
+        def override(self, **kwargs):
+            return FakeRequest(
+                tools=kwargs.get("tools", self.tools),
+                tool_choice=kwargs.get("tool_choice", self.tool_choice),
+            )
+
+    captured = {}
+
+    async def handler(request):
+        captured["tools"] = [tool.name for tool in request.tools]
+        captured["tool_choice"] = request.tool_choice
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call-result",
+                            "name": "submit_content_node_result",
+                            "args": {},
+                        }
+                    ],
+                )
+            ]
+        )
+
+    await ContentNodeResultMiddleware().awrap_model_call(FakeRequest(), handler)
+
+    assert captured == {
+        "tools": ["submit_content_node_result"],
+        "tool_choice": "submit_content_node_result",
+    }
+
+
+@pytest.mark.asyncio
+async def test_successful_structured_result_submission_ends_content_agent_loop():
+    collector = SimpleNamespace(submission_count=0)
+    context = SimpleNamespace(_content_node_result_collector=collector)
+    request = SimpleNamespace(
+        runtime=SimpleNamespace(context=context),
+        tool_call={"name": "submit_content_node_result"},
+    )
+    tool_message = ToolMessage(
+        content='{"accepted":true}',
+        tool_call_id="call-result",
+        name="submit_content_node_result",
+    )
+
+    async def handler(_request):
+        collector.submission_count = 1
+        return tool_message
+
+    result = await ContentNodeResultMiddleware().awrap_tool_call(request, handler)
+
+    assert isinstance(result, Command)
+    assert result.goto == END
+    assert result.update == {"messages": [tool_message]}
+
+
+@pytest.mark.asyncio
+async def test_rejected_structured_result_submission_keeps_content_agent_loop_open():
+    collector = SimpleNamespace(submission_count=0)
+    context = SimpleNamespace(_content_node_result_collector=collector)
+    request = SimpleNamespace(
+        runtime=SimpleNamespace(context=context),
+        tool_call={"name": "submit_content_node_result"},
+    )
+    tool_message = ToolMessage(
+        content="结果未通过业务校验，请修正后重新提交",
+        tool_call_id="call-result",
+        name="submit_content_node_result",
+        status="error",
+    )
+
+    async def handler(_request):
+        return tool_message
+
+    result = await ContentNodeResultMiddleware().awrap_tool_call(request, handler)
+
+    assert result is tool_message
+
+
+@pytest.mark.asyncio
 async def test_successful_cover_creation_forces_structured_result_as_second_tool_call():
     collector = SimpleNamespace(submission_count=0)
     context = SimpleNamespace(
@@ -355,7 +613,20 @@ async def test_successful_cover_creation_forces_structured_result_as_second_tool
     async def handler(request):
         captured["tools"] = [tool.name for tool in request.tools]
         captured["tool_choice"] = request.tool_choice
-        return ModelResponse(result=[AIMessage(content="")])
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "call-result",
+                            "name": "submit_content_node_result",
+                            "args": {},
+                        }
+                    ],
+                )
+            ]
+        )
 
     await ContentNodeResultMiddleware().awrap_model_call(FakeRequest(), handler)
 
@@ -430,7 +701,7 @@ def _delegation_request(**overrides):
                     "verified_status": "confirmed",
                     "allowed_usage": ["body"],
                 }
-            ]
+            ],
         },
         "locked_versions": {
             "industry_pack_version_id": "industry-v3",

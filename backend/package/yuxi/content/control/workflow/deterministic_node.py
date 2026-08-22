@@ -351,11 +351,7 @@ class V3DeterministicNodeHandler:
             existing = current_by_id.get(item.id)
             if existing is None:
                 new_additions.append(item)
-                continue
-            existing_payload = existing.model_dump(mode="json", exclude={"created_at"})
-            addition_payload = item.model_dump(mode="json", exclude={"created_at"})
-            if existing_payload != addition_payload:
-                raise EvidenceGovernanceError("evidence_id_conflict", f"Evidence ID {item.id} 已存在但内容不一致")
+            # 兼容已通过旧版契约的节点结果：同 ID 只能引用冻结证据，Agent 重复提交的副本一律不参与合并。
 
         evidence_by_id = {**current_by_id, **{item.id: item for item in new_additions}}
         requirement_by_id = {
