@@ -180,16 +180,15 @@ def test_unsupported_numbers_results_and_promises_are_blocked():
     assert report["status"] == "blocked"
 
 
-def test_task_knowledge_scope_intersects_agent_scope_and_only_two_nodes_can_retrieve(monkeypatch):
+def test_agent_knowledge_scope_is_preserved_and_only_research_nodes_can_retrieve(monkeypatch):
     context = SimpleNamespace(knowledges=["kb-a", "kb-b"], max_execution_steps=30)
     request = SimpleNamespace(
-        knowledge_policy="task_scope",
-        knowledge_scope=("kb-b", "kb-c"),
+        knowledge_policy="agent_scope",
         node_run=SimpleNamespace(node_id="collect_missing_evidence"),
         max_execution_steps=12,
     )
     AgentDelegationService._apply_node_constraints(context, request)
-    assert context.knowledges == ["kb-b"]
+    assert context.knowledges == ["kb-a", "kb-b"]
 
     request.node_run.node_id = "generate_body"
     with pytest.raises(ContentApplicationError) as exc_info:

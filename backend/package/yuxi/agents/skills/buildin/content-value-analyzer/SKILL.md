@@ -1,12 +1,12 @@
 ---
 name: content-value-analyzer
 description: 基于 ContentBrief 与 EvidenceBundle 识别可创作价值、候选角度和唯一主叙事轴，不创造事实，也不决定工作流跳转。
-version: 1.0.0
+version: 1.1.0
 ---
 
 # 内容价值分析
 
-只使用 ContentBrief 和 EvidenceBundle 中已存在的信息识别内容价值。
+只使用当前节点 `payload.content_brief`、`payload.evidence_bundle`、`payload.content_type`、`payload.industry_pack` 和 `payload.channel_profile` 中已存在的信息识别内容价值。
 
 - 输出 1～3 个候选内容方向，每个方向只允许一条主要叙事轴。
 - `direction_code` 只能使用平台一级方向正式编码，禁止创建 `D01` 等临时角度编号：
@@ -22,3 +22,4 @@ version: 1.0.0
 - 明确列出可用事实、证据 ID、缺失信息和风险。
 - 不补写价格、数字、效果、人物经历或服务承诺。
 - 不选择下一个节点，不修改工作流结构。
+- 严格提交 `ContentValueResultV1`：`value_points`、`direction_candidates`、`reasoning`、`evidence_ids`。

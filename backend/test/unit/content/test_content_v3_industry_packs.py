@@ -19,7 +19,7 @@ from yuxi.content.model.formulas.selector import (
 from yuxi.content.model.industry.pack import IndustryPackPolicy, IndustryPackRegressionMetrics
 from yuxi.content.schemas import IndustryPackRegressionSubmission, IndustryPackTransitionRequest
 from yuxi.content.model.rules.engine import CombinationGroup, CombinationMatcher, MatchRequest
-from yuxi.content.catalog import CONTENT_TYPES, INDUSTRY_CONFIG, VARIABLES
+from yuxi.content.catalog import CONTENT_TYPES, INDUSTRY_CONFIG, VARIABLES, content_form_fields
 from yuxi.content.rules import BODY_FORMULAS, INDUSTRIES, METHODS, TITLE_FORMULAS
 from yuxi.content.v3.fixtures import load_decoration_matrix
 from yuxi.content.v3.seed import GENERIC_DIRECTION_FORMULAS
@@ -66,6 +66,12 @@ def test_industry_pack_persistence_exposes_schema_version():
     column = IndustryContentPackVersion.__table__.c.schema_version
     assert column.nullable is False
     assert column.default.arg == 2
+
+
+@pytest.mark.unit
+def test_content_form_does_not_duplicate_agent_knowledge_configuration():
+    for config in INDUSTRY_CONFIG.values():
+        assert "knowledge_scope" not in {field["key"] for field in content_form_fields(config, pro=True)}
 
 
 def _pack_record(slug: str, groups: list[dict]):

@@ -103,7 +103,8 @@ async def test_submit_cover_node_delegates_the_locked_visual_plan(monkeypatch):
         node_run_id="node-run-1",
     )
 
-    assert captured["request"].input_payload["locked_values"]["visual_plan"] == visual_plan
+    assert captured["request"].input_payload["visual_plan"] == visual_plan
+    assert captured["request"].governance_values["locked_values"]["visual_plan"] == visual_plan
     assert result["cover_job"]["cover_job_id"] == "job-1"
 
 
@@ -226,11 +227,6 @@ async def test_cover_tool_uses_locked_plan_and_persists_event_resume_metadata(mo
     node_input = SimpleNamespace(
         task_id="task-1",
         parent_run_id="run-parent",
-        locked_values={
-            "state_version": 7,
-            "visual_plan_hash": "a" * 64,
-            "visual_plan": visual_plan,
-        },
     )
     context = SimpleNamespace(
         uid="user-1",
@@ -244,6 +240,13 @@ async def test_cover_tool_uses_locked_plan_and_persists_event_resume_metadata(mo
             )
         ),
         _content_node_input=node_input,
+        _content_node_governance={
+            "locked_values": {
+                "state_version": 7,
+                "visual_plan_hash": "a" * 64,
+                "visual_plan": visual_plan,
+            }
+        },
     )
 
     class FakeResult:
@@ -308,15 +311,6 @@ async def test_cover_tool_rejects_assets_outside_locked_visual_plan():
     node_input = SimpleNamespace(
         task_id="task-1",
         parent_run_id="run-parent",
-        locked_values={
-            "state_version": 7,
-            "visual_plan_hash": "a" * 64,
-            "visual_plan": {
-                **_visual_plan(),
-                "plan_hash": "a" * 64,
-                "source_asset_ids": ["other-source"],
-            },
-        },
     )
     context = SimpleNamespace(
         uid="user-1",
@@ -328,6 +322,17 @@ async def test_cover_tool_rejects_assets_outside_locked_visual_plan():
             )
         ),
         _content_node_input=node_input,
+        _content_node_governance={
+            "locked_values": {
+                "state_version": 7,
+                "visual_plan_hash": "a" * 64,
+                "visual_plan": {
+                    **_visual_plan(),
+                    "plan_hash": "a" * 64,
+                    "source_asset_ids": ["other-source"],
+                },
+            }
+        },
     )
 
     with pytest.raises(ValueError, match="未授权素材"):

@@ -13,6 +13,7 @@ from yuxi.content.catalog import CONTENT_TYPES
 from yuxi.content.rules import BODY_FORMULAS, METHODS, TITLE_FORMULAS
 from yuxi.content.schemas import ContentRunCreate, ContentTaskCreate
 from yuxi.content.v3.fixtures import load_decoration_matrix
+from yuxi.content.v3.workflow import LEGACY_PLATFORM_WORKFLOW_V3_ID, PLATFORM_WORKFLOW_V3_ID
 
 
 def _v3_bundle() -> dict:
@@ -58,6 +59,7 @@ def test_task_create_rejects_legacy_version_pinning_fields():
 async def test_v3_run_starts_from_brief_without_legacy_strategy(monkeypatch):
     task = SimpleNamespace(
         id="task-v3",
+        workflow_version_id=PLATFORM_WORKFLOW_V3_ID,
         brief_json={"form_values": {"brand_name": "测试品牌"}},
         strategy_json={},
         runtime_config_snapshot_json={"schema_version": 3},
@@ -113,6 +115,36 @@ async def test_legacy_task_cannot_start_a_new_run(monkeypatch):
         )
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail["error"]["code"] == "CONTENT_LEGACY_TASK_READ_ONLY"
+
+
+@pytest.mark.asyncio
+async def test_previous_v3_checkpoint_is_read_only_after_new_contract_release(monkeypatch):
+    task = SimpleNamespace(
+        id="task-old-v3",
+        workflow_version_id=LEGACY_PLATFORM_WORKFLOW_V3_ID,
+        brief_json={"form_values": {"brand_name": "历史品牌"}},
+        runtime_config_snapshot_json={"schema_version": 3},
+    )
+
+    class FakeRepo:
+        def __init__(self, db):
+            del db
+
+        async def get_task_for_user(self, task_id, user, for_update=False):
+            del user, for_update
+            return task if task_id == task.id else None
+
+    monkeypatch.setattr(content_service, "ContentRepository", FakeRepo)
+    with pytest.raises(HTTPException) as exc_info:
+        await content_service.create_content_run(
+            object(),
+            SimpleNamespace(uid="user-1"),
+            task.id,
+            ContentRunCreate(request_id="request-old-v3"),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"]["code"] == "CONTENT_WORKFLOW_UPGRADE_REQUIRED"
 
 
 @pytest.mark.asyncio

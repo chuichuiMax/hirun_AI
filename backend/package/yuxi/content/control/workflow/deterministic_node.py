@@ -41,6 +41,8 @@ class V3DeterministicNodeHandler:
             "match_combination_group": self._match_combination_group,
             "resolve_formula_requirements": self._resolve_formula_requirements,
             "freeze_evidence_bundle": self._freeze_evidence_bundle,
+            "resolve_product_material_requirements": self._resolve_product_material_requirements,
+            "freeze_product_evidence_bundle": self._freeze_product_evidence_bundle,
             "validate_title_candidates": self._validate_title_candidates,
             "adapt_to_channel": self._adapt_to_channel,
             "deterministic_validate": self._deterministic_validate,
@@ -258,6 +260,174 @@ class V3DeterministicNodeHandler:
         return {"evidence_bundle": bundle.model_dump(mode="json")}
 
     @staticmethod
+    async def _resolve_product_material_requirements(
+        *, db: AsyncSession, state: dict[str, Any], node_run_id: str
+    ) -> dict[str, Any]:
+        del db, node_run_id
+        strategy = state.get("strategy_snapshot") or {}
+        snapshot_hash = str(strategy.get("snapshot_hash") or "")
+        if not snapshot_hash:
+            raise ValueError("解析产品资料需求前必须锁定 StrategySnapshot")
+
+        title_variables = list((strategy.get("title_formula") or {}).get("variable_schema") or [])
+        body_variables = list((strategy.get("body_formula") or {}).get("required_variables") or [])
+        method_variables = [
+            variable
+            for method in strategy.get("creation_method_definitions") or []
+            for variable in method.get("variable_schema") or []
+        ]
+        variable_codes = list(dict.fromkeys([*title_variables, *body_variables, *method_variables]))
+        variable_set = set(variable_codes)
+        body_formula_code = str((strategy.get("body_formula") or {}).get("code") or "")
+
+        requirements = [
+            {
+                "requirement_id": "product_profile",
+                "material_type": "product_profile",
+                "variable_codes": sorted(variable_set & {"product", "advantages", "result", "pain_points"}),
+                "target_usages": ["title", "body"],
+                "required": bool(variable_set & {"product", "advantages", "result"}),
+                "query_hint": "检索当前公司正式产品或服务介绍、适用人群、核心卖点、解决的问题和使用边界",
+                "risk_level": "normal",
+            },
+            {
+                "requirement_id": "price",
+                "material_type": "price",
+                "variable_codes": sorted(variable_set & {"price", "budget", "cost", "discount", "fee"}),
+                "target_usages": ["title", "body"],
+                "required": bool(variable_set & {"price", "budget", "cost", "discount", "fee"}),
+                "query_hint": "检索仍在有效期内的正式价格、报价范围、费用口径、适用区域与生效日期",
+                "risk_level": "high_risk",
+            },
+            {
+                "requirement_id": "case_proof",
+                "material_type": "case_proof",
+                "variable_codes": sorted(variable_set & {"number", "result", "scene", "location"}),
+                "target_usages": ["title", "body"],
+                "required": body_formula_code == "C02" or bool(variable_set & {"number", "result"}),
+                "query_hint": "检索可公开使用的真实案例、结果数字、使用场景、地域与客户问题，不得拼接不同案例",
+                "risk_level": "sensitive",
+            },
+            {
+                "requirement_id": "brand",
+                "material_type": "brand",
+                "variable_codes": sorted(variable_set & {"brand_name", "audience"}),
+                "target_usages": ["title", "body"],
+                "required": body_formula_code == "C04" or "brand_name" in variable_set,
+                "query_hint": "检索正式品牌称谓、品牌定位、服务对象、价值主张、禁用词和承诺边界",
+                "risk_level": "normal",
+            },
+            {
+                "requirement_id": "viral_example",
+                "material_type": "viral_example",
+                "variable_codes": [],
+                "target_usages": ["style_reference"],
+                "required": False,
+                "query_hint": "检索同方向爆款样例，仅提取标题结构、叙事节奏和表达模式，禁止复制事实、数字和原句",
+                "risk_level": "normal",
+            },
+        ]
+        if not any(item["required"] for item in requirements):
+            requirements[0]["required"] = True
+        return {
+            "product_material_requirements": {
+                "strategy_snapshot_hash": snapshot_hash,
+                "required_variable_codes": variable_codes,
+                "requirements": requirements,
+            }
+        }
+
+    async def _freeze_product_evidence_bundle(
+        self, *, db: AsyncSession, state: dict[str, Any], node_run_id: str
+    ) -> dict[str, Any]:
+        del node_run_id
+        current = EvidenceBundleV1.model_validate(state["evidence_bundle"])
+        requirements = state.get("product_material_requirements") or {}
+        collection = state.get("product_evidence_collection") or {}
+        additions = [EvidenceItemV1.model_validate(item) for item in collection.get("evidence_items") or []]
+        current_by_id = {item.id: item for item in current.items}
+        new_additions: list[EvidenceItemV1] = []
+        for item in additions:
+            existing = current_by_id.get(item.id)
+            if existing is None:
+                new_additions.append(item)
+                continue
+            existing_payload = existing.model_dump(mode="json", exclude={"created_at"})
+            addition_payload = item.model_dump(mode="json", exclude={"created_at"})
+            if existing_payload != addition_payload:
+                raise EvidenceGovernanceError("evidence_id_conflict", f"Evidence ID {item.id} 已存在但内容不一致")
+
+        evidence_by_id = {**current_by_id, **{item.id: item for item in new_additions}}
+        requirement_by_id = {
+            item["requirement_id"]: item
+            for item in requirements.get("requirements") or []
+            if item.get("requirement_id")
+        }
+        slot_mappings = list(collection.get("slot_mappings") or [])
+        mapped_required = {item.get("slot") for item in slot_mappings if item.get("evidence_ids")}
+        missing_required = sorted(
+            requirement_id
+            for requirement_id, requirement in requirement_by_id.items()
+            if requirement.get("required") and requirement_id not in mapped_required
+        )
+        if missing_required:
+            raise EvidenceGovernanceError(
+                "required_product_evidence_missing",
+                f"锁定公式所需产品资料尚未补齐: {', '.join(missing_required)}",
+            )
+
+        for mapping in slot_mappings:
+            requirement = requirement_by_id.get(mapping.get("slot"))
+            if requirement is None:
+                raise EvidenceGovernanceError("product_slot_unknown", f"未知产品资料槽位: {mapping.get('slot')}")
+            target_usage = str(mapping.get("target_usage") or "")
+            if target_usage not in requirement.get("target_usages", []):
+                raise EvidenceGovernanceError(
+                    "product_slot_usage_invalid",
+                    f"槽位 {mapping['slot']} 不允许用于 {target_usage}",
+                )
+            for evidence_id in mapping.get("evidence_ids") or []:
+                evidence = evidence_by_id.get(evidence_id)
+                if evidence is None or target_usage not in evidence.allowed_usage:
+                    raise EvidenceGovernanceError(
+                        "product_evidence_usage_invalid",
+                        f"Evidence {evidence_id} 不允许用于槽位 {mapping['slot']} 的 {target_usage}",
+                    )
+
+        if new_additions:
+            bundle = next_evidence_bundle_version(
+                current,
+                additions=new_additions,
+                citations=[
+                    *current.citations,
+                    *({"source_id": item} for item in collection.get("citations") or []),
+                ],
+            )
+            await EvidenceApplicationService(db).persist_frozen_bundle(
+                bundle,
+                run_id=state["run_id"],
+                thread_id=state["task_id"],
+                added_evidence_ids=tuple(item.id for item in new_additions),
+            )
+        else:
+            bundle = current
+
+        pack_payload = {
+            "strategy_snapshot_hash": requirements.get("strategy_snapshot_hash"),
+            "evidence_bundle_id": bundle.id,
+            "evidence_bundle_version": bundle.version,
+            "evidence_bundle_hash": bundle.bundle_hash,
+            "slot_mappings": slot_mappings,
+            "unresolved_questions": collection.get("unresolved_questions") or [],
+        }
+        canonical = json.dumps(pack_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        pack_payload["pack_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return {
+            "evidence_bundle": bundle.model_dump(mode="json"),
+            "product_evidence_pack": pack_payload,
+        }
+
+    @staticmethod
     async def _validate_title_candidates(
         *, db: AsyncSession, state: dict[str, Any], node_run_id: str
     ) -> dict[str, Any]:
@@ -267,11 +437,35 @@ class V3DeterministicNodeHandler:
         if len(candidates) < 2 or any(item.get("formula_code") != locked for item in candidates):
             raise ValueError("标题候选必须全部使用同一锁定标题公式")
         report = []
+        title_mappings = [
+            item
+            for item in (state.get("product_evidence_pack") or {}).get("slot_mappings") or []
+            if item.get("target_usage") == "title"
+        ]
         for item in candidates:
             numeric = validate_numeric_evidence_coverage(item.get("text", ""), state["evidence_bundle"])
             length_ok = 1 <= len(item.get("text", "")) <= 60
-            status = "passed" if numeric["status"] == "passed" and length_ok else "blocked"
-            report.append({"id": item["id"], "status": status, "checks": numeric["checks"]})
+            cited = set(item.get("evidence_ids") or [])
+            missing_product_slots = [
+                mapping["slot"]
+                for mapping in title_mappings
+                if not cited.intersection(mapping.get("evidence_ids") or [])
+            ]
+            checks = list(numeric["checks"])
+            if missing_product_slots:
+                checks.append(
+                    {
+                        "code": "TITLE_PRODUCT_EVIDENCE_NOT_USED",
+                        "level": "error",
+                        "location": "title",
+                        "message": f"标题未植入已映射的产品资料: {', '.join(missing_product_slots)}",
+                        "evidence_ids": [],
+                    }
+                )
+            status = (
+                "passed" if numeric["status"] == "passed" and length_ok and not missing_product_slots else "blocked"
+            )
+            report.append({"id": item["id"], "status": status, "checks": checks})
         if all(item["status"] == "blocked" for item in report):
             raise ValueError("所有标题候选都未通过确定性校验")
         status_by_id = {item["id"]: item["status"] for item in report}
@@ -309,11 +503,9 @@ class V3DeterministicNodeHandler:
             brief=state["content_brief"],
             evidence_bundle=state["evidence_bundle"],
             strategy={
-                "methods": (state.get("match_decision_snapshot") or {}).get("selected_group_id"),
-                "title_formula_code": (state.get("formula_selection_snapshot") or {}).get(
-                    "selected_title_formula_code"
-                ),
-                "body_formula_code": (state.get("formula_selection_snapshot") or {}).get("selected_body_formula_code"),
+                "methods": (state.get("strategy_snapshot") or {}).get("creation_methods"),
+                "title_formula_code": ((state.get("strategy_snapshot") or {}).get("title_formula") or {}).get("code"),
+                "body_formula_code": ((state.get("strategy_snapshot") or {}).get("body_formula") or {}).get("code"),
             },
         )
         if not 200 <= len(body) <= 650:
@@ -323,6 +515,28 @@ class V3DeterministicNodeHandler:
                     "level": "error",
                     "location": "body",
                     "message": "正文目标长度必须为 200～650 字",
+                    "evidence_ids": [],
+                }
+            )
+            report["status"] = "blocked"
+        used_body_evidence = {
+            evidence_id
+            for paragraph in draft.get("paragraph_evidence") or []
+            for evidence_id in paragraph.get("evidence_ids") or []
+        }
+        missing_product_slots = [
+            mapping["slot"]
+            for mapping in (state.get("product_evidence_pack") or {}).get("slot_mappings") or []
+            if mapping.get("target_usage") == "body"
+            and not used_body_evidence.intersection(mapping.get("evidence_ids") or [])
+        ]
+        if missing_product_slots:
+            report["checks"].append(
+                {
+                    "code": "BODY_PRODUCT_EVIDENCE_NOT_USED",
+                    "level": "error",
+                    "location": "body",
+                    "message": f"正文未植入已映射的产品资料: {', '.join(missing_product_slots)}",
                     "evidence_ids": [],
                 }
             )

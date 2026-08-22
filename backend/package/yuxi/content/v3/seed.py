@@ -230,7 +230,7 @@ async def _ensure_workflow_v3(db: AsyncSession) -> None:
             id=PLATFORM_WORKFLOW_V3_ID,
             slug="enterprise-content",
             tenant_id=None,
-            version=3,
+            version=5,
             schema_version=3,
             status="draft",
             definition_json=deepcopy(WORKFLOW_V3),
@@ -250,8 +250,13 @@ def _upgrade_system_workflow_v3(workflow: ContentWorkflowVersion) -> bool:
         return False
     expected_definition = deepcopy(WORKFLOW_V3)
     expected_hash = workflow_definition_hash(expected_definition)
-    if workflow.definition_json == expected_definition and workflow.definition_hash == expected_hash:
+    if (
+        workflow.definition_json == expected_definition
+        and workflow.definition_hash == expected_hash
+        and int(getattr(workflow, "version", 0) or 0) == 5
+    ):
         return False
+    workflow.version = 5
     workflow.schema_version = 3
     workflow.definition_json = expected_definition
     workflow.definition_hash = expected_hash

@@ -28,6 +28,7 @@ SKILLS = {
     "content-value-analyzer",
     "content-strategy-planner",
     "content-evidence-researcher",
+    "strategy-product-researcher",
     "content-title-generator",
     "content-outline-builder",
     "content-body-generator",
@@ -50,13 +51,65 @@ def _node(definition: dict, node_id: str) -> dict:
 
 
 @pytest.mark.unit
-def test_v3_has_exactly_31_nodes_and_passes_full_catalog_validation():
+def test_v3_has_exactly_35_nodes_and_passes_full_catalog_validation():
     WorkflowDefinitionPolicy.validate(WORKFLOW_V3, catalog=CATALOG)
 
-    assert len(WORKFLOW_V3["nodes"]) == 31
-    assert len(WORKFLOW_V3["edges"]) == 30
+    assert len(WORKFLOW_V3["nodes"]) == 35
+    assert len(WORKFLOW_V3["edges"]) == 33
     assert len(workflow_definition_hash(WORKFLOW_V3)) == 64
     assert workflow_definition_hash(deepcopy(WORKFLOW_V3)) == workflow_definition_hash(WORKFLOW_V3)
+
+
+@pytest.mark.unit
+def test_every_agent_node_declares_its_own_input_contract_and_upstream_state():
+    expected = {
+        "analyze_content_value": ("AnalyzeContentValueInputV1", {"content_brief", "evidence_bundle"}),
+        "explain_strategy": ("ExplainStrategyInputV1", {"value_analysis", "match_decision_snapshot"}),
+        "collect_missing_evidence": ("CollectMissingEvidenceInputV1", {"formula_candidate_pool", "evidence_bundle"}),
+        "rank_formula_candidates": ("RankFormulaCandidatesInputV1", {"formula_candidate_pool", "evidence_bundle"}),
+        "collect_strategy_product_evidence": (
+            "CollectStrategyProductEvidenceInputV1",
+            {"strategy_snapshot", "product_material_requirements", "evidence_bundle"},
+        ),
+        "generate_title_candidates": (
+            "GenerateTitleCandidatesInputV1",
+            {"strategy_snapshot", "product_evidence_pack", "evidence_bundle"},
+        ),
+        "build_outline": ("BuildOutlineInputV1", {"selected_title", "strategy_snapshot", "product_evidence_pack"}),
+        "generate_body": (
+            "GenerateBodyInputV1",
+            {"selected_title", "content_outline", "strategy_snapshot", "product_evidence_pack"},
+        ),
+        "persona_style_polish": (
+            "PersonaStylePolishInputV1",
+            {"content_draft", "persona_profile", "product_evidence_pack"},
+        ),
+        "semantic_review": ("SemanticReviewInputV1", {"content_draft", "validation_report", "strategy_snapshot"}),
+        "plan_visuals": ("PlanVisualsInputV1", {"content_draft", "artifact_version", "strategy_snapshot"}),
+        "submit_cover_job": ("SubmitCoverJobInputV1", {"visual_plan", "artifact_version"}),
+        "visual_review": ("VisualReviewInputV1", {"visual_plan", "cover_assets", "content_draft"}),
+    }
+
+    agent_nodes = {item["id"]: item for item in WORKFLOW_V3["nodes"] if item["type"] == "agent"}
+    assert set(agent_nodes) == set(expected)
+    for node_id, (contract, upstream) in expected.items():
+        assert agent_nodes[node_id]["input_contract"] == contract
+        assert upstream <= set(agent_nodes[node_id]["state_inputs"])
+
+
+@pytest.mark.unit
+def test_knowledge_nodes_use_their_managed_agent_knowledge_scope():
+    knowledge_nodes = {
+        item["id"]: item["knowledge_policy"]
+        for item in WORKFLOW_V3["nodes"]
+        if item["type"] == "agent" and item["knowledge_policy"] == "agent_scope"
+    }
+
+    assert knowledge_nodes == {
+        "collect_missing_evidence": "agent_scope",
+        "collect_strategy_product_evidence": "agent_scope",
+        "semantic_review": "agent_scope",
+    }
 
 
 @pytest.mark.unit
@@ -80,6 +133,7 @@ def test_system_v3_seed_upgrades_stale_workflow_definition_but_preserves_user_ow
 
     assert _upgrade_system_workflow_v3(stale) is True
     assert stale.definition_json == WORKFLOW_V3
+    assert stale.version == 5
     assert stale.definition_hash == workflow_definition_hash(WORKFLOW_V3)
     assert stale.input_schema == {"type": "ContentBrief", "version": 3}
     assert stale.output_schema == {"type": "ContentArtifact", "version": 3}
@@ -135,6 +189,20 @@ def test_unknown_agent_skill_contract_and_backend_fail_publication_validation():
 
 
 @pytest.mark.unit
+def test_publication_rejects_shared_agent_input_and_review_gate_bypass():
+    shared = deepcopy(WORKFLOW_V3)
+    _node(shared, "build_outline")["input_contract"] = _node(shared, "generate_body")["input_contract"]
+    with pytest.raises(ValueError, match="独立输入契约"):
+        WorkflowDefinitionPolicy.validate(shared, catalog=CATALOG)
+
+    bypass = deepcopy(WORKFLOW_V3)
+    bypass["edges"].remove(["deterministic_validate", "revise_if_needed"])
+    bypass["edges"].append(["deterministic_validate", "semantic_review"])
+    with pytest.raises(ValueError, match="固定回修路由|不得绕过"):
+        WorkflowDefinitionPolicy.validate(bypass, catalog=CATALOG)
+
+
+@pytest.mark.unit
 def test_match_node_cannot_be_agent_and_required_human_gate_cannot_be_removed():
     agent_match = deepcopy(WORKFLOW_V3)
     match_node = _node(agent_match, "match_combination_group")
@@ -148,7 +216,7 @@ def test_match_node_cannot_be_agent_and_required_human_gate_cannot_be_removed():
 
     with pytest.raises(ValueError, match="禁止 Agent 化"):
         WorkflowDefinitionPolicy.validate(agent_match)
-    with pytest.raises(ValueError, match="31 个节点|人工关口"):
+    with pytest.raises(ValueError, match="35 个节点|人工关口"):
         WorkflowDefinitionPolicy.validate(missing_gate)
 
 
@@ -175,7 +243,7 @@ def test_skill_slug_and_invalid_revision_routes_are_rejected():
 @pytest.mark.unit
 def test_normal_edges_remain_acyclic_even_when_revision_routes_exist():
     definition = deepcopy(WORKFLOW_V3)
-    definition["edges"].append(["package_for_distribution", "compile_runtime_snapshot"])
+    definition["edges"].append(["deterministic_validate", "compile_runtime_snapshot"])
 
     with pytest.raises(ValueError, match="正常连线不能包含循环"):
         WorkflowDefinitionPolicy.validate(definition)
@@ -204,5 +272,5 @@ def test_revision_controller_routes_only_known_reasons_and_stops_at_limit():
 
     assert first.status == "route" and first.target_node_id == "generate_body"
     assert second.status == "route" and second.retry_counts["generate_body"] == 2
-    assert stopped.status == "limit_reached" and stopped.target_node_id == "human_content_approval"
+    assert stopped.status == "limit_reached" and stopped.target_node_id is None
     assert unknown.status == "continue" and unknown.target_node_id is None

@@ -37,7 +37,6 @@ class ContentBriefPayload(BaseModel):
     persona: dict[str, Any] = Field(default_factory=dict)
     required_terms: list[str] = Field(default_factory=list)
     forbidden_terms: list[str] = Field(default_factory=list)
-    knowledge_scope: list[str] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     locked_fields: list[str] = Field(default_factory=list)
     form_values: dict[str, Any] = Field(default_factory=dict)

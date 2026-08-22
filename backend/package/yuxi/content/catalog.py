@@ -244,7 +244,6 @@ def content_form_fields(config: dict[str, Any], *, pro: bool) -> list[dict[str, 
             [
                 {"key": "persona_profile_version_id", "label": "人设档案", "type": "persona", "required": False},
                 {"key": "channel_profile_version_id", "label": "发布渠道", "type": "channel", "required": True},
-                {"key": "knowledge_scope", "label": "知识库范围", "type": "knowledge", "required": False},
                 {"key": "attachments", "label": "真实素材", "type": "materials", "required": False},
                 {"key": "required_terms", "label": "必须包含", "type": "tags", "required": False},
                 {"key": "forbidden_terms", "label": "禁止表达", "type": "tags", "required": False},

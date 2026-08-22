@@ -9,6 +9,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
+from sqlalchemy import select
 
 from yuxi.agents import BaseAgent
 from yuxi.content.generation import SKILL_VERSIONS
@@ -16,7 +17,9 @@ from yuxi.content.control.workflow.agent_node import AgentNodeHandler
 from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
 from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
 from yuxi.content.control.workflow.revision import RevisionRouteController, resolve_revision_reason
+from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.model.workflows.definition import WorkflowDefinitionPolicy
+from yuxi.content.model.contracts import StrategySnapshotV1
 from yuxi.content.model.formulas.selector import (
     FormulaCandidateDefinition,
     FormulaCandidatePool,
@@ -28,7 +31,13 @@ from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.services.run_queue_service import append_run_stream_event, has_cancel_signal
 from yuxi.storage.postgres.manager import pg_manager
-from yuxi.storage.postgres.models_content import ContentArtifact
+from yuxi.storage.postgres.models_content import (
+    ContentArtifact,
+    ContentCombinationRule,
+    ContentFormula,
+    CreationMethod,
+    TitleFormula,
+)
 from yuxi.utils.datetime_utils import utc_now_naive
 
 from .context import ContentWorkflowContext
@@ -43,6 +52,13 @@ def _event_payload(state: ContentWorkflowState, node_id: str, status: str, **ext
         "status": status,
         **extra,
     }
+
+
+def _report_is_blocked(report: dict[str, Any]) -> bool:
+    return report.get("status") == "blocked" or any(
+        item.get("status") == "blocked" or item.get("level") == "error"
+        for item in report.get("checks") or []
+    )
 
 
 class ContentWorkflowAgent(BaseAgent):
@@ -80,6 +96,7 @@ class ContentWorkflowAgent(BaseAgent):
             incoming[target] += 1
             outgoing[source] += 1
         revision_targets = {
+            "semantic_review": "semantic_review",
             "human_content_approval": "human_content_approval",
             **{route["to"]: route["to"] for route in definition.get("revision_routes") or []},
         }
@@ -90,6 +107,9 @@ class ContentWorkflowAgent(BaseAgent):
                     self._route_after_revision,
                     revision_targets,
                 )
+                for target in revision_targets:
+                    incoming[target] += 1
+                    outgoing[node_id] += 1
         roots = [node_id for node_id, count in incoming.items() if count == 0]
         leaves = [node_id for node_id, count in outgoing.items() if count == 0]
         for node_id in roots:
@@ -104,7 +124,7 @@ class ContentWorkflowAgent(BaseAgent):
 
     @staticmethod
     def _route_after_revision(state: ContentWorkflowState) -> str:
-        return state.get("revision_target") or "human_content_approval"
+        return state.get("revision_target") or "semantic_review"
 
     def _node_runner(self, node: dict[str, Any]) -> Callable:
         async def run(state: ContentWorkflowState) -> dict[str, Any]:
@@ -231,21 +251,91 @@ class ContentWorkflowAgent(BaseAgent):
         if node_type == "human_review":
             return await self._v3_human_review(node, state)
         if node_type == "revision_router":
+            previous_node = state.get("current_node")
+            validation_report = state.get("validation_report") or {}
+            review_report = state.get("review_report") or {}
+            if previous_node == "deterministic_validate" and not _report_is_blocked(validation_report):
+                return {
+                    "revision_reason_code": None,
+                    "revision_target": "semantic_review",
+                    "revision_status": "continue",
+                    "retry_counts": dict(state.get("retry_counts") or {}),
+                }
+            if previous_node == "semantic_review" and not _report_is_blocked(review_report):
+                return {
+                    "revision_reason_code": None,
+                    "revision_target": "human_content_approval",
+                    "revision_status": "continue",
+                    "retry_counts": dict(state.get("retry_counts") or {}),
+                }
             reason_code = resolve_revision_reason(
                 title_validation_report=state.get("title_validation_report"),
-                validation_report=state.get("validation_report"),
-                review_report=state.get("review_report"),
+                validation_report=validation_report,
+                review_report=review_report if previous_node == "semantic_review" else None,
             )
+            if reason_code in {"SYSTEM_CONFIGURATION_FAILED", "REVIEW_CONTRACT_VIOLATION"}:
+                raise ContentApplicationError(
+                    code=reason_code.lower(),
+                    message=(
+                        "内容校验发现系统配置或审核契约错误，已停止执行；不会交给语义 Agent 猜测修复"
+                    ),
+                    kind="conflict",
+                )
             decision = RevisionRouteController().decide(
                 definition=definition or {},
                 reason_code=reason_code,
                 retry_counts=state.get("retry_counts") or {},
             )
+            if decision.status == "limit_reached":
+                raise ContentApplicationError(
+                    code="content_revision_limit_reached",
+                    message=f"阻断原因 {reason_code} 已达到定点回修次数上限",
+                    kind="conflict",
+                )
+            if decision.status == "continue" or decision.target_node_id is None:
+                raise ContentApplicationError(
+                    code="content_revision_route_missing",
+                    message=f"阻断原因 {reason_code or 'unknown'} 没有可执行的定点回修路线",
+                    kind="conflict",
+                )
+            state_version = int(state.get("state_version") or 0)
+            expected_run_id = state.get("resume_parent_run_id") or state["run_id"]
+            answer = interrupt(
+                {
+                    "interrupt_type": "content_correction",
+                    "task_id": state["task_id"],
+                    "run_id": expected_run_id,
+                    "node_id": node["id"],
+                    "expected_state_version": state_version,
+                    "reason_code": reason_code,
+                    "suggested_target": decision.target_node_id,
+                    "validation_report": validation_report,
+                    "review_report": review_report if previous_node == "semantic_review" else {},
+                }
+            )
+            if not isinstance(answer, dict):
+                raise ValueError("人工回修输入必须是对象")
+            expected = {
+                "run_id": expected_run_id,
+                "node_id": node["id"],
+                "expected_state_version": state_version,
+            }
+            mismatched = [key for key, value in expected.items() if answer.get(key) != value]
+            if mismatched:
+                raise ValueError(f"人工回修请求已过期或目标不匹配: {', '.join(mismatched)}")
+            if answer.get("decision") != "revise":
+                raise ContentApplicationError(
+                    code="content_correction_not_confirmed",
+                    message="内容阻断问题尚未确认回修，工作流保持停止",
+                    kind="conflict",
+                )
             return {
                 "revision_reason_code": reason_code,
-                "revision_target": decision.target_node_id or "human_content_approval",
+                "revision_target": decision.target_node_id,
                 "revision_status": decision.status,
                 "retry_counts": decision.retry_counts,
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
             }
         raise ValueError(f"V3 工作流不支持节点类型: {node_type}")
 
@@ -316,6 +406,37 @@ class ContentWorkflowAgent(BaseAgent):
                 "resume_parent_run_id": None,
             }
 
+        if interrupt_type == "strategy_product_facts":
+            collection = dict(state.get("product_evidence_collection") or {})
+            items = list(collection.get("evidence_items") or [])
+            high_risk_items = [
+                item
+                for item in items
+                if item.get("risk_level") == "high_risk" and item.get("verified_status") != "user_confirmed"
+            ]
+            if not high_risk_items:
+                return {"state_version": state_version + 1, "resume_parent_run_id": None}
+            high_risk_ids = {item["id"] for item in high_risk_items}
+            answer = require_resume(
+                {
+                    "evidence_ids": sorted(high_risk_ids),
+                    "evidence_items": high_risk_items,
+                    "strategy_snapshot_hash": (state.get("strategy_snapshot") or {}).get("snapshot_hash"),
+                }
+            )
+            confirmed = set(answer.get("confirmed_evidence_ids") or [])
+            if confirmed != high_risk_ids:
+                raise ValueError("价格、优惠、效果承诺等高风险产品事实必须逐项人工确认")
+            collection["evidence_items"] = [
+                {**item, "verified_status": "user_confirmed"} if item.get("id") in confirmed else item
+                for item in items
+            ]
+            return {
+                "product_evidence_collection": collection,
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
+
         if interrupt_type == "formula_selection":
             match = state.get("match_decision_snapshot") or {}
             title_pool = tuple(match.get("eligible_title_formula_codes") or [])
@@ -364,6 +485,14 @@ class ContentWorkflowAgent(BaseAgent):
                     selected_by=selected_by,
                     delegated_agent_run_id=(state.get("delegated_agent_runs") or {}).get("rank_formula_candidates"),
                 )
+                strategy_snapshot = await self._build_strategy_snapshot(
+                    db=db,
+                    state=state,
+                    match=match,
+                    formula_snapshot_id=snapshot.id,
+                    title_formula_code=str(decision.selected_title_formula_code or ""),
+                    body_formula_code=str(decision.selected_body_formula_code or ""),
+                )
             result = decision.to_dict()
             result["id"] = snapshot.id
             result["eligible_title_formula_codes"] = [item.formula_code for item in decision.eligible_title_formulas]
@@ -385,6 +514,7 @@ class ContentWorkflowAgent(BaseAgent):
             )
             return {
                 "formula_selection_snapshot": result,
+                "strategy_snapshot": strategy_snapshot,
                 "state_version": state_version + 1,
                 "resume_parent_run_id": None,
             }
@@ -402,7 +532,29 @@ class ContentWorkflowAgent(BaseAgent):
             }
 
         if interrupt_type == "content_approval":
-            answer = require_resume({"review_report": state.get("review_report") or {}})
+            validation_report = state.get("validation_report") or {}
+            review_report = state.get("review_report") or {}
+            invalid_reports = [
+                name
+                for name, report in (
+                    ("deterministic", validation_report),
+                    ("semantic", review_report),
+                )
+                if report.get("status") not in {"passed", "warning"} or _report_is_blocked(report)
+            ]
+            if invalid_reports:
+                raise ContentApplicationError(
+                    code="content_approval_blocked",
+                    message=f"最终审批前仍有阻断报告: {', '.join(invalid_reports)}",
+                    kind="conflict",
+                )
+            answer = require_resume(
+                {
+                    "validation_report": validation_report,
+                    "review_report": review_report,
+                    "approval_allowed": True,
+                }
+            )
             if answer.get("decision") != "approved":
                 raise ValueError("最终内容未获批准")
             artifact_payload = {
@@ -459,16 +611,114 @@ class ContentWorkflowAgent(BaseAgent):
 
         raise ValueError(f"未实现的 V3 人工关口: {interrupt_type}")
 
+    @staticmethod
+    async def _build_strategy_snapshot(
+        *,
+        db,
+        state: ContentWorkflowState,
+        match: dict[str, Any],
+        formula_snapshot_id: str,
+        title_formula_code: str,
+        body_formula_code: str,
+    ) -> dict[str, Any]:
+        rule_version_id = state["rule_version_id"]
+        group = await db.get(ContentCombinationRule, match["selected_group_id"])
+        title_formula = (
+            await db.execute(
+                select(TitleFormula).where(
+                    TitleFormula.version_id == rule_version_id,
+                    TitleFormula.code == title_formula_code,
+                    TitleFormula.enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        body_formula = (
+            await db.execute(
+                select(ContentFormula).where(
+                    ContentFormula.version_id == rule_version_id,
+                    ContentFormula.code == body_formula_code,
+                    ContentFormula.enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if group is None or title_formula is None or body_formula is None:
+            raise ValueError("锁定策略缺少组合组或标题/正文公式定义")
+        method_codes = [
+            str(item.get("method_code"))
+            for item in (group.method_members or [])
+            if isinstance(item, dict) and item.get("method_code")
+        ] or [str(item) for item in (group.methods or []) if item]
+        methods = list(
+            (
+                await db.execute(
+                    select(CreationMethod).where(
+                        CreationMethod.version_id == rule_version_id,
+                        CreationMethod.code.in_(method_codes),
+                        CreationMethod.enabled.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+        loaded_method_codes = {item.code for item in methods}
+        if not method_codes or set(method_codes) - loaded_method_codes:
+            raise ValueError("锁定策略缺少创作手法定义")
+        method_by_code = {item.code: item for item in methods}
+        payload = {
+            "content_direction": str(
+                (state.get("selected_angle") or {}).get("direction_code")
+                or (state.get("selected_angle") or {}).get("content_direction_code")
+                or ""
+            ),
+            "selected_group_id": group.id,
+            "creation_methods": method_codes,
+            "creation_method_definitions": [
+                {
+                    "code": method_by_code[code].code,
+                    "name": method_by_code[code].name,
+                    "method_type": method_by_code[code].method_type,
+                    "principle": method_by_code[code].principle,
+                    "suitable_scenes": method_by_code[code].suitable_scenes or [],
+                    "sentence_patterns": method_by_code[code].sentence_patterns or [],
+                    "variable_schema": method_by_code[code].variable_schema or [],
+                    "risk_rules": method_by_code[code].risk_rules or [],
+                }
+                for code in method_codes
+            ],
+            "title_formula": {
+                "code": title_formula.code,
+                "name": title_formula.name,
+                "core_goal": title_formula.core_goal,
+                "reference_examples": title_formula.reference_examples or [],
+                "variable_schema": title_formula.variable_schema or [],
+                "compatible_methods": title_formula.compatible_methods or [],
+                "risk_rules": title_formula.risk_rules or [],
+            },
+            "body_formula": {
+                "code": body_formula.code,
+                "name": body_formula.name,
+                "structure_schema": body_formula.structure_schema or [],
+                "reference_examples": body_formula.reference_examples or [],
+                "required_variables": body_formula.required_variables or [],
+                "output_schema": body_formula.output_schema or {},
+                "compatible_methods": body_formula.compatible_methods or [],
+                "risk_rules": body_formula.risk_rules or [],
+            },
+            "rule_version_id": rule_version_id,
+            "match_snapshot_id": str(match["id"]),
+            "formula_snapshot_id": formula_snapshot_id,
+        }
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        payload["snapshot_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return StrategySnapshotV1.model_validate(payload).model_dump(mode="json")
+
     async def _save_artifact(self, state: ContentWorkflowState) -> dict[str, Any]:
         draft = state["content_draft"]
         review = state.get("review_report") or state.get("validation_report") or {"status": "passed", "checks": []}
         approval_rejected = (state.get("approval_result") or {}).get("status") == "rejected"
         artifact_status = "blocked" if review["status"] == "blocked" or approval_rejected else "reviewed"
-        strategy_snapshot = {
-            "match_decision": state.get("match_decision_snapshot") or {},
-            "formula_selection": state.get("formula_selection_snapshot") or {},
-            "strategy_explanation": state.get("strategy_explanation") or {},
-        }
+        strategy_snapshot = state.get("strategy_snapshot") or {}
+        if not strategy_snapshot.get("snapshot_hash"):
+            raise ValueError("保存内容资产前缺少锁定 StrategySnapshot")
         async with pg_manager.get_async_session_context() as db:
             repo = ContentRepository(db)
             task = await repo.get_task(state["task_id"], for_update=True)
@@ -513,8 +763,8 @@ class ContentWorkflowAgent(BaseAgent):
                     content_type_snapshot=state.get("content_type") or {},
                     angle_snapshot=state.get("selected_angle") or {},
                     pattern_slot_snapshot={
-                        "title_pattern_code": strategy_snapshot.get("title_pattern_code"),
-                        "body_pattern_code": strategy_snapshot.get("body_pattern_code"),
+                        "title_pattern_code": (strategy_snapshot.get("title_formula") or {}).get("code"),
+                        "body_pattern_code": (strategy_snapshot.get("body_formula") or {}).get("code"),
                         "title_formula_code": (state.get("formula_selection_snapshot") or {}).get(
                             "selected_title_formula_code"
                         ),
@@ -551,8 +801,8 @@ class ContentWorkflowAgent(BaseAgent):
                 artifact.content_type_snapshot = state.get("content_type") or {}
                 artifact.angle_snapshot = state.get("selected_angle") or {}
                 artifact.pattern_slot_snapshot = {
-                    "title_pattern_code": strategy_snapshot.get("title_pattern_code"),
-                    "body_pattern_code": strategy_snapshot.get("body_pattern_code"),
+                    "title_pattern_code": (strategy_snapshot.get("title_formula") or {}).get("code"),
+                    "body_pattern_code": (strategy_snapshot.get("body_formula") or {}).get("code"),
                     "title_formula_code": (state.get("formula_selection_snapshot") or {}).get(
                         "selected_title_formula_code"
                     ),

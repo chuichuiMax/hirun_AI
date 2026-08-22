@@ -80,7 +80,6 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   const ruleBundle = computed(() => bootstrap.value?.rule_bundle || null)
   const templates = computed(() => bootstrap.value?.industry_templates || [])
   const contentGoals = computed(() => bootstrap.value?.content_goals || [])
-  const knowledgeOptions = computed(() => bootstrap.value?.knowledge_options || [])
   const evidence = computed(() => task.value?.evidence_bundle || { items: [] })
 
   async function loadBootstrap(force = false) {
@@ -393,7 +392,6 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     ruleBundle,
     templates,
     contentGoals,
-    knowledgeOptions,
     evidence,
     loadBootstrap,
     createTask,

@@ -25,6 +25,7 @@ import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
 import { contentApi } from '@/apis/content_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
+import { formatEvidenceReference } from '@/utils/contentEvidencePresentation'
 
 const route = useRoute()
 const router = useRouter()
@@ -93,6 +94,27 @@ const isQuickMode = computed(() => (store.task ? store.task.mode : creation.mode
 const titleOptions = computed(
   () => store.interrupt?.options || store.task?.title_candidates || []
 )
+const evidenceFieldLabels = computed(() =>
+  Object.fromEntries(
+    [...(store.template?.quick_form_schema || []), ...(store.template?.pro_form_schema || [])]
+      .filter((field) => field.key && field.label)
+      .map((field) => [field.key, field.label])
+  )
+)
+const evidenceItemsById = computed(
+  () =>
+    new Map(
+      [...(store.evidence?.items || []), ...(store.interrupt?.evidence_items || [])]
+        .filter((item) => item?.id)
+        .map((item) => [item.id, item])
+    )
+)
+const evidenceReferenceText = (evidenceId, index = 0) =>
+  formatEvidenceReference(
+    evidenceItemsById.value.get(evidenceId),
+    evidenceFieldLabels.value,
+    index
+  )
 const angleOptions = computed(() =>
   store.interrupt?.interrupt_type === 'content_direction' ? store.interrupt.options || [] : []
 )
@@ -111,6 +133,10 @@ const nodeTimeline = computed(() => {
     freeze_evidence_bundle: '冻结证据包',
     rank_formula_candidates: 'Agent 排序公式候选',
     lock_formula_selection: '锁定标题与正文公式',
+    resolve_product_material_requirements: '解析产品资料需求',
+    collect_strategy_product_evidence: '调研 Agent 定向检索产品资料',
+    confirm_strategy_product_facts: '人工确认产品高风险事实',
+    freeze_product_evidence_bundle: '冻结产品证据快照',
     generate_title_candidates: '标题 Agent 生成候选',
     validate_title_candidates: '校验标题候选',
     select_title: '人工选择标题',
@@ -139,6 +165,18 @@ const nodeTimeline = computed(() => {
 })
 const reviewChecks = computed(() => store.artifact?.review_snapshot?.checks || store.task?.review?.checks || [])
 const canFinalize = computed(() => ['passed', 'warning'].includes(store.artifact?.review_snapshot?.status))
+const approvalAllowed = computed(() => {
+  if (store.interrupt?.interrupt_type !== 'content_approval') return false
+  return (
+    store.interrupt.approval_allowed === true &&
+    ['passed', 'warning'].includes(store.interrupt.validation_report?.status) &&
+    ['passed', 'warning'].includes(store.interrupt.review_report?.status)
+  )
+})
+const correctionChecks = computed(() => [
+  ...(store.interrupt?.validation_report?.checks || []),
+  ...(store.interrupt?.review_report?.checks || [])
+].filter((item) => item.status === 'blocked' || item.level === 'error'))
 const runFailed = computed(() =>
   ['failed', 'cancelled'].includes(store.currentRun?.status) || store.task?.status === 'failed'
 )
@@ -188,7 +226,7 @@ const initializeFormValues = () => {
   activeFields.value.forEach((field) => {
     if (hasSavedValues && saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
     else if (defaults[field.key] !== undefined) formValues[field.key] = defaults[field.key]
-    else if (field.type === 'tags' || field.type === 'knowledge') formValues[field.key] = []
+    else if (field.type === 'tags') formValues[field.key] = []
     else formValues[field.key] = ''
   })
 }
@@ -217,8 +255,11 @@ watch(
     selectedTitleFormulaCode.value = ''
     selectedBodyFormulaCode.value = ''
     selectedCoverAssetId.value = ''
-    confirmedEvidenceIds.value =
-      interrupt?.interrupt_type === 'high_risk_facts' ? [...(interrupt.evidence_ids || [])] : []
+    confirmedEvidenceIds.value = ['high_risk_facts', 'strategy_product_facts'].includes(
+      interrupt?.interrupt_type
+    )
+      ? [...(interrupt.evidence_ids || [])]
+      : []
     approvalNote.value = ''
   },
   { deep: true }
@@ -314,13 +355,12 @@ const buildBrief = () => ({
   business_variables: Object.fromEntries(
     Object.entries(formValues).filter(
       ([key]) =>
-        !['brand_name', 'audience', 'persona', 'required_terms', 'forbidden_terms', 'knowledge_scope'].includes(key)
+        !['brand_name', 'audience', 'persona', 'required_terms', 'forbidden_terms'].includes(key)
     )
   ),
   persona: formValues.persona ? { description: formValues.persona } : {},
   required_terms: formValues.required_terms || [],
   forbidden_terms: formValues.forbidden_terms || [],
-  knowledge_scope: formValues.knowledge_scope || [],
   attachments: [],
   locked_fields: [],
   form_values: { ...formValues }
@@ -391,7 +431,7 @@ const submitHumanReview = async () => {
       })
       return
     }
-    if (store.interrupt?.interrupt_type === 'high_risk_facts') {
+    if (['high_risk_facts', 'strategy_product_facts'].includes(store.interrupt?.interrupt_type)) {
       await store.resumeRun({
         ...metadata,
         confirmed_evidence_ids: confirmedEvidenceIds.value
@@ -408,6 +448,10 @@ const submitHumanReview = async () => {
         title_formula_code: selectedTitleFormulaCode.value,
         body_formula_code: selectedBodyFormulaCode.value
       })
+      return
+    }
+    if (store.interrupt?.interrupt_type === 'content_correction') {
+      await store.resumeRun({ ...metadata, decision: 'revise' })
       return
     }
     if (store.interrupt?.interrupt_type === 'cover_selection') {
@@ -580,16 +624,6 @@ const openVersions = async () => {
                     :token-separators="[',', '，']"
                     :placeholder="`输入${field.label}后回车`"
                   />
-                  <a-select
-                    v-else-if="field.type === 'knowledge'"
-                    v-model:value="formValues[field.key]"
-                    mode="multiple"
-                    placeholder="选择本次允许检索的知识库"
-                  >
-                    <a-select-option v-for="kb in store.knowledgeOptions" :key="kb.id" :value="kb.id">
-                      {{ kb.name }}
-                    </a-select-option>
-                  </a-select>
                 </label>
               </div>
             </div>
@@ -599,7 +633,7 @@ const openVersions = async () => {
               <p>提交后系统会形成 ContentBrief，并把人工输入标准化为带来源的 EvidenceBundle。</p>
               <ul>
                 <li>数字和结果必须可验证</li>
-                <li>知识库仅补充行业知识与案例</li>
+                <li>知识库由内容调研 Agent 统一配置</li>
                 <li>规则组合不通过 RAG 判断</li>
               </ul>
             </aside>
@@ -643,7 +677,9 @@ const openVersions = async () => {
               <a-radio v-for="item in angleOptions" :key="item.direction_code" :value="item.direction_code">
                 <strong>{{ item.direction_code }}</strong>
                 <span>{{ item.reason }}</span>
-                <small v-if="item.evidence_ids?.length">引用证据：{{ item.evidence_ids.join('、') }}</small>
+                <small v-if="item.evidence_ids?.length" class="evidence-references">
+                  引用证据：{{ item.evidence_ids.map(evidenceReferenceText).join('；') }}
+                </small>
               </a-radio>
             </a-radio-group>
             <a-button type="primary" :disabled="!selectedAngleId" @click="submitHumanReview">确认方向并继续</a-button>
@@ -660,11 +696,11 @@ const openVersions = async () => {
             <a-button type="primary" @click="submitHumanReview">确认标题并继续生成</a-button>
           </div>
 
-          <div v-else-if="store.interrupt?.interrupt_type === 'high_risk_facts'" class="human-review-card">
-            <div class="human-heading"><ShieldCheck :size="20" /><div><h3>确认关键事实</h3><p>价格、效果或高风险表达必须确认后才能用于生成。</p></div></div>
+          <div v-else-if="['high_risk_facts', 'strategy_product_facts'].includes(store.interrupt?.interrupt_type)" class="human-review-card">
+            <div class="human-heading"><ShieldCheck :size="20" /><div><h3>确认关键事实</h3><p>价格、优惠、效果或高风险表达必须逐项确认后才能进入冻结证据并用于生成。</p></div></div>
             <a-checkbox-group v-model:value="confirmedEvidenceIds" class="fact-options">
               <a-checkbox v-for="item in store.interrupt.evidence_ids" :key="item" :value="item">
-                {{ item }}
+                <strong>{{ evidenceReferenceText(item) }}</strong>
               </a-checkbox>
             </a-checkbox-group>
             <a-button type="primary" @click="submitHumanReview">确认选中事实并继续</a-button>
@@ -696,7 +732,21 @@ const openVersions = async () => {
             <a-textarea v-model:value="approvalNote" :rows="3" placeholder="可选：填写审批备注" />
             <div class="approval-actions">
               <a-button danger @click="submitHumanApproval(false)">驳回</a-button>
-              <a-button type="primary" @click="submitHumanApproval(true)">通过并继续</a-button>
+              <a-button type="primary" :disabled="!approvalAllowed" @click="submitHumanApproval(true)">通过并继续</a-button>
+            </div>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'content_correction'" class="human-review-card">
+            <div class="human-heading"><CircleAlert :size="20" /><div><h3>内容需要定点回修</h3><p>确定性校验或语义审核发现阻断问题。确认后只重跑建议节点及其下游。</p></div></div>
+            <div class="approval-checks">
+              <div v-for="check in correctionChecks" :key="`${check.code}-${check.location || 'content'}`">
+                <strong>{{ check.message || check.code }}</strong>
+                <span v-if="check.suggestion">{{ check.suggestion }}</span>
+              </div>
+            </div>
+            <p class="correction-target">回修原因：{{ store.interrupt.reason_code }} · 目标节点：{{ store.interrupt.suggested_target }}</p>
+            <div class="approval-actions">
+              <a-button type="primary" @click="submitHumanReview">确认并按建议重新生成</a-button>
             </div>
           </div>
 
@@ -906,6 +956,7 @@ const openVersions = async () => {
 .approval-checks > div { padding: 10px 12px; border-radius: 6px; background: var(--color-warning-50); color: var(--color-warning-900); }
 .approval-checks strong, .approval-checks span { display: block; font-size: 12px; }
 .approval-checks span { margin-top: 3px; opacity: 0.82; }
+.correction-target { margin: 12px 0 0; color: var(--gray-600); font-size: 13px; }
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .title-options strong, .title-options span { display: block; }
 .title-options span { margin-top: 3px; color: var(--color-text-tertiary); font-size: 12px; }

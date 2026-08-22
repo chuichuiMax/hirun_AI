@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from yuxi.agents.middlewares.skills import (
     resolve_runtime_skills_for_context,
 )
 from yuxi.content.control.errors import ContentApplicationError
+from yuxi.content.model.contracts import ContractDomainContext
 from yuxi.content.v3.agents import (
     CONTENT_AGENT_SPECS,
     migrate_system_content_agent,
@@ -379,6 +381,79 @@ async def test_content_agent_uses_minimal_runtime_middlewares():
 
 
 def _delegation_request(**overrides):
+    strategy_snapshot = {
+        "content_direction": "CT01",
+        "selected_group_id": "group-1",
+        "creation_methods": ["M1"],
+        "creation_method_definitions": [
+            {
+                "code": "M1",
+                "name": "价值法",
+                "method_type": "core",
+                "principle": "表达价值",
+                "suitable_scenes": [],
+                "sentence_patterns": [],
+                "variable_schema": ["advantages"],
+                "risk_rules": [],
+            }
+        ],
+        "title_formula": {"code": "T1"},
+        "body_formula": {"code": "B1"},
+        "rule_version_id": "rules-v3",
+        "match_snapshot_id": "match-1",
+        "formula_snapshot_id": "formula-1",
+    }
+    strategy_snapshot["snapshot_hash"] = hashlib.sha256(
+        json.dumps(strategy_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    governance = {
+        "match_decision_snapshot": {
+            "selected_group_id": "group-1",
+            "eligible_title_formula_codes": ["T1"],
+            "eligible_body_formula_codes": ["B1"],
+        },
+        "formula_selection_snapshot": {
+            "combination_group_id": "group-1",
+            "eligible_title_formula_codes": ["T1"],
+            "eligible_body_formula_codes": ["B1"],
+            "selected_title_formula_code": "T1",
+            "selected_body_formula_code": "B1",
+        },
+        "evidence_bundle": {
+            "id": "bundle-1",
+            "version": 2,
+            "bundle_hash": "e" * 64,
+            "items": [
+                {
+                    "id": "e-body",
+                    "value": "fact",
+                    "verified_status": "confirmed",
+                    "allowed_usage": ["body"],
+                }
+            ]
+        },
+        "locked_versions": {
+            "industry_pack_version_id": "industry-v3",
+            "channel_profile_version_id": "channel-v1",
+            "persona_profile_version_id": None,
+            "rule_version_id": "rules-v3",
+            "title_formula_code": "T1",
+            "body_formula_code": "B1",
+            "artifact_version_id": None,
+        },
+        "locked_values": {"selected_title": "locked title"},
+    }
+    product_evidence_pack = {
+        "strategy_snapshot_hash": strategy_snapshot["snapshot_hash"],
+        "evidence_bundle_id": governance["evidence_bundle"]["id"],
+        "evidence_bundle_version": governance["evidence_bundle"]["version"],
+        "evidence_bundle_hash": governance["evidence_bundle"]["bundle_hash"],
+        "slot_mappings": [],
+        "unresolved_questions": [],
+    }
+    product_evidence_pack["pack_hash"] = hashlib.sha256(
+        json.dumps(product_evidence_pack, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     values = {
         "task_id": "task-1",
         "parent_content_run_id": "parent-run",
@@ -386,38 +461,20 @@ def _delegation_request(**overrides):
         "user": SimpleNamespace(uid="u1", role="user", department_id=None),
         "agent_slug": "content-body-agent",
         "required_skills": ("content-body-generator",),
+        "input_contract": "GenerateBodyInputV1",
         "input_payload": {
             "content_brief": {"brand": {"name": "x"}},
-            "match_decision_snapshot": {"selected_group_id": "group-1"},
-            "formula_selection_snapshot": {
-                "combination_group_id": "group-1",
-                "eligible_title_formula_codes": ["T1"],
-                "eligible_body_formula_codes": ["B1"],
-                "selected_title_formula_code": "T1",
-                "selected_body_formula_code": "B1",
-            },
-            "evidence_bundle": {
-                "items": [
-                    {
-                        "id": "e-body",
-                        "value": "fact",
-                        "verified_status": "confirmed",
-                        "allowed_usage": ["body"],
-                    }
-                ]
-            },
-            "evidence_bundle_hash": "evidence-hash",
-            "locked_versions": {
-                "industry_pack_version_id": "industry-v3",
-                "channel_profile_version_id": "channel-v1",
-                "persona_profile_version_id": None,
-                "rule_version_id": "rules-v3",
-                "title_formula_code": "T1",
-                "body_formula_code": "B1",
-                "artifact_version_id": None,
-            },
-            "locked_values": {"selected_title": "locked title"},
+            "strategy_snapshot": strategy_snapshot,
+            "product_evidence_pack": product_evidence_pack,
+            "evidence_bundle": governance["evidence_bundle"],
+            "channel_profile": {},
+            "persona_profile": {},
+            "selected_title": {"id": "title-1", "text": "locked title"},
+            "content_outline": {"body_formula_code": "B1", "sections": [{"section_id": "s1"}]},
         },
+        "input_snapshot_hash": "input-hash",
+        "domain_context": ContractDomainContext.from_governance(**governance),
+        "governance_values": governance,
         "prompt": "generate",
         "output_contract": "ContentDraftResultV1",
     }
@@ -551,6 +608,10 @@ async def test_delegation_creates_traceable_child_run_and_runtime_snapshot(monke
     assert created["parent_agent_run_id"] == "parent-run"
     assert created["thread_id"] == "content:task-1:generate_body:1"
     assert created["agent_id"] == "content-body-agent"
+    assert created["input_payload"]["input"]["payload"]["content_outline"]["body_formula_code"] == "B1"
+    assert "locked_values" not in created["input_payload"]["input"]
+    assert request.node_run.input_snapshot["input_contract"] == "GenerateBodyInputV1"
+    assert request.node_run.input_snapshot["input_snapshot_hash"] == "input-hash"
     assert request.node_run.delegated_agent_run_id == result.delegated_agent_run_id
     assert result.runtime_config_snapshot["agent"]["config_version"] == 4
     assert result.runtime_config_snapshot["skills"][0]["content_hash"] == "hash-2"
@@ -637,8 +698,8 @@ def test_formal_content_agent_catalog_and_conflict_policy():
         "content-visual-agent",
     }
     title_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-title-agent")
-    assert title_spec.skill_tools == ("get_creation_rule_bundle",)
-    assert title_spec.config_version == 2
+    assert title_spec.skill_tools == ()
+    assert title_spec.config_version == 3
     spec = CONTENT_AGENT_SPECS[0]
     existing = Agent(
         slug=spec.slug,
@@ -674,7 +735,7 @@ def test_system_content_agent_migration_is_versioned_and_preserves_extra_context
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 2
+    assert existing.config_version == 3
     assert existing.config_json["context"]["model"] == "provider:model"
     assert set(existing.config_json["context"]["skill_tool_allowlist"]) == set(spec.skill_tools)
     validate_existing_content_agent(existing, spec)

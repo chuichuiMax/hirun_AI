@@ -381,6 +381,11 @@ async def test_result_collector_requires_activation_exactly_one_submission_and_n
     assert collector.submission_count == 0
 
     runtime._activated_required_skills = ["content-reviewer"]
+    invalid = _make_unknown("ContentReviewResultV1", VALID_PAYLOADS["ContentReviewResultV1"])
+    with pytest.raises(ContractDomainValidationError, match="未授权"):
+        await collector.submit(**invalid)
+    assert collector.submission_count == 0
+
     await collector.submit(**VALID_PAYLOADS["ContentReviewResultV1"])
     assert collector.finalize()["status"] == "passed"
     with pytest.raises(ContractDomainValidationError, match="只能提交一次"):
@@ -399,8 +404,12 @@ async def test_structured_result_tool_uses_registered_pydantic_schema():
     collector = ContentNodeResultCollector("ContentReviewResultV1", DOMAIN_CONTEXT, runtime)
     tool = build_content_result_tool(collector)
 
+    rejected = await tool.ainvoke(_make_unknown("ContentReviewResultV1", VALID_PAYLOADS["ContentReviewResultV1"]))
+    assert "请修正后重新提交" in rejected
+    assert collector.submission_count == 0
+
     await tool.ainvoke(VALID_PAYLOADS["ContentReviewResultV1"])
 
     assert tool.name == "submit_content_node_result"
     assert collector.submission_count == 1
-    assert len(CONTRACT_REGISTRY) == 12
+    assert len(CONTRACT_REGISTRY) == 13

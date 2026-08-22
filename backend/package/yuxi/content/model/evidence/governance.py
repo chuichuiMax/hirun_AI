@@ -17,7 +17,7 @@ EvidenceSourceType = Literal[
     "human_confirmation",
 ]
 EvidenceVerifiedStatus = Literal["retrieved", "confirmed", "user_confirmed", "rejected"]
-EvidenceUsage = Literal["title", "body", "visual"]
+EvidenceUsage = Literal["title", "body", "visual", "style_reference"]
 EvidenceRiskLevel = Literal["normal", "sensitive", "high_risk"]
 
 

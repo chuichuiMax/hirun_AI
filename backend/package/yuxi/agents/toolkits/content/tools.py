@@ -250,7 +250,8 @@ async def create_content_cover_job(
     node_input = getattr(context, "_content_node_input", None)
     if node_input is None or node_input.task_id != task_id:
         raise ValueError("封面任务与当前内容节点不一致")
-    locked_values = node_input.locked_values
+    governance = getattr(context, "_content_node_governance", None) or {}
+    locked_values = governance.get("locked_values") or {}
     visual_plan_payload = locked_values.get("visual_plan")
     if not isinstance(visual_plan_payload, dict) or not visual_plan_payload:
         raise ValueError("封面提交节点缺少锁定 VisualPlan")
@@ -275,7 +276,7 @@ async def create_content_cover_job(
     workflow_resume = {
         "parent_run_id": node_input.parent_run_id,
         "node_id": "wait_cover_job",
-        "expected_state_version": int(node_input.locked_values.get("state_version") or 0),
+        "expected_state_version": int(locked_values.get("state_version") or 0),
     }
     await _emit_content_tool_event(
         runtime,

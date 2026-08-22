@@ -297,7 +297,6 @@ BASE_PRO_FIELDS = [
     {"key": "scene", "label": "典型使用场景", "type": "textarea", "required": False},
     {"key": "required_terms", "label": "必须包含", "type": "tags", "required": False},
     {"key": "forbidden_terms", "label": "明确避免", "type": "tags", "required": False},
-    {"key": "knowledge_scope", "label": "知识库范围", "type": "knowledge", "required": False},
 ]
 
 INDUSTRIES = [

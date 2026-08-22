@@ -18,11 +18,12 @@ from yuxi.agents.buildin import agent_manager
 from yuxi.agents.context import normalize_agent_context_config, prepare_agent_runtime_context
 from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.model.contracts import (
-    ContentAgentNodeInputV1,
+    ContentAgentNodeInputV2,
     ContentNodeResultCollector,
     ContractDomainContext,
     ContractDomainValidationError,
     get_contract_model,
+    get_input_contract_model,
 )
 from yuxi.repositories.agent_repository import AgentRepository, user_can_access_agent
 from yuxi.repositories.agent_run_repository import AgentRunRepository
@@ -40,12 +41,15 @@ class AgentDelegationRequest:
     user: User
     agent_slug: str
     required_skills: tuple[str, ...]
+    input_contract: str
     input_payload: dict[str, Any]
+    input_snapshot_hash: str
+    domain_context: ContractDomainContext
+    governance_values: dict[str, Any]
     prompt: str
     output_contract: str
     result_tool_name: str = "submit_content_node_result"
     knowledge_policy: str = "frozen_evidence_only"
-    knowledge_scope: tuple[str, ...] = ()
     timeout_seconds: int = 120
     max_execution_steps: int = 12
     max_tool_calls: int = 4
@@ -77,7 +81,7 @@ def _bounded_run_identifier(value: str) -> str:
 
 def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelegationRequest) -> dict[str, Any]:
     snapshot = {
-        "schema_version": 1,
+        "schema_version": 2,
         "agent": {
             "slug": agent.slug,
             "backend_id": agent.backend_id,
@@ -95,6 +99,7 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
             "token_budget": request.token_budget,
         },
         "output_contract": request.output_contract,
+        "input_contract": request.input_contract,
     }
     canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     snapshot["snapshot_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -102,7 +107,7 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
 
 
 class AgentDelegationService:
-    KNOWLEDGE_NODE_IDS = {"collect_missing_evidence", "semantic_review"}
+    KNOWLEDGE_NODE_IDS = {"collect_missing_evidence", "collect_strategy_product_evidence", "semantic_review"}
     KNOWLEDGE_TOOL_NAMES = {"list_kbs", "get_mindmap", "query_kb", "open_kb_document", "find_kb_document"}
 
     def __init__(self, db: AsyncSession):
@@ -151,27 +156,31 @@ class AgentDelegationService:
             )
 
         runtime_snapshot = build_runtime_config_snapshot(agent=agent, context=context, request=request)
+        visible_payload = get_input_contract_model(request.input_contract).model_validate(request.input_payload)
         node_input_payload = {
             "task_id": request.task_id,
             "parent_run_id": request.parent_content_run_id,
             "node_id": request.node_run.node_id,
             "attempt": request.node_run.attempt,
-            **request.input_payload,
+            "input_contract": request.input_contract,
+            "input_snapshot_hash": request.input_snapshot_hash,
+            "payload": visible_payload.model_dump(mode="json"),
             "runtime_config_snapshot": runtime_snapshot,
             "node_responsibility": request.prompt,
             "prohibited_actions": list(request.prohibited_actions),
             "output_json_schema": get_contract_model(request.output_contract).model_json_schema(),
         }
-        node_input = ContentAgentNodeInputV1.model_validate(node_input_payload)
+        node_input = ContentAgentNodeInputV2.model_validate(node_input_payload)
         collector = ContentNodeResultCollector(
             contract_name=request.output_contract,
-            domain_context=ContractDomainContext.from_node_input(node_input),
+            domain_context=request.domain_context,
             runtime_context=context,
         )
         context._content_node_tool_scope = runtime_snapshot["tools"]
         context._content_node_output_contract = request.output_contract
         context._content_node_result_collector = collector
         context._content_node_input = node_input
+        context._content_node_governance = request.governance_values
         context._content_node_max_tool_calls = request.max_tool_calls
         context._content_node_token_budget = request.token_budget
         context._content_max_retrieval_rounds = request.max_retrieval_rounds
@@ -197,6 +206,9 @@ class AgentDelegationService:
         await self.content_repo.attach_delegated_agent_run(request.node_run, child_run.id)
         request.node_run.input_snapshot = {
             **(getattr(request.node_run, "input_snapshot", None) or {}),
+            "input_contract": request.input_contract,
+            "input_snapshot_hash": request.input_snapshot_hash,
+            "visible_payload": visible_payload.model_dump(mode="json"),
             "runtime_config_snapshot": runtime_snapshot,
         }
         await self.run_repo.mark_running(child_run.id)
@@ -207,6 +219,8 @@ class AgentDelegationService:
             "content.agent.started",
             {
                 "agent_slug": agent.slug,
+                "input_contract": request.input_contract,
+                "input_snapshot_hash": request.input_snapshot_hash,
                 "runtime_config_snapshot": runtime_snapshot,
             },
         )
@@ -304,21 +318,19 @@ class AgentDelegationService:
     def _apply_node_constraints(context, request: AgentDelegationRequest) -> None:
         if request.knowledge_policy == "none" or request.knowledge_policy == "frozen_evidence_only":
             context.knowledges = []
-        elif request.knowledge_policy == "task_scope":
+        elif request.knowledge_policy == "agent_scope":
             if request.node_run.node_id not in AgentDelegationService.KNOWLEDGE_NODE_IDS:
                 raise ContentApplicationError(
                     "knowledge_node_forbidden",
                     f"节点 {request.node_run.node_id} 不允许检索知识库",
                     "invalid",
                 )
-            if request.knowledge_scope and os.environ.get("LITE_MODE", "").lower() in {"true", "1"}:
+            if context.knowledges and os.environ.get("LITE_MODE", "").lower() in {"true", "1"}:
                 raise ContentApplicationError(
                     "knowledge_capability_unavailable",
-                    "LITE_MODE 不支持本任务要求的知识库检索",
+                    "LITE_MODE 不支持 Agent 已配置的知识库检索",
                     "conflict",
                 )
-            allowed = set(request.knowledge_scope)
-            context.knowledges = [slug for slug in context.knowledges or [] if slug in allowed]
         else:
             raise ContentApplicationError("knowledge_policy_invalid", "Agent 节点知识库策略无效", "invalid")
         if hasattr(context, "max_execution_steps"):
@@ -339,7 +351,7 @@ class AgentDelegationService:
         graph,
         context,
         request: AgentDelegationRequest,
-        node_input: ContentAgentNodeInputV1 | None = None,
+        node_input: ContentAgentNodeInputV2 | None = None,
     ) -> dict[str, Any]:
         prompt = request.prompt
         if node_input is not None:

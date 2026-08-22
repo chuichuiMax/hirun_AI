@@ -7,6 +7,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yuxi.content.control.workflow.content_node_input import ContentNodeInputAssembler
+from yuxi.content.model.contracts import ContractDomainContext
 from yuxi.services.agent_delegation_service import AgentDelegationRequest, AgentDelegationService
 from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
@@ -16,6 +18,12 @@ PROHIBITED_ACTIONS = {
     "analyze_content_value": ("不锁定组合组", "不选公式", "不修改工作流"),
     "explain_strategy": ("不改变固定匹配结果", "不扩大候选池"),
     "collect_missing_evidence": ("不直接生成文章", "不编造事实"),
+    "collect_strategy_product_evidence": (
+        "不生成标题或正文",
+        "不修改锁定公式或创作手法",
+        "爆款样例不得作为事实或数字来源",
+        "不得把案例证明映射为爆款样例或 style_reference",
+    ),
     "rank_formula_candidates": ("不提交候选池外公式", "不修改匹配组"),
     "generate_title_candidates": ("不生成正文", "不选最终标题", "不改公式"),
     "build_outline": ("不生成新事实", "不改正文公式"),
@@ -40,6 +48,8 @@ class AgentNodeResultMapper:
             return {"strategy_explanation": result}
         if node_id == "collect_missing_evidence":
             return {"evidence_collection": result}
+        if node_id == "collect_strategy_product_evidence":
+            return {"product_evidence_collection": result}
         if node_id == "rank_formula_candidates":
             return {"formula_rankings": result}
         if node_id == "generate_title_candidates":
@@ -119,6 +129,15 @@ class AgentNodeHandler:
         }
         if node["id"] == "submit_cover_job":
             locked_values["visual_plan"] = state.get("visual_plan") or {}
+        assembly = ContentNodeInputAssembler.build(node=node, state=state)
+        domain_context = ContractDomainContext.from_governance(
+            match_decision_snapshot=state.get("match_decision_snapshot") or {},
+            formula_selection_snapshot=state.get("formula_selection_snapshot") or {},
+            evidence_bundle=evidence_bundle,
+            locked_versions=locked_versions,
+            locked_values=locked_values,
+            product_material_requirements=state.get("product_material_requirements") or {},
+        )
         delegation = AgentDelegationService(db)
         delegated = await delegation.execute(
             AgentDelegationRequest(
@@ -128,20 +147,22 @@ class AgentNodeHandler:
                 user=user,
                 agent_slug=node["agent_slug"],
                 required_skills=tuple(node["required_skills"]),
-                input_payload={
-                    "content_brief": state["content_brief"],
+                input_contract=assembly.contract_name,
+                input_payload=assembly.payload,
+                input_snapshot_hash=assembly.snapshot_hash,
+                domain_context=domain_context,
+                governance_values={
+                    "evidence_bundle_hash": evidence_hash,
                     "match_decision_snapshot": state.get("match_decision_snapshot") or {},
                     "formula_selection_snapshot": state.get("formula_selection_snapshot") or {},
-                    "evidence_bundle": evidence_bundle,
-                    "evidence_bundle_hash": evidence_hash,
                     "locked_versions": locked_versions,
                     "locked_values": locked_values,
+                    "product_material_requirements": state.get("product_material_requirements") or {},
                 },
                 prompt=f"执行内容工作流节点 {node['id']} 的唯一职责",
                 output_contract=node["output_contract"],
                 result_tool_name=node["result_tool_name"],
                 knowledge_policy=node["knowledge_policy"],
-                knowledge_scope=tuple(state["content_brief"].get("knowledge_scope") or []),
                 timeout_seconds=node["timeout_seconds"],
                 max_execution_steps=node["max_execution_steps"],
                 max_tool_calls=node["max_tool_calls"],

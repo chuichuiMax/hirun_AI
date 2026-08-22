@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from yuxi.agents.buildin import agent_manager
 from yuxi.agents.buildin.content_workflow.context import ContentWorkflowContext
 from yuxi.content_cover.schemas import CoverRetryCreate
+from yuxi.content.v3.workflow import LEGACY_PLATFORM_WORKFLOW_V3_IDS
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.agent_run_repository import TERMINAL_RUN_STATUSES, AgentRunRepository
@@ -107,6 +108,14 @@ async def process_content_run(ctx, run_id: str):
             status="failed",
             error_type="content_legacy_task_read_only",
             error_message="旧版内容任务仅保留历史查询，Worker 只执行 V3 工作流",
+        )
+        return
+    if task.workflow_version_id in LEGACY_PLATFORM_WORKFLOW_V3_IDS:
+        await _set_content_run_status(
+            run_id,
+            status="failed",
+            error_type="content_workflow_upgrade_required",
+            error_message="旧版 V3 checkpoint 不会套用新版节点输入契约；请新建任务后生产",
         )
         return
 
@@ -212,6 +221,10 @@ async def process_content_run(ctx, run_id: str):
                 "validation_report": None,
                 "title_validation_report": None,
                 "review_report": None,
+                "strategy_snapshot": {},
+                "product_material_requirements": {},
+                "product_evidence_collection": {},
+                "product_evidence_pack": {},
                 "persona_diff": None,
                 "channel_result": None,
                 "approval_result": None,

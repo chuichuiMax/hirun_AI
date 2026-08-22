@@ -1,12 +1,12 @@
 ---
 name: content-cover-generator
 description: 根据锁定的视觉方案提交唯一封面生成任务，不在 Agent 中等待图片完成。
-version: 1.0.1
+version: 1.1.0
 ---
 
 # 封面任务提交
 
-- 只接受已锁定且通过契约校验的视觉方案。
+- 只接受当前节点 `payload.visual_plan` 中已锁定且通过契约校验的视觉方案。
 - 视觉方案已由工作流锁定，禁止自行重建或改写视觉方案字段。
 - 第一步必须且只能调用一次 `create_content_cover_job`，参数只传当前输入中的 `task_id`。
 - 工具会从可信运行时读取锁定的 plan hash、尺寸、文案、模式和 source asset IDs，并保证幂等与来源可追溯。

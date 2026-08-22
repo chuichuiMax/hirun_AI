@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import uuid
 from copy import deepcopy
 from typing import Any
@@ -38,6 +37,7 @@ from yuxi.content.control.industry.pack import (
     ValidateIndustryPackHandler,
 )
 from yuxi.content.v3.seed import PLATFORM_RULE_V3_ID
+from yuxi.content.v3.workflow import LEGACY_PLATFORM_WORKFLOW_V3_IDS
 from yuxi.models.providers.cache import model_cache
 from yuxi.repositories.agent_run_repository import AgentRunRepository
 from yuxi.repositories.agent_repository import AgentRepository
@@ -73,6 +73,17 @@ def _require_v3_task(task: ContentTask | None) -> None:
             "CONTENT_LEGACY_TASK_READ_ONLY",
             "该任务由旧版内容工作流创建，仅保留历史查询；请新建 V3 任务继续生产",
             schema_version=schema_version,
+        )
+
+
+def _require_runnable_v3_task(task: ContentTask | None) -> None:
+    _require_v3_task(task)
+    if getattr(task, "workflow_version_id", None) in LEGACY_PLATFORM_WORKFLOW_V3_IDS:
+        raise _content_error(
+            409,
+            "CONTENT_WORKFLOW_UPGRADE_REQUIRED",
+            "该任务绑定旧版 V3 工作流与 checkpoint，仅保留历史查询；请复制或新建任务后使用新版工作流生产",
+            workflow_version_id=task.workflow_version_id,
         )
 
 
@@ -251,7 +262,7 @@ def _brief_field_value(brief: dict[str, Any], key: str) -> Any:
         return (brief.get("brand") or {}).get("name")
     if key == "audience":
         return brief.get("audience")
-    if key in {"required_terms", "forbidden_terms", "knowledge_scope"}:
+    if key in {"required_terms", "forbidden_terms"}:
         return brief.get(key)
     if key in {"channel_profile_version_id", "persona_profile_version_id", "attachments"}:
         return brief.get(key)
@@ -264,6 +275,7 @@ def compile_content_brief(
     raw = brief.model_dump()
     form_values = dict(raw.get("form_values") or {})
     business_variables = dict(raw.get("business_variables") or {})
+    # knowledge_scope 仅用于忽略旧任务表单遗留值；知识库范围由 Agent 管理配置决定。
     reserved = {"brand_name", "audience", "persona", "required_terms", "forbidden_terms", "knowledge_scope"}
     business_variables.update(
         {key: value for key, value in form_values.items() if key not in reserved and value not in (None, "", [])}
@@ -305,7 +317,6 @@ def compile_content_brief(
         "persona": persona,
         "required_terms": raw.get("required_terms") or form_values.get("required_terms") or [],
         "forbidden_terms": raw.get("forbidden_terms") or form_values.get("forbidden_terms") or [],
-        "knowledge_scope": raw.get("knowledge_scope") or form_values.get("knowledge_scope") or [],
         "attachments": raw.get("attachments") or [],
         "locked_fields": raw.get("locked_fields") or [],
         "form_values": form_values,
@@ -326,11 +337,6 @@ async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
     version = await repo.get_published_rule_version(schema_version=3)
     if version is None:
         raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "创作规则库尚未初始化")
-    knowledge_options: list[dict[str, Any]] = []
-    if os.environ.get("LITE_MODE", "").lower() not in {"true", "1"}:
-        from yuxi.knowledge import knowledge_base
-
-        knowledge_options = (await knowledge_base.get_databases_by_user(user)).get("databases") or []
     rule_bundle = await repo.get_rule_bundle(version.id)
     return {
         "industry_templates": await repo.list_templates(),
@@ -340,11 +346,6 @@ async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
         "channel_profiles": await repo.list_channel_profiles(),
         "personas": await repo.list_personas(user),
         "rule_bundle": rule_bundle,
-        "knowledge_options": [
-            {"id": item.get("kb_id"), "name": item.get("name"), "description": item.get("description")}
-            for item in knowledge_options
-            if item.get("kb_id")
-        ],
     }
 
 
@@ -888,7 +889,7 @@ async def create_content_run(db: AsyncSession, user: User, task_id: str, payload
     task = await repo.get_task_for_user(task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    _require_v3_task(task)
+    _require_runnable_v3_task(task)
     if not task.brief_json:
         raise _content_error(409, "CONTENT_TASK_NOT_READY", "请先完成业务简报")
     model_spec = _validate_model_spec(payload.model_spec)
@@ -913,7 +914,7 @@ async def resume_content_run(db: AsyncSession, user: User, run_id: str, payload:
     task = await ContentRepository(db).get_task_for_user(parent.thread_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    _require_v3_task(task)
+    _require_runnable_v3_task(task)
     model_spec = (parent.input_payload or {}).get("model_spec")
     return await _enqueue_content_run(
         db,
@@ -945,7 +946,7 @@ async def retry_content_node(
     task = await ContentRepository(db).get_task_for_user(parent.thread_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    _require_v3_task(task)
+    _require_runnable_v3_task(task)
     return await _enqueue_content_run(
         db,
         user=user,

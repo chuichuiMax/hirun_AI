@@ -37,7 +37,7 @@ class RevisionRouteController:
         counts = dict(retry_counts)
         current = int(counts.get(target, 0))
         if current >= int(route["max_attempts"]):
-            return RevisionDecision("limit_reached", "human_content_approval", counts)
+            return RevisionDecision("limit_reached", None, counts)
         counts[target] = current + 1
         return RevisionDecision("route", target, counts)
 
@@ -71,14 +71,49 @@ def resolve_revision_reason(
         and (review_report or {}).get("status") != "blocked"
     ):
         return None
-    if any("TITLE" in code for code in blocked_codes):
-        return "TITLE_VALIDATION_FAILED"
-    if any("PERSONA" in code or "STYLE" in code for code in blocked_codes):
-        return "PERSONA_STYLE_FAILED"
-    evidence_markers = ("EVIDENCE", "FACT", "NUMBER", "NUMERIC", "CITATION", "SOURCE")
-    if any(any(marker in code for marker in evidence_markers) for code in blocked_codes):
-        return "BODY_EVIDENCE_FAILED"
-    return "BODY_STRUCTURE_FAILED"
+    system_codes = {
+        "CONTENT_STRATEGY_SNAPSHOT_MISSING",
+        "NODE_INPUT_MISSING",
+        "NODE_INPUT_INVALID",
+        "REVIEW_CONTRACT_INVALID",
+    }
+    if blocked_codes & system_codes:
+        return "SYSTEM_CONFIGURATION_FAILED"
+
+    reason_by_code = {
+        "TITLE_TOO_LONG": "TITLE_VALIDATION_FAILED",
+        "TITLE_TOO_SHORT": "TITLE_VALIDATION_FAILED",
+        "TITLE_FORMULA_MISMATCH": "TITLE_VALIDATION_FAILED",
+        "TITLE_PRODUCT_EVIDENCE_NOT_USED": "TITLE_VALIDATION_FAILED",
+        "PERSONA_TONE_MISMATCH": "PERSONA_STYLE_FAILED",
+        "PERSONA_STYLE_MISMATCH": "PERSONA_STYLE_FAILED",
+        "EVIDENCE_REFERENCE_FORBIDDEN": "BODY_EVIDENCE_FAILED",
+        "FACT_NUMBER_WITHOUT_SOURCE": "BODY_EVIDENCE_FAILED",
+        "NUMERIC_CLAIM_UNSUPPORTED": "BODY_EVIDENCE_FAILED",
+        "FACT_CHECK_FAILED": "BODY_EVIDENCE_FAILED",
+        "FACT_INCONSISTENT": "BODY_EVIDENCE_FAILED",
+        "BODY_PRODUCT_EVIDENCE_NOT_USED": "BODY_EVIDENCE_FAILED",
+        "BODY_LENGTH_OUT_OF_RANGE": "BODY_STRUCTURE_FAILED",
+        "BODY_FORMULA_MISMATCH": "BODY_STRUCTURE_FAILED",
+        "CONTENT_STRUCTURE_MISMATCH": "BODY_STRUCTURE_FAILED",
+        "CONTENT_FORBIDDEN_TERM": "BODY_STRUCTURE_FAILED",
+        "CONTENT_HIGH_RISK_CLAIM": "BODY_STRUCTURE_FAILED",
+        "COMPLIANCE_RULE_MATCH": "BODY_STRUCTURE_FAILED",
+        "UNSAFE_AUTO_REPLACEMENT": "BODY_STRUCTURE_FAILED",
+    }
+    reasons = {reason_by_code[code] for code in blocked_codes if code in reason_by_code}
+    if len(reasons) == 1 and len(blocked_codes) == sum(code in reason_by_code for code in blocked_codes):
+        return reasons.pop()
+    if reasons:
+        for preferred in (
+            "BODY_EVIDENCE_FAILED",
+            "TITLE_VALIDATION_FAILED",
+            "PERSONA_STYLE_FAILED",
+            "BODY_STRUCTURE_FAILED",
+        ):
+            if preferred in reasons:
+                return preferred
+    return "REVIEW_CONTRACT_VIOLATION"
 
 
 __all__ = ["RevisionDecision", "RevisionRouteController", "resolve_revision_reason"]
