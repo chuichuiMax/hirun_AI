@@ -277,6 +277,41 @@ async def test_content_node_redundant_required_skill_read_is_safe_and_budgeted()
         await SkillsMiddleware().awrap_tool_call(request, handler)
 
 
+def test_content_node_reserves_structured_result_submission_after_business_tool_budget_is_used():
+    context = SimpleNamespace(
+        _content_node_max_tool_calls=4,
+        _content_node_tool_scope=["query_kb", "submit_content_node_result"],
+        _content_node_result_tool_name="submit_content_node_result",
+    )
+
+    for _ in range(4):
+        SkillsMiddleware._claim_content_tool_call(
+            SimpleNamespace(
+                runtime=SimpleNamespace(context=context),
+                tool_call={"name": "query_kb"},
+            )
+        )
+
+    assert context._content_node_tool_calls_used == 4
+    assert context._content_force_result_submission_reason == "tool_call_limit_reached"
+
+    SkillsMiddleware._claim_content_tool_call(
+        SimpleNamespace(
+            runtime=SimpleNamespace(context=context),
+            tool_call={"name": "submit_content_node_result"},
+        )
+    )
+    assert context._content_node_tool_calls_used == 4
+
+    with pytest.raises(RuntimeError, match="工具调用超过节点上限"):
+        SkillsMiddleware._claim_content_tool_call(
+            SimpleNamespace(
+                runtime=SimpleNamespace(context=context),
+                tool_call={"name": "query_kb"},
+            )
+        )
+
+
 @pytest.mark.asyncio
 async def test_content_node_read_file_outside_required_skill_is_rejected_without_failing_node():
     context = SimpleNamespace(

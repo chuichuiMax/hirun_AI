@@ -1058,6 +1058,7 @@ class ContentRepository:
                     "delegated_agent_run_id": item.delegated_agent_run_id,
                     "error_type": item.error_type,
                     "error_message": item.error_message,
+                    "output_snapshot": item.output_snapshot or {},
                     "started_at": format_utc_datetime(item.started_at),
                     "finished_at": format_utc_datetime(item.finished_at),
                     "runtime_config_snapshot": (item.input_snapshot or {}).get("runtime_config_snapshot"),

@@ -640,6 +640,9 @@ class SkillsMiddleware(AgentMiddleware):
         scope = getattr(runtime_context, "_content_node_tool_scope", None)
         if isinstance(scope, list) and tool_name not in set(normalize_string_list(scope)):
             raise RuntimeError(f"内容 Agent 工具 {tool_name} 不在当前节点许可范围")
+        result_tool_name = str(getattr(runtime_context, "_content_node_result_tool_name", "submit_content_node_result"))
+        if tool_name == result_tool_name:
+            return
         SkillsMiddleware._consume_content_tool_call_budget(runtime_context)
 
     @staticmethod
@@ -651,7 +654,10 @@ class SkillsMiddleware(AgentMiddleware):
         used = int(getattr(runtime_context, "_content_node_tool_calls_used", 0) or 0)
         if used >= maximum:
             raise RuntimeError(f"内容 Agent 工具调用超过节点上限（{maximum}）")
-        setattr(runtime_context, "_content_node_tool_calls_used", used + 1)
+        used += 1
+        setattr(runtime_context, "_content_node_tool_calls_used", used)
+        if used >= maximum:
+            setattr(runtime_context, "_content_force_result_submission_reason", "tool_call_limit_reached")
 
     def _extract_skill_slug_from_skill_md_path(self, file_path: Any) -> str | None:
         """从文件路径中提取 skill slug"""

@@ -47,6 +47,7 @@ class ContentWorkflowState(TypedDict, total=False):
     product_material_requirements: dict[str, Any]
     product_evidence_collection: dict[str, Any]
     product_evidence_pack: dict[str, Any]
+    title_evidence_requirements: list[dict[str, Any]]
     formula_rankings: dict[str, Any]
     formula_selection_snapshot: dict[str, Any]
     strategy_snapshot: dict[str, Any]

@@ -120,9 +120,7 @@ class WorkflowDefinitionPolicy:
                 raise ValueError(f"必选人工关口 {node_id} 必须使用 human_review 类型")
         if node_by_id.get("match_combination_group", {}).get("type") != "deterministic":
             raise ValueError("match_combination_group 必须是固定规则节点，禁止 Agent 化")
-        input_contracts = [
-            node.get("input_contract") for node in node_by_id.values() if node.get("type") == "agent"
-        ]
+        input_contracts = [node.get("input_contract") for node in node_by_id.values() if node.get("type") == "agent"]
         if len(input_contracts) != len(set(input_contracts)):
             raise ValueError("每个 V3 Agent 节点必须声明独立输入契约，禁止共用通用输入")
         for node in node_by_id.values():
@@ -143,6 +141,7 @@ class WorkflowDefinitionPolicy:
     def _validate_v3_control_flow(edges: list[Any]) -> None:
         edge_set = {tuple(edge) for edge in edges}
         required = {
+            ("validate_title_candidates", "revise_if_needed"),
             ("deterministic_validate", "revise_if_needed"),
             ("semantic_review", "revise_if_needed"),
             ("lock_formula_selection", "resolve_product_material_requirements"),
@@ -154,6 +153,7 @@ class WorkflowDefinitionPolicy:
         if not required <= edge_set:
             raise ValueError("V3 工作流缺少固定回修路由或公式锁定后的产品资料二次 RAG 链路")
         forbidden = {
+            ("validate_title_candidates", "select_title"),
             ("deterministic_validate", "semantic_review"),
             ("revise_if_needed", "human_content_approval"),
         }

@@ -340,6 +340,7 @@ async def test_freeze_product_evidence_builds_pack_bound_to_strategy_and_bundle(
     pack = result["product_evidence_pack"]
     assert pack["strategy_snapshot_hash"] == strategy["snapshot_hash"]
     assert pack["evidence_bundle_hash"] == bundle["bundle_hash"]
+    assert pack["slot_mappings"][0]["required"] is True
     assert len(pack["pack_hash"]) == 64
 
 
@@ -421,12 +422,23 @@ async def test_title_and_body_validation_require_mapped_product_evidence(monkeyp
             {
                 "slot": "product_profile",
                 "target_usage": "title",
+                "required": True,
                 "evidence_ids": ["ev-product"],
+                "integration_instruction": "标题中呈现服务主体",
             },
             {
                 "slot": "product_profile",
                 "target_usage": "body",
+                "required": True,
                 "evidence_ids": ["ev-product"],
+                "integration_instruction": "正文中呈现服务主体",
+            },
+            {
+                "slot": "brand",
+                "target_usage": "title",
+                "required": False,
+                "evidence_ids": ["ev-product"],
+                "integration_instruction": "需要品牌背书时使用",
             },
         ]
     }
@@ -451,6 +463,8 @@ async def test_title_and_body_validation_require_mapped_product_evidence(monkeyp
     )
     assert title_result["title_candidates"][0]["selectable"] is False
     assert title_result["title_candidates"][1]["selectable"] is True
+    assert title_result["title_validation_report"]["status"] == "passed"
+    assert title_result["title_validation_report"]["items"][0]["missing_required_slots"] == ["product_profile"]
 
     monkeypatch.setattr(
         "yuxi.content.control.workflow.deterministic_node.validate_content",
@@ -471,6 +485,173 @@ async def test_title_and_body_validation_require_mapped_product_evidence(monkeyp
     )
     assert body_result["validation_report"]["status"] == "blocked"
     assert body_result["validation_report"]["checks"][-1]["code"] == "BODY_PRODUCT_EVIDENCE_NOT_USED"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_all_blocked_titles_return_detailed_report_for_targeted_regeneration():
+    result = await V3DeterministicNodeHandler().execute(
+        db=object(),
+        node={"id": "validate_title_candidates"},
+        state={
+            "formula_selection_snapshot": {"selected_title_formula_code": "T02"},
+            "strategy_snapshot": {
+                "title_formula": {"variable_schema": ["number", "result"]},
+                "body_formula": {"required_variables": ["product", "result"]},
+                "creation_method_definitions": [],
+            },
+            "product_material_requirements": {
+                "requirements": [
+                    {
+                        "requirement_id": "case_proof",
+                        "required": True,
+                        "variable_codes": ["number", "result"],
+                    },
+                    {
+                        "requirement_id": "brand",
+                        "required": True,
+                        "variable_codes": ["brand_name"],
+                    },
+                ]
+            },
+            "evidence_bundle": {
+                "items": [
+                    {
+                        "id": "ev-case",
+                        "value": "89㎡项目增加12㎡收纳",
+                        "verified_status": "retrieved",
+                        "allowed_usage": ["title"],
+                    }
+                ]
+            },
+            "product_evidence_pack": {
+                "slot_mappings": [
+                    {
+                        "slot": "case_proof",
+                        "target_usage": "title",
+                        "evidence_ids": ["ev-case"],
+                        "integration_instruction": "使用案例结果",
+                    },
+                    {
+                        "slot": "brand",
+                        "target_usage": "title",
+                        "evidence_ids": ["ev-brand"],
+                        "integration_instruction": "使用品牌名",
+                    },
+                ]
+            },
+            "title_candidates": [
+                {"id": "t1", "text": "收纳改造效果看得见", "formula_code": "T02", "evidence_ids": []},
+                {"id": "t2", "text": "改善家庭收纳新方案", "formula_code": "T02", "evidence_ids": []},
+            ],
+        },
+        node_run_id="node-title",
+    )
+
+    report = result["title_validation_report"]
+    assert report["status"] == "blocked"
+    assert [item["text"] for item in report["items"]] == ["收纳改造效果看得见", "改善家庭收纳新方案"]
+    assert report["items"][0]["missing_required_slots"] == ["case_proof"]
+    assert result["title_evidence_requirements"] == [
+        {
+            "slot": "case_proof",
+            "required": True,
+            "evidence_ids": ["ev-case"],
+            "integration_instruction": "使用案例结果",
+        },
+        {
+            "slot": "brand",
+            "required": False,
+            "evidence_ids": ["ev-brand"],
+            "integration_instruction": "使用品牌名",
+        },
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_title_slot_requirements_do_not_duplicate_a_result_covered_by_case_evidence():
+    result = await V3DeterministicNodeHandler().execute(
+        db=object(),
+        node={"id": "validate_title_candidates"},
+        state={
+            "formula_selection_snapshot": {"selected_title_formula_code": "T02"},
+            "strategy_snapshot": {
+                "title_formula": {"variable_schema": ["emotion", "number", "result"]},
+                "body_formula": {"required_variables": ["product", "result"]},
+                "creation_method_definitions": [],
+            },
+            "product_material_requirements": {
+                "requirements": [
+                    {
+                        "requirement_id": "product_profile",
+                        "required": True,
+                        "variable_codes": ["product", "result"],
+                    },
+                    {
+                        "requirement_id": "case_proof",
+                        "required": True,
+                        "variable_codes": ["number", "result", "scene"],
+                    },
+                    {"requirement_id": "brand", "required": False, "variable_codes": []},
+                ]
+            },
+            "evidence_bundle": {
+                "items": [
+                    {
+                        "id": "ev-case",
+                        "value": "89㎡项目增加12㎡收纳",
+                        "verified_status": "retrieved",
+                        "allowed_usage": ["title"],
+                    }
+                ]
+            },
+            "product_evidence_pack": {
+                "slot_mappings": [
+                    {
+                        "slot": "product_profile",
+                        "target_usage": "title",
+                        "evidence_ids": ["ev-product"],
+                        "integration_instruction": "可呈现服务主体",
+                    },
+                    {
+                        "slot": "case_proof",
+                        "target_usage": "title",
+                        "evidence_ids": ["ev-case"],
+                        "integration_instruction": "使用案例数字和结果",
+                    },
+                    {
+                        "slot": "brand",
+                        "target_usage": "title",
+                        "evidence_ids": ["ev-brand"],
+                        "integration_instruction": "可作为品牌背书",
+                    },
+                ]
+            },
+            "title_candidates": [
+                {
+                    "id": "t1",
+                    "text": "没想到，杭州89㎡竟多出12㎡收纳",
+                    "formula_code": "T02",
+                    "evidence_ids": ["ev-case"],
+                },
+                {
+                    "id": "t2",
+                    "text": "惊喜！89㎡改造增加12㎡收纳",
+                    "formula_code": "T02",
+                    "evidence_ids": ["ev-case"],
+                },
+            ],
+        },
+        node_run_id="node-title",
+    )
+
+    assert result["title_validation_report"]["status"] == "passed"
+    assert [(item["slot"], item["required"]) for item in result["title_evidence_requirements"]] == [
+        ("product_profile", False),
+        ("case_proof", True),
+        ("brand", False),
+    ]
 
 
 @pytest.mark.unit

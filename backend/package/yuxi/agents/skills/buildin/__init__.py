@@ -55,7 +55,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-title-generator",
         source_dir=_SKILLS_ROOT / "content-title-generator",
         description="按锁定标题公式和证据包生成 3～5 个可追溯标题候选。",
-        version="1.2.0",
+        version="1.3.0",
     ),
     BuiltinSkillSpec(
         slug="content-body-generator",

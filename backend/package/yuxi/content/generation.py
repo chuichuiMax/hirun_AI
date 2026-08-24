@@ -15,7 +15,7 @@ SKILL_VERSIONS = {
     "content-strategy-planner": "3.1.0",
     "content-evidence-researcher": "1.1.0",
     "strategy-product-researcher": "1.0.1",
-    "content-title-generator": "1.2.0",
+    "content-title-generator": "1.3.0",
     "content-outline-builder": "1.2.0",
     "content-body-generator": "1.2.0",
     "persona-style-polisher": "1.1.0",

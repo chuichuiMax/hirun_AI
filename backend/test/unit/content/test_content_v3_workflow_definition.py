@@ -73,7 +73,12 @@ def test_every_agent_node_declares_its_own_input_contract_and_upstream_state():
         ),
         "generate_title_candidates": (
             "GenerateTitleCandidatesInputV1",
-            {"strategy_snapshot", "product_evidence_pack", "evidence_bundle"},
+            {
+                "strategy_snapshot",
+                "product_evidence_pack",
+                "title_evidence_requirements",
+                "evidence_bundle",
+            },
         ),
         "build_outline": ("BuildOutlineInputV1", {"selected_title", "strategy_snapshot", "product_evidence_pack"}),
         "generate_body": (
@@ -133,7 +138,7 @@ def test_system_v3_seed_upgrades_stale_workflow_definition_but_preserves_user_ow
 
     assert _upgrade_system_workflow_v3(stale) is True
     assert stale.definition_json == WORKFLOW_V3
-    assert stale.version == 5
+    assert stale.version == 6
     assert stale.definition_hash == workflow_definition_hash(WORKFLOW_V3)
     assert stale.input_schema == {"type": "ContentBrief", "version": 3}
     assert stale.output_schema == {"type": "ContentArtifact", "version": 3}
@@ -208,6 +213,12 @@ def test_publication_rejects_shared_agent_input_and_review_gate_bypass():
     with pytest.raises(ValueError, match="固定回修路由|不得绕过"):
         WorkflowDefinitionPolicy.validate(bypass, catalog=CATALOG)
 
+    title_bypass = deepcopy(WORKFLOW_V3)
+    title_bypass["edges"].remove(["validate_title_candidates", "revise_if_needed"])
+    title_bypass["edges"].append(["validate_title_candidates", "select_title"])
+    with pytest.raises(ValueError, match="固定回修路由|不得绕过"):
+        WorkflowDefinitionPolicy.validate(title_bypass, catalog=CATALOG)
+
 
 @pytest.mark.unit
 def test_match_node_cannot_be_agent_and_required_human_gate_cannot_be_removed():
@@ -250,7 +261,7 @@ def test_skill_slug_and_invalid_revision_routes_are_rejected():
 @pytest.mark.unit
 def test_normal_edges_remain_acyclic_even_when_revision_routes_exist():
     definition = deepcopy(WORKFLOW_V3)
-    definition["edges"].append(["deterministic_validate", "compile_runtime_snapshot"])
+    definition["edges"].append(["freeze_product_evidence_bundle", "compile_runtime_snapshot"])
 
     with pytest.raises(ValueError, match="正常连线不能包含循环"):
         WorkflowDefinitionPolicy.validate(definition)

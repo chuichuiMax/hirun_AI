@@ -172,10 +172,12 @@ WORKFLOW_V3_NODES = [
             "content_brief",
             "strategy_snapshot",
             "product_evidence_pack",
+            "title_evidence_requirements",
             "evidence_bundle",
             "channel_profile",
             "persona_profile",
         ),
+        optional_state_inputs=("title_validation_report",),
     ),
     _fixed("validate_title_candidates"),
     _human("select_title", "title_selection"),
@@ -317,11 +319,15 @@ WORKFLOW_V3 = {
         for index in range(len(WORKFLOW_V3_NODES) - 1)
         if (WORKFLOW_V3_NODES[index]["id"], WORKFLOW_V3_NODES[index + 1]["id"])
         not in {
+            ("validate_title_candidates", "select_title"),
             ("deterministic_validate", "semantic_review"),
             ("revise_if_needed", "human_content_approval"),
         }
     ]
-    + [["deterministic_validate", "revise_if_needed"]],
+    + [
+        ["validate_title_candidates", "revise_if_needed"],
+        ["deterministic_validate", "revise_if_needed"],
+    ],
     "revision_routes": [
         {
             "from": "revise_if_needed",
