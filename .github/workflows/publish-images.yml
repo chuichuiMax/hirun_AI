@@ -126,6 +126,16 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm run build
 
+      - name: Reclaim runner disk before image builds
+        run: |
+          docker rm -f yuxi-ci-postgres yuxi-ci-minio yuxi-ci-redis
+          docker image rm postgres:16 minio/minio:RELEASE.2023-03-20T20-16-18Z redis:7-alpine
+          docker system prune --all --force
+          uv cache clean
+          pnpm store prune
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
       - name: Set up Docker Buildx
         id: api-buildx
         uses: docker/setup-buildx-action@v3
