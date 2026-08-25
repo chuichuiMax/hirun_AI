@@ -388,6 +388,23 @@ class PostgresManager(metaclass=SingletonMeta):
         """确保业务 schema 包含后续新增字段（运行时 schema 演进）。"""
         self._check_initialized()
         stmts = [
+            (
+                "ALTER TABLE IF EXISTS content_cover_image2_settings "
+                "ADD COLUMN IF NOT EXISTS capabilities_json JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_cover_image2_settings "
+                "ADD COLUMN IF NOT EXISTS verification_status VARCHAR(32) NOT NULL DEFAULT 'unverified'"
+            ),
+            ("ALTER TABLE IF EXISTS content_cover_image2_settings ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP"),
+            (
+                "ALTER TABLE IF EXISTS content_cover_poster_templates "
+                "DROP CONSTRAINT IF EXISTS uq_content_cover_poster_owner_checksum"
+            ),
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_cover_poster_owner_checksum_active "
+                "ON content_cover_poster_templates(owner_uid, checksum) WHERE deleted_at IS NULL"
+            ),
             "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS cover_asset_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS cover_job_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS cover_asset_id VARCHAR(64)",

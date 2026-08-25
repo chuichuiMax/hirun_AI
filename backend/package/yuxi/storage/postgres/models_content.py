@@ -965,6 +965,9 @@ class ContentCoverImage2Setting(Base):
     base_url = Column(String(500), nullable=False)
     api_key = Column(String(500), nullable=False)
     model = Column(String(255), nullable=False, default="gpt-image-2")
+    capabilities_json = Column(JSON, nullable=False, default=dict)
+    verification_status = Column(String(32), nullable=False, default="unverified")
+    verified_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now_naive)
     updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
@@ -1004,6 +1007,74 @@ class ContentCoverAsset(Base):
             "sha256": self.sha256,
             "metadata": self.metadata_json or {},
             "created_at": format_utc_datetime(self.created_at),
+        }
+
+
+class ContentCoverPosterTemplate(Base):
+    __tablename__ = "content_cover_poster_templates"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    asset_id = Column(
+        String(64), ForeignKey("content_cover_assets.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    name = Column(String(255), nullable=False)
+    category = Column(String(80), nullable=False, default="未分类", index=True)
+    tags_json = Column(JSON, nullable=False, default=list)
+    template_type = Column(String(32), nullable=False, default="alpha_overlay", index=True)
+    canvas_width = Column(Integer, nullable=False)
+    canvas_height = Column(Integer, nullable=False)
+    product_box_json = Column(JSON, nullable=True)
+    safe_area_json = Column(JSON, nullable=False, default=dict)
+    text_slots_json = Column(JSON, nullable=False, default=list)
+    fixed_regions_json = Column(JSON, nullable=False, default=list)
+    editable_regions_json = Column(JSON, nullable=False, default=list)
+    analysis_json = Column(JSON, nullable=False, default=dict)
+    checksum = Column(String(64), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    analysis_version = Column(String(64), nullable=False, default="poster-v1")
+    status = Column(String(32), nullable=False, default="ready", index=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (
+        Index(
+            "uq_content_cover_poster_owner_checksum_active",
+            "owner_uid",
+            "checksum",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+        Index("idx_content_cover_poster_owner_created", "owner_uid", "created_at"),
+        Index("idx_content_cover_poster_owner_status", "owner_uid", "status"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "asset_id": self.asset_id,
+            "name": self.name,
+            "category": self.category,
+            "tags": self.tags_json or [],
+            "template_type": self.template_type,
+            "canvas_width": self.canvas_width,
+            "canvas_height": self.canvas_height,
+            "product_box": self.product_box_json,
+            "safe_area": self.safe_area_json or {},
+            "text_slots": self.text_slots_json or [],
+            "fixed_regions": self.fixed_regions_json or [],
+            "editable_regions": self.editable_regions_json or [],
+            "analysis": self.analysis_json or {},
+            "version": self.version,
+            "analysis_version": self.analysis_version,
+            "status": self.status,
+            "error_message": self.error_message,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
         }
 
 

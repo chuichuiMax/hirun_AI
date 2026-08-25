@@ -9,15 +9,35 @@ from typing import Any
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from yuxi.content_cover import COVER_PROCESSING_VERSION
 from yuxi.content_cover.image2_client import Image2Client, Image2Error
 from yuxi.content_cover.image2_settings import resolve_image2_config
+from yuxi.content_cover.poster_billboard import (
+    PosterBillboardError,
+    PosterBillboardQualityError,
+    build_image2_protection_mask,
+    evaluate_poster_quality,
+    render_poster_billboard,
+)
 from yuxi.content_cover.renderer import (
     CoverRenderError,
     apply_title_overlay,
     finalize_template_transfer,
     render_cover,
 )
-from yuxi.content_cover.schemas import Image2Input, Image2Request, Image2Submission
+from yuxi.content_cover.schemas import Image2Input, Image2Request, Image2Submission, TemplateAnalysis
+from yuxi.content_cover.template_replication import (
+    TemplateQualityError,
+    TemplateReplicationError,
+    apply_layout_overrides,
+    analyze_template,
+    build_copy_plan,
+    build_edit_mask,
+    ensure_clean_source,
+    evaluate_quality,
+    recognize_slot_texts,
+    render_template_replication,
+)
 from yuxi.content_cover.templates import COVER_SIZES
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.services.run_queue_service import (
@@ -34,6 +54,7 @@ from yuxi.utils.logging_config import logger
 
 COVER_BUCKET = os.getenv("CONTENT_COVER_BUCKET", "content-covers")
 POLL_INTERVAL_SECONDS = max(0.5, float(os.getenv("IMAGE2_POLL_INTERVAL_SECONDS", "2")))
+TEMPLATE_REPLICATION_V2_ENABLED = os.getenv("CONTENT_COVER_TEMPLATE_REPLICATION_V2", "true").strip().lower() == "true"
 POLL_TIMEOUT_SECONDS = max(30.0, float(os.getenv("IMAGE2_POLL_TIMEOUT_SECONDS", "900")))
 IMAGE2_MAX_CONCURRENT = max(1, int(os.getenv("IMAGE2_MAX_CONCURRENT", "1")))
 IMAGE2_SEMAPHORE = asyncio.Semaphore(IMAGE2_MAX_CONCURRENT)
@@ -155,6 +176,7 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
     target_size = (requested_size["width"], requested_size["height"]) if requested_size is not None else None
     title = str((job.request_json or {}).get("title") or "").strip()
     template_replicate = bool((job.request_json or {}).get("template_replicate"))
+    poster_billboard = job.mode == "poster_billboard"
     try:
         async with pg_manager.get_async_session_context() as db:
             repo = ContentCoverRepository(db)
@@ -162,7 +184,7 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
                 normalized, width, height = _normalize_output(
                     raw,
                     target_size=target_size,
-                    title="" if template_replicate else title,
+                    title="" if template_replicate or poster_billboard else title,
                 )
                 asset_id = f"cca_{uuid.uuid4().hex}"
                 object_name = f"content-covers/{job.owner_uid}/{job.id}/output-{index + 1}.png"
@@ -191,8 +213,23 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
                         "job_id": job.id,
                         "mode": job.mode,
                         "template_replicate": template_replicate,
+                        "poster_billboard": poster_billboard,
                         "generation_strategy": (
-                            "image2_multi_reference_full_canvas" if template_replicate else "default"
+                            "image2_masked_edit_deterministic_layers_v2"
+                            if template_replicate
+                            else "poster_deterministic_layers_v1"
+                            if poster_billboard
+                            else "default"
+                        ),
+                        "quality_report": (
+                            ((job.result_json or {}).get("quality_reports") or [{}])[index]
+                            if template_replicate and index < len((job.result_json or {}).get("quality_reports") or [])
+                            else {}
+                        ),
+                        "poster_quality_report": (
+                            ((job.result_json or {}).get("quality_reports") or [{}])[index]
+                            if poster_billboard and index < len((job.result_json or {}).get("quality_reports") or [])
+                            else {}
                         ),
                     },
                 )
@@ -256,12 +293,20 @@ async def _as_image2_input(asset: ContentCoverAsset) -> Image2Input:
     )
 
 
-def _compact_template_reference(data: bytes, file_name: str) -> Image2Input:
-    """Keep multipart references lossless while preserving their composition."""
+def _compact_template_reference(
+    data: bytes,
+    file_name: str,
+    *,
+    target_size: tuple[int, int] | None = None,
+) -> Image2Input:
+    """Keep multipart references lossless and aligned with the edit mask."""
     try:
         with Image.open(io.BytesIO(data)) as source:
             image = ImageOps.exif_transpose(source).convert("RGBA")
-            image.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
+            if target_size is not None:
+                image = ImageOps.fit(image, target_size, Image.Resampling.LANCZOS)
+            else:
+                image.thumbnail((1536, 1536), Image.Resampling.LANCZOS)
             output = io.BytesIO()
             image.save(output, format="PNG", optimize=True)
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
@@ -272,6 +317,16 @@ def _compact_template_reference(data: bytes, file_name: str) -> Image2Input:
         content_type="image/png",
         file_name=f"{stem}-reference.png",
     )
+
+
+def _open_worker_image(data: bytes) -> Image.Image:
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGBA")
+            image.load()
+            return image
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise TemplateReplicationError("模板复刻素材不是有效图片") from exc
 
 
 async def _load_image2_config(owner_uid: str):
@@ -323,6 +378,10 @@ async def _run_image2(job: ContentCoverJob) -> list[bytes]:
     template_replicate = bool(request_data.get("template_replicate"))
     template_data = None
     source_data = None
+    template_analysis = None
+    copy_plan = None
+    template_image = None
+    source_image = None
     requested_size = COVER_SIZES.get(request_data.get("size") or "")
     if template_replicate:
         if template is None or len(sources) != 1:
@@ -333,16 +392,75 @@ async def _run_image2(job: ContentCoverJob) -> list[bytes]:
             _download_asset(template),
             _download_asset(sources[0]),
         )
+        template_image = _open_worker_image(template_data)
+        source_image = _open_worker_image(source_data)
+        cached_analysis = (
+            (getattr(template, "metadata_json", {}) or {}).get("template_replication_analysis") or {}
+        ).get(request_data.get("size") or "1080x1440")
+        if cached_analysis and cached_analysis.get("processing_version") == COVER_PROCESSING_VERSION:
+            template_analysis = TemplateAnalysis.model_validate(cached_analysis)
+        else:
+            template_analysis = await asyncio.to_thread(
+                analyze_template,
+                template_image,
+                target_size=(requested_size["width"], requested_size["height"]),
+            )
+        template_analysis = apply_layout_overrides(
+            template_analysis,
+            dict(request_data.get("layout_overrides") or {}),
+        )
+        await asyncio.to_thread(ensure_clean_source, source_image, template_analysis)
+        template_texts = request_data.get("template_texts") or {}
+        copy_plan = build_copy_plan(
+            template_analysis,
+            title=str(template_texts.get("title") or request_data.get("title") or ""),
+            subtitle=str(template_texts.get("subtitle") or ""),
+            tags=list(template_texts.get("tags") or []),
+            source=str(template_texts.get("source") or "template"),
+            overrides=dict(request_data.get("copy_overrides") or {}),
+        )
+        mask_data = build_edit_mask(template_analysis)
+        plan_result = {
+            **(job.result_json or {}),
+            "template_analysis": template_analysis.model_dump(mode="json"),
+            "copy_plan": copy_plan.model_dump(mode="json"),
+            "render_plan": {
+                "processing_version": template_analysis.processing_version,
+                "target_width": requested_size["width"],
+                "target_height": requested_size["height"],
+                "source_fit": "cover",
+                "image2_mode": "edit",
+                "editable_regions": [item.model_dump() for item in template_analysis.editable_regions],
+            },
+        }
+        job.result_json = plan_result
+        await _set_job(job.id, result_json=plan_result)
         image2_request = Image2Request(
             mode="multi_reference",
-            prompt=request_data.get("prompt") or "",
+            prompt=(
+                f"{request_data.get('prompt') or ''}\n\n"
+                "严格执行蒙版编辑：只在透明区域生成与模板一致的纯视觉面板、贴纸和装饰，"
+                "不要生成任何汉字、字母、数字、Logo 或水印；不透明区域必须逐像素保留原图。"
+            ),
             negative_prompt=request_data.get("negative_prompt"),
             size=request_data.get("size") or "1080x1440",
             n=1,
-            source_images=[_compact_template_reference(source_data, sources[0].original_file_name)],
+            source_images=[
+                _compact_template_reference(
+                    source_data,
+                    sources[0].original_file_name,
+                    target_size=(requested_size["width"], requested_size["height"]),
+                )
+            ],
             template_image=_compact_template_reference(
                 template_data,
                 template.original_file_name,
+                target_size=(requested_size["width"], requested_size["height"]),
+            ),
+            mask_image=Image2Input(
+                data=mask_data,
+                content_type="image/png",
+                file_name="template-edit-mask.png",
             ),
             extra=request_data.get("parameters") or {},
         )
@@ -395,7 +513,44 @@ async def _run_image2(job: ContentCoverJob) -> list[bytes]:
                 {"status": "downloading", "progress": download_progress},
             )
             raw = (await client.read_output(result.images[0]))[0]
-            if template_replicate:
+            if template_replicate and TEMPLATE_REPLICATION_V2_ENABLED:
+                if (
+                    template_data is None
+                    or source_data is None
+                    or requested_size is None
+                    or template_analysis is None
+                    or copy_plan is None
+                    or template_image is None
+                    or source_image is None
+                ):
+                    raise CoverRenderError("模板复刻上下文缺失")
+                generated_image = _open_worker_image(raw)
+                raw, overflow_count = await asyncio.to_thread(
+                    render_template_replication,
+                    source_image,
+                    template_image,
+                    template_analysis,
+                    copy_plan,
+                    generated=generated_image,
+                )
+                output_image = _open_worker_image(raw)
+                recognized = await asyncio.to_thread(recognize_slot_texts, output_image, template_analysis)
+                report = await asyncio.to_thread(
+                    evaluate_quality,
+                    source_image,
+                    output_image,
+                    template_analysis,
+                    copy_plan,
+                    overflow_count=overflow_count,
+                    recognized_text=recognized,
+                )
+                quality_reports = list((job.result_json or {}).get("quality_reports") or [])
+                quality_reports.append(report.model_dump(mode="json"))
+                job.result_json = {**(job.result_json or {}), "quality_reports": quality_reports}
+                await _set_job(job.id, result_json=job.result_json)
+                if not report.passed:
+                    raise TemplateQualityError(report)
+            elif template_replicate:
                 if template_data is None or source_data is None or requested_size is None:
                     raise CoverRenderError("模板复刻上下文缺失")
                 template_texts = request_data.get("template_texts") or {}
@@ -410,6 +565,136 @@ async def _run_image2(job: ContentCoverJob) -> list[bytes]:
                     tags=list(template_texts.get("tags") or []),
                 )
             outputs.append(raw)
+    return outputs
+
+
+async def _run_poster_billboard(job: ContentCoverJob) -> list[bytes]:
+    request = job.request_json or {}
+    snapshot = dict(request.get("poster_template_snapshot") or {})
+    product_asset_id = str(request.get("product_asset_id") or "")
+    template_asset_id = str(snapshot.get("asset_id") or "")
+    if not product_asset_id or not template_asset_id or not snapshot.get("product_box"):
+        raise PosterBillboardError("大字报任务缺少蒙版或产品区域快照")
+    async with pg_manager.get_async_session_context() as db:
+        repo = ContentCoverRepository(db)
+        product_asset = await repo.get_asset_for_user(product_asset_id, job.owner_uid)
+        template_asset = await repo.get_asset_for_user(template_asset_id, job.owner_uid)
+    if product_asset is None or product_asset.role != "source":
+        raise PosterBillboardError("大字报任务引用的产品图已不存在")
+    if template_asset is None or template_asset.role != "poster_template":
+        raise PosterBillboardError("大字报任务引用的蒙版已不存在")
+    template_data, product_data = await asyncio.gather(
+        _download_asset(template_asset),
+        _download_asset(product_asset),
+    )
+    template_image = _open_worker_image(template_data)
+    product_image = _open_worker_image(product_data)
+    transform = dict(request.get("transform") or {})
+    copy_plan = dict(request.get("copy_plan") or {})
+    requested_count = int(request.get("n") or 1)
+    enhance = bool(request.get("enhance_with_image2"))
+    await _check_cancelled(job.id)
+
+    preview_data, preview_metadata = await asyncio.to_thread(
+        render_poster_billboard,
+        template_image,
+        product_image,
+        snapshot,
+        copy_plan,
+        transform=transform,
+    )
+    if not enhance:
+        output_image = _open_worker_image(preview_data)
+        report = await asyncio.to_thread(evaluate_poster_quality, output_image, snapshot, preview_metadata)
+        job.result_json = {**(job.result_json or {}), "copy_plan": copy_plan, "quality_reports": [report]}
+        await _set_job(job.id, result_json=job.result_json)
+        if not report["passed"]:
+            raise PosterBillboardQualityError(report)
+        return [preview_data]
+
+    if snapshot.get("template_type") != "alpha_overlay":
+        raise PosterBillboardError("不透明画板当前仅支持确定性合成，转换为透明蒙版后才能开启 image2 美化")
+    protection_mask, has_editable_area = await asyncio.to_thread(build_image2_protection_mask, snapshot)
+    if not has_editable_area:
+        raise PosterBillboardError("该蒙版没有可供 image2 美化的未锁定区域")
+    image2_request = Image2Request(
+        mode="mask",
+        prompt=(
+            "只优化未锁定区域的背景质感、产品周围光影与边缘过渡，保持小红书商业海报质感。"
+            "禁止生成或修改任何文字、字母、数字、Logo、产品主体、版式、边框和装饰。\n"
+            f"{str(request.get('enhancement_prompt') or '').strip()}"
+        ).strip(),
+        negative_prompt=(
+            f"{str(request.get('negative_prompt') or '').strip()}，"
+            "乱码文字，伪造品牌，产品变形，新增产品，修改版式，移动装饰，马赛克，棋盘格"
+        ).strip("，"),
+        size="1080x1440",
+        n=1,
+        source_images=[
+            Image2Input(data=preview_data, content_type="image/png", file_name="poster-preview.png")
+        ],
+        mask_image=Image2Input(
+            data=protection_mask,
+            content_type="image/png",
+            file_name="poster-protection-mask.png",
+        ),
+        extra={"quality": "high", "output_format": "png"},
+    )
+    provider_task_ids = list((job.result_json or {}).get("provider_task_ids") or [])
+    if not provider_task_ids and job.provider_task_id:
+        provider_task_ids.append(job.provider_task_id)
+    outputs: list[bytes] = []
+    quality_reports: list[dict[str, Any]] = []
+    deadline = asyncio.get_running_loop().time() + POLL_TIMEOUT_SECONDS
+    image2_config = await _load_image2_config(job.owner_uid)
+    async with Image2Client(image2_config) as client:
+        for index in range(requested_count):
+            await _check_cancelled(job.id)
+            progress_start = 20 + int(index * 60 / requested_count)
+            progress_end = 20 + int((index + 1) * 60 / requested_count)
+            if index < len(provider_task_ids) and provider_task_ids[index]:
+                result = Image2Submission(provider_task_id=provider_task_ids[index], status="pending")
+            else:
+                await _emit(job.id, "progress", {"status": "submitting", "progress": progress_start})
+                result = await client.submit(
+                    image2_request,
+                    idempotency_key=job.id if requested_count == 1 else f"{job.id}:{index}",
+                )
+                if result.provider_task_id:
+                    await _record_provider_task(job, index, result.provider_task_id)
+            result = await _poll_image2(
+                job,
+                client,
+                result,
+                progress_start=progress_start,
+                progress_end=progress_end,
+                deadline=deadline,
+            )
+            if not result.images:
+                raise Image2Error("IMAGE2_RESULT_EMPTY", "image2 任务完成但没有返回图片")
+            enhanced_data = (await client.read_output(result.images[0]))[0]
+            enhanced_image = _open_worker_image(enhanced_data)
+            rendered, metadata = await asyncio.to_thread(
+                render_poster_billboard,
+                template_image,
+                product_image,
+                snapshot,
+                copy_plan,
+                transform=transform,
+                enhanced_background=enhanced_image,
+            )
+            output_image = _open_worker_image(rendered)
+            report = await asyncio.to_thread(evaluate_poster_quality, output_image, snapshot, metadata)
+            quality_reports.append(report)
+            if not report["passed"]:
+                raise PosterBillboardQualityError(report)
+            outputs.append(rendered)
+    job.result_json = {
+        **(job.result_json or {}),
+        "copy_plan": copy_plan,
+        "quality_reports": quality_reports,
+    }
+    await _set_job(job.id, result_json=job.result_json)
     return outputs
 
 
@@ -448,6 +733,12 @@ async def process_content_cover_job(ctx: dict, job_id: str) -> None:
     try:
         if job.mode == "compose":
             outputs = await _run_compose(job)
+        elif job.mode == "poster_billboard":
+            if (job.request_json or {}).get("enhance_with_image2"):
+                async with IMAGE2_SEMAPHORE:
+                    outputs = await _run_poster_billboard(job)
+            else:
+                outputs = await _run_poster_billboard(job)
         else:
             async with IMAGE2_SEMAPHORE:
                 outputs = await _run_image2(job)
@@ -469,8 +760,16 @@ async def process_content_cover_job(ctx: dict, job_id: str) -> None:
         await _emit(job_id, "end", {"status": "succeeded", "progress": 100})
     except CoverJobCancelled:
         await _finish_cancelled(job_id)
-    except (Image2Error, CoverRenderError) as exc:
-        code = exc.code if isinstance(exc, Image2Error) else "COVER_RENDER_FAILED"
+    except (Image2Error, CoverRenderError, TemplateReplicationError, PosterBillboardError) as exc:
+        code = (
+            exc.code
+            if isinstance(exc, Image2Error)
+            else "COVER_QUALITY_FAILED"
+            if isinstance(exc, TemplateQualityError)
+            else "COVER_QUALITY_FAILED"
+            if isinstance(exc, PosterBillboardQualityError)
+            else "COVER_RENDER_FAILED"
+        )
         retryable = exc.retryable if isinstance(exc, Image2Error) else False
         updated = await _set_job(
             job_id,

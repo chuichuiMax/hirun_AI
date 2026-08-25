@@ -16,7 +16,6 @@ from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
 import yuxi.services.content_cover_service as content_cover_service
 import yuxi.services.content_cover_worker as content_cover_worker
-import yuxi.content_cover.renderer as content_cover_renderer
 from yuxi.content_cover.image2_client import Image2Config
 from yuxi.content_cover.image2_settings import (
     get_image2_config_state,
@@ -24,6 +23,7 @@ from yuxi.content_cover.image2_settings import (
     save_image2_config,
 )
 from yuxi.content_cover.schemas import Image2Output, Image2Submission
+from yuxi.content_cover.template_replication import analyze_template
 from yuxi.content.rules import ensure_content_seed_data
 from yuxi.storage.minio.client import get_minio_client
 from yuxi.storage.postgres.manager import pg_manager
@@ -387,10 +387,19 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
     monkeypatch.setattr(content_cover_worker, "_load_image2_config", load_image2_config)
     monkeypatch.setattr(content_cover_worker, "Image2Client", FakeImage2Client)
     monkeypatch.setattr(content_cover_worker, "POLL_INTERVAL_SECONDS", 0)
+    analysis = analyze_template(
+        Image.new("RGB", (1080, 1440), "#247BA0"),
+        target_size=(1080, 1440),
+        ocr_blocks=[
+            {"text": "OLD TITLE", "box": (120, 80, 900, 220)},
+            {"text": "设计定制/环保定制", "box": (150, 245, 820, 310)},
+        ],
+    )
+    monkeypatch.setattr(content_cover_worker, "analyze_template", lambda image, target_size: analysis)
     monkeypatch.setattr(
-        content_cover_renderer,
-        "_extract_template_text_blocks",
-        lambda image: [{"text": "OLD TITLE", "box": [[120, 80], [900, 80], [900, 220], [120, 220]]}],
+        content_cover_worker,
+        "recognize_slot_texts",
+        lambda image, current_analysis: "新品通勤指南设计定制/环保定制",
     )
 
     app = FastAPI()
@@ -449,7 +458,7 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
         assert len(captured_request["request"].source_images) == 1
         assert captured_request["request"].source_images[0].file_name.endswith("-reference.png")
         assert captured_request["request"].template_image.file_name.endswith("-reference.png")
-        assert captured_request["request"].mask_image is None
+        assert captured_request["request"].mask_image.file_name == "template-edit-mask.png"
         assert captured_request["idempotency_key"] == job_id
         assert "参考图1是用户原图" in captured_request["request"].prompt
         assert "参考图2是样式模板" in captured_request["request"].prompt
@@ -460,7 +469,7 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
         assert job.request_json["template_replicate"] is True
         assert job.request_json["parameters"]["template_replicate"] is True
         assert job.request_json["parameters"]["quality"] == "high"
-        assert job.request_json["parameters"]["input_fidelity"] == "high"
+        assert "input_fidelity" not in job.request_json["parameters"]
         assert job.request_json["parameters"]["output_format"] == "png"
         assert captured_request["client_config"].base_url == "https://relay.example.com/v1"
         assert captured_request["client_config"].api_key == "test-key"
