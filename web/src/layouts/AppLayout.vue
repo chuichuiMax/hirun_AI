@@ -15,7 +15,6 @@ import {
   MessageCirclePlus,
   Users,
   IdCard,
-  Images,
   SlidersHorizontal,
   UserRoundPen,
   ShieldCheck,
