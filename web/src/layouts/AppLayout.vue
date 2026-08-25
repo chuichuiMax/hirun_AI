@@ -11,7 +11,17 @@ import {
   FilePenLine,
   PanelLeftClose,
   PanelLeftOpen,
-  MessageCirclePlus
+  MessageCirclePlus,
+  Users,
+  IdCard,
+  Images,
+  SlidersHorizontal,
+  UserRoundPen,
+  ShieldCheck,
+  Layers,
+  Braces,
+  ChevronRight,
+  ChevronDown
 } from 'lucide-vue-next'
 
 import { useConfigStore } from '@/stores/config'
@@ -147,7 +157,62 @@ const mainList = computed(() => {
     name: '智能体管理',
     path: '/model-manage',
     icon: Box,
-    activeIcon: Box
+    activeIcon: Box,
+    exactActive: true
+  })
+
+  items.push({
+    name: '账号管理',
+    path: '/model-manage/accounts',
+    icon: Users,
+    activeIcon: Users
+  })
+
+  items.push({
+    name: '员工管理',
+    path: '/model-manage/employees',
+    icon: IdCard,
+    activeIcon: IdCard
+  })
+
+  items.push({
+    name: '封面管理',
+    path: '/model-manage/covers',
+    icon: Images,
+    activeIcon: Images
+  })
+
+  items.push({
+    name: '配置管理',
+    icon: SlidersHorizontal,
+    activeIcon: SlidersHorizontal,
+    activePaths: ['/config-manage'],
+    children: [
+      {
+        name: '人设管理',
+        path: '/config-manage/personas',
+        icon: UserRoundPen,
+        activeIcon: UserRoundPen
+      },
+      {
+        name: '权限配置',
+        path: '/config-manage/permissions',
+        icon: ShieldCheck,
+        activeIcon: ShieldCheck
+      },
+      {
+        name: '内容类型配置',
+        path: '/config-manage/content-types',
+        icon: Layers,
+        activeIcon: Layers
+      },
+      {
+        name: '变量配置',
+        path: '/config-manage/variables',
+        icon: Braces,
+        activeIcon: Braces
+      }
+    ]
   })
 
   if (userStore.isAdmin) {
@@ -162,12 +227,26 @@ const mainList = computed(() => {
   return items
 })
 
+const expandedGroups = ref({ 配置管理: true })
+
 const isNavItemActive = (item) => {
-  const activePaths = item.activePaths || [item.path]
+  const activePaths = item.activePaths || (item.path ? [item.path] : [])
+  if (!activePaths.length) return false
   if (item.exactActive) {
     return activePaths.some((path) => route.path === path)
   }
   return activePaths.some((path) => route.path === path || route.path.startsWith(`${path}/`))
+}
+
+const isNavGroup = (item) => !!(item.children?.length && !item.path)
+
+const isGroupExpanded = (item) => !!expandedGroups.value[item.name]
+
+const toggleGroup = (item) => {
+  expandedGroups.value = {
+    ...expandedGroups.value,
+    [item.name]: !expandedGroups.value[item.name]
+  }
 }
 
 const setSidebarCollapsed = (collapsed) => {
@@ -282,26 +361,77 @@ provide('settingsModal', {
       </div>
       <div class="nav">
         <!-- 使用mainList渲染导航项 -->
-        <RouterLink
-          v-for="(item, index) in mainList"
-          :key="index"
-          :to="item.path"
-          v-show="!item.hidden"
-          class="nav-item"
-          :class="{ active: isNavItemActive(item) }"
-          :active-class="item.action ? '' : 'active'"
-          @click.stop
-        >
-          <a-tooltip placement="right" :open="sidebarCollapsed ? undefined : false">
-            <template #title>{{ item.name }}</template>
+        <div v-for="(item, index) in mainList" :key="index" class="nav-group">
+          <button
+            v-if="isNavGroup(item)"
+            v-show="!item.hidden"
+            type="button"
+            class="nav-item"
+            :class="{ active: isNavItemActive(item) }"
+            @click.stop="toggleGroup(item)"
+          >
+            <span class="nav-icon">
+              <a-tooltip placement="right" :open="sidebarCollapsed ? undefined : false">
+                <template #title>{{ item.name }}</template>
+                <component
+                  class="icon"
+                  :is="isNavItemActive(item) ? item.activeIcon : item.icon"
+                  size="16"
+                />
+              </a-tooltip>
+            </span>
+            <span class="nav-text">{{ item.name }}</span>
             <component
-              class="icon"
-              :is="isNavItemActive(item) ? item.activeIcon : item.icon"
-              size="18"
+              v-if="!sidebarCollapsed"
+              class="nav-chevron"
+              :is="isGroupExpanded(item) ? ChevronDown : ChevronRight"
+              size="14"
             />
-          </a-tooltip>
-          <span class="nav-text">{{ item.name }}</span>
-        </RouterLink>
+          </button>
+          <RouterLink
+            v-else
+            :to="item.path"
+            v-show="!item.hidden"
+            class="nav-item"
+            :class="{ active: isNavItemActive(item) }"
+            :active-class="item.action ? '' : 'active'"
+            @click.stop
+          >
+            <span class="nav-icon">
+              <a-tooltip placement="right" :open="sidebarCollapsed ? undefined : false">
+                <template #title>{{ item.name }}</template>
+                <component
+                  class="icon"
+                  :is="isNavItemActive(item) ? item.activeIcon : item.icon"
+                  size="16"
+                />
+              </a-tooltip>
+            </span>
+            <span class="nav-text">{{ item.name }}</span>
+          </RouterLink>
+          <div
+            v-if="item.children?.length && !sidebarCollapsed && (!isNavGroup(item) || isGroupExpanded(item))"
+            class="nav-children"
+          >
+            <RouterLink
+              v-for="child in item.children"
+              :key="child.path || child.name"
+              :to="child.path"
+              class="nav-item nav-item-child"
+              :class="{ active: isNavItemActive(child) }"
+              @click.stop
+            >
+              <span class="nav-icon">
+                <component
+                  class="icon"
+                  :is="isNavItemActive(child) ? child.activeIcon : child.icon"
+                  size="16"
+                />
+              </span>
+              <span class="nav-text">{{ child.name }}</span>
+            </RouterLink>
+          </div>
+        </div>
       </div>
       <div class="fill">
         <ConversationNavSection
@@ -431,6 +561,27 @@ div.header,
     gap: 4px;
   }
 
+  .nav-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .nav-children {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 0 4px;
+  }
+
+  .nav-chevron {
+    flex: 0 0 14px;
+    width: 14px;
+    height: 14px;
+    margin-left: auto;
+    color: var(--gray-500);
+  }
+
   .sidebar-conversations {
     height: 100%;
     min-height: 0;
@@ -512,8 +663,10 @@ div.header,
     display: flex;
     align-items: center;
     justify-content: flex-start;
+    gap: 8px;
     width: 100%;
     height: @sidebar-item-height;
+    box-sizing: border-box;
     padding: 0 @sidebar-item-padding-x;
     border: 1px solid transparent;
     border-radius: 8px;
@@ -529,26 +682,50 @@ div.header,
     text-decoration: none;
     cursor: pointer;
     outline: none;
+    font-family: inherit;
+    text-align: left;
+
+    .nav-icon {
+      flex: 0 0 @sidebar-icon-size;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: @sidebar-icon-size;
+      height: @sidebar-icon-size;
+      overflow: hidden;
+
+      :deep(svg),
+      :deep(.icon) {
+        display: block;
+        flex: none;
+        width: @sidebar-icon-size;
+        height: @sidebar-icon-size;
+        min-width: @sidebar-icon-size;
+        min-height: @sidebar-icon-size;
+      }
+    }
 
     .icon {
-      flex: 0 0 @sidebar-icon-size;
+      display: block;
       width: @sidebar-icon-size;
       height: @sidebar-icon-size;
     }
 
     .nav-text {
+      flex: 1 1 auto;
       min-width: 0;
-      max-width: 140px;
-      margin-left: 8px;
+      margin: 0;
       overflow: hidden;
       line-height: 20px;
       font-weight: 450;
       text-overflow: ellipsis;
       white-space: nowrap;
-      transition:
-        opacity 0.12s ease,
-        margin-left 0.18s ease,
-        max-width 0.18s ease;
+    }
+
+    &.nav-item-child {
+      height: 32px;
+      padding-left: 28px;
+      font-size: 13px;
     }
 
     & > svg:focus {

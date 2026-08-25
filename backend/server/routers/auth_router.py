@@ -23,6 +23,7 @@ from yuxi.services.user_identity_service import generate_unique_uid, validate_us
 from yuxi.services.operation_log_service import log_operation
 from yuxi.storage.minio import upload_image_to_minio
 from yuxi.utils.datetime_utils import utc_now_naive
+from yuxi.services.role_service import resolve_stored_user_role
 
 # OIDC 认证相关导入
 from yuxi.services.oidc_service import (
@@ -449,19 +450,20 @@ async def create_user(
     hashed_password = AuthUtils.hash_password(user_data.password)
 
     # 检查角色权限
-    # 禁止创建超级管理员账户（系统只能有一个超级管理员）
-    if user_data.role == "superadmin":
+    stored_role = await resolve_stored_user_role(db, user_data.role)
+    if stored_role == "superadmin":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="不能创建超级管理员账户",
         )
 
-    # 管理员只能创建普通用户
-    if current_user.role == "admin" and user_data.role != "user":
+    # 管理员只能创建非管理员角色
+    if current_user.role == "admin" and stored_role in {"admin", "superadmin"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="管理员只能创建普通用户账户",
+            detail="管理员只能创建普通角色账户",
         )
+    user_data.role = stored_role
 
     # 部门分配逻辑
     if current_user.role == "superadmin":
@@ -615,16 +617,19 @@ async def update_user(
         )
 
     if current_user.role == "admin":
-        if user.role != "user":
+        if user.role in {"admin", "superadmin"}:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="管理员只能修改普通用户账户",
+                detail="管理员只能修改普通角色账户",
             )
         if user_data.role is not None and user_data.role != "user":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="管理员只能将用户角色设置为普通用户",
-            )
+            stored_role = await resolve_stored_user_role(db, user_data.role)
+            if stored_role in {"admin", "superadmin"}:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="管理员只能将用户角色设置为普通角色",
+                )
+            user_data.role = stored_role
 
     # 更新信息
     update_details = []
@@ -646,8 +651,14 @@ async def update_user(
         update_details.append("密码已更新")
 
     if user_data.role is not None:
+        stored_role = await resolve_stored_user_role(db, user_data.role)
+        if stored_role == "superadmin" and user.role != "superadmin":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不能将用户设置为超级管理员",
+            )
         # 检查是否将管理员降级为普通用户
-        if user.role == "admin" and user_data.role == "user" and user.department_id is not None:
+        if user.role == "admin" and stored_role != "admin" and user.department_id is not None:
             admin_count = await UserRepository().get_admin_count_in_department(
                 user.department_id, exclude_user_id=user_id
             )
@@ -656,8 +667,8 @@ async def update_user(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="不能将管理员降级为普通用户，因为该用户是当前部门的唯一管理员",
                 )
-        user.role = user_data.role
-        update_details.append(f"角色: {user_data.role}")
+        user.role = stored_role
+        update_details.append(f"角色: {stored_role}")
 
     if user_data.phone_number is not None:
         user.phone_number = user_data.phone_number
@@ -719,10 +730,10 @@ async def delete_user(
             detail="不能删除超级管理员账户",
         )
 
-    if current_user.role == "admin" and user.role != "user":
+    if current_user.role == "admin" and user.role in {"admin", "superadmin"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="管理员只能删除普通用户账户",
+            detail="管理员只能删除普通角色账户",
         )
 
     # 检查是否是部门的唯一管理员

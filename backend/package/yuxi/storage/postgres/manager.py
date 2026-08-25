@@ -481,6 +481,48 @@ class PostgresManager(metaclass=SingletonMeta):
             "CREATE INDEX IF NOT EXISTS ix_conversations_is_pinned ON conversations(is_pinned)",
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_model_providers_provider_id ON model_providers(provider_id)",
             "CREATE INDEX IF NOT EXISTS ix_model_providers_is_enabled ON model_providers(is_enabled)",
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'content_employees'
+                      AND column_name = 'login_port'
+                      AND data_type = 'character varying'
+                ) THEN
+                    ALTER TABLE content_employees
+                    ALTER COLUMN login_port TYPE JSONB
+                    USING CASE
+                        WHEN login_port IN ('pc_app', 'PC&APP') THEN '["pc","app"]'::jsonb
+                        WHEN login_port IN ('app', 'APP') THEN '["app"]'::jsonb
+                        WHEN login_port IN ('pc', 'PC') THEN '["pc"]'::jsonb
+                        ELSE '["pc","app"]'::jsonb
+                    END;
+                END IF;
+            END $$;
+            """,
+            "ALTER TABLE IF EXISTS content_covers ADD COLUMN IF NOT EXISTS image_name VARCHAR(255)",
+            """
+            UPDATE content_covers
+            SET image_name = 'cover-' || left(id, 8)
+            WHERE image_name IS NULL OR btrim(image_name) = ''
+            """,
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'content_covers' AND column_name = 'image_name'
+                ) THEN
+                    ALTER TABLE content_covers ALTER COLUMN image_name SET NOT NULL;
+                END IF;
+            END $$;
+            """,
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_content_covers_category_image_name_lower
+            ON content_covers (category, lower(image_name))
+            """,
+            "ALTER TABLE IF EXISTS content_roles ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '[]'::jsonb",
         ]
         async with self.async_engine.begin() as conn:
             for stmt in stmts:
