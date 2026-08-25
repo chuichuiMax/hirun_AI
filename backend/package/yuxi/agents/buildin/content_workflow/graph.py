@@ -56,8 +56,7 @@ def _event_payload(state: ContentWorkflowState, node_id: str, status: str, **ext
 
 def _report_is_blocked(report: dict[str, Any]) -> bool:
     return report.get("status") == "blocked" or any(
-        item.get("status") == "blocked" or item.get("level") == "error"
-        for item in report.get("checks") or []
+        item.get("status") == "blocked" or item.get("level") == "error" for item in report.get("checks") or []
     )
 
 
@@ -96,6 +95,7 @@ class ContentWorkflowAgent(BaseAgent):
             incoming[target] += 1
             outgoing[source] += 1
         revision_targets = {
+            "select_title": "select_title",
             "semantic_review": "semantic_review",
             "human_content_approval": "human_content_approval",
             **{route["to"]: route["to"] for route in definition.get("revision_routes") or []},
@@ -212,10 +212,13 @@ class ContentWorkflowAgent(BaseAgent):
                 repo = ContentRepository(db)
                 persisted = await db.get(type(node_run), node_run.id)
                 if persisted:
+                    output_snapshot = {"updated_fields": sorted(result.keys())}
+                    if node_id == "validate_title_candidates":
+                        output_snapshot["title_validation_report"] = result.get("title_validation_report") or {}
                     await repo.finish_node_run(
                         persisted,
                         status="completed",
-                        output_snapshot={"updated_fields": sorted(result.keys())},
+                        output_snapshot=output_snapshot,
                     )
             if node_id == "deterministic_validate":
                 validation = result.get("validation_report") or {}
@@ -252,8 +255,16 @@ class ContentWorkflowAgent(BaseAgent):
             return await self._v3_human_review(node, state)
         if node_type == "revision_router":
             previous_node = state.get("current_node")
+            title_validation_report = state.get("title_validation_report") or {}
             validation_report = state.get("validation_report") or {}
             review_report = state.get("review_report") or {}
+            if previous_node == "validate_title_candidates" and not _report_is_blocked(title_validation_report):
+                return {
+                    "revision_reason_code": None,
+                    "revision_target": "select_title",
+                    "revision_status": "continue",
+                    "retry_counts": dict(state.get("retry_counts") or {}),
+                }
             if previous_node == "deterministic_validate" and not _report_is_blocked(validation_report):
                 return {
                     "revision_reason_code": None,
@@ -269,16 +280,14 @@ class ContentWorkflowAgent(BaseAgent):
                     "retry_counts": dict(state.get("retry_counts") or {}),
                 }
             reason_code = resolve_revision_reason(
-                title_validation_report=state.get("title_validation_report"),
+                title_validation_report=title_validation_report,
                 validation_report=validation_report,
                 review_report=review_report if previous_node == "semantic_review" else None,
             )
             if reason_code in {"SYSTEM_CONFIGURATION_FAILED", "REVIEW_CONTRACT_VIOLATION"}:
                 raise ContentApplicationError(
                     code=reason_code.lower(),
-                    message=(
-                        "内容校验发现系统配置或审核契约错误，已停止执行；不会交给语义 Agent 猜测修复"
-                    ),
+                    message=("内容校验发现系统配置或审核契约错误，已停止执行；不会交给语义 Agent 猜测修复"),
                     kind="conflict",
                 )
             decision = RevisionRouteController().decide(
@@ -298,6 +307,14 @@ class ContentWorkflowAgent(BaseAgent):
                     message=f"阻断原因 {reason_code or 'unknown'} 没有可执行的定点回修路线",
                     kind="conflict",
                 )
+            if previous_node == "validate_title_candidates":
+                return {
+                    "revision_reason_code": reason_code,
+                    "revision_target": decision.target_node_id,
+                    "revision_status": decision.status,
+                    "retry_counts": decision.retry_counts,
+                    "resume_parent_run_id": None,
+                }
             state_version = int(state.get("state_version") or 0)
             expected_run_id = state.get("resume_parent_run_id") or state["run_id"]
             answer = interrupt(
@@ -309,6 +326,7 @@ class ContentWorkflowAgent(BaseAgent):
                     "expected_state_version": state_version,
                     "reason_code": reason_code,
                     "suggested_target": decision.target_node_id,
+                    "title_validation_report": title_validation_report,
                     "validation_report": validation_report,
                     "review_report": review_report if previous_node == "semantic_review" else {},
                 }
@@ -428,8 +446,7 @@ class ContentWorkflowAgent(BaseAgent):
             if confirmed != high_risk_ids:
                 raise ValueError("价格、优惠、效果承诺等高风险产品事实必须逐项人工确认")
             collection["evidence_items"] = [
-                {**item, "verified_status": "user_confirmed"} if item.get("id") in confirmed else item
-                for item in items
+                {**item, "verified_status": "user_confirmed"} if item.get("id") in confirmed else item for item in items
             ]
             return {
                 "product_evidence_collection": collection,

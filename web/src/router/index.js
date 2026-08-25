@@ -144,6 +144,62 @@ const router = createRouter({
           name: 'ModelManageComp',
           component: () => import('../views/ModelManageView.vue'),
           meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'accounts',
+          name: 'AccountManageComp',
+          component: () => import('../views/AccountManageView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'employees',
+          name: 'EmployeeManageComp',
+          component: () => import('../views/EmployeeManageView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'covers',
+          name: 'CoverManageComp',
+          component: () => import('../views/CoverManageView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        }
+      ]
+    },
+    {
+      path: '/config-manage',
+      name: 'config-manage',
+      component: AppLayout,
+      redirect: '/config-manage/personas',
+      children: [
+        {
+          path: 'personas',
+          name: 'PersonaManageComp',
+          component: () => import('../views/PersonaManageView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'permissions',
+          name: 'PermissionConfigComp',
+          component: () => import('../views/PermissionConfigView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'permissions/:roleId',
+          name: 'RoleAuthorizeComp',
+          component: () => import('../views/RoleAuthorizeView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'content-types',
+          name: 'ContentTypeConfigComp',
+          component: () => import('../views/ContentTypeConfigView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'variables',
+          name: 'VariableConfigComp',
+          component: () => import('../views/VariableConfigView.vue'),
+          meta: { keepAlive: false, requiresAuth: true },
         }
       ]
     },

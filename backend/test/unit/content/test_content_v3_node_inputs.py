@@ -69,6 +69,7 @@ def _state() -> dict:
         "persona_diff": {"change_summary": []},
         "evidence_bundle": deepcopy(EVIDENCE_BUNDLE),
         "product_evidence_pack": deepcopy(PRODUCT_EVIDENCE_PACK),
+        "title_evidence_requirements": [],
     }
 
 
@@ -95,6 +96,56 @@ def test_generate_body_input_contains_locked_title_and_outline():
     assert assembly.payload["selected_title"]["text"] == "锁定标题"
     assert assembly.payload["content_outline"]["body_formula_code"] == "C03"
     assert len(assembly.snapshot_hash) == 64
+
+
+@pytest.mark.unit
+def test_title_input_exposes_required_slots_and_previous_validation_report():
+    state = {**_state(), "channel_profile": {}, "persona_profile": {}}
+    state["product_evidence_pack"]["slot_mappings"] = [
+        {
+            "slot": "product_profile",
+            "target_usage": "title",
+            "required": True,
+            "evidence_ids": ["ev-product"],
+            "integration_instruction": "在标题中呈现产品主体",
+        },
+        {
+            "slot": "brand",
+            "target_usage": "title",
+            "required": False,
+            "evidence_ids": ["ev-brand"],
+            "integration_instruction": "需要品牌背书时使用",
+        },
+    ]
+    pack_payload = {key: value for key, value in state["product_evidence_pack"].items() if key != "pack_hash"}
+    state["product_evidence_pack"]["pack_hash"] = hashlib.sha256(
+        json.dumps(pack_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    state["title_evidence_requirements"] = [
+        {
+            "slot": "product_profile",
+            "required": True,
+            "evidence_ids": ["ev-product"],
+            "integration_instruction": "在标题中呈现产品主体",
+        },
+        {
+            "slot": "brand",
+            "required": False,
+            "evidence_ids": ["ev-brand"],
+            "integration_instruction": "需要品牌背书时使用",
+        },
+    ]
+    state["title_validation_report"] = {
+        "status": "blocked",
+        "items": [{"id": "t1", "missing_required_slots": ["product_profile"]}],
+    }
+    node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "generate_title_candidates")
+
+    assembly = ContentNodeInputAssembler.build(node=node, state=state)
+
+    assert assembly.payload["title_evidence_requirements"][0]["required"] is True
+    assert assembly.payload["title_evidence_requirements"][0]["evidence_ids"] == ["ev-product"]
+    assert assembly.payload["title_validation_report"]["status"] == "blocked"
 
 
 @pytest.mark.unit

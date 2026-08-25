@@ -95,22 +95,22 @@ async def test_strategy_snapshot_locks_one_title_formula_one_body_formula_and_al
             self.results = [
                 Result(title),
                 Result(body),
-            Result(
-                [
-                    SimpleNamespace(
-                        code=code,
-                        name=f"手法 {code}",
-                        method_type="core",
-                        principle="可验证原则",
-                        suitable_scenes=[],
-                        sentence_patterns=[],
-                        variable_schema=["result"],
-                        risk_rules=[],
-                    )
-                    for code in ("M01", "M03")
-                ],
-                many=True,
-            ),
+                Result(
+                    [
+                        SimpleNamespace(
+                            code=code,
+                            name=f"手法 {code}",
+                            method_type="core",
+                            principle="可验证原则",
+                            suitable_scenes=[],
+                            sentence_patterns=[],
+                            variable_schema=["result"],
+                            risk_rules=[],
+                        )
+                        for code in ("M01", "M03")
+                    ],
+                    many=True,
+                ),
             ]
 
         async def get(self, model, identity):
@@ -183,12 +183,63 @@ async def test_v3_graph_compiles_revision_routes_as_controlled_conditional_edges
     }
 
     assert revision_edges == {
+        "select_title",
         "semantic_review",
         "generate_title_candidates",
         "generate_body",
         "persona_style_polish",
         "human_content_approval",
     }
+
+
+@pytest.mark.asyncio
+async def test_blocked_title_validation_routes_back_to_title_agent_without_human_interrupt():
+    agent = ContentWorkflowAgent()
+    state = {
+        "task_id": "task-1",
+        "run_id": "run-1",
+        "current_node": "validate_title_candidates",
+        "retry_counts": {},
+        "title_validation_report": {
+            "status": "blocked",
+            "items": [
+                {
+                    "id": "t1",
+                    "status": "blocked",
+                    "missing_required_slots": ["product_profile"],
+                    "checks": [{"code": "TITLE_PRODUCT_EVIDENCE_NOT_USED", "level": "error"}],
+                }
+            ],
+        },
+    }
+
+    result = await agent._execute_node(
+        {"id": "revise_if_needed", "type": "revision_router"},
+        state,
+        WORKFLOW_V3,
+    )
+
+    assert result["revision_target"] == "generate_title_candidates"
+    assert result["revision_status"] == "route"
+    assert result["retry_counts"] == {"generate_title_candidates": 1}
+
+
+@pytest.mark.asyncio
+async def test_passed_title_validation_continues_to_human_title_selection():
+    result = await ContentWorkflowAgent()._execute_node(
+        {"id": "revise_if_needed", "type": "revision_router"},
+        {
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "current_node": "validate_title_candidates",
+            "retry_counts": {},
+            "title_validation_report": {"status": "passed", "items": []},
+        },
+        WORKFLOW_V3,
+    )
+
+    assert result["revision_target"] == "select_title"
+    assert result["revision_status"] == "continue"
 
 
 @pytest.mark.asyncio

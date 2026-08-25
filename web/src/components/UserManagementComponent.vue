@@ -48,9 +48,13 @@
         </a-select>
         <a-select v-model:value="userManagement.roleFilter" class="filter-select">
           <a-select-option value="">全部权限</a-select-option>
-          <a-select-option value="superadmin">超级管理员</a-select-option>
-          <a-select-option value="admin">管理员</a-select-option>
-          <a-select-option value="user">普通用户</a-select-option>
+          <a-select-option
+            v-for="role in catalogRoles"
+            :key="role.value"
+            :value="role.value"
+          >
+            {{ role.label }}
+          </a-select-option>
         </a-select>
       </div>
     </div>
@@ -88,19 +92,13 @@
                   <div class="user-info-content">
                     <div class="name-tag-row">
                       <h4 class="username">{{ user.username }}</h4>
-                      <div
-                        v-if="
-                          user.role === 'admin' ||
-                          user.role === 'superadmin' ||
-                          user.department_name
-                        "
-                        class="role-dept-badge"
-                      >
+                      <div class="role-dept-badge">
                         <span class="role-icon-wrapper" :class="getRoleClass(user.role)">
                           <UserLock v-if="user.role === 'superadmin'" :size="14" />
                           <UserStar v-else-if="user.role === 'admin'" :size="14" />
                           <User v-else :size="14" />
                         </span>
+                        <span class="dept-text">{{ roleDisplayName(user.role) }}</span>
                         <span v-if="user.department_name" class="dept-text">
                           {{ user.department_name }}
                         </span>
@@ -252,8 +250,13 @@
         </a-form-item>
         <a-form-item v-else label="角色" class="form-item">
           <a-select v-model:value="userManagement.form.role">
-            <a-select-option value="user">普通用户</a-select-option>
-            <a-select-option value="admin" v-if="userStore.isSuperAdmin">管理员</a-select-option>
+            <a-select-option
+              v-for="role in assignableRoles"
+              :key="role.value"
+              :value="role.value"
+            >
+              {{ role.label }}
+            </a-select-option>
           </a-select>
         </a-form-item>
 
@@ -275,10 +278,11 @@
 </template>
 
 <script setup>
-import { reactive, onMounted, watch, computed } from 'vue'
+import { reactive, onMounted, watch, computed, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { useUserStore } from '@/stores/user'
 import { departmentApi } from '@/apis'
+import { roleApi } from '@/apis/role_api'
 import {
   Plus,
   SquarePen,
@@ -329,6 +333,50 @@ const userManagement = reactive({
 const departmentManagement = reactive({
   departments: []
 })
+
+const FALLBACK_ROLE_LABELS = {
+  superadmin: '超级管理员',
+  admin: '管理员',
+  user: '普通用户'
+}
+
+const catalogRoleRecords = ref([])
+
+const storedRoleValue = (role) => {
+  if (role.role_code === 'user' || role.role_code === 'admin' || role.role_code === 'superadmin') {
+    return role.role_code
+  }
+  return role.name
+}
+
+const catalogRoles = computed(() => {
+  if (catalogRoleRecords.value.length) {
+    return catalogRoleRecords.value.map((role) => ({
+      value: storedRoleValue(role),
+      label: role.name
+    }))
+  }
+  return Object.entries(FALLBACK_ROLE_LABELS).map(([value, label]) => ({ value, label }))
+})
+
+const assignableRoles = computed(() => {
+  const source = catalogRoleRecords.value.length
+    ? catalogRoleRecords.value.filter((role) => role.enabled).map((role) => ({
+        value: storedRoleValue(role),
+        label: role.name
+      }))
+    : catalogRoles.value
+  return source.filter((role) => {
+    if (role.value === 'superadmin') return false
+    if (role.value === 'admin') return userStore.isSuperAdmin
+    return true
+  })
+})
+
+const roleDisplayName = (roleValue) => {
+  const found = catalogRoles.value.find((role) => role.value === roleValue)
+  return found?.label || FALLBACK_ROLE_LABELS[roleValue] || roleValue
+}
 
 const departmentFilterOptions = computed(() => {
   const options = new Map()
@@ -393,6 +441,17 @@ const fetchDepartments = async () => {
     departmentManagement.departments = departments
   } catch (error) {
     console.error('获取部门列表失败:', error)
+  }
+}
+
+const fetchRoles = async () => {
+  try {
+    const response = await roleApi.listRoles()
+    catalogRoleRecords.value = Array.isArray(response?.roles) ? response.roles : []
+  } catch (error) {
+    console.error('获取角色列表失败:', error)
+    catalogRoleRecords.value = []
+    message.error(error.message || '加载角色失败')
   }
 }
 
@@ -502,7 +561,7 @@ const handleRefresh = async () => {
   if (userManagement.refreshing) return
   userManagement.refreshing = true
   try {
-    await Promise.all([fetchUsers(), fetchDepartments()])
+    await Promise.all([fetchUsers(), fetchDepartments(), fetchRoles()])
     message.success('刷新成功')
   } catch (error) {
     console.error('刷新失败:', error)
@@ -514,6 +573,7 @@ const handleRefresh = async () => {
 
 // 打开添加用户模态框
 const showAddUserModal = () => {
+  void fetchRoles()
   userManagement.modalTitle = '添加用户'
   userManagement.editMode = false
   userManagement.editUserId = null
@@ -534,6 +594,7 @@ const showAddUserModal = () => {
 
 // 打开编辑用户模态框
 const showEditUserModal = (user) => {
+  void fetchRoles()
   userManagement.modalTitle = '编辑用户'
   userManagement.editMode = true
   userManagement.editUserId = user.id
@@ -697,6 +758,7 @@ const getRoleClass = (role) => {
 onMounted(async () => {
   await fetchUsers()
   await fetchDepartments()
+  await fetchRoles()
 })
 </script>
 
@@ -918,6 +980,9 @@ onMounted(async () => {
                       }
                       &.role-user {
                         color: var(--color-success-700);
+                      }
+                      &.role-default {
+                        color: var(--main-600);
                       }
                     }
 

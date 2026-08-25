@@ -25,6 +25,85 @@ from yuxi.services.run_queue_service import append_run_stream_event
 from yuxi.storage.postgres.models_content import ContentTask
 
 
+_SLOT_REQUIRED_VARIABLES = {
+    "product_profile": {"product", "advantages", "pain_points"},
+    "price": {"price", "budget", "cost", "discount", "fee"},
+    "case_proof": {"number", "result", "scene", "location"},
+    "brand": {"brand_name"},
+}
+
+
+def _annotate_product_slot_requirements(
+    *,
+    slot_mappings: list[dict[str, Any]],
+    material_requirements: dict[str, Any],
+    strategy_snapshot: dict[str, Any],
+) -> list[dict[str, Any]]:
+    requirement_by_id = {
+        item["requirement_id"]: item
+        for item in material_requirements.get("requirements") or []
+        if item.get("requirement_id")
+    }
+    title_variables = set((strategy_snapshot.get("title_formula") or {}).get("variable_schema") or [])
+    body_variables = set((strategy_snapshot.get("body_formula") or {}).get("required_variables") or [])
+    body_variables.update(
+        variable
+        for method in strategy_snapshot.get("creation_method_definitions") or []
+        for variable in method.get("variable_schema") or []
+    )
+    variables_by_usage = {"title": title_variables, "body": body_variables}
+    has_case_result_mapping = {
+        usage: any(
+            mapping.get("slot") == "case_proof"
+            and mapping.get("target_usage") == usage
+            and "result" in set((requirement_by_id.get("case_proof") or {}).get("variable_codes") or [])
+            for mapping in slot_mappings
+        )
+        for usage in variables_by_usage
+    }
+
+    annotated = []
+    for mapping in slot_mappings:
+        requirement = requirement_by_id.get(mapping.get("slot"))
+        if requirement is None:
+            required = bool(mapping.get("required", True))
+        elif not requirement.get("required") or mapping.get("target_usage") == "style_reference":
+            required = False
+        else:
+            target_usage = str(mapping.get("target_usage") or "")
+            relevant_variables = variables_by_usage.get(target_usage, set())
+            requirement_variables = set(requirement.get("variable_codes") or [])
+            slot = str(mapping.get("slot") or "")
+            required_variables = _SLOT_REQUIRED_VARIABLES.get(slot, requirement_variables)
+            required = (
+                bool(relevant_variables & requirement_variables & required_variables)
+                if relevant_variables and requirement_variables
+                else True
+            )
+            if (
+                slot == "product_profile"
+                and not required
+                and "result" in relevant_variables & requirement_variables
+                and not has_case_result_mapping.get(target_usage)
+            ):
+                required = True
+        annotated.append({**mapping, "required": required})
+    return annotated
+
+
+def _title_evidence_requirements(slot_mappings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "slot": mapping["slot"],
+            "required": bool(mapping.get("required")),
+            "evidence_ids": list(mapping.get("evidence_ids") or []),
+            "integration_instruction": str(mapping.get("integration_instruction") or "按槽位证据生成标题"),
+        }
+        for mapping in slot_mappings
+        if mapping.get("target_usage") == "title"
+    ]
+
+
 class V3DeterministicNodeHandler:
     async def execute(
         self,
@@ -408,12 +487,17 @@ class V3DeterministicNodeHandler:
         else:
             bundle = current
 
+        annotated_slot_mappings = _annotate_product_slot_requirements(
+            slot_mappings=slot_mappings,
+            material_requirements=requirements,
+            strategy_snapshot=state.get("strategy_snapshot") or {},
+        )
         pack_payload = {
             "strategy_snapshot_hash": requirements.get("strategy_snapshot_hash"),
             "evidence_bundle_id": bundle.id,
             "evidence_bundle_version": bundle.version,
             "evidence_bundle_hash": bundle.bundle_hash,
-            "slot_mappings": slot_mappings,
+            "slot_mappings": annotated_slot_mappings,
             "unresolved_questions": collection.get("unresolved_questions") or [],
         }
         canonical = json.dumps(pack_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -421,6 +505,7 @@ class V3DeterministicNodeHandler:
         return {
             "evidence_bundle": bundle.model_dump(mode="json"),
             "product_evidence_pack": pack_payload,
+            "title_evidence_requirements": _title_evidence_requirements(annotated_slot_mappings),
         }
 
     @staticmethod
@@ -432,42 +517,81 @@ class V3DeterministicNodeHandler:
         locked = (state.get("formula_selection_snapshot") or {}).get("selected_title_formula_code")
         if len(candidates) < 2 or any(item.get("formula_code") != locked for item in candidates):
             raise ValueError("标题候选必须全部使用同一锁定标题公式")
+        product_pack = dict(state.get("product_evidence_pack") or {})
+        annotated_slot_mappings = _annotate_product_slot_requirements(
+            slot_mappings=list(product_pack.get("slot_mappings") or []),
+            material_requirements=state.get("product_material_requirements") or {},
+            strategy_snapshot=state.get("strategy_snapshot") or {},
+        )
+        product_pack["slot_mappings"] = annotated_slot_mappings
+        if product_pack.get("pack_hash"):
+            canonical = json.dumps(
+                {key: value for key, value in product_pack.items() if key != "pack_hash"},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            product_pack["pack_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         report = []
         title_mappings = [
-            item
-            for item in (state.get("product_evidence_pack") or {}).get("slot_mappings") or []
-            if item.get("target_usage") == "title"
+            item for item in annotated_slot_mappings if item.get("target_usage") == "title" and item.get("required")
         ]
         for item in candidates:
-            numeric = validate_numeric_evidence_coverage(item.get("text", ""), state["evidence_bundle"])
-            length_ok = 1 <= len(item.get("text", "")) <= 60
+            text = str(item.get("text") or "")
+            numeric = validate_numeric_evidence_coverage(text, state["evidence_bundle"])
+            length_ok = 1 <= len(text) <= 60
             cited = set(item.get("evidence_ids") or [])
-            missing_product_slots = [
-                mapping["slot"]
-                for mapping in title_mappings
-                if not cited.intersection(mapping.get("evidence_ids") or [])
+            missing_product_mappings = [
+                mapping for mapping in title_mappings if not cited.intersection(mapping.get("evidence_ids") or [])
             ]
             checks = list(numeric["checks"])
-            if missing_product_slots:
+            if not length_ok:
+                checks.append(
+                    {
+                        "code": "TITLE_TOO_SHORT" if not text else "TITLE_TOO_LONG",
+                        "level": "error",
+                        "location": "title",
+                        "message": "标题不能为空" if not text else "标题超过 60 个字符",
+                        "evidence_ids": [],
+                        "suggestion": "重新生成符合 1～60 个字符限制的标题",
+                    }
+                )
+            for mapping in missing_product_mappings:
+                evidence_ids = list(mapping.get("evidence_ids") or [])
                 checks.append(
                     {
                         "code": "TITLE_PRODUCT_EVIDENCE_NOT_USED",
                         "level": "error",
                         "location": "title",
-                        "message": f"标题未植入已映射的产品资料: {', '.join(missing_product_slots)}",
-                        "evidence_ids": [],
+                        "message": f"标题未引用必填产品资料槽位：{mapping['slot']}",
+                        "evidence_ids": evidence_ids,
+                        "suggestion": (
+                            f"按要求“{mapping.get('integration_instruction') or '植入对应资料'}”，"
+                            f"并在候选 evidence_ids 中加入 {', '.join(evidence_ids)}"
+                        ),
                     }
                 )
             status = (
-                "passed" if numeric["status"] == "passed" and length_ok and not missing_product_slots else "blocked"
+                "passed" if numeric["status"] == "passed" and length_ok and not missing_product_mappings else "blocked"
             )
-            report.append({"id": item["id"], "status": status, "checks": checks})
-        if all(item["status"] == "blocked" for item in report):
-            raise ValueError("所有标题候选都未通过确定性校验")
+            report.append(
+                {
+                    "id": item["id"],
+                    "text": text,
+                    "status": status,
+                    "missing_required_slots": [mapping["slot"] for mapping in missing_product_mappings],
+                    "checks": checks,
+                }
+            )
         status_by_id = {item["id"]: item["status"] for item in report}
         return {
             "title_candidates": [{**item, "selectable": status_by_id[item["id"]] != "blocked"} for item in candidates],
-            "title_validation_report": {"status": "passed", "items": report},
+            "title_validation_report": {
+                "status": "blocked" if all(item["status"] == "blocked" for item in report) else "passed",
+                "items": report,
+            },
+            "product_evidence_pack": product_pack,
+            "title_evidence_requirements": _title_evidence_requirements(annotated_slot_mappings),
         }
 
     @staticmethod
@@ -524,6 +648,7 @@ class V3DeterministicNodeHandler:
             mapping["slot"]
             for mapping in (state.get("product_evidence_pack") or {}).get("slot_mappings") or []
             if mapping.get("target_usage") == "body"
+            and mapping.get("required", True)
             and not used_body_evidence.intersection(mapping.get("evidence_ids") or [])
         ]
         if missing_product_slots:

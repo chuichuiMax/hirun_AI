@@ -177,6 +177,7 @@ class AgentDelegationService:
             runtime_context=context,
         )
         context._content_node_tool_scope = runtime_snapshot["tools"]
+        context._content_node_result_tool_name = request.result_tool_name
         context._content_node_output_contract = request.output_contract
         context._content_node_result_collector = collector
         context._content_node_input = node_input

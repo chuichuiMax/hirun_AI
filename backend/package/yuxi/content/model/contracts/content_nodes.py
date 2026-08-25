@@ -137,6 +137,13 @@ class CollectStrategyProductEvidenceInputV1(StrictContract):
     channel_profile: dict[str, Any]
 
 
+class TitleEvidenceRequirementV1(StrictContract):
+    slot: str = Field(min_length=1)
+    required: bool
+    evidence_ids: list[str] = Field(min_length=1)
+    integration_instruction: str = Field(min_length=1)
+
+
 class ProductEvidencePackV1(StrictContract):
     strategy_snapshot_hash: str = Field(min_length=64, max_length=64)
     evidence_bundle_id: str = Field(min_length=1)
@@ -156,7 +163,7 @@ class ProductEvidencePackV1(StrictContract):
         return self
 
 
-class GenerateTitleCandidatesInputV1(StrictContract):
+class ProductEvidenceBoundInputV1(StrictContract):
     content_brief: dict[str, Any] = Field(min_length=1)
     strategy_snapshot: StrategySnapshotV1
     product_evidence_pack: ProductEvidencePackV1
@@ -165,7 +172,7 @@ class GenerateTitleCandidatesInputV1(StrictContract):
     persona_profile: dict[str, Any]
 
     @model_validator(mode="after")
-    def verify_product_evidence_locks(self) -> GenerateTitleCandidatesInputV1:
+    def verify_product_evidence_locks(self) -> ProductEvidenceBoundInputV1:
         if self.product_evidence_pack.strategy_snapshot_hash != self.strategy_snapshot.snapshot_hash:
             raise ValueError("产品证据快照不属于当前 StrategySnapshot")
         if self.product_evidence_pack.evidence_bundle_hash != self.evidence_bundle.get("bundle_hash"):
@@ -173,7 +180,30 @@ class GenerateTitleCandidatesInputV1(StrictContract):
         return self
 
 
-class BuildOutlineInputV1(GenerateTitleCandidatesInputV1):
+class GenerateTitleCandidatesInputV1(ProductEvidenceBoundInputV1):
+    title_evidence_requirements: list[TitleEvidenceRequirementV1]
+    title_validation_report: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def verify_title_evidence_requirements(self) -> GenerateTitleCandidatesInputV1:
+        expected = sorted(
+            (
+                str(mapping.get("slot") or ""),
+                bool(mapping.get("required")),
+                tuple(sorted(str(item) for item in mapping.get("evidence_ids") or [])),
+            )
+            for mapping in self.product_evidence_pack.slot_mappings
+            if mapping.get("target_usage") == "title"
+        )
+        actual = sorted(
+            (item.slot, item.required, tuple(sorted(item.evidence_ids))) for item in self.title_evidence_requirements
+        )
+        if actual != expected:
+            raise ValueError("标题资料要求与 ProductEvidencePack 的标题槽位不一致")
+        return self
+
+
+class BuildOutlineInputV1(ProductEvidenceBoundInputV1):
     selected_title: dict[str, Any] = Field(min_length=1)
 
 

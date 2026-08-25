@@ -1355,3 +1355,183 @@ class ContentAnalyticsEvent(Base):
     uid = Column(String(64), nullable=False, index=True)
     properties = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime, default=utc_now_naive, index=True)
+
+
+class ContentAccount(Base):
+    """内容发布账号（企业号/个人号）。"""
+
+    __tablename__ = "content_accounts"
+
+    id = Column(String(64), primary_key=True)
+    account_id = Column(String(64), nullable=False, unique=True, index=True)
+    name = Column(String(80), nullable=False)
+    account_type = Column(String(32), nullable=False)
+    following_count = Column(Integer, nullable=False, default=0)
+    follower_count = Column(Integer, nullable=False, default=0)
+    likes_count = Column(Integer, nullable=False, default=0)
+    works_count = Column(Integer, nullable=False, default=0)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "account_id": self.account_id,
+            "name": self.name,
+            "account_type": self.account_type,
+            "following_count": self.following_count or 0,
+            "follower_count": self.follower_count or 0,
+            "likes_count": self.likes_count or 0,
+            "works_count": self.works_count or 0,
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentEmployee(Base):
+    """内容发布员工。"""
+
+    __tablename__ = "content_employees"
+
+    id = Column(String(64), primary_key=True)
+    employee_code = Column(String(64), nullable=False, unique=True, index=True)
+    name = Column(String(80), nullable=False)
+    login_account = Column(String(64), nullable=False, unique=True, index=True)
+    gender = Column(String(16), nullable=False)
+    login_port = Column(JSON, nullable=False, default=list)
+    role = Column(String(64), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "employee_code": self.employee_code,
+            "name": self.name,
+            "login_account": self.login_account,
+            "gender": self.gender,
+            "login_port": list(self.login_port or []),
+            "role": self.role,
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentRole(Base):
+    """内容发布角色，与员工角色名称联动。"""
+
+    __tablename__ = "content_roles"
+
+    id = Column(String(64), primary_key=True)
+    role_code = Column(String(32), nullable=False, unique=True, index=True)
+    name = Column(String(64), nullable=False, unique=True, index=True)
+    role_type = Column(String(32), nullable=False, default="新增")
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    permissions = Column(JSON, nullable=False, default=list)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self, *, member_count: int = 0) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "role_code": self.role_code,
+            "name": self.name,
+            "role_type": self.role_type,
+            "member_count": member_count,
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentType(Base):
+    """内容类型配置。"""
+
+    __tablename__ = "content_types"
+
+    id = Column(String(64), primary_key=True)
+    type_code = Column(String(32), nullable=False, unique=True, index=True)
+    name = Column(String(64), nullable=False, unique=True, index=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "type_code": self.type_code,
+            "name": self.name,
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentVariable(Base):
+    """变量配置，服务入口与内容类型名称联动。"""
+
+    __tablename__ = "content_variables"
+
+    id = Column(String(64), primary_key=True)
+    variable_code = Column(String(32), nullable=False, unique=True, index=True)
+    name = Column(String(64), nullable=False, unique=True, index=True)
+    service_entry = Column(String(64), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "variable_code": self.variable_code,
+            "name": self.name,
+            "service_entry": self.service_entry,
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentCover(Base):
+    """内容封面。"""
+
+    __tablename__ = "content_covers"
+
+    id = Column(String(64), primary_key=True)
+    category = Column(String(32), nullable=False, index=True)
+    image_url = Column(String(1024), nullable=False)
+    image_name = Column(String(255), nullable=False)
+    title = Column(String(120), nullable=False, default="")
+    generation_count = Column(Integer, nullable=False, default=0)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "category": self.category,
+            "image_url": self.image_url,
+            "image_name": self.image_name,
+            "title": self.title or "",
+            "generation_count": self.generation_count or 0,
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }

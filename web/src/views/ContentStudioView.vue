@@ -177,9 +177,18 @@ const approvalAllowed = computed(() => {
   )
 })
 const correctionChecks = computed(() => [
+  ...(store.interrupt?.title_validation_report?.items || []).flatMap((item) => item.checks || []),
   ...(store.interrupt?.validation_report?.checks || []),
   ...(store.interrupt?.review_report?.checks || [])
 ].filter((item) => item.status === 'blocked' || item.level === 'error'))
+const latestTitleValidationReport = computed(() => {
+  const nodes = [...(store.runAudit?.nodes || [])].reverse()
+  return nodes.find((item) => item.node_id === 'validate_title_candidates')
+    ?.output_snapshot?.title_validation_report || null
+})
+const blockedTitleCandidates = computed(() =>
+  (latestTitleValidationReport.value?.items || []).filter((item) => item.status === 'blocked')
+)
 const runFailed = computed(() =>
   ['failed', 'cancelled'].includes(store.currentRun?.status) || store.task?.status === 'failed'
 )
@@ -827,6 +836,20 @@ const openVersions = async () => {
             <CircleAlert :size="26" />
             <h3>工作流执行失败</h3>
             <p>{{ store.task?.error?.message || store.lastError?.message || '已保留完成节点和 checkpoint，可从失败节点恢复。' }}</p>
+            <section v-if="blockedTitleCandidates.length" class="title-validation-failures">
+              <h4>标题候选校验明细</h4>
+              <ol>
+                <li v-for="item in blockedTitleCandidates" :key="item.id">
+                  <strong>{{ item.text || item.id }}</strong>
+                  <ul>
+                    <li v-for="check in item.checks" :key="`${item.id}-${check.code}-${check.message}`">
+                      <span>{{ check.message }}</span>
+                      <small v-if="check.suggestion">{{ check.suggestion }}</small>
+                    </li>
+                  </ul>
+                </li>
+              </ol>
+            </section>
             <a-button type="primary" @click="retryFailedRun"><RefreshCw :size="15" />从失败节点重试</a-button>
           </div>
 
@@ -995,6 +1018,13 @@ const openVersions = async () => {
 .run-node.failed { background: var(--color-error-50); color: var(--color-error-700); }
 .human-review-card, .running-card { align-self: start; }
 .failure-card { color: var(--color-error-700); background: var(--color-error-50); }
+.title-validation-failures { width: 100%; margin: 8px 0 4px; padding: 14px; text-align: left; color: var(--color-text); background: var(--gray-0); border: 1px solid var(--color-error-200); border-radius: 8px; }
+.title-validation-failures h4 { margin: 0 0 10px; font-size: 14px; }
+.title-validation-failures > ol { display: grid; gap: 12px; margin: 0; padding-left: 22px; }
+.title-validation-failures > ol > li > strong { display: block; font-size: 14px; line-height: 1.6; }
+.title-validation-failures ul { display: grid; gap: 5px; margin: 6px 0 0; padding-left: 18px; color: var(--color-error-700); }
+.title-validation-failures ul span, .title-validation-failures ul small { display: block; font-size: 12px; line-height: 1.55; }
+.title-validation-failures ul small { margin-top: 2px; color: var(--color-text-secondary); }
 .external-wait-card { gap: 10px; background: var(--color-info-50); color: var(--color-info-700); }
 .external-wait-card h3, .external-wait-card p { margin: 0; }
 .external-wait-card p, .external-wait-card small { color: var(--color-text-secondary); }

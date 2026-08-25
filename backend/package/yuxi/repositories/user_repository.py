@@ -4,7 +4,7 @@ from datetime import UTC
 from datetime import datetime as dt
 from typing import Annotated, Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.storage.postgres.manager import pg_manager
@@ -137,6 +137,33 @@ class UserRepository:
                 query = query.where(User.department_id == department_id)
             result = await session.execute(query)
             return result.scalar() or 0
+
+    async def count_by_role_with_db(self, db: AsyncSession) -> dict[str, int]:
+        result = await db.execute(
+            select(User.role, func.count()).where(User.is_deleted == 0).group_by(User.role)
+        )
+        return {role: count for role, count in result.all()}
+
+    async def list_by_roles_with_db(
+        self, db: AsyncSession, roles: list[str], *, keyword: str | None = None
+    ) -> list[User]:
+        if not roles:
+            return []
+        query = select(User).where(User.is_deleted == 0, User.role.in_(roles))
+        if keyword:
+            escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            query = query.where(
+                or_(
+                    User.username.ilike(pattern, escape="\\"),
+                    User.uid.ilike(pattern, escape="\\"),
+                )
+            )
+        result = await db.execute(query.order_by(User.id.asc()))
+        return list(result.scalars().all())
+
+    async def rename_role_with_db(self, db: AsyncSession, old_role: str, new_role: str) -> None:
+        await db.execute(update(User).where(User.role == old_role, User.is_deleted == 0).values(role=new_role))
 
     async def get_all_uids(self) -> list[str]:
         """获取所有 uid"""

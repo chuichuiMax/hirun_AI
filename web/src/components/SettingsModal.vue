@@ -159,7 +159,7 @@
             <BasicSettingsSection />
           </div>
 
-          <div v-show="activeTab === 'user'" v-if="userStore.isAdmin">
+          <div v-if="activeTab === 'user' && userStore.isAdmin">
             <UserManagementComponent />
           </div>
 
