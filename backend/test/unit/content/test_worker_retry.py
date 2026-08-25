@@ -1,8 +1,11 @@
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 
+from yuxi.content.schemas import ReviewReport
 from yuxi.services import content_run_worker
+from yuxi.services.run_worker import RetryableRunError
 
 
 class FakeGraph:
@@ -10,9 +13,15 @@ class FakeGraph:
         self.updated_state = None
         self.invoked_with = "not-called"
         self.completed = False
+        self.pending_node = "generate_body"
+        self.values = {}
 
     async def aget_state(self, config):
-        return SimpleNamespace(next=() if self.completed else ("generate_body",), interrupts=())
+        return SimpleNamespace(
+            next=() if self.completed else (self.pending_node,),
+            interrupts=(),
+            values=self.values,
+        )
 
     async def aupdate_state(self, config, values):
         self.updated_state = values
@@ -20,6 +29,79 @@ class FakeGraph:
     async def ainvoke(self, graph_input, **kwargs):
         self.invoked_with = graph_input
         self.completed = True
+
+
+@pytest.mark.asyncio
+async def test_graph_initialization_failure_marks_run_and_task_failed(monkeypatch):
+    statuses = []
+    events = []
+    run = SimpleNamespace(
+        id="run-bootstrap-failure",
+        status="pending",
+        uid="user-1",
+        request_id="request-bootstrap-failure",
+        checkpoint_thread_id="content:task-bootstrap-failure",
+        input_payload={"action": "start", "model_spec": None},
+    )
+    task = SimpleNamespace(
+        id="task-bootstrap-failure",
+        workflow_version_id="workflow-v3",
+        rule_version_id="rules-v3",
+        industry_template_version_id="industry-v3",
+        runtime_config_snapshot_json={"schema_version": 3},
+        status="queued",
+        error_json=None,
+    )
+    workflow = SimpleNamespace(definition_json={"schema_version": 3})
+
+    async def load_run(run_id):
+        return run, task, workflow, {"version": {"id": "rules-v3"}}
+
+    async def set_status(run_id, *, status, **kwargs):
+        statuses.append((status, kwargs))
+
+    async def append_event(run_id, event_type, payload, **kwargs):
+        events.append((event_type, payload))
+
+    async def no_event(*args, **kwargs):
+        return None
+
+    async def get_graph(*args, **kwargs):
+        raise ValueError("V3 工作流必须声明 runtime_limits")
+
+    class FakeRepo:
+        def __init__(self, db):
+            del db
+
+        async def get_task(self, task_id, for_update=False):
+            del for_update
+            return task if task_id == task.id else None
+
+        async def track(self, *args, **kwargs):
+            del args, kwargs
+
+    @asynccontextmanager
+    async def session_context():
+        yield object()
+
+    monkeypatch.setattr(content_run_worker, "_load_content_run", load_run)
+    monkeypatch.setattr(content_run_worker, "_set_content_run_status", set_status)
+    monkeypatch.setattr(content_run_worker, "append_run_stream_event", append_event)
+    monkeypatch.setattr(content_run_worker, "clear_cancel_signal", no_event)
+    monkeypatch.setattr(content_run_worker, "ContentRepository", FakeRepo)
+    monkeypatch.setattr(content_run_worker.pg_manager, "get_async_session_context", session_context)
+    monkeypatch.setattr(
+        content_run_worker.agent_manager,
+        "get_agent",
+        lambda agent_id: SimpleNamespace(get_graph=get_graph),
+    )
+
+    await content_run_worker.process_content_run({"job_try": 1}, run.id)
+
+    assert [status for status, _ in statuses] == ["running", "failed"]
+    assert task.status == "failed"
+    assert task.error_json["code"] == "CONTENT_WORKFLOW_FAILED"
+    assert [event_type for event_type, _ in events] == ["metadata", "error", "end"]
 
 
 @pytest.mark.asyncio
@@ -37,17 +119,18 @@ async def test_failed_node_retry_continues_from_checkpoint(monkeypatch):
     )
     task = SimpleNamespace(
         id="task-1",
-        workflow_version_id="workflow-v1",
-        rule_version_id="rules-v1",
-        industry_template_version_id="industry-v1",
+        workflow_version_id="workflow-v3",
+        rule_version_id="rules-v3",
+        industry_template_version_id="industry-v3",
+        runtime_config_snapshot_json={"schema_version": 3},
         brief_json={},
         strategy_json={},
         evidence_json={"items": []},
     )
-    workflow = SimpleNamespace(definition_json={"nodes": [], "edges": []})
+    workflow = SimpleNamespace(definition_json={"schema_version": 3, "nodes": [], "edges": []})
 
     async def load_run(run_id):
-        return run, task, workflow, {"version": {"id": "rules-v1"}}
+        return run, task, workflow, {"version": {"id": "rules-v3"}}
 
     async def set_status(run_id, *, status, **kwargs):
         statuses.append(status)
@@ -75,5 +158,146 @@ async def test_failed_node_retry_continues_from_checkpoint(monkeypatch):
     await content_run_worker.process_content_run({"job_try": 1}, run.id)
 
     assert graph.invoked_with is None
-    assert graph.updated_state == {"run_id": run.id, "uid": run.uid, "model_spec": None}
+    assert graph.updated_state == {
+        "run_id": run.id,
+        "uid": run.uid,
+        "model_spec": None,
+        "resume_parent_run_id": None,
+    }
     assert statuses == ["running", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_failed_cover_wait_retry_requeues_cover_and_updates_checkpoint(monkeypatch):
+    graph = FakeGraph()
+    graph.pending_node = "wait_cover_job"
+    graph.values = {
+        "cover_job": {"cover_job_id": "cover-failed", "plan_hash": "a" * 64},
+        "state_version": 6,
+    }
+    captured = {}
+    run = SimpleNamespace(
+        id="run-cover-retry",
+        status="pending",
+        uid="user-1",
+        thread_id="task-1",
+        request_id="request-cover-retry",
+        checkpoint_thread_id="content:task-1",
+        input_payload={"action": "retry", "node_id": "wait_cover_job", "model_spec": None},
+    )
+    task = SimpleNamespace(
+        id="task-1",
+        workflow_version_id="workflow-v3",
+        rule_version_id="rules-v3",
+        industry_template_version_id="industry-v3",
+        runtime_config_snapshot_json={"schema_version": 3},
+    )
+    workflow = SimpleNamespace(definition_json={"schema_version": 3, "nodes": [], "edges": []})
+
+    async def load_run(run_id):
+        return run, task, workflow, {"version": {"id": "rules-v3"}}
+
+    async def retry_cover(run_arg, state):
+        captured["run"] = run_arg
+        captured["state"] = state
+        return {"id": "cover-retried", "status": "queued"}
+
+    async def no_event(*args, **kwargs):
+        return None
+
+    async def no_cancel(*args, **kwargs):
+        return False
+
+    async def get_graph(*args, **kwargs):
+        return graph
+
+    monkeypatch.setattr(content_run_worker, "_load_content_run", load_run)
+    monkeypatch.setattr(content_run_worker, "_retry_failed_cover_job", retry_cover)
+    monkeypatch.setattr(content_run_worker, "_set_content_run_status", no_event)
+    monkeypatch.setattr(content_run_worker, "append_run_stream_event", no_event)
+    monkeypatch.setattr(content_run_worker, "clear_cancel_signal", no_event)
+    monkeypatch.setattr(content_run_worker, "has_cancel_signal", no_cancel)
+    monkeypatch.setattr(
+        content_run_worker.agent_manager,
+        "get_agent",
+        lambda agent_id: SimpleNamespace(get_graph=get_graph),
+    )
+
+    await content_run_worker.process_content_run({"job_try": 1}, run.id)
+
+    assert captured == {"run": run, "state": graph.values}
+    assert graph.updated_state == {
+        "run_id": run.id,
+        "uid": run.uid,
+        "model_spec": None,
+        "resume_parent_run_id": None,
+        "cover_job": {
+            "cover_job_id": "cover-retried",
+            "plan_hash": "a" * 64,
+            "status": "queued",
+        },
+    }
+    assert graph.invoked_with is None
+
+
+@pytest.mark.asyncio
+async def test_retryable_model_validation_error_is_wrapped_for_arq_retry(monkeypatch):
+    class InvalidModelGraph:
+        async def ainvoke(self, graph_input, **kwargs):
+            del graph_input, kwargs
+            ReviewReport.model_validate(
+                {"status": "passed", "checks": [{"code": "x", "level": "passed", "message": "ok"}]}
+            )
+
+    run = SimpleNamespace(
+        id="run-model-retry",
+        status="pending",
+        uid="user-1",
+        request_id="request-model-retry",
+        checkpoint_thread_id="content:task-model-retry",
+        input_payload={"action": "start", "model_spec": None},
+    )
+    task = SimpleNamespace(
+        id="task-model-retry",
+        workflow_version_id="workflow-v3",
+        rule_version_id="rules-v3",
+        industry_template_version_id="industry-v3",
+        runtime_config_snapshot_json={"schema_version": 3},
+        brief_json={"task_id": "task-model-retry"},
+        strategy_json={"compatibility": "compatible"},
+        evidence_json={"items": []},
+        selected_angle_json={},
+    )
+    workflow = SimpleNamespace(definition_json={"schema_version": 3, "nodes": [], "edges": []})
+    statuses = []
+
+    async def load_run(run_id):
+        return run, task, workflow, {"version": {"id": "rules-v3"}}
+
+    async def set_status(run_id, *, status, **kwargs):
+        statuses.append(status)
+
+    async def no_event(*args, **kwargs):
+        return None
+
+    async def no_cancel(*args, **kwargs):
+        return False
+
+    async def get_graph(*args, **kwargs):
+        return InvalidModelGraph()
+
+    monkeypatch.setattr(content_run_worker, "_load_content_run", load_run)
+    monkeypatch.setattr(content_run_worker, "_set_content_run_status", set_status)
+    monkeypatch.setattr(content_run_worker, "append_run_stream_event", no_event)
+    monkeypatch.setattr(content_run_worker, "clear_cancel_signal", no_event)
+    monkeypatch.setattr(content_run_worker, "has_cancel_signal", no_cancel)
+    monkeypatch.setattr(
+        content_run_worker.agent_manager,
+        "get_agent",
+        lambda agent_id: SimpleNamespace(get_graph=get_graph),
+    )
+
+    with pytest.raises(RetryableRunError):
+        await content_run_worker.process_content_run({"job_try": 1}, run.id)
+
+    assert statuses == ["running"]

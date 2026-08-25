@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
-import os
+import json
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -10,27 +9,39 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
+from sqlalchemy import select
 
 from yuxi.agents import BaseAgent
-from yuxi.agents.backends.knowledge_base_backend import resolve_visible_knowledge_bases_for_context
-from yuxi.content.generation import (
-    SKILL_VERSIONS,
-    generate_body,
-    generate_title_candidates,
-    review_generated_content,
+from yuxi.content.generation import SKILL_VERSIONS
+from yuxi.content.control.workflow.agent_node import AgentNodeHandler
+from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
+from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
+from yuxi.content.control.workflow.revision import RevisionRouteController, resolve_revision_reason
+from yuxi.content.control.errors import ContentApplicationError
+from yuxi.content.model.workflows.definition import WorkflowDefinitionPolicy
+from yuxi.content.model.contracts import StrategySnapshotV1
+from yuxi.content.model.formulas.selector import (
+    FormulaCandidateDefinition,
+    FormulaCandidatePool,
+    FormulaSelectionRequest,
+    FormulaSelector,
 )
-from yuxi.content.rules import recommend_strategy
-from yuxi.content.validators import merge_evidence, normalize_manual_evidence, validate_content
+from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
 from yuxi.repositories.content_repository import ContentRepository
+from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.services.run_queue_service import append_run_stream_event, has_cancel_signal
 from yuxi.storage.postgres.manager import pg_manager
-from yuxi.storage.postgres.models_content import ContentArtifact
+from yuxi.storage.postgres.models_content import (
+    ContentArtifact,
+    ContentCombinationRule,
+    ContentFormula,
+    CreationMethod,
+    TitleFormula,
+)
 from yuxi.utils.datetime_utils import utc_now_naive
 
 from .context import ContentWorkflowContext
 from .state import ContentWorkflowState
-
-ALLOWED_NODE_TYPES = {"compile_brief", "skill", "tool_group", "human_review", "validator", "save_artifact"}
 
 
 def _event_payload(state: ContentWorkflowState, node_id: str, status: str, **extra: Any) -> dict[str, Any]:
@@ -43,86 +54,15 @@ def _event_payload(state: ContentWorkflowState, node_id: str, status: str, **ext
     }
 
 
-async def _update_task(task_id: str, **changes: Any) -> None:
-    async with pg_manager.get_async_session_context() as db:
-        task = await ContentRepository(db).get_task(task_id, for_update=True)
-        if task is None:
-            raise ValueError(f"内容任务不存在: {task_id}")
-        for key, value in changes.items():
-            setattr(task, key, value)
-        task.updated_at = utc_now_naive()
-
-
-async def _collect_knowledge_evidence(state: ContentWorkflowState) -> list[dict[str, Any]]:
-    scope = state["content_brief"].get("knowledge_scope") or []
-    if not scope or os.environ.get("LITE_MODE", "").lower() in {"true", "1"}:
-        return []
-
-    from yuxi.agents.context import BaseContext
-    from yuxi.knowledge import knowledge_base
-    from yuxi.knowledge.base import KnowledgeBase
-
-    context = BaseContext(uid=state["uid"], thread_id=f"content:{state['task_id']}", knowledges=scope)
-    visible = await resolve_visible_knowledge_bases_for_context(context)
-    retrievers = knowledge_base.get_retrievers()
-    variables = state["content_brief"].get("business_variables") or {}
-    query = " ".join(
-        str(value)
-        for value in (
-            (state["content_brief"].get("brand") or {}).get("name"),
-            variables.get("product"),
-            variables.get("pain_points"),
-            variables.get("result"),
-        )
-        if value
+def _report_is_blocked(report: dict[str, Any]) -> bool:
+    return report.get("status") == "blocked" or any(
+        item.get("status") == "blocked" or item.get("level") == "error" for item in report.get("checks") or []
     )
-    additions = []
-    for kb in visible:
-        kb_id = str(kb.get("kb_id") or "")
-        target = retrievers.get(kb_id)
-        if not target:
-            continue
-        retriever = target["retriever"]
-        result = await retriever(query) if inspect.iscoroutinefunction(retriever) else retriever(query)
-        output = (
-            result
-            if isinstance(result, dict) and "results" in result
-            else KnowledgeBase.build_search_output(kb_id, result)
-        )
-        for item in (output.get("results") if isinstance(output, dict) else [])[:3]:
-            content = str(item.get("content") or "").strip()
-            if not content:
-                continue
-            source_id = str(item.get("id") or item.get("file_id") or uuid.uuid4().hex)
-            digest = hashlib.sha256(f"{kb_id}:{source_id}:{content}".encode()).hexdigest()[:16]
-            additions.append(
-                {
-                    "id": f"ev_{digest}",
-                    "type": "knowledge_fragment",
-                    "key": "knowledge_context",
-                    "value": content,
-                    "source_type": "knowledge_base",
-                    "source_id": source_id,
-                    "source_version": str((item.get("metadata") or {}).get("version") or "retrieved"),
-                    "kb_id": kb_id,
-                    "file_id": item.get("file_id"),
-                    "verified_status": "retrieved",
-                    "allowed_usage": ["body"],
-                    "metadata": item.get("metadata") or {},
-                }
-            )
-    return additions
-
-
-def _merge_review_reports(deterministic: dict[str, Any], llm: dict[str, Any]) -> dict[str, Any]:
-    checks = list(deterministic.get("checks") or []) + list(llm.get("checks") or [])
-    status = "blocked" if any(item.get("level") == "error" for item in checks) else "warning" if checks else "passed"
-    return {"status": status, "checks": checks}
 
 
 class ContentWorkflowAgent(BaseAgent):
     name = "通用内容生产工作流"
-    description = "由数据库工作流定义装配，执行内容策略、证据、标题、正文和审核节点。"
+    description = "仅装配 V3 内容工作流，执行固定节点、正式 Agent、Skill 和人工关口。"
     capabilities = []
     context_schema = ContentWorkflowContext
 
@@ -141,17 +81,35 @@ class ContentWorkflowAgent(BaseAgent):
         context = context or self.context_schema()
         definition = context.workflow_definition
         self._validate_definition(definition)
+        self._workflow_definition = definition
         graph = StateGraph(ContentWorkflowState)
         nodes = {node["id"]: node for node in definition["nodes"]}
         for node_id, node in nodes.items():
-            graph.add_node(node_id, self._node_runner(node, context.rule_bundle))
+            graph.add_node(node_id, self._node_runner(node))
 
         incoming = {node_id: 0 for node_id in nodes}
         outgoing = {node_id: 0 for node_id in nodes}
         for source, target in definition["edges"]:
-            graph.add_edge(source, target)
+            if nodes[source]["type"] != "revision_router":
+                graph.add_edge(source, target)
             incoming[target] += 1
             outgoing[source] += 1
+        revision_targets = {
+            "select_title": "select_title",
+            "semantic_review": "semantic_review",
+            "human_content_approval": "human_content_approval",
+            **{route["to"]: route["to"] for route in definition.get("revision_routes") or []},
+        }
+        for node_id, node in nodes.items():
+            if node["type"] == "revision_router":
+                graph.add_conditional_edges(
+                    node_id,
+                    self._route_after_revision,
+                    revision_targets,
+                )
+                for target in revision_targets:
+                    incoming[target] += 1
+                    outgoing[node_id] += 1
         roots = [node_id for node_id, count in incoming.items() if count == 0]
         leaves = [node_id for node_id, count in outgoing.items() if count == 0]
         for node_id in roots:
@@ -162,37 +120,13 @@ class ContentWorkflowAgent(BaseAgent):
 
     @staticmethod
     def _validate_definition(definition: dict[str, Any]) -> None:
-        nodes = definition.get("nodes") if isinstance(definition, dict) else None
-        edges = definition.get("edges") if isinstance(definition, dict) else None
-        if not isinstance(nodes, list) or not nodes or not isinstance(edges, list):
-            raise ValueError("工作流定义必须包含 nodes 和 edges")
-        ids = [node.get("id") for node in nodes if isinstance(node, dict)]
-        if len(ids) != len(set(ids)) or any(not node_id for node_id in ids):
-            raise ValueError("工作流节点 ID 不能为空或重复")
-        for node in nodes:
-            if node.get("type") not in ALLOWED_NODE_TYPES:
-                raise ValueError(f"不支持的工作流节点类型: {node.get('type')}")
-        indegree = {node_id: 0 for node_id in ids}
-        outgoing = {node_id: [] for node_id in ids}
-        for edge in edges:
-            if not isinstance(edge, list) or len(edge) != 2 or edge[0] not in ids or edge[1] not in ids:
-                raise ValueError(f"无效的工作流连线: {edge}")
-            outgoing[edge[0]].append(edge[1])
-            indegree[edge[1]] += 1
+        WorkflowDefinitionPolicy.validate(definition)
 
-        ready = [node_id for node_id, count in indegree.items() if count == 0]
-        visited = 0
-        while ready:
-            source = ready.pop()
-            visited += 1
-            for target in outgoing[source]:
-                indegree[target] -= 1
-                if indegree[target] == 0:
-                    ready.append(target)
-        if visited != len(ids):
-            raise ValueError("工作流定义不能包含循环依赖")
+    @staticmethod
+    def _route_after_revision(state: ContentWorkflowState) -> str:
+        return state.get("revision_target") or "semantic_review"
 
-    def _node_runner(self, node: dict[str, Any], rule_bundle: dict[str, Any]) -> Callable:
+    def _node_runner(self, node: dict[str, Any]) -> Callable:
         async def run(state: ContentWorkflowState) -> dict[str, Any]:
             node_id = node["id"]
             run_id = state["run_id"]
@@ -214,13 +148,47 @@ class ContentWorkflowAgent(BaseAgent):
                     input_snapshot={"current_node": state.get("current_node")},
                 )
             try:
-                result = await self._execute_node(node, state, rule_bundle)
+                if node["type"] == "agent":
+                    async with pg_manager.get_async_session_context() as db:
+                        result = await AgentNodeHandler().execute(
+                            db=db,
+                            node=node,
+                            state=state,
+                            node_run_id=node_run.id,
+                        )
+                elif node["type"] == "deterministic":
+                    if node["id"] == "save_artifact_snapshot":
+                        result = await self._save_artifact(state)
+                    else:
+                        async with pg_manager.get_async_session_context() as db:
+                            result = await V3DeterministicNodeHandler().execute(
+                                db=db,
+                                node=node,
+                                state=state,
+                                node_run_id=node_run.id,
+                            )
+                elif node["type"] == "external_wait":
+                    async with pg_manager.get_async_session_context() as db:
+                        result = await ExternalWaitNodeHandler().execute(
+                            db=db,
+                            node=node,
+                            state=state,
+                        )
+                else:
+                    result = await self._execute_node(
+                        node,
+                        state,
+                        getattr(self, "_workflow_definition", {}),
+                    )
             except GraphInterrupt:
                 async with pg_manager.get_async_session_context() as db:
                     repo = ContentRepository(db)
                     persisted = await db.get(type(node_run), node_run.id)
                     if persisted:
-                        await repo.finish_node_run(persisted, status="waiting_human")
+                        await repo.finish_node_run(
+                            persisted,
+                            status=("waiting_external" if node["type"] == "external_wait" else "waiting_human"),
+                        )
                 raise
             except Exception as exc:
                 async with pg_manager.get_async_session_context() as db:
@@ -244,11 +212,28 @@ class ContentWorkflowAgent(BaseAgent):
                 repo = ContentRepository(db)
                 persisted = await db.get(type(node_run), node_run.id)
                 if persisted:
+                    output_snapshot = {"updated_fields": sorted(result.keys())}
+                    if node_id == "validate_title_candidates":
+                        output_snapshot["title_validation_report"] = result.get("title_validation_report") or {}
                     await repo.finish_node_run(
                         persisted,
                         status="completed",
-                        output_snapshot={"updated_fields": sorted(result.keys())},
+                        output_snapshot=output_snapshot,
                     )
+            if node_id == "deterministic_validate":
+                validation = result.get("validation_report") or {}
+                await append_run_stream_event(
+                    run_id,
+                    "content.validation.completed",
+                    {
+                        "task_id": state["task_id"],
+                        "parent_run_id": run_id,
+                        "node_id": node_id,
+                        "status": validation.get("status"),
+                        "check_count": len(validation.get("checks") or []),
+                    },
+                    thread_id=state["task_id"],
+                )
             await append_run_stream_event(
                 run_id,
                 "custom",
@@ -260,156 +245,562 @@ class ContentWorkflowAgent(BaseAgent):
         return run
 
     async def _execute_node(
-        self, node: dict[str, Any], state: ContentWorkflowState, rule_bundle: dict[str, Any]
+        self,
+        node: dict[str, Any],
+        state: ContentWorkflowState,
+        definition: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         node_type = node["type"]
-        if node_type == "compile_brief":
-            if not state.get("content_brief"):
-                raise ValueError("ContentBrief 为空")
-            return {"content_brief": state["content_brief"]}
-        if node_type == "tool_group":
-            evidence = normalize_manual_evidence(state["task_id"], state["content_brief"])
-            evidence = merge_evidence(evidence, await _collect_knowledge_evidence(state))
-            await _update_task(state["task_id"], evidence_json=evidence, status="collecting_evidence")
-            return {"evidence_bundle": evidence}
         if node_type == "human_review":
-            return await self._human_review(node, state)
-        if node_type == "validator":
-            draft = state.get("content_draft") or {}
-            report = validate_content(
-                title=(state.get("selected_title") or {}).get("text", ""),
-                body=draft.get("body", ""),
-                topics=draft.get("topics") or [],
-                brief=state["content_brief"],
-                evidence_bundle=state["evidence_bundle"],
-                strategy=state["strategy_plan"],
+            return await self._v3_human_review(node, state)
+        if node_type == "revision_router":
+            previous_node = state.get("current_node")
+            title_validation_report = state.get("title_validation_report") or {}
+            validation_report = state.get("validation_report") or {}
+            review_report = state.get("review_report") or {}
+            if previous_node == "validate_title_candidates" and not _report_is_blocked(title_validation_report):
+                return {
+                    "revision_reason_code": None,
+                    "revision_target": "select_title",
+                    "revision_status": "continue",
+                    "retry_counts": dict(state.get("retry_counts") or {}),
+                }
+            if previous_node == "deterministic_validate" and not _report_is_blocked(validation_report):
+                return {
+                    "revision_reason_code": None,
+                    "revision_target": "semantic_review",
+                    "revision_status": "continue",
+                    "retry_counts": dict(state.get("retry_counts") or {}),
+                }
+            if previous_node == "semantic_review" and not _report_is_blocked(review_report):
+                return {
+                    "revision_reason_code": None,
+                    "revision_target": "human_content_approval",
+                    "revision_status": "continue",
+                    "retry_counts": dict(state.get("retry_counts") or {}),
+                }
+            reason_code = resolve_revision_reason(
+                title_validation_report=title_validation_report,
+                validation_report=validation_report,
+                review_report=review_report if previous_node == "semantic_review" else None,
             )
-            await _update_task(state["task_id"], review_json=report, status="reviewing", current_stage="review")
-            return {"validation_report": report}
-        if node_type == "save_artifact":
-            return await self._save_artifact(state)
-        if node_type == "skill":
-            return await self._execute_skill(node["skill"], state, rule_bundle)
-        raise ValueError(f"未实现的节点类型: {node_type}")
+            if reason_code in {"SYSTEM_CONFIGURATION_FAILED", "REVIEW_CONTRACT_VIOLATION"}:
+                raise ContentApplicationError(
+                    code=reason_code.lower(),
+                    message=("内容校验发现系统配置或审核契约错误，已停止执行；不会交给语义 Agent 猜测修复"),
+                    kind="conflict",
+                )
+            decision = RevisionRouteController().decide(
+                definition=definition or {},
+                reason_code=reason_code,
+                retry_counts=state.get("retry_counts") or {},
+            )
+            if decision.status == "limit_reached":
+                raise ContentApplicationError(
+                    code="content_revision_limit_reached",
+                    message=f"阻断原因 {reason_code} 已达到定点回修次数上限",
+                    kind="conflict",
+                )
+            if decision.status == "continue" or decision.target_node_id is None:
+                raise ContentApplicationError(
+                    code="content_revision_route_missing",
+                    message=f"阻断原因 {reason_code or 'unknown'} 没有可执行的定点回修路线",
+                    kind="conflict",
+                )
+            if previous_node == "validate_title_candidates":
+                return {
+                    "revision_reason_code": reason_code,
+                    "revision_target": decision.target_node_id,
+                    "revision_status": decision.status,
+                    "retry_counts": decision.retry_counts,
+                    "resume_parent_run_id": None,
+                }
+            state_version = int(state.get("state_version") or 0)
+            expected_run_id = state.get("resume_parent_run_id") or state["run_id"]
+            answer = interrupt(
+                {
+                    "interrupt_type": "content_correction",
+                    "task_id": state["task_id"],
+                    "run_id": expected_run_id,
+                    "node_id": node["id"],
+                    "expected_state_version": state_version,
+                    "reason_code": reason_code,
+                    "suggested_target": decision.target_node_id,
+                    "title_validation_report": title_validation_report,
+                    "validation_report": validation_report,
+                    "review_report": review_report if previous_node == "semantic_review" else {},
+                }
+            )
+            if not isinstance(answer, dict):
+                raise ValueError("人工回修输入必须是对象")
+            expected = {
+                "run_id": expected_run_id,
+                "node_id": node["id"],
+                "expected_state_version": state_version,
+            }
+            mismatched = [key for key, value in expected.items() if answer.get(key) != value]
+            if mismatched:
+                raise ValueError(f"人工回修请求已过期或目标不匹配: {', '.join(mismatched)}")
+            if answer.get("decision") != "revise":
+                raise ContentApplicationError(
+                    code="content_correction_not_confirmed",
+                    message="内容阻断问题尚未确认回修，工作流保持停止",
+                    kind="conflict",
+                )
+            return {
+                "revision_reason_code": reason_code,
+                "revision_target": decision.target_node_id,
+                "revision_status": decision.status,
+                "retry_counts": decision.retry_counts,
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
+        raise ValueError(f"V3 工作流不支持节点类型: {node_type}")
 
-    async def _execute_skill(
-        self, skill_slug: str, state: ContentWorkflowState, rule_bundle: dict[str, Any]
+    async def _v3_human_review(
+        self,
+        node: dict[str, Any],
+        state: ContentWorkflowState,
     ) -> dict[str, Any]:
-        if skill_slug == "content-strategy-planner":
-            strategy = state.get("strategy_plan") or recommend_strategy(
-                rule_bundle,
-                brief=state["content_brief"],
-                content_goal=state["content_brief"]["content_goal"],
-            )
-            await _update_task(state["task_id"], strategy_json=strategy, status="planning_strategy")
-            return {"strategy_plan": strategy}
-        if skill_slug == "content-title-generator":
-            titles = await generate_title_candidates(
-                model_spec=state.get("model_spec"),
-                brief=state["content_brief"],
-                strategy=state["strategy_plan"],
-                evidence_bundle=state["evidence_bundle"],
-                rule_bundle=rule_bundle,
-            )
-            await _update_task(
-                state["task_id"], title_candidates_json=titles, status="waiting_title", current_stage="generation"
-            )
-            return {"title_candidates": titles}
-        if skill_slug == "content-body-generator":
-            draft = await generate_body(
-                model_spec=state.get("model_spec"),
-                brief=state["content_brief"],
-                strategy=state["strategy_plan"],
-                evidence_bundle=state["evidence_bundle"],
-                selected_title=state["selected_title"],
-                rule_bundle=rule_bundle,
-            )
-            await _update_task(state["task_id"], status="generating_body")
-            return {"content_draft": draft}
-        if skill_slug == "content-reviewer":
-            draft = state["content_draft"]
-            llm_report = await review_generated_content(
-                model_spec=state.get("model_spec"),
-                title=state["selected_title"]["text"],
-                body=draft["body"],
-                topics=draft.get("topics") or [],
-                brief=state["content_brief"],
-                strategy=state["strategy_plan"],
-                evidence_bundle=state["evidence_bundle"],
-            )
-            report = _merge_review_reports(state["validation_report"], llm_report)
-            await _update_task(state["task_id"], review_json=report, status="reviewing")
-            return {"review_report": report}
-        raise ValueError(f"工作流引用了未知 Skill: {skill_slug}")
+        interrupt_type = node["interrupt_type"]
+        state_version = int(state.get("state_version") or 0)
 
-    async def _human_review(self, node: dict[str, Any], state: ContentWorkflowState) -> dict[str, Any]:
-        interrupt_type = node.get("interrupt_type")
-        if interrupt_type == "confirm_facts":
-            pending = [
-                item
-                for item in (state.get("evidence_bundle") or {}).get("items", [])
-                if item.get("verified_status") == "needs_confirmation"
-            ]
-            if not pending and node.get("optional"):
-                return {}
+        def require_resume(payload: dict[str, Any]) -> dict[str, Any]:
             answer = interrupt(
                 {
-                    "interrupt_type": "confirm_facts",
+                    "interrupt_type": interrupt_type,
                     "task_id": state["task_id"],
-                    "run_id": state["run_id"],
+                    "run_id": state.get("resume_parent_run_id") or state["run_id"],
                     "node_id": node["id"],
-                    "options": pending,
+                    "expected_state_version": state_version,
+                    **payload,
                 }
             )
-            confirmed_ids = set((answer or {}).get("confirmed_evidence_ids") or [])
-            evidence = dict(state["evidence_bundle"])
-            evidence["items"] = [
-                {**item, "verified_status": "user_confirmed"}
-                if item.get("id") in confirmed_ids
-                else item
-                for item in evidence.get("items", [])
-            ]
-            await _update_task(state["task_id"], evidence_json=evidence)
-            return {"evidence_bundle": evidence}
-        if interrupt_type == "select_title":
-            answer = interrupt(
-                {
-                    "interrupt_type": "select_title",
-                    "task_id": state["task_id"],
-                    "run_id": state["run_id"],
-                    "node_id": node["id"],
-                    "options": state.get("title_candidates") or [],
-                }
-            )
-            selected_id = (answer or {}).get("selected_candidate_id")
-            selected = next(
-                (item for item in state.get("title_candidates") or [] if item.get("id") == selected_id), None
-            )
+            if not isinstance(answer, dict):
+                raise ValueError("人工恢复输入必须是对象")
+            expected = {
+                "run_id": state.get("resume_parent_run_id") or state["run_id"],
+                "node_id": node["id"],
+                "expected_state_version": state_version,
+            }
+            mismatched = [key for key, value in expected.items() if answer.get(key) != value]
+            if mismatched:
+                raise ValueError(f"人工恢复请求已过期或目标不匹配: {', '.join(mismatched)}")
+            return answer
+
+        if interrupt_type == "content_direction":
+            options = state.get("content_angles") or []
+            answer = require_resume({"options": options})
+            code = answer.get("direction_code")
+            selected = next((item for item in options if item.get("direction_code") == code), None)
             if selected is None:
-                raise ValueError("selected_candidate_id 不属于当前标题候选")
-            await _update_task(state["task_id"], selected_title_json=selected, status="generating_body")
-            return {"selected_title": selected}
-        raise ValueError(f"未知人工节点: {interrupt_type}")
+                raise ValueError("选定内容方向不在当前候选集中")
+            return {
+                "selected_angle": selected,
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
+
+        if interrupt_type == "high_risk_facts":
+            collection = dict(state.get("evidence_collection") or {})
+            items = list(collection.get("evidence_items") or [])
+            high_risk_ids = {
+                item["id"]
+                for item in items
+                if item.get("risk_level") == "high_risk" and item.get("verified_status") != "user_confirmed"
+            }
+            if not high_risk_ids:
+                return {"state_version": state_version + 1, "resume_parent_run_id": None}
+            answer = require_resume({"evidence_ids": sorted(high_risk_ids)})
+            confirmed = set(answer.get("confirmed_evidence_ids") or [])
+            if confirmed != high_risk_ids:
+                raise ValueError("高风险事实必须逐项人工确认")
+            collection["evidence_items"] = [
+                {**item, "verified_status": "user_confirmed"} if item.get("id") in confirmed else item for item in items
+            ]
+            return {
+                "evidence_collection": collection,
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
+
+        if interrupt_type == "strategy_product_facts":
+            collection = dict(state.get("product_evidence_collection") or {})
+            items = list(collection.get("evidence_items") or [])
+            high_risk_items = [
+                item
+                for item in items
+                if item.get("risk_level") == "high_risk" and item.get("verified_status") != "user_confirmed"
+            ]
+            if not high_risk_items:
+                return {"state_version": state_version + 1, "resume_parent_run_id": None}
+            high_risk_ids = {item["id"] for item in high_risk_items}
+            answer = require_resume(
+                {
+                    "evidence_ids": sorted(high_risk_ids),
+                    "evidence_items": high_risk_items,
+                    "strategy_snapshot_hash": (state.get("strategy_snapshot") or {}).get("snapshot_hash"),
+                }
+            )
+            confirmed = set(answer.get("confirmed_evidence_ids") or [])
+            if confirmed != high_risk_ids:
+                raise ValueError("价格、优惠、效果承诺等高风险产品事实必须逐项人工确认")
+            collection["evidence_items"] = [
+                {**item, "verified_status": "user_confirmed"} if item.get("id") in confirmed else item for item in items
+            ]
+            return {
+                "product_evidence_collection": collection,
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
+
+        if interrupt_type == "formula_selection":
+            match = state.get("match_decision_snapshot") or {}
+            title_pool = tuple(match.get("eligible_title_formula_codes") or [])
+            body_pool = tuple(match.get("eligible_body_formula_codes") or [])
+            ranking = state.get("formula_rankings") or {}
+            title_ranking = tuple(item["formula_code"] for item in ranking.get("title_rankings") or [])
+            body_ranking = tuple(item["formula_code"] for item in ranking.get("body_rankings") or [])
+            selected_by = "quick_mode"
+            if state.get("task_mode") == "pro":
+                answer = require_resume({"title_formula_codes": title_pool, "body_formula_codes": body_pool})
+                title_ranking = (str(answer.get("title_formula_code") or ""),)
+                body_ranking = (str(answer.get("body_formula_code") or ""),)
+                selected_by = state["uid"]
+            definitions = [
+                FormulaCandidateDefinition(code=code, kind="title", rule_version_id=state["rule_version_id"])
+                for code in title_pool
+            ] + [
+                FormulaCandidateDefinition(code=code, kind="body", rule_version_id=state["rule_version_id"])
+                for code in body_pool
+            ]
+            decision = FormulaSelector().select(
+                FormulaCandidatePool(
+                    combination_group_id=match["selected_group_id"],
+                    rule_version_id=state["rule_version_id"],
+                    title_formula_codes=title_pool,
+                    body_formula_codes=body_pool,
+                ),
+                definitions,
+                FormulaSelectionRequest(
+                    agent_title_ranking=title_ranking,
+                    agent_body_ranking=body_ranking,
+                ),
+            )
+            if decision.status != "selected":
+                raise ValueError("公式候选池无可用标题/正文公式对")
+            evidence_hash = str((state.get("evidence_bundle") or {}).get("bundle_hash") or "")
+            async with pg_manager.get_async_session_context() as db:
+                snapshot = await PostgresDecisionSnapshotRepository(db).save_formula_selection(
+                    task_id=state["task_id"],
+                    content_run_id=state["run_id"],
+                    node_run_id=None,
+                    match_snapshot_id=match["id"],
+                    rule_version_id=state["rule_version_id"],
+                    evidence_bundle_hash=evidence_hash,
+                    decision=decision,
+                    selected_by=selected_by,
+                    delegated_agent_run_id=(state.get("delegated_agent_runs") or {}).get("rank_formula_candidates"),
+                )
+                strategy_snapshot = await self._build_strategy_snapshot(
+                    db=db,
+                    state=state,
+                    match=match,
+                    formula_snapshot_id=snapshot.id,
+                    title_formula_code=str(decision.selected_title_formula_code or ""),
+                    body_formula_code=str(decision.selected_body_formula_code or ""),
+                )
+            result = decision.to_dict()
+            result["id"] = snapshot.id
+            result["eligible_title_formula_codes"] = [item.formula_code for item in decision.eligible_title_formulas]
+            result["eligible_body_formula_codes"] = [item.formula_code for item in decision.eligible_body_formulas]
+            await append_run_stream_event(
+                state["run_id"],
+                "content.formula.selected",
+                {
+                    "task_id": state["task_id"],
+                    "parent_run_id": state["run_id"],
+                    "node_id": node["id"],
+                    "snapshot_id": snapshot.id,
+                    "combination_group_id": decision.combination_group_id,
+                    "title_formula_code": decision.selected_title_formula_code,
+                    "body_formula_code": decision.selected_body_formula_code,
+                    "selection_mode": decision.selection_mode,
+                },
+                thread_id=state["task_id"],
+            )
+            return {
+                "formula_selection_snapshot": result,
+                "strategy_snapshot": strategy_snapshot,
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
+
+        if interrupt_type == "title_selection":
+            options = [item for item in state.get("title_candidates") or [] if item.get("selectable", True)]
+            answer = require_resume({"options": options})
+            selected = next((item for item in options if item.get("id") == answer.get("title_id")), None)
+            if selected is None:
+                raise ValueError("选定标题不在通过校验的候选集中")
+            return {
+                "selected_title": selected,
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
+
+        if interrupt_type == "content_approval":
+            validation_report = state.get("validation_report") or {}
+            review_report = state.get("review_report") or {}
+            invalid_reports = [
+                name
+                for name, report in (
+                    ("deterministic", validation_report),
+                    ("semantic", review_report),
+                )
+                if report.get("status") not in {"passed", "warning"} or _report_is_blocked(report)
+            ]
+            if invalid_reports:
+                raise ContentApplicationError(
+                    code="content_approval_blocked",
+                    message=f"最终审批前仍有阻断报告: {', '.join(invalid_reports)}",
+                    kind="conflict",
+                )
+            answer = require_resume(
+                {
+                    "validation_report": validation_report,
+                    "review_report": review_report,
+                    "approval_allowed": True,
+                }
+            )
+            if answer.get("decision") != "approved":
+                raise ValueError("最终内容未获批准")
+            artifact_payload = {
+                "task_id": state["task_id"],
+                "run_id": state["run_id"],
+                "title": state.get("selected_title") or {},
+                "draft": state.get("content_draft") or {},
+                "evidence_bundle_hash": (state.get("evidence_bundle") or {}).get("bundle_hash"),
+                "formula_selection": state.get("formula_selection_snapshot") or {},
+            }
+            artifact_hash = hashlib.sha256(
+                json.dumps(
+                    artifact_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            return {
+                "approval_result": {
+                    "status": "approved",
+                    "note": answer.get("note"),
+                    "reviewer_uid": state["uid"],
+                },
+                "artifact_version": {
+                    "id": f"cav_{artifact_hash[:32]}",
+                    "content_hash": artifact_hash,
+                    "status": "approved_content",
+                },
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
+
+        if interrupt_type == "cover_selection":
+            review = state.get("visual_review") or {}
+            passed_ids = {
+                item["asset_id"] for item in review.get("assets") or [] if item.get("status") in {"passed", "warning"}
+            }
+            answer = require_resume({"asset_ids": sorted(passed_ids)})
+            asset_id = answer.get("asset_id")
+            if asset_id not in passed_ids:
+                raise ValueError("只能选择通过视觉审核的封面资产")
+            return {
+                "selected_cover": {
+                    "asset_id": asset_id,
+                    "cover_job_id": (state.get("cover_job") or {}).get("cover_job_id"),
+                    "review_status": next(
+                        item["status"] for item in review.get("assets") or [] if item.get("asset_id") == asset_id
+                    ),
+                },
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
+
+        raise ValueError(f"未实现的 V3 人工关口: {interrupt_type}")
+
+    @staticmethod
+    async def _build_strategy_snapshot(
+        *,
+        db,
+        state: ContentWorkflowState,
+        match: dict[str, Any],
+        formula_snapshot_id: str,
+        title_formula_code: str,
+        body_formula_code: str,
+    ) -> dict[str, Any]:
+        rule_version_id = state["rule_version_id"]
+        group = await db.get(ContentCombinationRule, match["selected_group_id"])
+        title_formula = (
+            await db.execute(
+                select(TitleFormula).where(
+                    TitleFormula.version_id == rule_version_id,
+                    TitleFormula.code == title_formula_code,
+                    TitleFormula.enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        body_formula = (
+            await db.execute(
+                select(ContentFormula).where(
+                    ContentFormula.version_id == rule_version_id,
+                    ContentFormula.code == body_formula_code,
+                    ContentFormula.enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if group is None or title_formula is None or body_formula is None:
+            raise ValueError("锁定策略缺少组合组或标题/正文公式定义")
+        method_codes = [
+            str(item.get("method_code"))
+            for item in (group.method_members or [])
+            if isinstance(item, dict) and item.get("method_code")
+        ] or [str(item) for item in (group.methods or []) if item]
+        methods = list(
+            (
+                await db.execute(
+                    select(CreationMethod).where(
+                        CreationMethod.version_id == rule_version_id,
+                        CreationMethod.code.in_(method_codes),
+                        CreationMethod.enabled.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+        loaded_method_codes = {item.code for item in methods}
+        if not method_codes or set(method_codes) - loaded_method_codes:
+            raise ValueError("锁定策略缺少创作手法定义")
+        method_by_code = {item.code: item for item in methods}
+        payload = {
+            "content_direction": str(
+                (state.get("selected_angle") or {}).get("direction_code")
+                or (state.get("selected_angle") or {}).get("content_direction_code")
+                or ""
+            ),
+            "selected_group_id": group.id,
+            "creation_methods": method_codes,
+            "creation_method_definitions": [
+                {
+                    "code": method_by_code[code].code,
+                    "name": method_by_code[code].name,
+                    "method_type": method_by_code[code].method_type,
+                    "principle": method_by_code[code].principle,
+                    "suitable_scenes": method_by_code[code].suitable_scenes or [],
+                    "sentence_patterns": method_by_code[code].sentence_patterns or [],
+                    "variable_schema": method_by_code[code].variable_schema or [],
+                    "risk_rules": method_by_code[code].risk_rules or [],
+                }
+                for code in method_codes
+            ],
+            "title_formula": {
+                "code": title_formula.code,
+                "name": title_formula.name,
+                "core_goal": title_formula.core_goal,
+                "reference_examples": title_formula.reference_examples or [],
+                "variable_schema": title_formula.variable_schema or [],
+                "compatible_methods": title_formula.compatible_methods or [],
+                "risk_rules": title_formula.risk_rules or [],
+            },
+            "body_formula": {
+                "code": body_formula.code,
+                "name": body_formula.name,
+                "structure_schema": body_formula.structure_schema or [],
+                "reference_examples": body_formula.reference_examples or [],
+                "required_variables": body_formula.required_variables or [],
+                "output_schema": body_formula.output_schema or {},
+                "compatible_methods": body_formula.compatible_methods or [],
+                "risk_rules": body_formula.risk_rules or [],
+            },
+            "rule_version_id": rule_version_id,
+            "match_snapshot_id": str(match["id"]),
+            "formula_snapshot_id": formula_snapshot_id,
+        }
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        payload["snapshot_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return StrategySnapshotV1.model_validate(payload).model_dump(mode="json")
 
     async def _save_artifact(self, state: ContentWorkflowState) -> dict[str, Any]:
         draft = state["content_draft"]
+        review = state.get("review_report") or state.get("validation_report") or {"status": "passed", "checks": []}
+        approval_rejected = (state.get("approval_result") or {}).get("status") == "rejected"
+        artifact_status = "blocked" if review["status"] == "blocked" or approval_rejected else "reviewed"
+        strategy_snapshot = state.get("strategy_snapshot") or {}
+        if not strategy_snapshot.get("snapshot_hash"):
+            raise ValueError("保存内容资产前缺少锁定 StrategySnapshot")
         async with pg_manager.get_async_session_context() as db:
             repo = ContentRepository(db)
             task = await repo.get_task(state["task_id"], for_update=True)
+            selected_cover = state.get("selected_cover") or {}
+            cover_job_id = selected_cover.get("cover_job_id")
+            cover_asset_id = selected_cover.get("asset_id")
+            cover_repo = ContentCoverRepository(db)
+            cover_job = await cover_repo.get_job(str(cover_job_id or ""))
+            cover_asset = await cover_repo.get_asset(str(cover_asset_id or ""))
+            passed_ids = {
+                item["asset_id"]
+                for item in (state.get("visual_review") or {}).get("assets") or []
+                if item.get("status") in {"passed", "warning"}
+            }
+            if (
+                cover_job is None
+                or cover_job.status != "succeeded"
+                or cover_job.content_task_id != task.id
+                or cover_asset is None
+                or cover_asset.owner_uid != state["uid"]
+                or cover_asset.role != "output"
+                or cover_asset.id not in ((cover_job.result_json or {}).get("asset_ids") or [])
+                or cover_asset.id not in passed_ids
+            ):
+                raise ValueError("ArtifactVersion 只能绑定本任务中通过视觉审核的 CoverJob 资产")
             artifact = await repo.get_artifact_for_task(task.id)
             if artifact is None:
                 artifact = ContentArtifact(
                     id=f"ca_{uuid.uuid4().hex}",
                     task_id=task.id,
                     tenant_id=task.tenant_id,
-                    status="blocked" if state["review_report"]["status"] == "blocked" else "reviewed",
+                    status=artifact_status,
                     current_version=1,
                     title=state["selected_title"]["text"],
                     body=draft["body"],
                     topics=draft.get("topics") or [],
-                    strategy_snapshot=state["strategy_plan"],
+                    strategy_snapshot=strategy_snapshot,
                     evidence_snapshot=state["evidence_bundle"],
-                    review_snapshot=state["review_report"],
+                    review_snapshot=review,
+                    cover_asset_id=cover_asset_id,
+                    cover_job_id=cover_job_id,
+                    content_type_snapshot=state.get("content_type") or {},
+                    angle_snapshot=state.get("selected_angle") or {},
+                    pattern_slot_snapshot={
+                        "title_pattern_code": (strategy_snapshot.get("title_formula") or {}).get("code"),
+                        "body_pattern_code": (strategy_snapshot.get("body_formula") or {}).get("code"),
+                        "title_formula_code": (state.get("formula_selection_snapshot") or {}).get(
+                            "selected_title_formula_code"
+                        ),
+                        "body_formula_code": (state.get("formula_selection_snapshot") or {}).get(
+                            "selected_body_formula_code"
+                        ),
+                        "outline": state.get("content_outline") or {},
+                    },
+                    persona_snapshot={
+                        "profile": state.get("persona_profile") or {},
+                        "diff": state.get("persona_diff") or {},
+                    },
+                    channel_snapshot=state.get("channel_profile") or {},
+                    compliance_snapshot={
+                        "policies": state.get("compliance_policies") or [],
+                        "result": state.get("channel_result") or {},
+                        "approval": state.get("approval_result") or {},
+                    },
+                    runtime_config_snapshot=state.get("runtime_config_snapshot") or {},
                     created_by=state["uid"],
                 )
                 db.add(artifact)
@@ -419,31 +810,58 @@ class ContentWorkflowAgent(BaseAgent):
                 artifact.title = state["selected_title"]["text"]
                 artifact.body = draft["body"]
                 artifact.topics = draft.get("topics") or []
-                artifact.strategy_snapshot = state["strategy_plan"]
+                artifact.strategy_snapshot = strategy_snapshot
                 artifact.evidence_snapshot = state["evidence_bundle"]
-                artifact.review_snapshot = state["review_report"]
-                artifact.status = "blocked" if state["review_report"]["status"] == "blocked" else "reviewed"
+                artifact.review_snapshot = review
+                artifact.cover_asset_id = cover_asset_id
+                artifact.cover_job_id = cover_job_id
+                artifact.content_type_snapshot = state.get("content_type") or {}
+                artifact.angle_snapshot = state.get("selected_angle") or {}
+                artifact.pattern_slot_snapshot = {
+                    "title_pattern_code": (strategy_snapshot.get("title_formula") or {}).get("code"),
+                    "body_pattern_code": (strategy_snapshot.get("body_formula") or {}).get("code"),
+                    "title_formula_code": (state.get("formula_selection_snapshot") or {}).get(
+                        "selected_title_formula_code"
+                    ),
+                    "body_formula_code": (state.get("formula_selection_snapshot") or {}).get(
+                        "selected_body_formula_code"
+                    ),
+                    "outline": state.get("content_outline") or {},
+                }
+                artifact.persona_snapshot = {
+                    "profile": state.get("persona_profile") or {},
+                    "diff": state.get("persona_diff") or {},
+                }
+                artifact.channel_snapshot = state.get("channel_profile") or {}
+                artifact.compliance_snapshot = {
+                    "policies": state.get("compliance_policies") or [],
+                    "result": state.get("channel_result") or {},
+                    "approval": state.get("approval_result") or {},
+                }
+                artifact.runtime_config_snapshot = state.get("runtime_config_snapshot") or {}
+                artifact.status = artifact_status
                 artifact.updated_at = utc_now_naive()
             version = await repo.save_artifact_version(
                 artifact=artifact,
+                version_id=(state.get("artifact_version") or {}).get("id"),
                 source_type="generated",
                 model_spec=state.get("model_spec"),
                 skill_versions=SKILL_VERSIONS,
                 rule_version_id=task.rule_version_id,
                 knowledge_snapshot=state["evidence_bundle"],
-                review_snapshot=state["review_report"],
+                review_snapshot=review,
                 created_by=state["uid"],
             )
             await repo.add_review_record(
                 artifact_version_id=version.id,
                 review_type="combined",
-                status=state["review_report"]["status"],
-                checks=state["review_report"].get("checks") or [],
-                reviewer_uid=None,
+                status=review["status"],
+                checks=review.get("checks") or [],
+                reviewer_uid=(state.get("approval_result") or {}).get("reviewer_uid"),
             )
-            task.status = "review_blocked" if state["review_report"]["status"] == "blocked" else "reviewed"
+            task.status = "review_blocked" if artifact_status == "blocked" else "reviewed"
             task.current_stage = "review"
-            task.review_json = state["review_report"]
+            task.review_json = review
             task.evidence_json = state["evidence_bundle"]
             task.selected_title_json = state["selected_title"]
             await repo.track(
@@ -451,6 +869,16 @@ class ContentWorkflowAgent(BaseAgent):
                 uid=state["uid"],
                 task_id=task.id,
                 run_id=state["run_id"],
-                properties={"artifact_id": artifact.id, "review_status": state["review_report"]["status"]},
+                properties={"artifact_id": artifact.id, "review_status": review["status"]},
             )
-            return {"artifact_id": artifact.id}
+            return {
+                "artifact_id": artifact.id,
+                "artifact_version": {
+                    "id": version.id,
+                    "version": version.version,
+                    "content_hash": (state.get("artifact_version") or {}).get("content_hash"),
+                    "cover_asset_id": version.cover_asset_id,
+                    "cover_job_id": version.cover_job_id,
+                    "status": artifact.status,
+                },
+            }

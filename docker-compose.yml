@@ -2,7 +2,8 @@ x-api-worker-env: &api-worker-env
   HOST_IP: ${HOST_IP:-}
   LITE_MODE: ${LITE_MODE:-false}
   RUNNING_IN_DOCKER: "true"
-  YUXI_ENV: development
+  YUXI_ENV: ${YUXI_ENV:-development}
+  WATCHFILES_FORCE_POLLING: ${WATCHFILES_FORCE_POLLING:-true}
   # DBs and other services
   POSTGRES_URL: ${POSTGRES_URL:-postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-yuxi}}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -23,6 +24,28 @@ x-api-worker-env: &api-worker-env
   SANDBOX_VIRTUAL_PATH_PREFIX: ${SANDBOX_VIRTUAL_PATH_PREFIX:-/home/gem/user-data}
   SANDBOX_EXEC_TIMEOUT_SECONDS: ${SANDBOX_EXEC_TIMEOUT_SECONDS:-180}
   SANDBOX_MAX_OUTPUT_BYTES: ${SANDBOX_MAX_OUTPUT_BYTES:-262144}
+  IMAGE2_BASE_URL: ${IMAGE2_BASE_URL:-}
+  IMAGE2_API_KEY: ${IMAGE2_API_KEY:-}
+  IMAGE2_MODEL: ${IMAGE2_MODEL:-}
+  IMAGE2_SUBMIT_PATH: ${IMAGE2_SUBMIT_PATH:-/images/generations}
+  IMAGE2_EDIT_PATH: ${IMAGE2_EDIT_PATH:-/images/edits}
+  IMAGE2_STATUS_PATH: ${IMAGE2_STATUS_PATH:-/images/generations/{task_id}}
+  IMAGE2_TIMEOUT_SECONDS: ${IMAGE2_TIMEOUT_SECONDS:-120}
+  IMAGE2_POLL_INTERVAL_SECONDS: ${IMAGE2_POLL_INTERVAL_SECONDS:-2}
+  IMAGE2_POLL_TIMEOUT_SECONDS: ${IMAGE2_POLL_TIMEOUT_SECONDS:-900}
+  IMAGE2_MAX_CONCURRENT: ${IMAGE2_MAX_CONCURRENT:-1}
+  IMAGE2_SEND_RESPONSE_FORMAT: ${IMAGE2_SEND_RESPONSE_FORMAT:-false}
+  IMAGE2_TRUSTED_OUTPUT_ORIGINS: ${IMAGE2_TRUSTED_OUTPUT_ORIGINS:-}
+  CONTENT_COVER_BUCKET: ${CONTENT_COVER_BUCKET:-content-covers}
+  XHS_BROWSER_GATEWAY_URL: ${XHS_BROWSER_GATEWAY_URL:-http://xhs-browser-gateway:5051}
+  XHS_GATEWAY_TOKEN: ${XHS_GATEWAY_TOKEN:-local-dev-change-me}
+  XHS_GATEWAY_HEADLESS: ${XHS_GATEWAY_HEADLESS:-true}
+  XHS_GATEWAY_IDLE_SECONDS: ${XHS_GATEWAY_IDLE_SECONDS:-900}
+  XHS_GATEWAY_REAPER_INTERVAL_SECONDS: ${XHS_GATEWAY_REAPER_INTERVAL_SECONDS:-30}
+  XHS_GATEWAY_MAX_SESSIONS: ${XHS_GATEWAY_MAX_SESSIONS:-5}
+  XHS_BROWSER_CONTROL_LEASE_SECONDS: ${XHS_BROWSER_CONTROL_LEASE_SECONDS:-120}
+  XHS_BROWSER_OPERATION_LOCK_SECONDS: ${XHS_BROWSER_OPERATION_LOCK_SECONDS:-180}
+  XHS_BROWSER_OPERATION_BLOCK_SECONDS: ${XHS_BROWSER_OPERATION_BLOCK_SECONDS:-3}
   # Model request timeouts
   EMBEDDING_TIMEOUT: ${EMBEDDING_TIMEOUT:-600}
   LLM_TIMEOUT: ${LLM_TIMEOUT:-600}
@@ -80,6 +103,45 @@ services:
       minio:
         condition: service_healthy
       sandbox-provisioner:
+        condition: service_healthy
+
+  xhs-browser-gateway:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: yuxi-api:${YUXI_VERSION:-0.7.0}
+    container_name: xhs-browser-gateway
+    working_dir: /app
+    shm_size: ${XHS_GATEWAY_SHM_SIZE:-1gb}
+    mem_limit: ${XHS_GATEWAY_MEMORY_LIMIT:-4g}
+    volumes:
+      - ./backend/server:/app/server
+      - ./backend/package:/app/package
+      - ./docker/volumes/yuxi:/app/saves
+      - ./docker/volumes/models:/app/models
+      - ./.env:/app/.env
+      - ./backend/pyproject.toml:/app/pyproject.toml
+      - ./backend/uv.lock:/app/uv.lock
+    networks:
+      - app-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    environment:
+      <<: *api-worker-env
+      XHS_GATEWAY_TOKEN: ${XHS_GATEWAY_TOKEN:-local-dev-change-me}
+      XHS_GATEWAY_HEADLESS: ${XHS_GATEWAY_HEADLESS:-true}
+    command: uv run --no-sync --no-dev uvicorn server.xhs_browser_gateway:app --host 0.0.0.0 --port 5051
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5051/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 60s
+    depends_on:
+      postgres:
         condition: service_healthy
 
   worker:

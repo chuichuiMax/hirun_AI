@@ -14,7 +14,14 @@ from yuxi.agents.mcp.service import ensure_builtin_mcp_servers_in_db
 from yuxi.agents.skills.service import init_builtin_skills
 from yuxi.repositories.agent_run_repository import TERMINAL_RUN_STATUSES, AgentRunRepository
 from yuxi.services.chat_service import stream_agent_chat, stream_agent_resume
-from yuxi.services.content_run_worker import process_content_run
+from yuxi.services.content_run_worker import process_content_run, resume_content_run_from_cover
+from yuxi.services.content_cover_worker import process_content_cover_job
+from yuxi.services.xiaohongshu_worker import (
+    process_xiaohongshu_distribution,
+    process_xiaohongshu_login,
+    process_xiaohongshu_profile_cleanup,
+    process_xiaohongshu_status_check,
+)
 from yuxi.services.run_queue_service import (
     append_run_stream_event,
     clear_cancel_signal,
@@ -505,6 +512,7 @@ async def _worker_startup(ctx):
     pg_manager.initialize()
     await pg_manager.create_business_tables()
     await pg_manager.ensure_business_schema()
+    await pg_manager.ensure_content_schema()
     await ensure_builtin_mcp_servers_in_db()
     async with pg_manager.get_async_session_context() as session:
         await init_builtin_skills(session)
@@ -518,7 +526,16 @@ async def _worker_shutdown(ctx):
 
 
 class WorkerSettings:
-    functions = [process_agent_run, process_content_run]
+    functions = [
+        process_agent_run,
+        process_content_run,
+        resume_content_run_from_cover,
+        process_content_cover_job,
+        process_xiaohongshu_login,
+        process_xiaohongshu_status_check,
+        process_xiaohongshu_profile_cleanup,
+        process_xiaohongshu_distribution,
+    ]
     max_tries = 2
     retry_jobs = True
     job_timeout = 3600

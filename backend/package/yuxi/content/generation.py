@@ -7,14 +7,22 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from yuxi.agents import load_chat_model, resolve_chat_model_spec
-from yuxi.content.schemas import GeneratedContent, ReviewReport, TitleCandidate
+from yuxi.content.schemas import ReviewReport
 
 SKILLS_ROOT = Path(__file__).resolve().parents[1] / "agents" / "skills" / "buildin"
 SKILL_VERSIONS = {
-    "content-strategy-planner": "1.0.0",
-    "content-title-generator": "1.0.0",
-    "content-body-generator": "1.0.0",
-    "content-reviewer": "1.0.0",
+    "content-value-analyzer": "1.1.0",
+    "content-strategy-planner": "3.1.0",
+    "content-evidence-researcher": "1.1.0",
+    "strategy-product-researcher": "1.0.1",
+    "content-title-generator": "1.3.0",
+    "content-outline-builder": "1.2.0",
+    "content-body-generator": "1.2.0",
+    "persona-style-polisher": "1.1.0",
+    "content-reviewer": "1.1.0",
+    "content-visual-planner": "1.1.0",
+    "content-cover-generator": "1.1.0",
+    "content-visual-reviewer": "1.1.0",
 }
 
 
@@ -66,70 +74,6 @@ async def _invoke_json(model_spec: str | None, *, skill_slug: str, prompt: str) 
     return _parse_json(_response_text(response))
 
 
-async def generate_title_candidates(
-    *,
-    model_spec: str | None,
-    brief: dict[str, Any],
-    strategy: dict[str, Any],
-    evidence_bundle: dict[str, Any],
-    rule_bundle: dict[str, Any],
-) -> list[dict[str, Any]]:
-    formula = next(
-        item for item in rule_bundle["title_formulas"] if item["code"] == strategy["title_formula_code"]
-    )
-    payload = await _invoke_json(
-        model_spec,
-        skill_slug="content-title-generator",
-        prompt=(
-            "严格使用同一份 ContentBrief、EvidenceBundle 和选定公式生成 4 个标题候选。"
-            "只输出 JSON 数组；每项字段必须是 id、text、formula_code、variable_mapping、evidence_ids、risk_flags。\n"
-            f"ContentBrief={json.dumps(brief, ensure_ascii=False)}\n"
-            f"StrategyPlan={json.dumps(strategy, ensure_ascii=False)}\n"
-            f"TitleFormula={json.dumps(formula, ensure_ascii=False)}\n"
-            f"EvidenceBundle={json.dumps(evidence_bundle, ensure_ascii=False)}"
-        ),
-    )
-    if isinstance(payload, dict):
-        payload = payload.get("titles") or payload.get("items")
-    if not isinstance(payload, list) or not 3 <= len(payload) <= 5:
-        raise ValueError("标题生成必须返回 3～5 个候选")
-    candidates = []
-    for index, item in enumerate(payload, start=1):
-        item = dict(item or {})
-        item["id"] = str(item.get("id") or f"title_{index}")
-        item["formula_code"] = strategy["title_formula_code"]
-        candidates.append(TitleCandidate.model_validate(item).model_dump())
-    return candidates
-
-
-async def generate_body(
-    *,
-    model_spec: str | None,
-    brief: dict[str, Any],
-    strategy: dict[str, Any],
-    evidence_bundle: dict[str, Any],
-    selected_title: dict[str, Any],
-    rule_bundle: dict[str, Any],
-) -> dict[str, Any]:
-    formula = next(
-        item for item in rule_bundle["content_formulas"] if item["code"] == strategy["content_formula_code"]
-    )
-    payload = await _invoke_json(
-        model_spec,
-        skill_slug="content-body-generator",
-        prompt=(
-            "基于已锁定标题生成一篇平台无关、可直接编辑的中文正文和 3～8 个话题。"
-            "不得添加证据包之外的价格、参数、数据或客户效果。只输出 JSON 对象：body、topics、evidence_ids。\n"
-            f"SelectedTitle={json.dumps(selected_title, ensure_ascii=False)}\n"
-            f"ContentBrief={json.dumps(brief, ensure_ascii=False)}\n"
-            f"StrategyPlan={json.dumps(strategy, ensure_ascii=False)}\n"
-            f"ContentFormula={json.dumps(formula, ensure_ascii=False)}\n"
-            f"EvidenceBundle={json.dumps(evidence_bundle, ensure_ascii=False)}"
-        ),
-    )
-    return GeneratedContent.model_validate(payload).model_dump()
-
-
 async def review_generated_content(
     *,
     model_spec: str | None,
@@ -137,9 +81,11 @@ async def review_generated_content(
     body: str,
     topics: list[str],
     brief: dict[str, Any],
-    strategy: dict[str, Any],
+    workflow_snapshot: dict[str, Any],
     evidence_bundle: dict[str, Any],
 ) -> dict[str, Any]:
+    """对已生成的 V3 内容执行一次独立语义复审。"""
+
     payload = await _invoke_json(
         model_spec,
         skill_slug="content-reviewer",
@@ -149,8 +95,39 @@ async def review_generated_content(
             "checks 每项包含 code、level、location、message、evidence_ids、suggestion。\n"
             f"Content={json.dumps({'title': title, 'body': body, 'topics': topics}, ensure_ascii=False)}\n"
             f"ContentBrief={json.dumps(brief, ensure_ascii=False)}\n"
-            f"StrategyPlan={json.dumps(strategy, ensure_ascii=False)}\n"
+            f"WorkflowSnapshot={json.dumps(workflow_snapshot, ensure_ascii=False)}\n"
             f"EvidenceBundle={json.dumps(evidence_bundle, ensure_ascii=False)}"
         ),
     )
-    return ReviewReport.model_validate(payload).model_dump()
+    if not isinstance(payload, dict):
+        raise ValueError("内容审核必须返回 JSON 对象")
+    normalized = dict(payload)
+    status_aliases = {
+        "pass": "passed",
+        "ok": "passed",
+        "success": "passed",
+        "warn": "warning",
+        "failed": "blocked",
+        "fail": "blocked",
+        "error": "blocked",
+    }
+    normalized["status"] = status_aliases.get(str(normalized.get("status") or "").lower(), normalized.get("status"))
+    level_aliases = {
+        "pass": "info",
+        "passed": "info",
+        "ok": "info",
+        "success": "info",
+        "warn": "warning",
+        "failed": "error",
+        "fail": "error",
+        "blocked": "error",
+    }
+    checks = []
+    for raw in normalized.get("checks") or []:
+        item = dict(raw or {})
+        item["level"] = level_aliases.get(str(item.get("level") or "").lower(), item.get("level"))
+        item.setdefault("location", "content")
+        item.setdefault("evidence_ids", [])
+        checks.append(item)
+    normalized["checks"] = checks
+    return ReviewReport.model_validate(normalized).model_dump()

@@ -84,9 +84,33 @@ const router = createRouter({
           meta: { keepAlive: false, requiresAuth: true }
         },
         {
+          path: 'results/:taskId',
+          name: 'ContentResult',
+          component: () => import('../views/ContentResultView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
           path: 'history',
           name: 'ContentHistory',
           component: () => import('../views/ContentHistoryView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'covers',
+          name: 'ContentCovers',
+          component: () => import('../views/CoverGenerationView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'results/:taskId',
+          name: 'ContentResult',
+          component: () => import('../views/ContentResultView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'accounts',
+          name: 'ContentAccounts',
+          component: () => import('../views/XiaohongshuAccountsView.vue'),
           meta: { keepAlive: false, requiresAuth: true }
         },
         {

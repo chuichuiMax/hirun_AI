@@ -45,6 +45,13 @@ const parseSse = async (response, onEvent) => {
   dispatch()
 }
 
+const createClientRequestId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export const useContentStudioStore = defineStore('contentStudio', () => {
   const bootstrap = ref(null)
   const task = ref(null)
@@ -53,6 +60,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   const currentRun = ref(null)
   const interrupt = ref(null)
   const runEvents = ref([])
+  const runAudit = ref(null)
   const history = ref([])
   const historyTotal = ref(0)
   const versions = ref([])
@@ -72,8 +80,6 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   const ruleBundle = computed(() => bootstrap.value?.rule_bundle || null)
   const templates = computed(() => bootstrap.value?.industry_templates || [])
   const contentGoals = computed(() => bootstrap.value?.content_goals || [])
-  const knowledgeOptions = computed(() => bootstrap.value?.knowledge_options || [])
-  const strategy = computed(() => task.value?.strategy || {})
   const evidence = computed(() => task.value?.evidence_bundle || { items: [] })
 
   async function loadBootstrap(force = false) {
@@ -142,28 +148,6 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     }
   }
 
-  async function recommendStrategy() {
-    loading.saving = true
-    try {
-      const response = await contentApi.recommendStrategy(task.value.id)
-      task.value = response.task
-      return response.strategy
-    } finally {
-      loading.saving = false
-    }
-  }
-
-  async function saveStrategy(selection) {
-    loading.saving = true
-    try {
-      const response = await contentApi.saveStrategy(task.value.id, selection)
-      task.value = response.task
-      return response
-    } finally {
-      loading.saving = false
-    }
-  }
-
   function handleRunEvent(eventType, envelope, eventId) {
     if (eventId) lastRunSeq = eventId
     const payload = envelope?.payload || envelope || {}
@@ -178,15 +162,80 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     } else if (eventType === 'error') {
       lastError.value = new Error(payload.message || '内容运行失败')
     }
+    if (eventType.startsWith('content.')) {
+      const events = runAudit.value?.events || []
+      runAudit.value = {
+        ...(runAudit.value || {}),
+        events: [...events, { event_type: eventType, payload, run_id: envelope?.run_id }]
+      }
+    }
+  }
+
+  async function loadRunAudit(runId) {
+    if (!runId) return null
+    const response = await contentApi.getRun(runId)
+    runAudit.value = response
+    return response
+  }
+
+  function applyStartedRun(response) {
+    currentRun.value = response
+    lastError.value = null
+    if (task.value) {
+      task.value = {
+        ...task.value,
+        status: response.status || 'queued',
+        latest_run_id: response.run_id,
+        error: null,
+        error_json: null
+      }
+    }
+  }
+
+  async function followExternalWait(parentRunId, externalWait, signal) {
+    const coverJobId = externalWait?.cover_job_id
+    if (!coverJobId) return
+    const terminalStatuses = new Set(['succeeded', 'failed', 'cancelled'])
+
+    while (!signal.aborted) {
+      const response = await contentApi.getCoverJob(coverJobId)
+      const job = response.job
+      if (
+        interrupt.value?.interrupt_type === 'external_wait' &&
+        interrupt.value.cover_job_id === coverJobId
+      ) {
+        interrupt.value = {
+          ...interrupt.value,
+          status: job.status,
+          progress: job.progress,
+          error_code: job.error_code,
+          error_message: job.error_message
+        }
+      }
+
+      if (terminalStatuses.has(job.status)) {
+        await loadTask(task.value.id)
+        const continuationRunId = task.value?.latest_run_id
+        if (continuationRunId && continuationRunId !== parentRunId) {
+          interrupt.value = null
+          await recoverRun(continuationRunId)
+          return
+        }
+        if (task.value?.status === 'failed') return
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1500))
+    }
   }
 
   async function subscribeRun(runId) {
     runAbortController?.abort()
-    runAbortController = new AbortController()
+    const controller = new AbortController()
+    runAbortController = controller
     loading.running = true
     try {
       const response = await contentApi.streamRunEvents(runId, lastRunSeq, {
-        signal: runAbortController.signal
+        signal: controller.signal
       })
       if (!response.ok) throw new Error(`运行事件连接失败：${response.status}`)
       await parseSse(response, (eventType, data, eventId) => {
@@ -195,7 +244,11 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
           currentRun.value = { ...(currentRun.value || {}), status: data?.payload?.status }
         }
       })
+      const externalWait =
+        interrupt.value?.interrupt_type === 'external_wait' ? { ...interrupt.value } : null
+      await loadRunAudit(runId)
       await loadTask(task.value.id)
+      if (externalWait) await followExternalWait(runId, externalWait, controller.signal)
     } catch (error) {
       if (error.name !== 'AbortError') {
         lastError.value = error
@@ -209,12 +262,13 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   async function startRun(modelSpec = null) {
     interrupt.value = null
     runEvents.value = []
+    runAudit.value = null
     lastRunSeq = '0-0'
     const response = await contentApi.createRun(task.value.id, {
-      request_id: crypto.randomUUID(),
+      request_id: createClientRequestId(),
       model_spec: modelSpec || null
     })
-    currentRun.value = response
+    applyStartedRun(response)
     void subscribeRun(response.run_id)
     return response
   }
@@ -223,10 +277,10 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     if (!currentRun.value?.run_id) return
     interrupt.value = null
     const response = await contentApi.resumeRun(currentRun.value.run_id, {
-      request_id: crypto.randomUUID(),
+      request_id: createClientRequestId(),
       resume
     })
-    currentRun.value = response
+    applyStartedRun(response)
     lastRunSeq = '0-0'
     void subscribeRun(response.run_id)
     return response
@@ -234,7 +288,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
 
   async function recoverRun(runId) {
     if (!runId) return
-    const response = await contentApi.getRun(runId)
+    const response = await loadRunAudit(runId)
     currentRun.value = {
       run_id: response.run.id,
       status: response.run.status,
@@ -247,12 +301,13 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   async function retryNode(nodeId, modelSpec = null) {
     if (!currentRun.value?.run_id) return
     const response = await contentApi.retryNode(currentRun.value.run_id, {
-      request_id: crypto.randomUUID(),
+      request_id: createClientRequestId(),
       node_id: nodeId,
       model_spec: modelSpec || null
     })
-    currentRun.value = response
+    applyStartedRun(response)
     runEvents.value = []
+    runAudit.value = null
     lastRunSeq = '0-0'
     void subscribeRun(response.run_id)
     return response
@@ -313,6 +368,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     currentRun.value = null
     interrupt.value = null
     runEvents.value = []
+    runAudit.value = null
     lastError.value = null
     versions.value = []
     saveStatus.value = 'idle'
@@ -326,6 +382,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     currentRun,
     interrupt,
     runEvents,
+    runAudit,
     history,
     historyTotal,
     versions,
@@ -335,19 +392,16 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     ruleBundle,
     templates,
     contentGoals,
-    knowledgeOptions,
-    strategy,
     evidence,
     loadBootstrap,
     createTask,
     loadTask,
     compileBrief,
     saveBrief,
-    recommendStrategy,
-    saveStrategy,
     startRun,
     resumeRun,
     recoverRun,
+    loadRunAudit,
     retryNode,
     saveArtifact,
     reviewArtifact,

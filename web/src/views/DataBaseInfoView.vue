@@ -1,8 +1,9 @@
 <template>
   <div class="database-info-container extension-detail-page">
-    <FileDetailModal />
+    <FileDetailModal v-if="store.state.fileDetailModalVisible" />
 
     <FileUploadModal
+      v-if="addFilesModalVisible"
       v-model:visible="addFilesModalVisible"
       :folder-tree="folderTree"
       :current-folder-id="currentFolderId"
@@ -163,7 +164,11 @@
           <FileTable ref="fileTableRef" />
         </div>
 
-        <div v-show="activeTab === 'query'" class="tab-panel query-config-panel">
+        <div
+          v-if="loadedTabs.has('query')"
+          v-show="activeTab === 'query'"
+          class="tab-panel query-config-panel"
+        >
           <div class="query-config-layout">
             <div class="query-test-pane">
               <QuerySection ref="querySectionRef" :visible="true" @toggle-visible="() => {}" />
@@ -231,7 +236,12 @@
       </main>
     </div>
 
-    <a-modal v-model:open="editModalVisible" title="编辑知识库信息" width="700px">
+    <a-modal
+      v-if="editModalVisible"
+      v-model:open="editModalVisible"
+      title="编辑知识库信息"
+      width="700px"
+    >
       <template #footer>
         <a-button danger @click="deleteDatabase" style="margin-right: auto; margin-left: 0">
           <template #icon>
@@ -346,7 +356,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDatabaseStore } from '@/stores/database'
 import { useTaskerStore } from '@/stores/tasker'
@@ -372,22 +382,27 @@ import {
 import { QuestionCircleOutlined } from '@ant-design/icons-vue'
 import { message, Modal } from 'ant-design-vue'
 import FileTable from '@/components/FileTable.vue'
-import FileDetailModal from '@/components/FileDetailModal.vue'
-import FileUploadModal from '@/components/FileUploadModal.vue'
-import KnowledgeGraphSection from '@/components/KnowledgeGraphSection.vue'
-import QuerySection from '@/components/QuerySection.vue'
-import MindMapSection from '@/components/MindMapSection.vue'
-import RAGEvaluationTab from '@/components/RAGEvaluationTab.vue'
-import EvaluationBenchmarks from '@/components/EvaluationBenchmarks.vue'
-import SearchConfigPanel from '@/components/SearchConfigPanel.vue'
-import AiTextarea from '@/components/AiTextarea.vue'
-import ShareConfigForm from '@/components/ShareConfigForm.vue'
 import { databaseApi } from '@/apis/knowledge_api'
 import { departmentApi } from '@/apis/department_api'
 import { authApi } from '@/apis/auth_api'
 import { CHUNK_PRESET_OPTIONS, getChunkPresetDescription } from '@/utils/chunk_presets'
 import { formatFileSize } from '@/utils/file_utils'
 import { getKbTypeIcon, getKbTypeLabel, kbUtils } from '@/utils/kb_utils'
+
+const FileDetailModal = defineAsyncComponent(() => import('@/components/FileDetailModal.vue'))
+const FileUploadModal = defineAsyncComponent(() => import('@/components/FileUploadModal.vue'))
+const KnowledgeGraphSection = defineAsyncComponent(
+  () => import('@/components/KnowledgeGraphSection.vue')
+)
+const QuerySection = defineAsyncComponent(() => import('@/components/QuerySection.vue'))
+const MindMapSection = defineAsyncComponent(() => import('@/components/MindMapSection.vue'))
+const RAGEvaluationTab = defineAsyncComponent(() => import('@/components/RAGEvaluationTab.vue'))
+const EvaluationBenchmarks = defineAsyncComponent(
+  () => import('@/components/EvaluationBenchmarks.vue')
+)
+const SearchConfigPanel = defineAsyncComponent(() => import('@/components/SearchConfigPanel.vue'))
+const AiTextarea = defineAsyncComponent(() => import('@/components/AiTextarea.vue'))
+const ShareConfigForm = defineAsyncComponent(() => import('@/components/ShareConfigForm.vue'))
 
 const route = useRoute()
 const router = useRouter()
@@ -438,12 +453,21 @@ const tabs = computed(() => {
 
 const visibleTabs = computed(() => tabs.value)
 const activeTab = ref('filetable')
+const loadedTabs = reactive(new Set(['filetable']))
 
 watch(
-  () => [kbId.value, isMilvus.value],
-  ([newDbId, isMilvusType]) => {
-    if (!newDbId) return
-    activeTab.value = isMilvusType ? 'filetable' : 'query'
+  activeTab,
+  (tab) => {
+    if (tab) loadedTabs.add(tab)
+  },
+  { immediate: true }
+)
+
+watch(
+  () => [kbId.value, kbType.value],
+  ([newDbId, loadedKbType]) => {
+    if (!newDbId || !loadedKbType) return
+    activeTab.value = loadedKbType === 'milvus' ? 'filetable' : 'query'
   },
   { immediate: true }
 )
@@ -637,7 +661,9 @@ watch(
     store.kbId = nextKbId
     resetFileSelectionState()
     store.stopAutoRefresh()
-    await store.getDatabaseInfo(nextKbId, false)
+    // The file-management tab does not need retrieval parameters. Load them
+    // only when the user opens retrieval testing.
+    await store.getDatabaseInfo(nextKbId, true)
     store.startAutoRefresh()
   },
   { immediate: true }

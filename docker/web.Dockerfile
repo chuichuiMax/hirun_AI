@@ -4,7 +4,7 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai
 
 # 安装 pnpm
-RUN npm install -g pnpm@latest
+RUN npm install -g pnpm@10.11.0
 
 # 复制 package.json 和 pnpm-lock.yaml
 COPY ./web/package*.json ./
@@ -26,7 +26,7 @@ FROM node:24-alpine AS build-stage
 WORKDIR /app
 
 # 安装 pnpm
-RUN npm install -g pnpm@latest
+RUN npm install -g pnpm@10.11.0
 
 # 复制依赖文件
 COPY ./web/package*.json ./
@@ -42,7 +42,7 @@ ENV VITE_BASE_PATH=$VITE_BASE_PATH
 RUN pnpm run build
 
 # 生产环境运行阶段
-FROM nginx:alpine AS production
+FROM nginx:1.31.2-alpine@sha256:35cd77497979abe70dc8d26f5ae60811eea233a2eb5dc03c2ee30972caeb303e AS production
 COPY --from=build-stage /app/dist /usr/share/nginx/html
 COPY ./docker/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY ./docker/nginx/default.conf /etc/nginx/conf.d/default.conf

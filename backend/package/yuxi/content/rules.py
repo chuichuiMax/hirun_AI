@@ -297,7 +297,6 @@ BASE_PRO_FIELDS = [
     {"key": "scene", "label": "典型使用场景", "type": "textarea", "required": False},
     {"key": "required_terms", "label": "必须包含", "type": "tags", "required": False},
     {"key": "forbidden_terms", "label": "明确避免", "type": "tags", "required": False},
-    {"key": "knowledge_scope", "label": "知识库范围", "type": "knowledge", "required": False},
 ]
 
 INDUSTRIES = [
@@ -371,107 +370,6 @@ def brief_variable_map(brief: dict[str, Any]) -> dict[str, Any]:
     variables.setdefault("number", re.findall(r"\d+(?:\.\d+)?(?:%|元|天|周|月|年|个|次|㎡)?", combined_text))
     variables.setdefault("emotion", "真实体验")
     return variables
-
-
-def _has_value(variables: dict[str, Any], key: str) -> bool:
-    value = variables.get(key)
-    return value not in (None, "", [])
-
-
-def validate_strategy_bundle(
-    bundle: dict[str, Any],
-    *,
-    brief: dict[str, Any],
-    content_goal: str,
-    methods: list[str],
-    title_formula_code: str,
-    content_formula_code: str,
-) -> dict[str, Any]:
-    method_map = {item["code"]: item for item in bundle["methods"] if item.get("method_type") == "core"}
-    title_map = {item["code"]: item for item in bundle["title_formulas"]}
-    body_map = {item["code"]: item for item in bundle["content_formulas"]}
-    invalid_methods = [code for code in methods if code not in method_map]
-    if invalid_methods or title_formula_code not in title_map or content_formula_code not in body_map:
-        return {
-            "compatibility": "blocked",
-            "reasons": ["选择中包含当前规则版本不存在或已停用的配置"],
-            "missing_variables": [],
-            "recommended": None,
-        }
-
-    title_formula = title_map[title_formula_code]
-    body_formula = body_map[content_formula_code]
-    reasons: list[str] = []
-    if not set(methods) & set(title_formula["compatible_methods"]):
-        reasons.append("标题公式与所选创作手法不兼容")
-    if not set(methods) & set(body_formula["compatible_methods"]):
-        reasons.append("正文公式与所选创作手法不兼容")
-
-    variables = brief_variable_map(brief)
-    required = set(title_formula["variable_schema"]) | set(body_formula["required_variables"])
-    missing = sorted(key for key in required if not _has_value(variables, key))
-    if missing:
-        reasons.append(f"缺少公式所需变量：{', '.join(missing)}")
-
-    exact_match = next(
-        (
-            rule
-            for rule in bundle["combination_rules"]
-            if rule["content_goal"] == content_goal
-            and title_formula_code in rule["title_formula_codes"]
-            and content_formula_code == rule["content_formula_code"]
-        ),
-        None,
-    )
-    if not exact_match:
-        reasons.append("该组合不是当前内容目标的推荐组合")
-
-    if missing or any("不兼容" in reason for reason in reasons):
-        compatibility = "blocked"
-    elif reasons:
-        compatibility = "warning"
-    else:
-        compatibility = "compatible"
-
-    return {
-        "compatibility": compatibility,
-        "reasons": reasons,
-        "missing_variables": missing,
-        "recommended": exact_match,
-    }
-
-
-def recommend_strategy(bundle: dict[str, Any], *, brief: dict[str, Any], content_goal: str) -> dict[str, Any]:
-    candidates = sorted(
-        (rule for rule in bundle["combination_rules"] if rule["content_goal"] == content_goal),
-        key=lambda item: item.get("priority", 0),
-        reverse=True,
-    )
-    if not candidates:
-        raise ValueError(f"内容目标 {content_goal} 没有可用组合规则")
-    selected = candidates[0]
-    title_code = selected["title_formula_codes"][0]
-    validation = validate_strategy_bundle(
-        bundle,
-        brief=brief,
-        content_goal=content_goal,
-        methods=selected["methods"],
-        title_formula_code=title_code,
-        content_formula_code=selected["content_formula_code"],
-    )
-    return {
-        "content_goal": content_goal,
-        "methods": selected["methods"],
-        "scene_enhancer": "S01",
-        "title_formula_code": title_code,
-        "title_formula_candidates": selected["title_formula_codes"],
-        "content_formula_code": selected["content_formula_code"],
-        "compatibility": "auto_matched" if validation["compatibility"] == "compatible" else validation["compatibility"],
-        "required_variables": validation["missing_variables"],
-        "rule_version_id": bundle["version"]["id"],
-        "reason_summary": selected["recommendation_reason"],
-        "warnings": validation["reasons"],
-    }
 
 
 async def ensure_content_seed_data(db: AsyncSession) -> None:

@@ -37,6 +37,7 @@
     </PageShoulder>
 
     <a-modal
+      v-if="state.openNewDatabaseModel"
       :open="state.openNewDatabaseModel"
       title="新建知识库"
       :confirm-loading="dbState.creating"
@@ -226,7 +227,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, reactive, watch, computed } from 'vue'
+import { ref, onMounted, reactive, watch, computed, defineAsyncComponent } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useConfigStore } from '@/stores/config'
@@ -239,14 +240,18 @@ import { typeApi } from '@/apis/knowledge_api'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import PageShoulder from '@/components/shared/PageShoulder.vue'
 import ResourceEmptyState from '@/components/shared/ResourceEmptyState.vue'
-import EmbeddingModelSelector from '@/components/EmbeddingModelSelector.vue'
-import ShareConfigForm from '@/components/ShareConfigForm.vue'
 import ExtensionCardGrid from '@/components/extensions/ExtensionCardGrid.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import dayjs, { parseToShanghai } from '@/utils/time'
-import AiTextarea from '@/components/AiTextarea.vue'
 import { getKbTypeLabel, getKbTypeIcon, getKbTypeColor, kbUtils } from '@/utils/kb_utils'
 import { CHUNK_PRESET_OPTIONS, getChunkPresetDescription } from '@/utils/chunk_presets'
+
+const EmbeddingModelSelector = defineAsyncComponent(
+  () => import('@/components/EmbeddingModelSelector.vue')
+)
+const ShareConfigForm = defineAsyncComponent(() => import('@/components/ShareConfigForm.vue'))
+const AiTextarea = defineAsyncComponent(() => import('@/components/AiTextarea.vue'))
+const preloadDatabaseDetail = () => import('./DataBaseInfoView.vue')
 
 const route = useRoute()
 const router = useRouter()
@@ -508,6 +513,7 @@ const cardTags = (database) => {
 }
 
 const navigateToDatabase = (database) => {
+  void preloadDatabaseDetail()
   router.push({ path: `/knowledge/${database.kb_id}` })
 }
 
@@ -523,6 +529,9 @@ watch(
 onMounted(() => {
   loadSupportedKbTypes()
   databaseStore.loadDatabases()
+  // Start fetching the lightweight detail shell while the user scans the list.
+  // The router reuses this module request when a knowledge base is opened.
+  void preloadDatabaseDetail()
 })
 
 defineExpose({

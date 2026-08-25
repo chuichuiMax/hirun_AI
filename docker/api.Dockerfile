@@ -19,23 +19,21 @@ ENV TZ=Asia/Shanghai \
 RUN npm config set registry https://registry.npmmirror.com --global \
     && npm cache clean --force
 
-# 设置代理和时区，更换镜像源，安装系统依赖 - 合并为一个RUN减少层数
+# 设置时区并使用 Debian 官方源安装系统依赖
 RUN set -ex \
     # (A) 设置时区
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
-    # (B) 替换清华源 (针对 Debian Bookworm 的新版格式)
-    && sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
-    && sed -i 's|security.debian.org/debian-security|mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list.d/debian.sources \
-    # (C) 安装必要的系统库
+    # (B) 安装必要的系统库
     && apt-get update \
     && apt-get install -y --no-install-recommends --fix-missing \
         curl \
         ffmpeg \
         git \
         libpq5 \
+        fonts-noto-cjk \
         libsm6 \
         libxext6 \
-    # (D) 清理垃圾，减小体积
+    # (C) 清理垃圾，减小体积
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -47,9 +45,14 @@ COPY backend/uv.lock /app/uv.lock
 # 先复制 package 目录，因为 pyproject.toml 中 yuxi = { path = "package", editable = true }
 COPY backend/package /app/package
 
-# 如果网络还是不好，可以在后面添加 --index-url https://pypi.tuna.tsinghua.edu.cn/simple
+# 使用 pyproject.toml 中配置的官方 PyPI 索引。
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --group test --no-dev --frozen
+
+# Browser runtime is built into the versioned API image and is launched only by
+# Xiaohongshu jobs running in the existing worker process.
+RUN /usr/local/bin/patchright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 # 激活虚拟环境并添加到PATH
 ENV PATH="/app/.venv/bin:$PATH"

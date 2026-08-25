@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
-  ArrowLeft,
   BookOpenCheck,
   CheckCircle2,
   CircleAlert,
@@ -14,14 +13,19 @@ import {
   Play,
   RefreshCw,
   Save,
+  ScanText,
   Send,
   Settings2,
   ShieldCheck,
-  Sparkles
+  Sparkles,
+  UserRoundCog
 } from 'lucide-vue-next'
 import ContentStageStepper from '@/components/content/ContentStageStepper.vue'
+import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
+import { contentApi } from '@/apis/content_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
+import { formatEvidenceReference } from '@/utils/contentEvidencePresentation'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,18 +40,43 @@ const creation = reactive({
   name: ''
 })
 const formValues = reactive({})
-const strategySelection = reactive({
-  methods: [],
-  scene_enhancer: 'S01',
-  title_formula_code: '',
-  content_formula_code: ''
-})
+const selectedAngleId = ref('')
 const selectedTitleId = ref('')
+const selectedTitleFormulaCode = ref('')
+const selectedBodyFormulaCode = ref('')
+const selectedCoverAssetId = ref('')
 const confirmedEvidenceIds = ref([])
+const approvalNote = ref('')
 const modelSpec = ref('')
 const editor = reactive({ title: '', body: '', topics: [] })
 const versionDrawerOpen = ref(false)
+const ocrModalOpen = ref(false)
+const coverUrl = ref('')
+const coverLoading = ref(false)
+const coverCandidateUrls = ref({})
+const coverCandidatesLoading = ref(false)
 let draftSaveTimer = null
+let coverLoadGeneration = 0
+let coverCandidateLoadGeneration = 0
+
+const testFormDefaults = {
+  decoration: {
+    brand_name: '杭州栖居空间设计',
+    audience: ['杭州准备改善型装修的三口之家'],
+    pain: ['89㎡空间收纳不足', '厨房动线拥挤', '担心预算失控'],
+    advantage: ['设计施工一体化', '节点验收留档', '主材报价透明'],
+    project_type: '三室两厅一卫',
+    area: '89㎡',
+    budget: '硬装预算18万元',
+    duration: '预计工期90天',
+    craft_and_materials:
+      '全屋定制柜采用ENF级板材，水电管线分色布置，防水完成后进行48小时闭水试验，各节点验收后留存影像记录。',
+    owner_pain:
+      '入户和餐厅缺少集中收纳，厨房操作台不足，儿童房需要同时满足学习与储物。',
+    project_result:
+      '现场复尺后通过玄关柜、餐边柜和儿童房组合柜增加12㎡收纳空间，厨房动线调整为洗、切、炒顺序。'
+  }
+}
 
 const taskId = computed(() => route.params.taskId)
 const selectedTemplate = computed(() =>
@@ -65,41 +94,121 @@ const activeFields = computed(() => {
     : store.template?.pro_form_schema || []
 })
 const isQuickMode = computed(() => (store.task ? store.task.mode : creation.mode) === 'quick')
-const methodOptions = computed(() =>
-  (store.ruleBundle?.methods || []).filter((item) => item.method_type === 'core')
-)
-const titleFormulaOptions = computed(() => store.ruleBundle?.title_formulas || [])
-const bodyFormulaOptions = computed(() => store.ruleBundle?.content_formulas || [])
-const compatibilityClass = computed(() => {
-  const value = store.strategy?.compatibility
-  if (value === 'blocked') return 'blocked'
-  if (value === 'warning') return 'warning'
-  return 'compatible'
-})
 const titleOptions = computed(
   () => store.interrupt?.options || store.task?.title_candidates || []
 )
+const evidenceFieldLabels = computed(() =>
+  Object.fromEntries(
+    [...(store.template?.quick_form_schema || []), ...(store.template?.pro_form_schema || [])]
+      .filter((field) => field.key && field.label)
+      .map((field) => [field.key, field.label])
+  )
+)
+const evidenceItemsById = computed(
+  () =>
+    new Map(
+      [...(store.evidence?.items || []), ...(store.interrupt?.evidence_items || [])]
+        .filter((item) => item?.id)
+        .map((item) => [item.id, item])
+    )
+)
+const evidenceReferenceText = (evidenceId, index = 0) =>
+  formatEvidenceReference(
+    evidenceItemsById.value.get(evidenceId),
+    evidenceFieldLabels.value,
+    index
+  )
+const angleOptions = computed(() =>
+  store.interrupt?.interrupt_type === 'content_direction' ? store.interrupt.options || [] : []
+)
 const nodeTimeline = computed(() => {
-  const labels = {
-    compile_brief: '构建业务简报',
-    plan_strategy: '规划创作策略',
-    collect_evidence: '检索并冻结证据',
-    confirm_facts: '确认关键事实',
-    generate_titles: '生成标题候选',
+  const v3Labels = {
+    compile_runtime_snapshot: '冻结运行配置',
+    ingest_real_materials: '导入真实素材',
+    normalize_evidence: '规范化证据',
+    analyze_content_value: 'Agent 分析内容价值',
+    select_content_direction: '人工锁定内容方向',
+    match_combination_group: '固定规则匹配组合组',
+    explain_strategy: 'Agent 解释策略',
+    resolve_formula_requirements: '解析公式所需事实',
+    collect_missing_evidence: 'Agent 收集缺失证据',
+    confirm_high_risk_facts: '人工确认高风险事实',
+    freeze_evidence_bundle: '冻结证据包',
+    rank_formula_candidates: 'Agent 排序公式候选',
+    lock_formula_selection: '锁定标题与正文公式',
+    resolve_product_material_requirements: '解析产品资料需求',
+    collect_strategy_product_evidence: '调研 Agent 定向检索产品资料',
+    confirm_strategy_product_facts: '人工确认产品高风险事实',
+    freeze_product_evidence_bundle: '冻结产品证据快照',
+    generate_title_candidates: '标题 Agent 生成候选',
+    validate_title_candidates: '校验标题候选',
     select_title: '人工选择标题',
-    generate_body: '生成正文与话题',
-    validate: '确定性校验',
-    review: '内容质量审核',
-    save: '保存内容版本'
+    build_outline: '正文 Agent 构建大纲',
+    generate_body: '正文 Agent 生成正文',
+    persona_style_polish: '按人设润色表达',
+    adapt_to_channel: '适配发布渠道',
+    deterministic_validate: '执行确定性校验',
+    semantic_review: '审核 Agent 复核内容',
+    revise_if_needed: '按失败原因定点回修',
+    human_content_approval: '人工批准最终文案',
+    plan_visuals: '视觉 Agent 制定方案',
+    submit_cover_job: '提交封面任务',
+    wait_cover_job: '等待封面服务',
+    visual_review: '视觉 Agent 审核图片',
+    select_cover: '人工选择封面',
+    save_artifact_snapshot: '保存统一内容版本',
+    package_for_distribution: '生成不可变发布包'
   }
   const byNode = new Map(store.runEvents.map((item) => [item.node_id, item]))
-  return Object.entries(labels).map(([id, label]) => ({ id, label, status: byNode.get(id)?.status || 'pending' }))
+  return Object.entries(v3Labels).map(([id, label]) => ({
+    id,
+    label,
+    status: byNode.get(id)?.status || 'pending'
+  }))
 })
 const reviewChecks = computed(() => store.artifact?.review_snapshot?.checks || store.task?.review?.checks || [])
 const canFinalize = computed(() => ['passed', 'warning'].includes(store.artifact?.review_snapshot?.status))
+const approvalAllowed = computed(() => {
+  if (store.interrupt?.interrupt_type !== 'content_approval') return false
+  return (
+    store.interrupt.approval_allowed === true &&
+    ['passed', 'warning'].includes(store.interrupt.validation_report?.status) &&
+    ['passed', 'warning'].includes(store.interrupt.review_report?.status)
+  )
+})
+const correctionChecks = computed(() => [
+  ...(store.interrupt?.title_validation_report?.items || []).flatMap((item) => item.checks || []),
+  ...(store.interrupt?.validation_report?.checks || []),
+  ...(store.interrupt?.review_report?.checks || [])
+].filter((item) => item.status === 'blocked' || item.level === 'error'))
+const latestTitleValidationReport = computed(() => {
+  const nodes = [...(store.runAudit?.nodes || [])].reverse()
+  return nodes.find((item) => item.node_id === 'validate_title_candidates')
+    ?.output_snapshot?.title_validation_report || null
+})
+const blockedTitleCandidates = computed(() =>
+  (latestTitleValidationReport.value?.items || []).filter((item) => item.status === 'blocked')
+)
 const runFailed = computed(() =>
   ['failed', 'cancelled'].includes(store.currentRun?.status) || store.task?.status === 'failed'
 )
+const externalWaitProgress = computed(() =>
+  Math.min(100, Math.max(0, Number(store.interrupt?.progress || 0)))
+)
+const externalWaitStatusLabel = computed(() => {
+  const labels = {
+    queued: '封面任务已进入队列',
+    running: '封面服务正在生成图片',
+    submitting: '正在提交封面生成请求',
+    polling: '正在等待封面生成结果',
+    downloading: '正在下载封面结果',
+    saving: '正在保存封面资产',
+    succeeded: '封面生成完成，正在自动继续工作流',
+    failed: '封面生成失败，正在同步失败结果',
+    cancelled: '封面任务已取消，正在同步任务状态'
+  }
+  return labels[store.interrupt?.status] || '正在等待封面服务'
+})
 const failedNodeId = computed(
   () => [...store.runEvents].reverse().find((item) => item.status === 'failed')?.node_id || null
 )
@@ -112,27 +221,26 @@ const saveStatusLabel = computed(() => {
 
 const stageFromTask = (task) => {
   if (!task) return 1
-  if (task.current_stage === 'review') return 4
-  if (task.current_stage === 'generation') return 3
-  if (task.current_stage === 'strategy') return 2
+  if (task.current_stage === 'review') return 3
+  if (['generation', 'strategy'].includes(task.current_stage)) return 2
   return 1
 }
 
 const initializeFormValues = () => {
   Object.keys(formValues).forEach((key) => delete formValues[key])
   const saved = store.task?.brief?.form_values || {}
+  const hasSavedValues = Object.values(saved).some(
+    (value) => value !== undefined && value !== null && value !== '' && (!Array.isArray(value) || value.length)
+  )
+  const defaults = hasSavedValues
+    ? {}
+    : testFormDefaults[store.template?.slug || selectedTemplate.value?.slug] || {}
   activeFields.value.forEach((field) => {
-    if (saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
-    else if (field.type === 'tags' || field.type === 'knowledge') formValues[field.key] = []
+    if (hasSavedValues && saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
+    else if (defaults[field.key] !== undefined) formValues[field.key] = defaults[field.key]
+    else if (field.type === 'tags') formValues[field.key] = []
     else formValues[field.key] = ''
   })
-}
-
-const syncStrategy = (strategy = store.strategy) => {
-  strategySelection.methods = [...(strategy?.methods || [])]
-  strategySelection.scene_enhancer = strategy?.scene_enhancer || 'S01'
-  strategySelection.title_formula_code = strategy?.title_formula_code || ''
-  strategySelection.content_formula_code = strategy?.content_formula_code || ''
 }
 
 const syncEditor = () => {
@@ -146,10 +254,91 @@ watch(
   (task) => {
     if (!task) return
     stage.value = stageFromTask(task)
-    syncStrategy(task.strategy)
     syncEditor()
   },
   { deep: true }
+)
+
+watch(
+  () => store.interrupt,
+  (interrupt) => {
+    selectedAngleId.value = ''
+    selectedTitleId.value = ''
+    selectedTitleFormulaCode.value = ''
+    selectedBodyFormulaCode.value = ''
+    selectedCoverAssetId.value = ''
+    confirmedEvidenceIds.value = ['high_risk_facts', 'strategy_product_facts'].includes(
+      interrupt?.interrupt_type
+    )
+      ? [...(interrupt.evidence_ids || [])]
+      : []
+    approvalNote.value = ''
+  },
+  { deep: true }
+)
+
+watch(
+  () => store.artifact?.cover_asset_id,
+  async (assetId) => {
+    const generation = ++coverLoadGeneration
+    if (coverUrl.value) {
+      URL.revokeObjectURL(coverUrl.value)
+      coverUrl.value = ''
+    }
+    if (!assetId) return
+    coverLoading.value = true
+    try {
+      const response = await contentApi.getCoverAssetFile(assetId)
+      const nextUrl = URL.createObjectURL(await response.blob())
+      if (generation !== coverLoadGeneration) {
+        URL.revokeObjectURL(nextUrl)
+        return
+      }
+      coverUrl.value = nextUrl
+    } catch (error) {
+      if (generation === coverLoadGeneration) {
+        message.warning(error.message || '当前封面暂时无法预览')
+      }
+    } finally {
+      if (generation === coverLoadGeneration) coverLoading.value = false
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  () =>
+    store.interrupt?.interrupt_type === 'cover_selection'
+      ? (store.interrupt.asset_ids || []).join('|')
+      : '',
+  async (assetKey) => {
+    const generation = ++coverCandidateLoadGeneration
+    Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
+    coverCandidateUrls.value = {}
+    if (!assetKey) return
+
+    coverCandidatesLoading.value = true
+    const nextUrls = {}
+    await Promise.all(
+      assetKey.split('|').map(async (assetId) => {
+        try {
+          const response = await contentApi.getCoverAssetFile(assetId)
+          nextUrls[assetId] = URL.createObjectURL(await response.blob())
+        } catch {
+          nextUrls[assetId] = ''
+        }
+      })
+    )
+    if (generation !== coverCandidateLoadGeneration) {
+      Object.values(nextUrls).forEach((url) => {
+        if (url) URL.revokeObjectURL(url)
+      })
+      return
+    }
+    coverCandidateUrls.value = nextUrls
+    coverCandidatesLoading.value = false
+  },
+  { immediate: true }
 )
 
 watch(
@@ -167,19 +356,14 @@ onMounted(async () => {
     if (taskId.value) {
       await store.loadTask(taskId.value)
       initializeFormValues()
-      syncStrategy()
       syncEditor()
       if (
         store.task?.latest_run_id &&
         [
           'queued',
           'running',
-          'planning_strategy',
-          'collecting_evidence',
-          'waiting_title',
           'waiting_human',
-          'generating_body',
-          'reviewing',
+          'waiting_external',
           'failed',
           'cancelled'
         ].includes(store.task.status)
@@ -218,13 +402,12 @@ const buildBrief = () => ({
   business_variables: Object.fromEntries(
     Object.entries(formValues).filter(
       ([key]) =>
-        !['brand_name', 'audience', 'persona', 'required_terms', 'forbidden_terms', 'knowledge_scope'].includes(key)
+        !['brand_name', 'audience', 'persona', 'required_terms', 'forbidden_terms'].includes(key)
     )
   ),
   persona: formValues.persona ? { description: formValues.persona } : {},
   required_terms: formValues.required_terms || [],
   forbidden_terms: formValues.forbidden_terms || [],
-  knowledge_scope: formValues.knowledge_scope || [],
   attachments: [],
   locked_fields: [],
   form_values: { ...formValues }
@@ -242,41 +425,22 @@ watch(
   { deep: true }
 )
 
-onBeforeUnmount(() => window.clearTimeout(draftSaveTimer))
+onBeforeUnmount(() => {
+  window.clearTimeout(draftSaveTimer)
+  coverLoadGeneration += 1
+  coverCandidateLoadGeneration += 1
+  if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
+  Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
+})
 
 const compileBrief = async () => {
   try {
     window.clearTimeout(draftSaveTimer)
     await store.compileBrief(buildBrief())
     stage.value = 2
-    const strategy = await store.recommendStrategy()
-    syncStrategy(strategy)
-    message.success('业务简报已形成，系统已匹配创作策略')
+    message.success('业务简报已形成，可启动 V3 内容工作流')
   } catch (error) {
     message.error(error.message || '请补充必填业务信息')
-  }
-}
-
-const refreshRecommendation = async () => {
-  try {
-    const strategy = await store.recommendStrategy()
-    syncStrategy(strategy)
-  } catch (error) {
-    message.error(error.message || '策略匹配失败')
-  }
-}
-
-const confirmStrategy = async () => {
-  try {
-    const response = await store.saveStrategy({ ...strategySelection })
-    if (response.validation.compatibility === 'blocked') {
-      message.error('当前组合不兼容，请根据提示调整')
-      return
-    }
-    stage.value = 3
-    message.success('创作策略已锁定')
-  } catch (error) {
-    message.error(error.message || '保存策略失败')
   }
 }
 
@@ -299,11 +463,52 @@ const retryFailedRun = async () => {
 
 const submitHumanReview = async () => {
   try {
-    if (store.interrupt?.interrupt_type === 'confirm_facts') {
+    const metadata = {
+      run_id: store.interrupt?.run_id,
+      node_id: store.interrupt?.node_id,
+      expected_state_version: store.interrupt?.expected_state_version
+    }
+    if (store.interrupt?.interrupt_type === 'content_direction') {
+      const selected = angleOptions.value.find((item) => item.direction_code === selectedAngleId.value)
+      if (!selected) {
+        message.warning('请选择一个内容方向')
+        return
+      }
       await store.resumeRun({
-        interrupt_type: 'confirm_facts',
+        ...metadata,
+        direction_code: selected.direction_code
+      })
+      return
+    }
+    if (['high_risk_facts', 'strategy_product_facts'].includes(store.interrupt?.interrupt_type)) {
+      await store.resumeRun({
+        ...metadata,
         confirmed_evidence_ids: confirmedEvidenceIds.value
       })
+      return
+    }
+    if (store.interrupt?.interrupt_type === 'formula_selection') {
+      if (!selectedTitleFormulaCode.value || !selectedBodyFormulaCode.value) {
+        message.warning('请各选择一个标题公式和正文公式')
+        return
+      }
+      await store.resumeRun({
+        ...metadata,
+        title_formula_code: selectedTitleFormulaCode.value,
+        body_formula_code: selectedBodyFormulaCode.value
+      })
+      return
+    }
+    if (store.interrupt?.interrupt_type === 'content_correction') {
+      await store.resumeRun({ ...metadata, decision: 'revise' })
+      return
+    }
+    if (store.interrupt?.interrupt_type === 'cover_selection') {
+      if (!selectedCoverAssetId.value) {
+        message.warning('请选择一张封面')
+        return
+      }
+      await store.resumeRun({ ...metadata, asset_id: selectedCoverAssetId.value })
       return
     }
     if (!selectedTitleId.value) {
@@ -311,11 +516,25 @@ const submitHumanReview = async () => {
       return
     }
     await store.resumeRun({
-      interrupt_type: 'select_title',
-      selected_candidate_id: selectedTitleId.value
+      ...metadata,
+      title_id: selectedTitleId.value
     })
   } catch (error) {
     message.error(error.message || '恢复工作流失败')
+  }
+}
+
+const submitHumanApproval = async (approved) => {
+  try {
+    await store.resumeRun({
+      run_id: store.interrupt?.run_id,
+      node_id: store.interrupt?.node_id,
+      expected_state_version: store.interrupt?.expected_state_version,
+      decision: approved ? 'approved' : 'rejected',
+      note: approvalNote.value.trim() || null
+    })
+  } catch (error) {
+    message.error(error.message || '提交人工审批失败')
   }
 }
 
@@ -342,6 +561,7 @@ const reviewArtifact = async () => {
 const finalizeArtifact = async () => {
   try {
     await store.finalizeArtifact()
+    await router.push(`/content/results/${store.task.id}`)
     message.success('已保存为正式内容资产')
   } catch (error) {
     message.error(error.message || '保存正式版本失败')
@@ -363,6 +583,12 @@ const openVersions = async () => {
         <p>规则、事实和知识同源，关键节点由人确认。</p>
       </div>
       <div class="header-actions">
+        <a-button @click="router.push('/content/accounts')"><UserRoundCog :size="16" />账号管理</a-button>
+        <a-button
+          :disabled="!store.task"
+          :title="store.task ? '上传图片并使用 RapidOCR 识别' : '请先创建内容任务'"
+          @click="ocrModalOpen = true"
+        ><ScanText :size="16" />图片识别</a-button>
         <a-button @click="router.push('/content/history')"><History :size="16" />生产历史</a-button>
         <a-button v-if="userStore.isAdmin" @click="router.push('/content/admin/rules')">
           <Settings2 :size="16" />创作规则库
@@ -384,7 +610,7 @@ const openVersions = async () => {
             <label class="field-block">
               <span>使用模式</span>
               <a-segmented v-model:value="creation.mode" :options="[{ label: '简化版', value: 'quick' }, { label: '专业版', value: 'pro' }]" />
-              <small>简化版由系统自动匹配公式；专业版可逐项确认策略。</small>
+              <small>简化版由 V3 自动锁定公式；专业版会在人工节点确认公式对。</small>
             </label>
             <label class="field-block">
               <span>内容目标</span>
@@ -447,16 +673,6 @@ const openVersions = async () => {
                     :token-separators="[',', '，']"
                     :placeholder="`输入${field.label}后回车`"
                   />
-                  <a-select
-                    v-else-if="field.type === 'knowledge'"
-                    v-model:value="formValues[field.key]"
-                    mode="multiple"
-                    placeholder="选择本次允许检索的知识库"
-                  >
-                    <a-select-option v-for="kb in store.knowledgeOptions" :key="kb.id" :value="kb.id">
-                      {{ kb.name }}
-                    </a-select-option>
-                  </a-select>
                 </label>
               </div>
             </div>
@@ -466,14 +682,14 @@ const openVersions = async () => {
               <p>提交后系统会形成 ContentBrief，并把人工输入标准化为带来源的 EvidenceBundle。</p>
               <ul>
                 <li>数字和结果必须可验证</li>
-                <li>知识库仅补充行业知识与案例</li>
+                <li>知识库由内容调研 Agent 统一配置</li>
                 <li>规则组合不通过 RAG 判断</li>
               </ul>
             </aside>
           </div>
           <div class="stage-actions">
             <a-button type="primary" :loading="store.loading.saving" @click="compileBrief">
-              形成事实简报并进入策略
+              形成事实简报并进入 V3 生产
             </a-button>
           </div>
         </template>
@@ -481,75 +697,14 @@ const openVersions = async () => {
 
       <section v-else-if="stage === 2" class="stage-panel">
         <div class="panel-heading">
-          <div><span>阶段 2</span><h2>创作策略与组合校验</h2></div>
-          <a-button :loading="store.loading.saving" @click="refreshRecommendation"><RefreshCw :size="15" />重新匹配</a-button>
-        </div>
-
-        <div class="strategy-grid">
-          <div class="form-card">
-            <label class="field-block">
-              <span>核心创作手法</span>
-              <a-select v-model:value="strategySelection.methods" mode="multiple" :disabled="isQuickMode">
-                <a-select-option v-for="item in methodOptions" :key="item.code" :value="item.code">
-                  {{ item.name }} · {{ item.principle }}
-                </a-select-option>
-              </a-select>
-            </label>
-            <label class="field-block">
-              <span>标题公式</span>
-              <a-select v-model:value="strategySelection.title_formula_code" :disabled="isQuickMode">
-                <a-select-option v-for="item in titleFormulaOptions" :key="item.code" :value="item.code">
-                  {{ item.code }} · {{ item.name }}
-                </a-select-option>
-              </a-select>
-            </label>
-            <label class="field-block">
-              <span>正文公式</span>
-              <a-select v-model:value="strategySelection.content_formula_code" :disabled="isQuickMode">
-                <a-select-option v-for="item in bodyFormulaOptions" :key="item.code" :value="item.code">
-                  {{ item.code }} · {{ item.name }}
-                </a-select-option>
-              </a-select>
-            </label>
-            <label class="field-check">
-              <a-checkbox
-                :checked="Boolean(strategySelection.scene_enhancer)"
-                @change="strategySelection.scene_enhancer = $event.target.checked ? 'S01' : ''"
-              >启用场景增强</a-checkbox>
-            </label>
-          </div>
-
-          <aside class="compatibility-card" :class="compatibilityClass">
-            <CheckCircle2 v-if="compatibilityClass === 'compatible'" :size="24" />
-            <CircleAlert v-else :size="24" />
-            <h3>{{ compatibilityClass === 'blocked' ? '组合被阻断' : compatibilityClass === 'warning' ? '组合可用但需注意' : '组合已匹配' }}</h3>
-            <p>{{ store.strategy?.reason_summary || '系统会根据内容目标和规则矩阵给出组合原因。' }}</p>
-            <ul v-if="store.strategy?.warnings?.length">
-              <li v-for="warning in store.strategy.warnings" :key="warning">{{ warning }}</li>
-            </ul>
-            <div class="strategy-snapshot">
-              <span>规则版本</span><code>{{ store.task?.rule_version_id }}</code>
-              <span>证据条目</span><strong>{{ store.evidence?.items?.length || 0 }}</strong>
-            </div>
-          </aside>
-        </div>
-
-        <div class="stage-actions split">
-          <a-button @click="stage = 1"><ArrowLeft :size="15" />返回素材</a-button>
-          <a-button type="primary" :loading="store.loading.saving" @click="confirmStrategy">锁定策略并进入生成</a-button>
-        </div>
-      </section>
-
-      <section v-else-if="stage === 3" class="stage-panel">
-        <div class="panel-heading">
-          <div><span>阶段 3</span><h2>内容生成与人工选择</h2></div>
+          <div><span>阶段 2</span><h2>V3 内容工作流</h2></div>
           <span v-if="store.currentRun" class="run-id">Run {{ store.currentRun.run_id }}</span>
         </div>
 
         <div v-if="!store.currentRun && !store.interrupt" class="generation-start">
           <Sparkles :size="30" />
-          <h3>策略和证据已锁定</h3>
-          <p>工作流会依次执行策略、证据、标题、正文和审核节点，并在标题候选处暂停。</p>
+          <h3>事实简报已锁定</h3>
+          <p>固定工作流会在动态节点调用 Agent，Agent 再使用 Skill、知识库和工具，关键选择会暂停等待人工确认。</p>
           <a-input v-if="!isQuickMode" v-model:value="modelSpec" placeholder="可选：指定模型 spec；留空使用系统默认模型" />
           <a-button type="primary" size="large" @click="startGeneration"><Play :size="17" />开始生成</a-button>
         </div>
@@ -565,7 +720,26 @@ const openVersions = async () => {
             </div>
           </div>
 
-          <div v-if="store.interrupt?.interrupt_type === 'select_title'" class="human-review-card">
+          <div v-if="store.interrupt?.interrupt_type === 'content_direction'" class="human-review-card">
+            <div class="human-heading"><Sparkles :size="20" /><div><h3>选择本次内容方向</h3><p>Agent 已根据目标、事实和证据生成候选方向，选择后将由固定规则匹配组合组。</p></div></div>
+            <a-radio-group v-model:value="selectedAngleId" class="title-options angle-options">
+              <a-radio v-for="item in angleOptions" :key="item.direction_code" :value="item.direction_code">
+                <strong>{{ item.direction_code }}</strong>
+                <span>{{ item.reason }}</span>
+                <div v-if="item.evidence_ids?.length" class="evidence-references">
+                  <div class="evidence-references-title">引用证据</div>
+                  <ol>
+                    <li v-for="(evidenceId, index) in item.evidence_ids" :key="evidenceId">
+                      {{ evidenceReferenceText(evidenceId, index) }}
+                    </li>
+                  </ol>
+                </div>
+              </a-radio>
+            </a-radio-group>
+            <a-button type="primary" :disabled="!selectedAngleId" @click="submitHumanReview">确认方向并继续</a-button>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'title_selection'" class="human-review-card">
             <div class="human-heading"><Send :size="20" /><div><h3>请选择最终标题</h3><p>选择后 LangGraph 从 checkpoint 恢复，无需重新检索证据。</p></div></div>
             <a-radio-group v-model:value="selectedTitleId" class="title-options">
               <a-radio v-for="item in titleOptions" :key="item.id" :value="item.id">
@@ -576,21 +750,113 @@ const openVersions = async () => {
             <a-button type="primary" @click="submitHumanReview">确认标题并继续生成</a-button>
           </div>
 
-          <div v-else-if="store.interrupt?.interrupt_type === 'confirm_facts'" class="human-review-card">
-            <div class="human-heading"><ShieldCheck :size="20" /><div><h3>确认关键事实</h3><p>价格、效果或高风险表达必须确认后才能用于生成。</p></div></div>
+          <div v-else-if="['high_risk_facts', 'strategy_product_facts'].includes(store.interrupt?.interrupt_type)" class="human-review-card">
+            <div class="human-heading"><ShieldCheck :size="20" /><div><h3>确认关键事实</h3><p>价格、优惠、效果或高风险表达必须逐项确认后才能进入冻结证据并用于生成。</p></div></div>
             <a-checkbox-group v-model:value="confirmedEvidenceIds" class="fact-options">
-              <a-checkbox v-for="item in store.interrupt.options" :key="item.id" :value="item.id">
-                {{ item.key }}：{{ item.value }}
+              <a-checkbox v-for="item in store.interrupt.evidence_ids" :key="item" :value="item">
+                <strong>{{ evidenceReferenceText(item) }}</strong>
               </a-checkbox>
             </a-checkbox-group>
             <a-button type="primary" @click="submitHumanReview">确认选中事实并继续</a-button>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'formula_selection'" class="human-review-card">
+            <div class="human-heading"><Sparkles :size="20" /><div><h3>选择公式对</h3><p>专业模式下，从当前组合组的合法候选池中各选一个标题公式和正文公式。</p></div></div>
+            <label class="field-block"><span>标题公式</span>
+              <a-select v-model:value="selectedTitleFormulaCode">
+                <a-select-option v-for="code in store.interrupt.title_formula_codes" :key="code" :value="code">{{ code }}</a-select-option>
+              </a-select>
+            </label>
+            <label class="field-block"><span>正文公式</span>
+              <a-select v-model:value="selectedBodyFormulaCode">
+                <a-select-option v-for="code in store.interrupt.body_formula_codes" :key="code" :value="code">{{ code }}</a-select-option>
+              </a-select>
+            </label>
+            <a-button type="primary" @click="submitHumanReview">锁定公式并继续</a-button>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'content_approval'" class="human-review-card">
+            <div class="human-heading"><ShieldCheck :size="20" /><div><h3>最终人工审批</h3><p>请根据审核结果确认是否允许保存内容资产。</p></div></div>
+            <div v-if="store.interrupt.review_report?.checks?.length" class="approval-checks">
+              <div v-for="check in store.interrupt.review_report.checks" :key="`${check.code}-${check.message}`">
+                <strong>{{ check.message }}</strong>
+                <span v-if="check.suggestion">{{ check.suggestion }}</span>
+              </div>
+            </div>
+            <a-textarea v-model:value="approvalNote" :rows="3" placeholder="可选：填写审批备注" />
+            <div class="approval-actions">
+              <a-button danger @click="submitHumanApproval(false)">驳回</a-button>
+              <a-button type="primary" :disabled="!approvalAllowed" @click="submitHumanApproval(true)">通过并继续</a-button>
+            </div>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'content_correction'" class="human-review-card">
+            <div class="human-heading"><CircleAlert :size="20" /><div><h3>内容需要定点回修</h3><p>确定性校验或语义审核发现阻断问题。确认后只重跑建议节点及其下游。</p></div></div>
+            <div class="approval-checks">
+              <div v-for="check in correctionChecks" :key="`${check.code}-${check.location || 'content'}`">
+                <strong>{{ check.message || check.code }}</strong>
+                <span v-if="check.suggestion">{{ check.suggestion }}</span>
+              </div>
+            </div>
+            <p class="correction-target">回修原因：{{ store.interrupt.reason_code }} · 目标节点：{{ store.interrupt.suggested_target }}</p>
+            <div class="approval-actions">
+              <a-button type="primary" @click="submitHumanReview">确认并按建议重新生成</a-button>
+            </div>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'cover_selection'" class="human-review-card">
+            <div class="human-heading"><Send :size="20" /><div><h3>选择最终封面</h3><p>只可从通过视觉审核的资产中选择。</p></div></div>
+            <a-radio-group v-model:value="selectedCoverAssetId" class="title-options cover-options">
+              <a-radio v-for="(assetId, index) in store.interrupt.asset_ids" :key="assetId" :value="assetId">
+                <div class="cover-option">
+                  <div class="cover-candidate-preview">
+                    <img v-if="coverCandidateUrls[assetId]" :src="coverCandidateUrls[assetId]" :alt="`封面候选 ${index + 1}`" />
+                    <div v-else class="cover-candidate-placeholder">
+                      <LoaderCircle v-if="coverCandidatesLoading" class="spin" :size="22" />
+                      <span v-else>封面暂时无法预览</span>
+                    </div>
+                  </div>
+                  <strong>封面候选 {{ index + 1 }}</strong>
+                  <span>{{ assetId }}</span>
+                </div>
+              </a-radio>
+            </a-radio-group>
+            <a-button type="primary" @click="submitHumanReview">确认封面并保存</a-button>
+          </div>
+
+          <div v-else-if="store.interrupt?.interrupt_type === 'external_wait'" class="running-card external-wait-card">
+            <LoaderCircle class="spin" :size="26" />
+            <h3>封面正在生成</h3>
+            <p>这是系统等待节点，无需人工操作；封面服务完成后会自动继续后续审核。</p>
+            <a-progress :percent="externalWaitProgress" :show-info="externalWaitProgress > 0" status="active" />
+            <small>{{ externalWaitStatusLabel }}</small>
           </div>
 
           <div v-else-if="runFailed" class="running-card failure-card">
             <CircleAlert :size="26" />
             <h3>工作流执行失败</h3>
             <p>{{ store.task?.error?.message || store.lastError?.message || '已保留完成节点和 checkpoint，可从失败节点恢复。' }}</p>
+            <section v-if="blockedTitleCandidates.length" class="title-validation-failures">
+              <h4>标题候选校验明细</h4>
+              <ol>
+                <li v-for="item in blockedTitleCandidates" :key="item.id">
+                  <strong>{{ item.text || item.id }}</strong>
+                  <ul>
+                    <li v-for="check in item.checks" :key="`${item.id}-${check.code}-${check.message}`">
+                      <span>{{ check.message }}</span>
+                      <small v-if="check.suggestion">{{ check.suggestion }}</small>
+                    </li>
+                  </ul>
+                </li>
+              </ol>
+            </section>
             <a-button type="primary" @click="retryFailedRun"><RefreshCw :size="15" />从失败节点重试</a-button>
+          </div>
+
+          <div v-else-if="store.interrupt" class="running-card failure-card">
+            <CircleAlert :size="26" />
+            <h3>遇到未支持的人工节点</h3>
+            <p>节点类型：{{ store.interrupt.interrupt_type || '未知' }}。请联系管理员检查工作流版本。</p>
           </div>
 
           <div v-else class="running-card">
@@ -603,7 +869,7 @@ const openVersions = async () => {
 
       <section v-else class="stage-panel">
         <div class="panel-heading">
-          <div><span>阶段 4</span><h2>审核、编辑与正式版本</h2></div>
+          <div><span>阶段 3</span><h2>审核、编辑与正式版本</h2></div>
           <div class="status-badge" :class="store.artifact?.review_snapshot?.status || 'pending'">
             {{ store.artifact?.review_snapshot?.status || '待审核' }}
           </div>
@@ -611,6 +877,17 @@ const openVersions = async () => {
 
         <div v-if="store.artifact" class="review-layout">
           <div class="content-editor-card">
+            <section v-if="store.artifact.cover_asset_id" class="artifact-cover-preview">
+              <div class="artifact-cover-heading">
+                <div><strong>本次生成封面</strong><span>已与当前内容版本绑定</span></div>
+                <small>{{ store.artifact.cover_asset_id }}</small>
+              </div>
+              <div v-if="coverLoading" class="cover-preview-loading">
+                <LoaderCircle class="spin" :size="24" />正在加载封面
+              </div>
+              <img v-else-if="coverUrl" :src="coverUrl" alt="本次生成封面" />
+              <a-empty v-else description="封面暂时无法预览" />
+            </section>
             <label class="field-block"><span>标题</span><a-input v-model:value="editor.title" /></label>
             <label class="field-block"><span>正文</span><a-textarea v-model:value="editor.body" :rows="18" /></label>
             <label class="field-block">
@@ -655,10 +932,14 @@ const openVersions = async () => {
         <a-timeline-item v-for="item in store.versions" :key="item.id">
           <strong>v{{ item.version }} · {{ item.source_type }}</strong>
           <p>{{ item.title }}</p>
-          <small>{{ item.created_at }} · {{ item.model_spec || '人工编辑' }}</small>
+          <small>
+            {{ item.created_at }} ·
+            {{ item.model_spec || (item.source_type === 'generated' ? '系统默认模型' : '人工编辑') }}
+          </small>
         </a-timeline-item>
       </a-timeline>
     </a-drawer>
+    <ContentOcrDrawer v-if="store.task" v-model:open="ocrModalOpen" :task-id="store.task.id" />
   </div>
 </template>
 
@@ -696,7 +977,7 @@ const openVersions = async () => {
 .panel-heading h2 { margin: 2px 0 0; font-size: 20px; }
 .panel-heading p { max-width: 460px; margin: 0; color: var(--color-text-secondary); }
 
-.setup-grid, .brief-layout, .strategy-grid, .run-layout, .review-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr); gap: 20px; }
+.setup-grid, .brief-layout, .run-layout, .review-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr); gap: 20px; }
 .setup-grid { grid-template-columns: 1fr 1fr; margin-bottom: 20px; }
 .template-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .template-card { min-height: 116px; padding: 16px; display: flex; flex-direction: column; gap: 7px; text-align: left; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); color: var(--color-text); cursor: pointer; }
@@ -705,7 +986,7 @@ const openVersions = async () => {
 .template-card strong { font-size: 15px; }
 .template-card span, .template-card small { color: var(--color-text-secondary); }
 
-.form-card, .facts-preview, .compatibility-card, .run-timeline, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
+.form-card, .facts-preview, .run-timeline, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
 .form-card, .content-editor-card { display: flex; flex-direction: column; gap: 18px; }
 .dynamic-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .dynamic-form .field-block:has(textarea), .dynamic-form .field-block:has(.ant-select-multiple) { grid-column: 1 / -1; }
@@ -724,15 +1005,6 @@ const openVersions = async () => {
 .stage-actions { margin-top: 22px; display: flex; justify-content: flex-end; gap: 10px; }
 .stage-actions.split { justify-content: space-between; }
 
-.compatibility-card.compatible { background: var(--color-success-10); border-color: var(--color-success-100); }
-.compatibility-card.warning { background: var(--color-warning-10); border-color: var(--color-warning-100); }
-.compatibility-card.blocked { background: var(--color-error-10); border-color: var(--color-error-100); }
-.compatibility-card h3 { margin: 10px 0 6px; }
-.compatibility-card p, .compatibility-card li { color: var(--color-text-secondary); }
-.strategy-snapshot { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--gray-150); }
-.strategy-snapshot span { color: var(--color-text-secondary); }
-.strategy-snapshot code { overflow-wrap: anywhere; }
-.field-check { color: var(--color-text-secondary); }
 
 .generation-start { max-width: 560px; margin: 50px auto; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
 .generation-start h3, .generation-start p { margin: 0; }
@@ -746,16 +1018,55 @@ const openVersions = async () => {
 .run-node.failed { background: var(--color-error-50); color: var(--color-error-700); }
 .human-review-card, .running-card { align-self: start; }
 .failure-card { color: var(--color-error-700); background: var(--color-error-50); }
+.title-validation-failures { width: 100%; margin: 8px 0 4px; padding: 14px; text-align: left; color: var(--color-text); background: var(--gray-0); border: 1px solid var(--color-error-200); border-radius: 8px; }
+.title-validation-failures h4 { margin: 0 0 10px; font-size: 14px; }
+.title-validation-failures > ol { display: grid; gap: 12px; margin: 0; padding-left: 22px; }
+.title-validation-failures > ol > li > strong { display: block; font-size: 14px; line-height: 1.6; }
+.title-validation-failures ul { display: grid; gap: 5px; margin: 6px 0 0; padding-left: 18px; color: var(--color-error-700); }
+.title-validation-failures ul span, .title-validation-failures ul small { display: block; font-size: 12px; line-height: 1.55; }
+.title-validation-failures ul small { margin-top: 2px; color: var(--color-text-secondary); }
+.external-wait-card { gap: 10px; background: var(--color-info-50); color: var(--color-info-700); }
+.external-wait-card h3, .external-wait-card p { margin: 0; }
+.external-wait-card p, .external-wait-card small { color: var(--color-text-secondary); }
+.external-wait-card :deep(.ant-progress) { width: 100%; }
 .human-heading { display: flex; gap: 10px; margin-bottom: 16px; }
 .human-heading h3, .human-heading p { margin: 0; }
 .human-heading p { margin-top: 3px; color: var(--color-text-secondary); }
 .title-options, .fact-options { width: 100%; display: flex; flex-direction: column; gap: 9px; margin-bottom: 16px; }
 .title-options :deep(.ant-radio-wrapper), .fact-options :deep(.ant-checkbox-wrapper) { width: 100%; margin-inline-start: 0; padding: 12px; border: 1px solid var(--gray-150); border-radius: 6px; align-items: flex-start; }
+.angle-options :deep(.ant-radio-wrapper-checked) { border-color: var(--main-color); background: var(--main-30); }
+.angle-options strong, .angle-options span { display: block; }
+.angle-options span { margin-top: 4px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.evidence-references { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--gray-150); color: var(--color-text-secondary); }
+.evidence-references-title { margin-bottom: 6px; font-size: 12px; font-weight: 600; line-height: 1.5; }
+.evidence-references ol { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: evidence-reference; }
+.evidence-references li { display: grid; grid-template-columns: 24px minmax(0, 1fr); margin: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; counter-increment: evidence-reference; }
+.evidence-references li::before { content: counter(evidence-reference) '、'; color: var(--main-color); font-weight: 600; }
+.approval-checks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.approval-checks > div { padding: 10px 12px; border-radius: 6px; background: var(--color-warning-50); color: var(--color-warning-900); }
+.approval-checks strong, .approval-checks span { display: block; font-size: 12px; }
+.approval-checks span { margin-top: 3px; opacity: 0.82; }
+.correction-target { margin: 12px 0 0; color: var(--gray-600); font-size: 13px; }
+.approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .title-options strong, .title-options span { display: block; }
 .title-options span { margin-top: 3px; color: var(--color-text-tertiary); font-size: 12px; }
+.cover-options :deep(.ant-radio-wrapper) { align-items: center; }
+.cover-options :deep(.ant-radio + span) { min-width: 0; flex: 1; }
+.cover-option { display: grid; gap: 4px; min-width: 0; }
+.cover-candidate-preview { width: 100%; margin-bottom: 7px; overflow: hidden; border-radius: 8px; background: var(--gray-25); }
+.cover-candidate-preview img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; }
+.cover-candidate-placeholder { min-height: 220px; display: flex; align-items: center; justify-content: center; color: var(--color-text-tertiary); }
+.cover-option > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .running-card { display: flex; flex-direction: column; align-items: center; text-align: center; }
 
 .content-editor-card textarea { resize: vertical; }
+.artifact-cover-preview { display: flex; flex-direction: column; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--gray-150); }
+.artifact-cover-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.artifact-cover-heading div { display: grid; gap: 3px; }
+.artifact-cover-heading span, .artifact-cover-heading small { color: var(--color-text-tertiary); font-size: 12px; }
+.artifact-cover-heading small { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-cover-preview img { width: min(100%, 320px); aspect-ratio: 3 / 4; align-self: center; border-radius: 8px; object-fit: cover; box-shadow: 0 8px 24px var(--shadow-3); }
+.cover-preview-loading { min-height: 240px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-secondary); background: var(--gray-25); border-radius: 8px; }
 .editor-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .review-sidebar { display: flex; flex-direction: column; gap: 16px; align-self: start; }
 .review-sidebar section { border-bottom: 1px solid var(--gray-150); padding-bottom: 14px; }
@@ -778,7 +1089,7 @@ const openVersions = async () => {
 
 @media (max-width: 900px) {
   .studio-header, .panel-heading { flex-direction: column; }
-  .setup-grid, .brief-layout, .strategy-grid, .run-layout, .review-layout { grid-template-columns: 1fr; }
+  .setup-grid, .brief-layout, .run-layout, .review-layout { grid-template-columns: 1fr; }
   .template-grid { grid-template-columns: 1fr 1fr; }
 }
 

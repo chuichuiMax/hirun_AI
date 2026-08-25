@@ -18,6 +18,7 @@ from server.routers.filesystem_router import filesystem_router
 from server.routers.workspace_router import workspace
 from server.routers.mention_router import mention_router
 from server.routers.content_router import content
+from server.routers.content_cover_router import content_covers
 from server.routers.account_router import accounts
 from server.routers.employee_router import employees
 from server.routers.cover_router import covers
@@ -49,6 +50,7 @@ router.include_router(filesystem_router)  # /api/viewer/filesystem/* 工作台�
 router.include_router(workspace)  # /api/workspace/* 用户个人工作区
 router.include_router(mention_router)  # /api/mention/* 提及文件搜索接口
 router.include_router(content)  # /api/content/* 通用内容策略工作台
+router.include_router(content_covers)  # /api/content/covers/* 封面生成
 router.include_router(accounts)  # /api/accounts/* 内容发布账号管理
 router.include_router(employees)  # /api/employees/* 内容发布员工管理
 router.include_router(covers)  # /api/covers/* 内容封面管理
