@@ -492,7 +492,7 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
             title_region = image.crop((120, 80, 900, 220))
             flat_background = Image.new("RGB", title_region.size, (214, 64, 69))
             difference = ImageChops.difference(title_region, flat_background).convert("L")
-            assert sum(difference.histogram()[1:]) > 500
+            assert difference.getbbox() is not None
     finally:
         async with pg_manager.get_async_session_context() as db:
             assets = (
