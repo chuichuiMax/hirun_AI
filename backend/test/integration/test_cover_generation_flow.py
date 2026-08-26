@@ -33,6 +33,7 @@ from yuxi.storage.postgres.models_content import (
     ContentCoverAsset,
     ContentCoverImage2Setting,
     ContentCoverJob,
+    ContentMaterialLibraryItem,
     ContentRuleVersion,
     ContentTask,
     IndustryTemplateVersion,
@@ -48,6 +49,12 @@ def _png(color: str, size: tuple[int, int] = (420, 560)) -> bytes:
 async def _reset_pg_manager() -> None:
     if pg_manager._initialized:
         await pg_manager.close()
+
+
+async def _delete_owner_assets(db, owner_uid: str) -> None:
+    asset_ids = select(ContentCoverAsset.id).where(ContentCoverAsset.owner_uid == owner_uid)
+    await db.execute(delete(ContentMaterialLibraryItem).where(ContentMaterialLibraryItem.asset_id.in_(asset_ids)))
+    await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
 
 
 @pytest.fixture(autouse=True)
@@ -221,7 +228,7 @@ async def test_compose_cover_runs_from_upload_to_stored_result(monkeypatch: pyte
             )
             asset_objects = [(item["bucket_name"], item["object_name"]) for item in assets]
             await db.execute(delete(ContentCoverJob).where(ContentCoverJob.owner_uid == owner_uid))
-            await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
+            await _delete_owner_assets(db, owner_uid)
             await db.commit()
         for bucket_name, object_name in asset_objects:
             await get_minio_client().adelete_file(bucket_name, object_name)
@@ -320,7 +327,7 @@ async def test_compose_job_is_idempotent_cancellable_and_retryable(monkeypatch: 
             )
             asset_objects = [(item["bucket_name"], item["object_name"]) for item in assets]
             await db.execute(delete(ContentCoverJob).where(ContentCoverJob.owner_uid == owner_uid))
-            await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
+            await _delete_owner_assets(db, owner_uid)
             await db.commit()
         for bucket_name, object_name in asset_objects:
             await get_minio_client().adelete_file(bucket_name, object_name)
@@ -495,7 +502,7 @@ async def test_async_image2_template_flow_stores_provider_task_and_result(
             )
             asset_objects = [(item["bucket_name"], item["object_name"]) for item in assets]
             await db.execute(delete(ContentCoverJob).where(ContentCoverJob.owner_uid == owner_uid))
-            await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
+            await _delete_owner_assets(db, owner_uid)
             await db.commit()
         for bucket_name, object_name in asset_objects:
             await get_minio_client().adelete_file(bucket_name, object_name)
@@ -636,7 +643,7 @@ async def test_selected_candidate_creates_new_artifact_version():
     finally:
         async with pg_manager.get_async_session_context() as db:
             await db.execute(delete(ContentCoverJob).where(ContentCoverJob.owner_uid == owner_uid))
-            await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.owner_uid == owner_uid))
+            await _delete_owner_assets(db, owner_uid)
             await db.execute(delete(ContentArtifactVersion).where(ContentArtifactVersion.artifact_id == artifact_id))
             await db.execute(delete(ContentArtifact).where(ContentArtifact.id == artifact_id))
             await db.execute(delete(ContentTask).where(ContentTask.id == task_id))

@@ -102,6 +102,7 @@ jobs:
             test/unit/content/test_content_ocr.py \
             test/unit/services/test_material_library_service.py \
             test/unit/scripts/test_migrate_material_library_to_image.py \
+            test/integration/test_cover_generation_flow.py \
             test/e2e/test_material_library_migration.py
 
       - name: Lint material library changes

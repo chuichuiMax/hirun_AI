@@ -25,7 +25,7 @@ async def test_material_migration_apply_verify_and_rollback_preserves_old_object
     from yuxi.storage.postgres.manager import pg_manager
 
     pg_manager.initialize()
-    await pg_manager.create_tables()
+    await pg_manager.create_business_tables()
     await pg_manager.close()
 
     uid = f"pytest_migration_{uuid.uuid4().hex[:10]}"

@@ -1018,9 +1018,7 @@ class ContentMaterialLibraryItem(Base):
     id = Column(String(64), primary_key=True)
     owner_uid = Column(String(255), nullable=False, index=True)
     tenant_id = Column(String(64), nullable=True, index=True)
-    asset_id = Column(
-        String(64), ForeignKey("content_cover_assets.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
+    asset_id = Column(String(64), ForeignKey("content_cover_assets.id", ondelete="CASCADE"), nullable=False, index=True)
     material_type = Column(String(32), nullable=False, index=True)
     display_name = Column(String(255), nullable=False)
     category = Column(String(80), nullable=False, default="未分类", index=True)

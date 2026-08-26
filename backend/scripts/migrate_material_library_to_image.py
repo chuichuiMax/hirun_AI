@@ -51,7 +51,7 @@ async def migrate(*, apply: bool, owner_uid: str | None, manifest_path: Path) ->
 
     pg_manager.initialize()
     if apply:
-        await pg_manager.create_tables()
+        await pg_manager.create_business_tables()
     client = get_minio_client()
     planned = migrated = skipped = failed = 0
     async with pg_manager.get_async_session_context() as db:
