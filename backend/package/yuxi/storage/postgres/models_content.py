@@ -1010,6 +1010,61 @@ class ContentCoverAsset(Base):
         }
 
 
+class ContentMaterialLibraryItem(Base):
+    """用户素材库目录项；文件事实由 ContentCoverAsset 承载。"""
+
+    __tablename__ = "content_material_library_items"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    asset_id = Column(
+        String(64), ForeignKey("content_cover_assets.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    material_type = Column(String(32), nullable=False, index=True)
+    display_name = Column(String(255), nullable=False)
+    category = Column(String(80), nullable=False, default="未分类", index=True)
+    tags_json = Column(JSON, nullable=False, default=list)
+    status = Column(String(32), nullable=False, default="enabled", index=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "material_type IN ('image', 'cover_template')",
+            name="ck_content_material_library_type",
+        ),
+        CheckConstraint(
+            "status IN ('enabled', 'disabled')",
+            name="ck_content_material_library_status",
+        ),
+        Index(
+            "uq_content_material_library_asset_active",
+            "asset_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+        Index("idx_content_material_library_owner_type_created", "owner_uid", "material_type", "created_at"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "asset_id": self.asset_id,
+            "material_type": self.material_type,
+            "name": self.display_name,
+            "category": self.category,
+            "tags": self.tags_json or [],
+            "status": self.status,
+            "metadata": self.metadata_json or {},
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
 class ContentCoverPosterTemplate(Base):
     __tablename__ = "content_cover_poster_templates"
 

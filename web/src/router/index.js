@@ -66,6 +66,26 @@ const router = createRouter({
       ]
     },
     {
+      path: '/materials',
+      name: 'materials',
+      component: AppLayout,
+      redirect: '/materials/images',
+      children: [
+        {
+          path: 'images',
+          name: 'MaterialImages',
+          component: () => import('../views/MaterialLibraryView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'cover-templates',
+          name: 'MaterialCoverTemplates',
+          component: () => import('../views/MaterialLibraryView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        }
+      ]
+    },
+    {
       path: '/content',
       name: 'content',
       component: AppLayout,

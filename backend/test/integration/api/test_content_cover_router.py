@@ -70,6 +70,12 @@ async def test_cover_asset_upload_is_private_and_deletable(test_client, admin_he
     assert asset["role"] == "source"
     assert asset["content_type"] == "image/png"
     assert (asset["width"], asset["height"]) == (320, 420)
+    material_library = await test_client.get(
+        "/api/material-library/items?material_type=image",
+        headers=admin_headers,
+    )
+    assert material_library.status_code == 200, material_library.text
+    assert asset["id"] in {item["asset_id"] for item in material_library.json()["items"]}
 
     try:
         downloaded = await test_client.get(
@@ -125,6 +131,13 @@ async def test_poster_template_library_preview_and_owner_isolation(
     template = imported.json()["items"][0]["template"]
     assert template["status"] == "ready"
     assert template["template_type"] == "alpha_overlay"
+
+    material_library = await test_client.get(
+        "/api/material-library/items?material_type=cover_template",
+        headers=admin_headers,
+    )
+    assert material_library.status_code == 200, material_library.text
+    assert template["asset_id"] in {item["asset_id"] for item in material_library.json()["items"]}
 
     duplicate = await test_client.post(
         "/api/content/covers/poster-templates/import",

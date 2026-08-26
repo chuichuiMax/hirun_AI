@@ -56,6 +56,8 @@ from yuxi.content_cover.template_replication import (
 )
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
+from yuxi.repositories.material_library_repository import MaterialLibraryRepository
+from yuxi.services.material_library_service import MATERIAL_LIBRARY_BUCKET, create_library_item_for_asset
 from yuxi.services.run_queue_service import (
     get_arq_pool,
     get_last_run_stream_seq,
@@ -247,10 +249,12 @@ async def create_cover_asset(
         raise _error(400, "COVER_IMAGE_TOO_LARGE", "图片规范化后超过 20 MB，请降低分辨率后重试")
     owner_uid = _owner_uid(user)
     asset_id = f"cca_{uuid.uuid4().hex}"
-    object_name = f"content-covers/{owner_uid}/{asset_id}/image.png"
+    material_type = "image" if role == "source" else "cover_template"
+    object_group = "images" if material_type == "image" else "cover-templates"
+    object_name = f"material-library/{owner_uid}/{object_group}/{asset_id}/image.png"
     try:
         uploaded = await get_minio_client().aupload_file(
-            bucket_name=COVER_BUCKET,
+            bucket_name=MATERIAL_LIBRARY_BUCKET,
             object_name=object_name,
             data=normalized,
             content_type=content_type,
@@ -273,6 +277,14 @@ async def create_cover_asset(
             bucket_name=uploaded.bucket_name,
             object_name=uploaded.object_name,
             metadata_json={"original_content_type": file.content_type or ""},
+        )
+        await create_library_item_for_asset(
+            db,
+            asset=item,
+            material_type=material_type,
+            name=Path(file.filename).stem,
+            category="封面素材",
+            metadata={"cover_role": role},
         )
         await db.commit()
     except Exception:
@@ -341,6 +353,17 @@ async def import_poster_templates(
                 checksum = hashlib.sha256(normalized).hexdigest()
                 existing = await repo.get_poster_template_by_checksum(owner_uid, checksum)
                 if existing is not None:
+                    existing_asset = await repo.get_asset_for_user(existing.asset_id, owner_uid)
+                    if existing_asset is not None:
+                        await create_library_item_for_asset(
+                            db,
+                            asset=existing_asset,
+                            material_type="cover_template",
+                            name=existing.name,
+                            category=existing.category,
+                            tags=existing.tags_json,
+                            metadata={"poster_template_id": existing.id},
+                        )
                     duplicate += 1
                     results.append(
                         {
@@ -354,16 +377,16 @@ async def import_poster_templates(
                 analysis = await _analyze_poster_image(image)
                 asset_id = f"cca_{uuid.uuid4().hex}"
                 template_id = f"cpt_{uuid.uuid4().hex}"
-                object_name = f"content-covers/{owner_uid}/poster-templates/{template_id}.png"
+                object_name = f"material-library/{owner_uid}/cover-templates/{asset_id}/image.png"
                 uploaded = await get_minio_client().aupload_file(
-                    bucket_name=COVER_BUCKET,
+                    bucket_name=MATERIAL_LIBRARY_BUCKET,
                     object_name=object_name,
                     data=normalized,
                     content_type=content_type,
                 )
                 uploaded_objects.append((uploaded.bucket_name, uploaded.object_name))
                 async with db.begin_nested():
-                    await repo.create_asset(
+                    asset = await repo.create_asset(
                         id=asset_id,
                         owner_uid=owner_uid,
                         tenant_id=_tenant_id(user),
@@ -404,6 +427,15 @@ async def import_poster_templates(
                         analysis_version=POSTER_PROCESSING_VERSION,
                         status=analysis["status"],
                     )
+                    await create_library_item_for_asset(
+                        db,
+                        asset=asset,
+                        material_type="cover_template",
+                        name=item.name,
+                        category=item.category,
+                        tags=item.tags_json,
+                        metadata={"poster_template_id": item.id},
+                    )
                 created += 1
                 results.append(
                     {"file_name": file_name, "status": "created", "template": serialize_poster_template(item)}
@@ -431,6 +463,17 @@ async def import_poster_templates(
                     uploaded_objects.remove(uploaded_key)
                 existing = await repo.get_poster_template_by_checksum(owner_uid, checksum)
                 if existing is not None:
+                    existing_asset = await repo.get_asset_for_user(existing.asset_id, owner_uid)
+                    if existing_asset is not None:
+                        await create_library_item_for_asset(
+                            db,
+                            asset=existing_asset,
+                            material_type="cover_template",
+                            name=existing.name,
+                            category=existing.category,
+                            tags=existing.tags_json,
+                            metadata={"poster_template_id": existing.id},
+                        )
                     duplicate += 1
                     results.append(
                         {
@@ -551,6 +594,13 @@ async def update_poster_template(
         }
     )
     item.analysis_json = analysis
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(item.asset_id)
+    if library_item is not None:
+        library_item.display_name = item.name
+        library_item.category = item.category
+        library_item.tags_json = item.tags_json
+        library_item.status = "enabled" if item.status == "ready" else "disabled"
+        library_item.updated_at = utc_now_naive()
     await db.commit()
     return {"template": serialize_poster_template(item)}
 
@@ -603,6 +653,9 @@ async def delete_poster_template(db: AsyncSession, user: User, template_id: str)
         except StorageError as exc:
             raise _error(500, "COVER_STORAGE_FAILED", "大字报蒙版删除失败", retryable=True) from exc
         asset.deleted_at = utc_now_naive()
+        library_item = await MaterialLibraryRepository(db).get_item_by_asset(asset.id)
+        if library_item is not None:
+            library_item.deleted_at = utc_now_naive()
     item.deleted_at = utc_now_naive()
     await db.commit()
     return {"success": True}
@@ -636,6 +689,9 @@ async def delete_cover_asset(db: AsyncSession, user: User, asset_id: str) -> dic
     except StorageError as exc:
         raise _error(500, "COVER_STORAGE_FAILED", "封面素材删除失败", retryable=True) from exc
     item.deleted_at = utc_now_naive()
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(item.id)
+    if library_item is not None:
+        library_item.deleted_at = utc_now_naive()
     await db.commit()
     return {"success": True}
 
