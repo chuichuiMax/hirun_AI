@@ -8,12 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.utils.auth_middleware import get_db, get_required_user
 from yuxi.services.material_library_service import (
+    MaterialCategoryCreate,
+    MaterialCategoryDelete,
+    MaterialCategoryUpdate,
     MaterialItemUpdate,
+    create_material_category,
     delete_material_item,
+    delete_material_category,
     get_material_file,
+    get_material_categories,
     import_material_images,
+    list_image_galleries,
     list_material_items,
     update_material_item,
+    update_material_category,
 )
 from yuxi.storage.postgres.models_business import User
 
@@ -23,8 +31,7 @@ material_library = APIRouter(prefix="/material-library", tags=["material-library
 @material_library.post("/images/import", status_code=status.HTTP_201_CREATED)
 async def import_images(
     files: list[UploadFile] = File(...),
-    category: str = Form("未分类"),
-    tags: str = Form(""),
+    category: str = Form(...),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -33,8 +40,55 @@ async def import_images(
         current_user,
         files,
         category=category,
-        tags=[item for item in tags.split(",") if item.strip()],
     )
+
+
+@material_library.get("/categories")
+async def material_categories(
+    material_type: str = Query(...),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_material_categories(db, current_user, material_type)
+
+
+@material_library.post("/categories", status_code=status.HTTP_201_CREATED)
+async def add_material_category(
+    payload: MaterialCategoryCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_material_category(db, current_user, payload)
+
+
+@material_library.patch("/categories/{category_id}")
+async def edit_material_category(
+    category_id: str,
+    payload: MaterialCategoryUpdate,
+    material_type: str = Query(...),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await update_material_category(db, current_user, material_type, category_id, payload)
+
+
+@material_library.delete("/categories/{category_id}")
+async def remove_material_category(
+    category_id: str,
+    payload: MaterialCategoryDelete,
+    material_type: str = Query(...),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await delete_material_category(db, current_user, material_type, category_id, payload)
+
+
+@material_library.get("/galleries")
+async def image_galleries(
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_image_galleries(db, current_user)
 
 
 @material_library.get("/items")
@@ -45,6 +99,7 @@ async def material_items(
     query: str | None = Query(None, max_length=100),
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
+    sort: str = Query("newest"),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -57,6 +112,7 @@ async def material_items(
         query=query,
         page=page,
         page_size=page_size,
+        sort=sort,
     )
 
 

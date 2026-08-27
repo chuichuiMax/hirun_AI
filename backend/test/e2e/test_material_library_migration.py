@@ -15,7 +15,11 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from yuxi.storage.minio import get_minio_client
-from yuxi.storage.postgres.models_content import ContentCoverAsset, ContentMaterialLibraryItem
+from yuxi.storage.postgres.models_content import (
+    ContentCoverAsset,
+    ContentMaterialCategory,
+    ContentMaterialLibraryItem,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.e2e]
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -120,6 +124,7 @@ async def test_material_migration_apply_verify_and_rollback_preserves_old_object
     finally:
         async with sessions() as db:
             await db.execute(delete(ContentMaterialLibraryItem).where(ContentMaterialLibraryItem.asset_id == asset_id))
+            await db.execute(delete(ContentMaterialCategory).where(ContentMaterialCategory.owner_uid == uid))
             await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.id == asset_id))
             await db.commit()
         await engine.dispose()

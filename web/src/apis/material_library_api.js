@@ -11,11 +11,19 @@ const encodeQuery = (params = {}) => {
 
 export const materialLibraryApi = {
   listItems: (params) => apiGet(`/api/material-library/items${encodeQuery(params)}`),
-  importImages: (files, category = '未分类', tags = []) => {
+  listCategories: (materialType) => apiGet(`/api/material-library/categories?material_type=${materialType}`),
+  createCategory: (payload) => apiPost('/api/material-library/categories', payload),
+  updateCategory: (materialType, categoryId, payload) =>
+    apiPatch(`/api/material-library/categories/${categoryId}?material_type=${materialType}`, payload),
+  deleteCategory: (materialType, categoryId, targetCategoryId = null) =>
+    apiDelete(`/api/material-library/categories/${categoryId}?material_type=${materialType}`, {
+      body: JSON.stringify({ target_category_id: targetCategoryId })
+    }),
+  listGalleries: () => apiGet('/api/material-library/galleries'),
+  importImages: (files, category) => {
     const form = new FormData()
     Array.from(files).forEach((file) => form.append('files', file))
     form.append('category', category)
-    form.append('tags', tags.join(','))
     return apiPost('/api/material-library/images/import', form)
   },
   updateItem: (itemId, payload) => apiPatch(`/api/material-library/items/${itemId}`, payload),

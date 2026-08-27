@@ -43,6 +43,8 @@ from yuxi.repositories.agent_run_repository import AgentRunRepository
 from yuxi.repositories.agent_repository import AgentRepository
 from yuxi.agents.skills.repository import SkillRepository
 from yuxi.repositories.content_repository import ContentRepository
+from yuxi.repositories.content_cover_repository import ContentCoverRepository
+from yuxi.repositories.material_library_repository import MaterialLibraryRepository
 from yuxi.services.run_queue_service import get_arq_pool, list_run_stream_events
 from yuxi.storage.postgres.models_business import AgentRun, User
 from yuxi.storage.postgres.models_content import ContentArtifactVersion, ContentTask
@@ -321,6 +323,7 @@ def compile_content_brief(
         "locked_fields": raw.get("locked_fields") or [],
         "form_values": form_values,
         "material_confirmations": raw.get("material_confirmations") or [],
+        "visual_material": raw.get("visual_material"),
     }
     missing = []
     for field in fields or []:
@@ -757,6 +760,8 @@ async def duplicate_content_task(db: AsyncSession, user: User, task_id: str) -> 
     copy_task.evidence_json = deepcopy(source.evidence_json or {})
     copy_task.selected_angle_json = {}
     copy_task.primary_narrative_axis = None
+    copy_task.selected_image_item_id = source.selected_image_item_id
+    copy_task.selected_poster_template_id = source.selected_poster_template_id
     copy_task.current_stage = "generation" if copy_task.brief_json else "brief"
     await db.commit()
     return {"task": copy_task.to_dict()}
@@ -774,6 +779,94 @@ async def save_content_brief(
     if template is None:
         raise _content_error(409, "CONTENT_TEMPLATE_VERSION_MISSING", "任务绑定的行业模板版本不存在")
     compiled, missing = compile_content_brief(task=task, template=template, brief=brief)
+    selection = brief.visual_material
+    requested_image_item_id = selection.image_item_id if selection else None
+    requested_poster_template_id = selection.poster_template_id if selection else None
+    if task.current_stage != "brief" and (
+        task.selected_image_item_id != requested_image_item_id
+        or task.selected_poster_template_id != requested_poster_template_id
+    ):
+        raise _content_error(
+            409,
+            "CONTENT_VISUAL_MATERIAL_LOCKED",
+            "视觉素材已随事实简报锁定，不能在 V3 生产开始后更换",
+        )
+
+    visual_snapshot: dict[str, Any] | None = None
+    if requested_image_item_id:
+        owner_uid = str(user.uid)
+        material_repo = MaterialLibraryRepository(db)
+        image_item = await material_repo.get_item_for_user(requested_image_item_id, owner_uid, for_update=True)
+        if image_item is None or image_item.material_type != "image" or image_item.status != "enabled":
+            raise _content_error(
+                422,
+                "CONTENT_IMAGE_MATERIAL_INVALID",
+                "所选图库图片不存在、已停用或无权访问",
+            )
+        image_asset = await material_repo.get_asset(image_item.asset_id, owner_uid, for_update=True)
+        if image_asset is None or image_asset.role not in {"source", "library_image"}:
+            raise _content_error(422, "CONTENT_IMAGE_ASSET_INVALID", "所选图库图片的文件记录无效")
+        visual_snapshot = {
+            "image_item_id": image_item.id,
+            "image_asset_id": image_asset.id,
+            "image_name": image_item.display_name,
+            "image_category_id": image_item.category,
+            "image_sha256": image_asset.sha256,
+            "image_width": image_asset.image_width,
+            "image_height": image_asset.image_height,
+        }
+        if requested_poster_template_id:
+            poster = await ContentCoverRepository(db).get_poster_template_for_user(
+                requested_poster_template_id, owner_uid, for_update=True
+            )
+            if poster is None or poster.status != "ready" or not poster.product_box_json:
+                raise _content_error(
+                    422,
+                    "CONTENT_POSTER_TEMPLATE_INVALID",
+                    "所选封面模板不存在、未启用、未完成标注或无权访问",
+                )
+            poster_asset = await material_repo.get_asset(poster.asset_id, owner_uid, for_update=True)
+            if poster_asset is None or poster_asset.role != "poster_template":
+                raise _content_error(422, "CONTENT_POSTER_TEMPLATE_ASSET_INVALID", "所选封面模板文件记录无效")
+            poster_library_item = await material_repo.get_item_by_asset(poster.asset_id)
+            if (
+                poster_library_item is None
+                or poster_library_item.owner_uid != owner_uid
+                or poster_library_item.material_type != "cover_template"
+                or poster_library_item.status != "enabled"
+            ):
+                raise _content_error(422, "CONTENT_POSTER_TEMPLATE_INVALID", "所选封面模板已从素材库停用或移除")
+            visual_snapshot.update(
+                {
+                    "poster_template_id": poster.id,
+                    "poster_template_asset_id": poster_asset.id,
+                    "poster_template_name": poster_library_item.display_name,
+                    "poster_template_checksum": poster.checksum,
+                    "poster_template_version": poster.version,
+                }
+            )
+    elif compile_now:
+        raise _content_error(
+            422,
+            "CONTENT_IMAGE_MATERIAL_REQUIRED",
+            "进入 V3 生产前必须从素材库图库中选择一张图片",
+            fields=[{"field": "visual_material.image_item_id", "label": "图库图片"}],
+        )
+
+    task.selected_image_item_id = requested_image_item_id
+    task.selected_poster_template_id = requested_poster_template_id
+    compiled["visual_material"] = (
+        {
+            "image_item_id": visual_snapshot["image_item_id"],
+            "image_asset_id": visual_snapshot["image_asset_id"],
+            "image_name": visual_snapshot["image_name"],
+            "image_category_id": visual_snapshot["image_category_id"],
+            "poster_template_id": visual_snapshot.get("poster_template_id"),
+            "poster_template_name": visual_snapshot.get("poster_template_name"),
+        }
+        if visual_snapshot
+        else None
+    )
     task.brief_json = compiled
     task.updated_by = str(user.uid)
     task.updated_at = utc_now_naive()
@@ -787,6 +880,10 @@ async def save_content_brief(
             suggested_action="补充缺失字段后重新编译",
         )
     if compile_now:
+        task.runtime_config_snapshot_json = {
+            **(task.runtime_config_snapshot_json or {}),
+            "visual_material": visual_snapshot,
+        }
         task.evidence_json = normalize_manual_evidence(task.id, compiled)
         task.status = "brief_ready"
         task.current_stage = "generation"

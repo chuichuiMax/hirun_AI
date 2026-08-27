@@ -22,6 +22,7 @@ ELIGIBLE_ROLES = {
     "mask": "cover_template",
     "poster_template": "cover_template",
 }
+VISIBLE_LIBRARY_ROLES = {"source", "template", "poster_template"}
 
 
 def target_object_name(owner_uid: str, asset_id: str, material_type: str) -> str:
@@ -65,7 +66,7 @@ async def migrate(*, apply: bool, owner_uid: str | None, manifest_path: Path) ->
             material_type = ELIGIBLE_ROLES[asset.role]
             target = target_object_name(asset.owner_uid, asset.id, material_type)
             if asset.bucket_name == MATERIAL_LIBRARY_BUCKET and asset.object_name == target:
-                if apply:
+                if apply and asset.role in VISIBLE_LIBRARY_ROLES:
                     await create_library_item_for_asset(
                         db,
                         asset=asset,
@@ -96,13 +97,14 @@ async def migrate(*, apply: bool, owner_uid: str | None, manifest_path: Path) ->
                     raise ValueError("目标对象完整性校验失败")
                 asset.bucket_name = uploaded.bucket_name
                 asset.object_name = uploaded.object_name
-                await create_library_item_for_asset(
-                    db,
-                    asset=asset,
-                    material_type=material_type,
-                    name=Path(asset.original_file_name).stem,
-                    metadata={"migrated_role": asset.role},
-                )
+                if asset.role in VISIBLE_LIBRARY_ROLES:
+                    await create_library_item_for_asset(
+                        db,
+                        asset=asset,
+                        material_type=material_type,
+                        name=Path(asset.original_file_name).stem,
+                        metadata={"migrated_role": asset.role},
+                    )
                 append_manifest(
                     manifest_path,
                     {
@@ -179,7 +181,7 @@ async def verify(owner_uid: str | None) -> int:
                 data = await client.adownload_file(asset.bucket_name, asset.object_name)
                 if len(data) != asset.file_size or hashlib.sha256(data).hexdigest() != asset.sha256:
                     raise ValueError("目标对象大小或 SHA-256 不一致")
-                if await repo.get_item_by_asset(asset.id) is None:
+                if asset.role in VISIBLE_LIBRARY_ROLES and await repo.get_item_by_asset(asset.id) is None:
                     raise ValueError("缺少素材库目录项")
             except Exception as exc:
                 failed += 1

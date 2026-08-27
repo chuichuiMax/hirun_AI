@@ -503,6 +503,7 @@ class ContractDomainContext:
     locked_body_formula_code: str | None = None
     allowed_evidence_by_usage: dict[str, frozenset[str]] = field(default_factory=dict)
     allowed_asset_ids: frozenset[str] = frozenset()
+    required_source_asset_ids: tuple[str, ...] = ()
     locked_title: str | None = None
     artifact_version_id: str | None = None
     visual_plan_hash: str | None = None
@@ -586,6 +587,7 @@ class ContractDomainContext:
             locked_body_formula_code=(formula.get("selected_body_formula_code") or versions.body_formula_code),
             allowed_evidence_by_usage={key: frozenset(value) for key, value in evidence_by_usage.items()},
             allowed_asset_ids=frozenset(locks.get("source_asset_ids") or []),
+            required_source_asset_ids=tuple(locks.get("required_source_asset_ids") or []),
             locked_title=locks.get("selected_title"),
             artifact_version_id=versions.artifact_version_id,
             visual_plan_hash=locks.get("visual_plan_hash"),
@@ -786,12 +788,24 @@ def validate_content_node_result(
             _validate_evidence_ids(item.evidence_ids, "body", context, f"checks.{index}.evidence_ids")
     elif isinstance(result, VisualPlanResultV1):
         _require_equal(result.artifact_version_id, context.artifact_version_id, "artifact_version_id")
+        if context.required_source_asset_ids and tuple(result.source_asset_ids) != context.required_source_asset_ids:
+            raise ContractDomainValidationError(
+                "visual_source_locked",
+                "source_asset_ids",
+                "视觉方案必须且只能使用任务已锁定的图库图片",
+            )
         for index, asset_id in enumerate(result.source_asset_ids):
             _require_member(asset_id, context.allowed_asset_ids, f"source_asset_ids.{index}")
         _validate_evidence_ids(result.evidence_ids, "visual", context, "evidence_ids")
         _validate_numbers("\n".join(result.text), context, "text", "visual")
     elif isinstance(result, CoverJobSubmissionResultV1):
         _require_equal(result.plan_hash, context.visual_plan_hash, "plan_hash")
+        if context.required_source_asset_ids and tuple(result.source_asset_ids) != context.required_source_asset_ids:
+            raise ContractDomainValidationError(
+                "visual_source_locked",
+                "source_asset_ids",
+                "封面任务必须使用任务已锁定的图库图片",
+            )
         for index, asset_id in enumerate(result.source_asset_ids):
             _require_member(asset_id, context.allowed_asset_ids, f"source_asset_ids.{index}")
     elif isinstance(result, VisualReviewResultV1):

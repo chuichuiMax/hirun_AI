@@ -13,6 +13,8 @@ SPEC.loader.exec_module(MODULE)
 
 def test_target_object_name_is_user_isolated_and_deterministic():
     assert set(MODULE.ELIGIBLE_ROLES) == {"source", "template", "mask", "poster_template"}
+    assert MODULE.VISIBLE_LIBRARY_ROLES == {"source", "template", "poster_template"}
+    assert "mask" not in MODULE.VISIBLE_LIBRARY_ROLES
     assert "output" not in MODULE.ELIGIBLE_ROLES
     assert MODULE.target_object_name("user-1", "asset-1", "image") == (
         "material-library/user-1/images/asset-1/image.png"

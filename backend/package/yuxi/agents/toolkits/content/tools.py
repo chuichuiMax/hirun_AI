@@ -11,10 +11,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from yuxi.agents.toolkits.registry import tool
-from yuxi.content_cover.schemas import CoverComposeCreate, CoverGenerateCreate
+from yuxi.content_cover.schemas import CoverComposeCreate, CoverGenerateCreate, PosterGenerateCreate
 from yuxi.content.validators import normalize_manual_evidence, validate_content
 from yuxi.repositories.content_repository import ContentRepository
-from yuxi.services.content_cover_service import create_cover_compose_job, create_cover_generate_job
+from yuxi.services.content_cover_service import (
+    create_cover_compose_job,
+    create_cover_generate_job,
+    create_poster_billboard_job,
+)
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_business import User
 
@@ -289,7 +293,43 @@ async def create_content_cover_job(
         user = (await db.execute(select(User).where(User.uid == uid))).scalar_one_or_none()
         if user is None:
             raise ValueError("用户不存在")
-        if mode == "template":
+        task = await ContentRepository(db).get_task_for_user(task_id, user)
+        if task is None:
+            raise ValueError("内容任务不存在")
+        visual_material = (task.runtime_config_snapshot_json or {}).get("visual_material") or {}
+        locked_image_asset_id = visual_material.get("image_asset_id")
+        if locked_image_asset_id and source_asset_ids != [locked_image_asset_id]:
+            raise ValueError("视觉方案未使用任务锁定的唯一图库图片")
+        poster_template_id = visual_material.get("poster_template_id")
+        if poster_template_id:
+            from yuxi.repositories.content_cover_repository import ContentCoverRepository
+
+            poster = await ContentCoverRepository(db).get_poster_template_for_user(poster_template_id, str(user.uid))
+            if (
+                poster is None
+                or poster.status != "ready"
+                or poster.checksum != visual_material.get("poster_template_checksum")
+                or poster.version != visual_material.get("poster_template_version")
+            ):
+                raise ValueError("任务锁定的封面模板已变更或不可用，请复制任务后重新选择")
+            result = await create_poster_billboard_job(
+                db,
+                user,
+                PosterGenerateCreate(
+                    poster_template_id=poster_template_id,
+                    product_asset_id=locked_image_asset_id,
+                    content_task_id=task_id,
+                    title=text[0],
+                    enhance_with_image2=False,
+                    n=1,
+                    parameters={
+                        "visual_plan_hash": plan_hash,
+                        "workflow_resume": workflow_resume,
+                    },
+                    idempotency_key=idempotency_key,
+                ),
+            )
+        elif mode == "template":
             result = await create_cover_compose_job(
                 db,
                 user,

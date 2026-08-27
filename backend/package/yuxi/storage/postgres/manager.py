@@ -389,6 +389,22 @@ class PostgresManager(metaclass=SingletonMeta):
         self._check_initialized()
         stmts = [
             (
+                "DO $$ BEGIN "
+                "IF EXISTS ("
+                "SELECT 1 FROM pg_constraint "
+                "WHERE conrelid = 'content_material_categories'::regclass "
+                "AND conname = 'content_material_categories_pkey' "
+                "AND pg_get_constraintdef(oid) <> "
+                "'PRIMARY KEY (owner_uid, material_type, id)'"
+                ") THEN "
+                "ALTER TABLE content_material_categories "
+                "DROP CONSTRAINT content_material_categories_pkey; "
+                "ALTER TABLE content_material_categories "
+                "ADD CONSTRAINT content_material_categories_pkey "
+                "PRIMARY KEY (owner_uid, material_type, id); "
+                "END IF; END $$"
+            ),
+            (
                 "ALTER TABLE IF EXISTS content_cover_image2_settings "
                 "ADD COLUMN IF NOT EXISTS capabilities_json JSONB NOT NULL DEFAULT '{}'::jsonb"
             ),
@@ -553,28 +569,10 @@ class PostgresManager(metaclass=SingletonMeta):
                 END IF;
             END $$;
             """,
-            "ALTER TABLE IF EXISTS content_covers ADD COLUMN IF NOT EXISTS image_name VARCHAR(255)",
-            """
-            UPDATE content_covers
-            SET image_name = 'cover-' || left(id, 8)
-            WHERE image_name IS NULL OR btrim(image_name) = ''
-            """,
-            """
-            DO $$
-            BEGIN
-                IF EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'content_covers' AND column_name = 'image_name'
-                ) THEN
-                    ALTER TABLE content_covers ALTER COLUMN image_name SET NOT NULL;
-                END IF;
-            END $$;
-            """,
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_content_covers_category_image_name_lower
-            ON content_covers (category, lower(image_name))
-            """,
-            "ALTER TABLE IF EXISTS content_roles ADD COLUMN IF NOT EXISTS permissions JSONB NOT NULL DEFAULT '[]'::jsonb",
+            (
+                "ALTER TABLE IF EXISTS content_roles ADD COLUMN IF NOT EXISTS permissions "
+                "JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
         ]
         async with self.async_engine.begin() as conn:
             for stmt in stmts:
@@ -767,6 +765,16 @@ class PostgresManager(metaclass=SingletonMeta):
             (
                 "ALTER TABLE IF EXISTS content_tasks "
                 "ADD COLUMN IF NOT EXISTS runtime_config_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS selected_image_item_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_tasks ADD COLUMN IF NOT EXISTS selected_poster_template_id VARCHAR(64)",
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_tasks_selected_image_item_id "
+                "ON content_tasks(selected_image_item_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_tasks_selected_poster_template_id "
+                "ON content_tasks(selected_poster_template_id)"
             ),
             (
                 "ALTER TABLE IF EXISTS content_industry_pack_versions "

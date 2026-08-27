@@ -150,10 +150,10 @@ export const useCoverGenerationStore = defineStore('coverGeneration', () => {
     }
   }
 
-  async function importPosterTemplates(files, category, tags) {
+  async function importPosterTemplates(files, category) {
     loading.posterImport = true
     try {
-      const response = await contentApi.importCoverPosterTemplates(files, category, tags)
+      const response = await contentApi.importCoverPosterTemplates(files, category)
       await loadPosterTemplates()
       return response
     } finally {

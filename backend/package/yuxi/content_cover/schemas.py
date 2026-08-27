@@ -270,21 +270,12 @@ class PosterProductTransform(BaseModel):
 class PosterTemplateUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     category: str | None = Field(default=None, min_length=1, max_length=80)
-    tags: list[str] | None = Field(default=None, max_length=20)
     product_box: NormalizedBox | None = None
     safe_area: NormalizedBox | None = None
     text_slots: list[PosterTextSlot] | None = Field(default=None, max_length=20)
     fixed_regions: list[NormalizedBox] | None = Field(default=None, max_length=40)
     editable_regions: list[NormalizedBox] | None = Field(default=None, max_length=40)
     status: Literal["ready", "disabled"] | None = None
-
-    @field_validator("tags")
-    @classmethod
-    def normalize_tags(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        normalized = [item.strip()[:40] for item in value if item.strip()]
-        return list(dict.fromkeys(normalized))
 
 
 class PosterPreviewCreate(BaseModel):
@@ -301,6 +292,7 @@ class PosterGenerateCreate(PosterPreviewCreate):
     enhancement_prompt: str = Field(default="", max_length=2000)
     negative_prompt: str | None = Field(default=None, max_length=2000)
     n: int = Field(default=1, ge=1, le=4)
+    parameters: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=8, max_length=128)
 
     @model_validator(mode="after")

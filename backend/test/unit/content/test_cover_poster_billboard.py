@@ -21,6 +21,7 @@ from yuxi.content_cover.poster_billboard import (
 from yuxi.content_cover.schemas import PosterGenerateCreate, TemplateAnalysis
 from yuxi.content_cover.schemas import Image2Output, Image2Submission
 from yuxi.services import content_cover_worker
+from yuxi.services.content_cover_service import serialize_poster_template
 
 
 def _slot(*, editable: bool = True, source_text: str = "模板标题") -> dict:
@@ -344,6 +345,27 @@ def test_deterministic_generation_rejects_multiple_identical_outputs():
             enhance_with_image2=False,
             idempotency_key="poster-test-123",
         )
+
+
+def test_poster_template_display_uses_material_library_name_and_category():
+    poster = SimpleNamespace(
+        asset_id="cca_template",
+        category="legacy-category",
+        to_dict=lambda: {
+            "id": "cpt_template",
+            "asset_id": "cca_template",
+            "name": "legacy-hash-name",
+            "category": "legacy-category",
+            "text_slots": [],
+        },
+    )
+    library_item = SimpleNamespace(display_name="素材库模板名称", category="product_promotion")
+
+    result = serialize_poster_template(poster, "产品推广", library_item)
+
+    assert result["name"] == "素材库模板名称"
+    assert result["category"] == "product_promotion"
+    assert result["category_name"] == "产品推广"
 
 
 @pytest.mark.asyncio

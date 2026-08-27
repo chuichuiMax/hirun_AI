@@ -20,6 +20,7 @@ import {
   X
 } from 'lucide-vue-next'
 import { useCoverGenerationStore } from '@/stores/coverGeneration'
+import { materialLibraryApi } from '@/apis/material_library_api'
 
 const props = defineProps({
   contentTaskId: { type: String, default: '' },
@@ -42,8 +43,9 @@ const showAdvanced = ref(false)
 let restoreJobVersion = 0
 const page = ref(1)
 const filters = reactive({ query: '', category: '', status: '' })
-const importForm = reactive({ category: '未分类', tags: '' })
-const templateForm = reactive({ name: '', category: '', tags: '', status: 'ready' })
+const categoryOptions = ref([])
+const importForm = reactive({ category: '' })
+const templateForm = reactive({ name: '', category: '', status: 'ready' })
 const annotation = reactive({ x: 0.08, y: 0.25, width: 0.84, height: 0.65 })
 const form = reactive({
   title: '',
@@ -154,8 +156,7 @@ function chooseTemplate(item) {
   form.copyOverrides = {}
   Object.assign(templateForm, {
     name: item.name || '',
-    category: item.category || '未分类',
-    tags: (item.tags || []).join(','),
+    category: item.category === 'uncategorized' ? '' : item.category,
     status: item.status || 'ready'
   })
 }
@@ -167,11 +168,11 @@ function collectFiles(event) {
 
 async function importTemplates(files = importFiles.value) {
   if (!files.length) return
+  if (!importForm.category) return message.warning('请选择蒙版分类')
   try {
     const response = await store.importPosterTemplates(
       files,
-      importForm.category,
-      importForm.tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean)
+      importForm.category
     )
     importFiles.value = []
     await loadTemplates()
@@ -316,11 +317,11 @@ async function reanalyzeTemplate() {
 
 async function saveTemplateMetadata() {
   if (!selectedTemplate.value) return
+  if (!templateForm.name.trim() || !templateForm.category) return message.warning('请填写名称并选择分类')
   try {
     const payload = {
       name: templateForm.name.trim(),
-      category: templateForm.category.trim() || '未分类',
-      tags: templateForm.tags.split(/[,，]/).map((item) => item.trim()).filter(Boolean)
+      category: templateForm.category
     }
     if (templateForm.status !== 'needs_annotation') payload.status = templateForm.status
     const updated = await store.updatePosterTemplate(selectedTemplate.value.id, payload)
@@ -396,6 +397,8 @@ watch(() => store.currentJob, (job) => { void restoreFromJob(job) }, { deep: fal
 watch(() => props.contentTaskId, () => { previewDataUrl.value = '' })
 
 onMounted(async () => {
+  const response = await materialLibraryApi.listCategories('cover_template')
+  categoryOptions.value = (response.categories || []).filter((item) => item.code !== 'uncategorized')
   await loadTemplates()
   await restoreFromJob(store.currentJob)
 })
@@ -422,8 +425,8 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="library-toolbar">
-        <label class="search-field"><span class="sr-only">搜索蒙版</span><Search :size="16" /><input v-model="filters.query" placeholder="搜索名称或标签" @keyup.enter="page = 1; loadTemplates()" /></label>
-        <label><span class="sr-only">蒙版分类</span><input v-model="filters.category" placeholder="分类，例如：家装" @keyup.enter="page = 1; loadTemplates()" /></label>
+        <label class="search-field"><span class="sr-only">搜索蒙版</span><Search :size="16" /><input v-model="filters.query" placeholder="搜索蒙版名称" @keyup.enter="page = 1; loadTemplates()" /></label>
+        <label><span class="sr-only">蒙版分类</span><select v-model="filters.category" @change="page = 1; loadTemplates()"><option value="">全部分类</option><option v-for="item in categoryOptions" :key="item.code" :value="item.code">{{ item.name }}</option></select></label>
         <label><span class="sr-only">蒙版状态</span><select v-model="filters.status" @change="page = 1; loadTemplates()"><option value="">全部状态</option><option value="ready">可使用</option><option value="needs_annotation">待标注</option><option value="disabled">已停用</option></select></label>
         <button type="button" class="secondary" :disabled="store.loading.posterTemplates" @click="page = 1; loadTemplates()"><SlidersHorizontal :size="15" />筛选</button>
         <button v-if="hasFilters" type="button" class="text-button" @click="clearFilters"><X :size="14" />清除</button>
@@ -435,8 +438,7 @@ onBeforeUnmount(() => {
           <input type="file" accept="image/png,image/jpeg,image/webp" multiple @change="collectFiles" />
         </label>
         <div class="import-settings">
-          <label><span>统一分类</span><input v-model="importForm.category" placeholder="例如：家装" /></label>
-          <label><span>统一标签</span><input v-model="importForm.tags" placeholder="多个标签用逗号分隔" /></label>
+          <label><span>统一分类</span><select v-model="importForm.category"><option value="" disabled>请选择分类</option><option v-for="item in categoryOptions" :key="item.code" :value="item.code">{{ item.name }} — {{ item.description }}</option></select></label>
           <button type="button" class="secondary" :disabled="!importFiles.length || store.loading.posterImport" @click="importTemplates()">{{ store.loading.posterImport ? '正在导入…' : `确认导入${importFiles.length ? ` ${importFiles.length} 张` : ''}` }}</button>
         </div>
       </div>
@@ -446,7 +448,7 @@ onBeforeUnmount(() => {
         <article v-for="item in store.posterTemplates" :key="item.id" class="poster-template-card" :class="{ active: selectedTemplateId === item.id }">
           <button type="button" class="template-select" :aria-pressed="selectedTemplateId === item.id" @click="chooseTemplate(item)">
             <span class="template-image"><img :src="item.thumbnail_url" :alt="`${item.name} 蒙版预览`" /><span v-if="selectedTemplateId === item.id" class="selected-mark"><Check :size="14" />已选择</span></span>
-            <span class="template-meta"><strong :title="item.name">{{ item.name }}</strong><small>{{ item.category }}</small><em :data-status="item.status">{{ item.status === 'ready' ? '可使用' : item.status === 'needs_annotation' ? '待标注' : '已停用' }}</em></span>
+            <span class="template-meta"><strong :title="item.name">{{ item.name }}</strong><small>{{ item.category_name }}</small><em :data-status="item.status">{{ item.status === 'ready' ? '可使用' : item.status === 'needs_annotation' ? '待标注' : '已停用' }}</em></span>
           </button>
           <button type="button" class="delete-template" :aria-label="`删除蒙版 ${item.name}`" @click="deleteTemplate(item)"><Trash2 :size="15" /></button>
         </article>
@@ -462,7 +464,7 @@ onBeforeUnmount(() => {
 
     <div v-if="selectedTemplate" class="selected-template-bar">
       <img :src="selectedTemplate.thumbnail_url" :alt="`${selectedTemplate.name} 缩略图`" />
-      <div><small>当前蒙版</small><strong>{{ selectedTemplate.name }}</strong><span>{{ selectedTemplate.category }} · {{ templateReady ? '可以直接使用' : '需要先标注产品区域' }}</span></div>
+      <div><small>当前蒙版</small><strong>{{ selectedTemplate.name }}</strong><span>{{ selectedTemplate.category_name }} · {{ templateReady ? '可以直接使用' : '需要先标注产品区域' }}</span></div>
       <button type="button" class="text-button" @click="showManagement = !showManagement">管理蒙版<ChevronUp v-if="showManagement" :size="15" /><ChevronDown v-else :size="15" /></button>
     </div>
 
@@ -470,8 +472,7 @@ onBeforeUnmount(() => {
       <div class="section-head"><div><strong>蒙版信息</strong><small>只影响素材库中的名称、分类和状态，不会改变画面内容</small></div></div>
       <div class="management-grid">
         <label><span>名称</span><input v-model="templateForm.name" maxlength="255" /></label>
-        <label><span>分类</span><input v-model="templateForm.category" maxlength="80" /></label>
-        <label><span>标签</span><input v-model="templateForm.tags" placeholder="用逗号分隔" /></label>
+        <label><span>分类</span><select v-model="templateForm.category"><option value="" disabled>请选择分类</option><option v-for="item in categoryOptions" :key="item.code" :value="item.code">{{ item.name }}</option></select></label>
         <label><span>状态</span><select v-model="templateForm.status"><option v-if="selectedTemplate.product_box" value="ready">可使用</option><option value="disabled">已停用</option><option v-if="!selectedTemplate.product_box" value="needs_annotation">待标注</option></select></label>
       </div>
       <button type="button" class="secondary management-save" @click="saveTemplateMetadata">保存蒙版信息</button>

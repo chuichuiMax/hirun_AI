@@ -140,6 +140,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     saveStatus.value = 'saving'
     try {
       const response = await contentApi.saveBrief(task.value.id, brief)
+      task.value = response.task
       saveStatus.value = 'saved'
       return response
     } catch (error) {

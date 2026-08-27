@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import uuid
@@ -19,6 +20,18 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 def _png() -> bytes:
     output = io.BytesIO()
     Image.new("RGB", (48, 36), "#4A7BF7").save(output, format="PNG")
+    return output.getvalue()
+
+
+def _poster_png() -> bytes:
+    from PIL import ImageDraw
+
+    output = io.BytesIO()
+    image = Image.new("RGBA", (1080, 1440), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, 1079, 1439), outline="#F0522D", width=28)
+    draw.rectangle((0, 0, 1079, 180), fill="#252525")
+    image.save(output, format="PNG")
     return output.getvalue()
 
 
@@ -64,6 +77,9 @@ async def material_users(test_client):
         yield {"owner": headers[0], "other": headers[1]}
     finally:
         async with session_factory() as db:
+            from yuxi.storage.postgres.models_content import ContentMaterialCategory
+
+            await db.execute(delete(ContentMaterialCategory).where(ContentMaterialCategory.owner_uid.in_(credentials)))
             await db.execute(delete(OperationLog).where(OperationLog.user_id.in_(user_ids)))
             await db.execute(delete(User).where(User.id.in_(user_ids)))
             await db.execute(delete(Department).where(Department.id == department_id))
@@ -76,13 +92,15 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
     uploaded = await test_client.post(
         "/api/material-library/images/import",
         headers=owner_headers,
-        data={"category": "integration", "tags": "blue,sample"},
+        data={"category": "product"},
         files=[("files", ("fixture.png", _png(), "image/png"))],
     )
     assert uploaded.status_code == 201, uploaded.text
     item = uploaded.json()["items"][0]
     assert item["material_type"] == "image"
-    assert item["category"] == "integration"
+    assert item["category"] == "product"
+    assert item["category_name"] == "产品商品"
+    assert "tags" not in item
 
     from yuxi.storage.postgres.models_content import ContentCoverAsset
 
@@ -96,11 +114,38 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
     await engine.dispose()
 
     listed = await test_client.get(
-        "/api/material-library/items?material_type=image&query=integration",
+        "/api/material-library/items?material_type=image&category=product&query=fixture",
         headers=owner_headers,
     )
     assert listed.status_code == 200, listed.text
     assert item["id"] in {entry["id"] for entry in listed.json()["items"]}
+
+    categories = await test_client.get(
+        "/api/material-library/categories?material_type=image", headers=owner_headers
+    )
+    assert categories.status_code == 200, categories.text
+    assert categories.json()["categories"][0]["code"] == "product"
+    cover_categories, cover_categories_again = await asyncio.gather(
+        test_client.get(
+            "/api/material-library/categories?material_type=cover_template",
+            headers=owner_headers,
+        ),
+        test_client.get(
+            "/api/material-library/categories?material_type=cover_template",
+            headers=owner_headers,
+        ),
+    )
+    assert cover_categories.status_code == 200, cover_categories.text
+    assert cover_categories_again.status_code == 200, cover_categories_again.text
+    assert {entry["code"] for entry in cover_categories.json()["categories"]} >= {
+        "brand",
+        "uncategorized",
+    }
+    galleries = await test_client.get("/api/material-library/galleries", headers=owner_headers)
+    assert galleries.status_code == 200, galleries.text
+    product_gallery = next(entry for entry in galleries.json()["galleries"] if entry["code"] == "product")
+    assert product_gallery["count"] >= 1
+    assert product_gallery["cover_item_id"] == item["id"]
 
     downloaded = await test_client.get(item["file_url"], headers=owner_headers)
     assert downloaded.status_code == 200, downloaded.text
@@ -115,3 +160,167 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
     assert deleted.json()["object_deleted"] is True
     missing = await test_client.get(item["file_url"], headers=owner_headers)
     assert missing.status_code == 404
+
+
+async def test_material_import_rejects_free_form_or_missing_category(test_client, material_users):
+    for data in ({}, {"category": "不存在的图库"}):
+        response = await test_client.post(
+            "/api/material-library/images/import",
+            headers=material_users["owner"],
+            data=data,
+            files=[("files", ("fixture.png", _png(), "image/png"))],
+        )
+        assert response.status_code == 422, response.text
+
+
+async def test_image_gallery_crud_and_safe_item_reassignment(test_client, material_users):
+    headers = material_users["owner"]
+    blank = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "   "},
+    )
+    assert blank.status_code == 422, blank.text
+    created = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "春季新品", "description": "三月新品图片"},
+    )
+    assert created.status_code == 201, created.text
+    gallery = created.json()["category"]
+    assert gallery["count"] == 0
+
+    other_categories = await test_client.get(
+        "/api/material-library/categories?material_type=image",
+        headers=material_users["other"],
+    )
+    assert other_categories.status_code == 200, other_categories.text
+    assert gallery["id"] not in {item["id"] for item in other_categories.json()["categories"]}
+    other_update = await test_client.patch(
+        f"/api/material-library/categories/{gallery['id']}?material_type=image",
+        headers=material_users["other"],
+        json={"name": "越权修改"},
+    )
+    assert other_update.status_code == 404, other_update.text
+
+    protected = await test_client.request(
+        "DELETE",
+        "/api/material-library/categories/uncategorized?material_type=image",
+        headers=headers,
+        json={"target_category_id": "product"},
+    )
+    assert protected.status_code == 409, protected.text
+
+    duplicate = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "春季新品"},
+    )
+    assert duplicate.status_code == 409, duplicate.text
+
+    renamed = await test_client.patch(
+        f"/api/material-library/categories/{gallery['id']}?material_type=image",
+        headers=headers,
+        json={"name": "春季上新", "description": "春季新品与商品细节"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["category"]["name"] == "春季上新"
+
+    uploaded = await test_client.post(
+        "/api/material-library/images/import",
+        headers=headers,
+        data={"category": gallery["id"]},
+        files=[("files", ("spring.png", _png(), "image/png"))],
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    item = uploaded.json()["items"][0]
+    try:
+        removed = await test_client.request(
+            "DELETE",
+            f"/api/material-library/categories/{gallery['id']}?material_type=image",
+            headers=headers,
+            json={"target_category_id": "uncategorized"},
+        )
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["moved"] == 1
+        listed = await test_client.get(
+            "/api/material-library/items?material_type=image&category=uncategorized&query=spring",
+            headers=headers,
+        )
+        assert [entry["id"] for entry in listed.json()["items"]] == [item["id"]]
+    finally:
+        await test_client.delete(f"/api/material-library/items/{item['id']}", headers=headers)
+
+
+async def test_cover_mask_is_stored_but_not_listed_as_library_template(test_client, material_users):
+    headers = material_users["owner"]
+    uploaded = await test_client.post(
+        "/api/content/covers/assets",
+        headers=headers,
+        data={"role": "mask"},
+        files={"file": ("mask.png", _png(), "image/png")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    asset = uploaded.json()["asset"]
+    try:
+        listed = await test_client.get(
+            "/api/material-library/items?material_type=cover_template",
+            headers=headers,
+        )
+        assert listed.status_code == 200, listed.text
+        assert asset["id"] not in {item["asset_id"] for item in listed.json()["items"]}
+    finally:
+        deleted = await test_client.delete(f"/api/content/covers/assets/{asset['id']}", headers=headers)
+        assert deleted.status_code == 200, deleted.text
+
+
+async def test_poster_template_uses_controlled_category_without_tags(test_client, material_users):
+    headers = material_users["owner"]
+    category_response = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "cover_template", "name": "客户案例", "description": "案例复盘封面"},
+    )
+    assert category_response.status_code == 201, category_response.text
+    category = category_response.json()["category"]
+    imported = await test_client.post(
+        "/api/content/covers/poster-templates/import",
+        headers=headers,
+        data={"category": category["id"]},
+        files=[("files", ("poster.png", _poster_png(), "image/png"))],
+    )
+    assert imported.status_code == 201, imported.text
+    assert imported.json()["summary"]["created"] == 1
+    template = imported.json()["items"][0]["template"]
+    assert template["category"] == category["id"]
+    assert template["category_name"] == "客户案例"
+    assert "tags" not in template
+    try:
+        updated = await test_client.patch(
+            f"/api/content/covers/poster-templates/{template['id']}",
+            headers=headers,
+            json={"name": "自定义分类模板", "category": category["id"]},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["template"]["category_name"] == "客户案例"
+
+        removed_category = await test_client.request(
+            "DELETE",
+            f"/api/material-library/categories/{category['id']}?material_type=cover_template",
+            headers=headers,
+            json={"target_category_id": "uncategorized"},
+        )
+        assert removed_category.status_code == 200, removed_category.text
+        assert removed_category.json()["moved"] == 1
+
+        listed = await test_client.get(
+            "/api/material-library/items?material_type=cover_template&category=uncategorized&query=自定义分类",
+            headers=headers,
+        )
+        assert listed.status_code == 200, listed.text
+        assert [item["asset_id"] for item in listed.json()["items"]] == [template["asset_id"]]
+    finally:
+        deleted = await test_client.delete(
+            f"/api/content/covers/poster-templates/{template['id']}", headers=headers
+        )
+        assert deleted.status_code == 200, deleted.text

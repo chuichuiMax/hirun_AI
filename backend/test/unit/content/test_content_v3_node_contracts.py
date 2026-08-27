@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
@@ -154,6 +155,17 @@ def _make_unknown(contract_name: str, payload: dict) -> dict:
 def test_each_contract_accepts_valid_payload(contract_name):
     result = validate_content_node_result(contract_name, VALID_PAYLOADS[contract_name], DOMAIN_CONTEXT)
     assert result.__class__.__name__ == contract_name
+
+
+def test_visual_plan_must_use_exactly_the_task_locked_gallery_image():
+    context = replace(DOMAIN_CONTEXT, required_source_asset_ids=("asset-1",))
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["source_asset_ids"] = []
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    assert exc_info.value.code == "visual_source_locked"
 
 
 def test_formula_ranking_pool_comes_from_match_snapshot_before_selection_exists():

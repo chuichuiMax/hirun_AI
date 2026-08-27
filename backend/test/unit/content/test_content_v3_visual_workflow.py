@@ -11,6 +11,7 @@ import yuxi.content.control.workflow.agent_node as agent_node_module
 from yuxi.content.control.workflow.agent_node import AgentNodeHandler, AgentNodeResultMapper
 from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
 from yuxi.content.v3.workflow import WORKFLOW_V3_NODES
+from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.storage.postgres.models_content import ContentCoverAsset, ContentCoverJob, ContentNodeRun, ContentTask
 
 
@@ -275,6 +276,12 @@ async def test_cover_tool_uses_locked_plan_and_persists_event_resume_metadata(mo
         events.append((event_type, payload))
 
     monkeypatch.setattr(content_tools.pg_manager, "get_async_session_context", fake_session)
+
+    async def fake_get_task_for_user(repo, task_id, user):
+        del repo, task_id, user
+        return SimpleNamespace(runtime_config_snapshot_json={})
+
+    monkeypatch.setattr(content_tools.ContentRepository, "get_task_for_user", fake_get_task_for_user)
     monkeypatch.setattr(content_tools, "create_cover_generate_job", fake_create)
     monkeypatch.setattr(content_tools, "_emit_content_tool_event", fake_event)
 
@@ -304,6 +311,105 @@ async def test_cover_tool_uses_locked_plan_and_persists_event_resume_metadata(mo
         "content.cover.started",
         "content.tool.completed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_cover_tool_routes_locked_gallery_image_and_template_to_poster_billboard(monkeypatch):
+    visual_plan = {**_visual_plan(), "plan_hash": "a" * 64}
+    node_input = SimpleNamespace(
+        task_id="task-1",
+        parent_run_id="run-parent",
+        node_id="submit_cover_job",
+    )
+    context = SimpleNamespace(
+        uid="user-1",
+        _content_node_output_contract="CoverJobSubmissionResultV1",
+        _content_node_result_collector=SimpleNamespace(
+            domain_context=SimpleNamespace(
+                visual_plan_hash="a" * 64,
+                allowed_asset_ids=frozenset({"source-1"}),
+            )
+        ),
+        _content_node_input=node_input,
+        _content_node_governance={
+            "locked_values": {
+                "state_version": 7,
+                "visual_plan_hash": "a" * 64,
+                "visual_plan": visual_plan,
+            }
+        },
+    )
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return SimpleNamespace(uid="user-1")
+
+    class FakeDB:
+        async def execute(self, query):
+            del query
+            return FakeResult()
+
+    @asynccontextmanager
+    async def fake_session():
+        yield FakeDB()
+
+    async def fake_get_task_for_user(repo, task_id, user):
+        del repo, task_id, user
+        return SimpleNamespace(
+            runtime_config_snapshot_json={
+                "visual_material": {
+                    "image_asset_id": "source-1",
+                    "poster_template_id": "poster-1",
+                    "poster_template_checksum": "checksum-1",
+                    "poster_template_version": 3,
+                }
+            }
+        )
+
+    async def fake_get_poster(repo, template_id, owner_uid):
+        del repo, template_id, owner_uid
+        return SimpleNamespace(status="ready", checksum="checksum-1", version=3)
+
+    captured = []
+
+    async def fake_create_poster(db, user, payload):
+        del db, user
+        captured.append(payload)
+        return {"job": {"id": "poster-job-1", "mode": "poster_billboard"}, "deduplicated": False}
+
+    async def fail_generate(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("选择大字报模板后不应进入普通图片生成")
+
+    async def fake_event(*args, **kwargs):
+        del args, kwargs
+
+    monkeypatch.setattr(content_tools.pg_manager, "get_async_session_context", fake_session)
+    monkeypatch.setattr(content_tools.ContentRepository, "get_task_for_user", fake_get_task_for_user)
+    monkeypatch.setattr(ContentCoverRepository, "get_poster_template_for_user", fake_get_poster)
+    monkeypatch.setattr(content_tools, "create_poster_billboard_job", fake_create_poster)
+    monkeypatch.setattr(content_tools, "create_cover_generate_job", fail_generate)
+    monkeypatch.setattr(content_tools, "_emit_content_tool_event", fake_event)
+
+    result = await content_tools.create_content_cover_job.coroutine(
+        task_id="task-1",
+        runtime=SimpleNamespace(context=context),
+    )
+
+    assert result["cover_job_id"] == "poster-job-1"
+    assert result["source_asset_ids"] == ["source-1"]
+    assert captured[0].poster_template_id == "poster-1"
+    assert captured[0].product_asset_id == "source-1"
+    assert captured[0].content_task_id == "task-1"
+    assert captured[0].enhance_with_image2 is False
+    assert captured[0].parameters == {
+        "visual_plan_hash": "a" * 64,
+        "workflow_resume": {
+            "parent_run_id": "run-parent",
+            "node_id": "wait_cover_job",
+            "expected_state_version": 7,
+        },
+    }
 
 
 @pytest.mark.asyncio

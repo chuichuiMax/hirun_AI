@@ -118,12 +118,15 @@ class AgentNodeHandler:
         }
         media = state.get("media_evidence_items") or []
         cover_asset_ids = list((state.get("cover_job") or {}).get("asset_ids") or [])
+        visual_material = (state.get("runtime_config_snapshot") or {}).get("visual_material") or {}
+        required_source_asset_ids = [visual_material["image_asset_id"]] if visual_material.get("image_asset_id") else []
         locked_values = {
             "selected_title": (state.get("selected_title") or {}).get("text"),
             "source_asset_ids": [
                 *[item["id"] for item in media if item.get("id")],
                 *cover_asset_ids,
             ],
+            "required_source_asset_ids": required_source_asset_ids,
             "visual_plan_hash": (state.get("visual_plan") or {}).get("plan_hash"),
             "state_version": int(state.get("state_version") or 0),
         }

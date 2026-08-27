@@ -176,12 +176,6 @@ const router = createRouter({
           name: 'EmployeeManageComp',
           component: () => import('../views/EmployeeManageView.vue'),
           meta: { keepAlive: false, requiresAuth: true }
-        },
-        {
-          path: 'covers',
-          name: 'CoverManageComp',
-          component: () => import('../views/CoverManageView.vue'),
-          meta: { keepAlive: false, requiresAuth: true }
         }
       ]
     },

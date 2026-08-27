@@ -89,8 +89,7 @@ async def upload_cover_asset(
 @content_covers.post("/poster-templates/import", status_code=status.HTTP_201_CREATED)
 async def import_cover_poster_templates(
     files: list[UploadFile] = File(...),
-    category: str = Form("未分类"),
-    tags: str = Form(""),
+    category: str = Form(...),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -99,7 +98,6 @@ async def import_cover_poster_templates(
         current_user,
         files,
         category=category,
-        tags=[item for item in tags.split(",") if item.strip()],
     )
 
 

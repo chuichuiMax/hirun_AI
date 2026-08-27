@@ -202,13 +202,6 @@ const mainList = computed(() => {
   })
 
   items.push({
-    name: '封面管理',
-    path: '/model-manage/covers',
-    icon: Images,
-    activeIcon: Images
-  })
-
-  items.push({
     name: '配置管理',
     icon: SlidersHorizontal,
     activeIcon: SlidersHorizontal,

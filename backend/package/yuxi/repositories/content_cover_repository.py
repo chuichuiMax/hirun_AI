@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import Text, cast, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.storage.postgres.models_content import (
@@ -13,6 +13,7 @@ from yuxi.storage.postgres.models_content import (
     ContentCoverImage2Setting,
     ContentCoverJob,
     ContentCoverPosterTemplate,
+    ContentTask,
 )
 from yuxi.utils.datetime_utils import utc_now_naive
 
@@ -141,12 +142,9 @@ class ContentCoverRepository:
                 or_(
                     ContentCoverPosterTemplate.name.ilike(pattern),
                     ContentCoverPosterTemplate.category.ilike(pattern),
-                    cast(ContentCoverPosterTemplate.tags_json, Text).ilike(pattern),
                 )
             )
-        total = (
-            await self.db.execute(select(func.count(ContentCoverPosterTemplate.id)).where(*filters))
-        ).scalar_one()
+        total = (await self.db.execute(select(func.count(ContentCoverPosterTemplate.id)).where(*filters))).scalar_one()
         items = (
             await self.db.execute(
                 select(ContentCoverPosterTemplate)
@@ -169,6 +167,22 @@ class ContentCoverRepository:
             )
         ).scalars()
         return any((request or {}).get("poster_template_id") == template_id for request in requests)
+
+    async def poster_template_is_selected_by_task(
+        self,
+        template_id: str,
+        owner_uid: str,
+        *,
+        locked_only: bool = False,
+    ) -> bool:
+        filters = [
+            ContentTask.created_by == owner_uid,
+            ContentTask.selected_poster_template_id == template_id,
+            ContentTask.deleted_at.is_(None),
+        ]
+        if locked_only:
+            filters.append(ContentTask.current_stage != "brief")
+        return bool((await self.db.execute(select(func.count(ContentTask.id)).where(*filters))).scalar_one())
 
     async def get_asset(self, asset_id: str, *, for_update: bool = False) -> ContentCoverAsset | None:
         query = select(ContentCoverAsset).where(

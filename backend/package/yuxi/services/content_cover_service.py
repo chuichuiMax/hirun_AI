@@ -57,7 +57,12 @@ from yuxi.content_cover.template_replication import (
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
-from yuxi.services.material_library_service import MATERIAL_LIBRARY_BUCKET, create_library_item_for_asset
+from yuxi.services.material_library_service import (
+    MATERIAL_LIBRARY_BUCKET,
+    create_library_item_for_asset,
+    ensure_material_categories,
+    resolve_material_category,
+)
 from yuxi.services.run_queue_service import (
     get_arq_pool,
     get_last_run_stream_seq,
@@ -72,6 +77,7 @@ from yuxi.storage.postgres.models_content import (
     ContentCoverAsset,
     ContentCoverJob,
     ContentCoverPosterTemplate,
+    ContentMaterialLibraryItem,
 )
 from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.logging_config import logger
@@ -169,8 +175,16 @@ def serialize_job(item: ContentCoverJob) -> dict[str, Any]:
     return data
 
 
-def serialize_poster_template(item: ContentCoverPosterTemplate) -> dict[str, Any]:
+def serialize_poster_template(
+    item: ContentCoverPosterTemplate,
+    category_name: str | None = None,
+    library_item: ContentMaterialLibraryItem | None = None,
+) -> dict[str, Any]:
     data = item.to_dict()
+    if library_item is not None:
+        data["name"] = library_item.display_name
+    data["category"] = library_item.category if library_item is not None else item.category
+    data["category_name"] = category_name or "未分类"
     data["text_slots"] = normalize_poster_text_slots(data.get("text_slots") or [])
     data["file_url"] = f"/api/content/covers/assets/{item.asset_id}/file"
     data["thumbnail_url"] = data["file_url"]
@@ -278,14 +292,15 @@ async def create_cover_asset(
             object_name=uploaded.object_name,
             metadata_json={"original_content_type": file.content_type or ""},
         )
-        await create_library_item_for_asset(
-            db,
-            asset=item,
-            material_type=material_type,
-            name=Path(file.filename).stem,
-            category="封面素材",
-            metadata={"cover_role": role},
-        )
+        if role != "mask":
+            await create_library_item_for_asset(
+                db,
+                asset=item,
+                material_type=material_type,
+                name=Path(file.filename).stem,
+                category="uncategorized",
+                metadata={"cover_role": role},
+            )
         await db.commit()
     except Exception:
         await get_minio_client().adelete_file(uploaded.bucket_name, uploaded.object_name)
@@ -323,7 +338,6 @@ async def import_poster_templates(
     files: list[UploadFile],
     *,
     category: str,
-    tags: list[str],
 ) -> dict[str, Any]:
     if not files:
         raise _error(400, "POSTER_TEMPLATE_FILES_REQUIRED", "请至少上传一张大字报蒙版")
@@ -331,13 +345,22 @@ async def import_poster_templates(
         raise _error(400, "POSTER_TEMPLATE_BATCH_TOO_LARGE", "单次最多导入 100 张蒙版")
     owner_uid = _owner_uid(user)
     repo = ContentCoverRepository(db)
+    resolved_category = await resolve_material_category(
+        db,
+        owner_uid=owner_uid,
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+        category_id=category,
+    )
+    category_names = {
+        item.id: item.name for item in await MaterialLibraryRepository(db).list_categories(owner_uid, "cover_template")
+    }
     results: list[dict[str, Any]] = []
     uploaded_objects: list[tuple[str, str]] = []
     created = 0
     duplicate = 0
     failed = 0
-    normalized_tags = list(dict.fromkeys(item.strip()[:40] for item in tags if item.strip()))[:20]
-    normalized_category = category.strip()[:80] or "未分类"
+    normalized_category = resolved_category.id
     try:
         for index, file in enumerate(files):
             file_name = Path((file.filename or f"poster-{index + 1}.png").replace("\\", "/")).name
@@ -355,21 +378,21 @@ async def import_poster_templates(
                 if existing is not None:
                     existing_asset = await repo.get_asset_for_user(existing.asset_id, owner_uid)
                     if existing_asset is not None:
-                        await create_library_item_for_asset(
+                        library_item = await create_library_item_for_asset(
                             db,
                             asset=existing_asset,
                             material_type="cover_template",
                             name=existing.name,
                             category=existing.category,
-                            tags=existing.tags_json,
                             metadata={"poster_template_id": existing.id},
                         )
+                        library_item.status = "enabled" if existing.status == "ready" else "disabled"
                     duplicate += 1
                     results.append(
                         {
                             "file_name": file_name,
                             "status": "duplicate",
-                            "template": serialize_poster_template(existing),
+                            "template": serialize_poster_template(existing, category_names.get(existing.category)),
                         }
                     )
                     continue
@@ -413,7 +436,7 @@ async def import_poster_templates(
                         asset_id=asset_id,
                         name=Path(file_name).stem[:255] or f"大字报画板 {index + 1}",
                         category=normalized_category,
-                        tags_json=normalized_tags,
+                        tags_json=[],
                         template_type=analysis["template_type"],
                         canvas_width=1080,
                         canvas_height=1440,
@@ -427,18 +450,22 @@ async def import_poster_templates(
                         analysis_version=POSTER_PROCESSING_VERSION,
                         status=analysis["status"],
                     )
-                    await create_library_item_for_asset(
+                    library_item = await create_library_item_for_asset(
                         db,
                         asset=asset,
                         material_type="cover_template",
                         name=item.name,
                         category=item.category,
-                        tags=item.tags_json,
                         metadata={"poster_template_id": item.id},
                     )
+                    library_item.status = "enabled" if item.status == "ready" else "disabled"
                 created += 1
                 results.append(
-                    {"file_name": file_name, "status": "created", "template": serialize_poster_template(item)}
+                    {
+                        "file_name": file_name,
+                        "status": "created",
+                        "template": serialize_poster_template(item, resolved_category.name),
+                    }
                 )
             except HTTPException as exc:
                 failed += 1
@@ -465,21 +492,21 @@ async def import_poster_templates(
                 if existing is not None:
                     existing_asset = await repo.get_asset_for_user(existing.asset_id, owner_uid)
                     if existing_asset is not None:
-                        await create_library_item_for_asset(
+                        library_item = await create_library_item_for_asset(
                             db,
                             asset=existing_asset,
                             material_type="cover_template",
                             name=existing.name,
                             category=existing.category,
-                            tags=existing.tags_json,
                             metadata={"poster_template_id": existing.id},
                         )
+                        library_item.status = "enabled" if existing.status == "ready" else "disabled"
                     duplicate += 1
                     results.append(
                         {
                             "file_name": file_name,
                             "status": "duplicate",
-                            "template": serialize_poster_template(existing),
+                            "template": serialize_poster_template(existing, category_names.get(existing.category)),
                         }
                     )
                 else:
@@ -525,16 +552,64 @@ async def list_poster_templates(
     page: int,
     page_size: int,
 ) -> dict[str, Any]:
-    items, total = await ContentCoverRepository(db).list_poster_templates(
+    categories = await ensure_material_categories(
+        db,
+        owner_uid=_owner_uid(user),
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+    )
+    category_names = {item.id: item.name for item in categories}
+    resolved_category = (
+        await resolve_material_category(
+            db,
+            owner_uid=_owner_uid(user),
+            tenant_id=_tenant_id(user),
+            material_type="cover_template",
+            category_id=category,
+        )
+        if category
+        else None
+    )
+    cover_repo = ContentCoverRepository(db)
+    items, total = await cover_repo.list_poster_templates(
         _owner_uid(user),
-        category=category,
+        category=resolved_category.id if resolved_category else None,
         status=status,
         query_text=query,
         page=page,
         page_size=page_size,
     )
+    library_items = await MaterialLibraryRepository(db).list_items_by_asset_ids(
+        _owner_uid(user),
+        [item.asset_id for item in items],
+    )
+    library_by_asset = {item.asset_id: item for item in library_items}
+    for item in items:
+        if item.asset_id in library_by_asset:
+            continue
+        asset = await cover_repo.get_asset_for_user(item.asset_id, _owner_uid(user))
+        if asset is None:
+            continue
+        library_item = await create_library_item_for_asset(
+            db,
+            asset=asset,
+            material_type="cover_template",
+            name=item.name,
+            category=item.category,
+            metadata={"poster_template_id": item.id},
+        )
+        library_item.status = "enabled" if item.status == "ready" else "disabled"
+        library_by_asset[item.asset_id] = library_item
+    await db.commit()
     return {
-        "items": [serialize_poster_template(item) for item in items],
+        "items": [
+            serialize_poster_template(
+                item,
+                category_names.get(library_by_asset.get(item.asset_id, item).category),
+                library_by_asset.get(item.asset_id),
+            )
+            for item in items
+        ],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -545,7 +620,16 @@ async def get_poster_template(db: AsyncSession, user: User, template_id: str) ->
     item = await ContentCoverRepository(db).get_poster_template_for_user(template_id, _owner_uid(user))
     if item is None:
         raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
-    return {"template": serialize_poster_template(item)}
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(item.asset_id)
+    category = await resolve_material_category(
+        db,
+        owner_uid=_owner_uid(user),
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+        category_id=library_item.category if library_item is not None else item.category,
+    )
+    await db.commit()
+    return {"template": serialize_poster_template(item, category.name, library_item)}
 
 
 async def update_poster_template(
@@ -557,13 +641,32 @@ async def update_poster_template(
     item = await ContentCoverRepository(db).get_poster_template_for_user(template_id, _owner_uid(user), for_update=True)
     if item is None:
         raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
+    if await ContentCoverRepository(db).poster_template_is_selected_by_task(
+        template_id,
+        _owner_uid(user),
+        locked_only=True,
+    ):
+        raise _error(409, "POSTER_TEMPLATE_IN_USE", "模板已被内容任务锁定，不能修改")
     changes = payload.model_dump(exclude_unset=True, mode="json")
     if "name" in changes:
         item.name = changes["name"].strip()
     if "category" in changes:
-        item.category = changes["category"].strip()
-    if "tags" in changes:
-        item.tags_json = changes["tags"]
+        category = await resolve_material_category(
+            db,
+            owner_uid=_owner_uid(user),
+            tenant_id=_tenant_id(user),
+            material_type="cover_template",
+            category_id=changes["category"],
+        )
+        item.category = category.id
+    else:
+        category = await resolve_material_category(
+            db,
+            owner_uid=_owner_uid(user),
+            tenant_id=_tenant_id(user),
+            material_type="cover_template",
+            category_id=item.category,
+        )
     field_map = {
         "product_box": "product_box_json",
         "safe_area": "safe_area_json",
@@ -598,11 +701,10 @@ async def update_poster_template(
     if library_item is not None:
         library_item.display_name = item.name
         library_item.category = item.category
-        library_item.tags_json = item.tags_json
         library_item.status = "enabled" if item.status == "ready" else "disabled"
         library_item.updated_at = utc_now_naive()
     await db.commit()
-    return {"template": serialize_poster_template(item)}
+    return {"template": serialize_poster_template(item, category.name)}
 
 
 async def reanalyze_poster_template(
@@ -634,8 +736,19 @@ async def reanalyze_poster_template(
     item.error_message = None
     item.version += 1
     item.updated_at = utc_now_naive()
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(item.asset_id)
+    if library_item is not None:
+        library_item.status = "enabled" if item.status == "ready" else "disabled"
+        library_item.updated_at = utc_now_naive()
+    category = await resolve_material_category(
+        db,
+        owner_uid=_owner_uid(user),
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+        category_id=item.category,
+    )
     await db.commit()
-    return {"template": serialize_poster_template(item)}
+    return {"template": serialize_poster_template(item, category.name)}
 
 
 async def delete_poster_template(db: AsyncSession, user: User, template_id: str) -> dict[str, bool]:
@@ -644,8 +757,10 @@ async def delete_poster_template(db: AsyncSession, user: User, template_id: str)
     item = await repo.get_poster_template_for_user(template_id, owner_uid, for_update=True)
     if item is None:
         raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
-    if await repo.poster_template_is_in_active_job(template_id, owner_uid):
-        raise _error(409, "POSTER_TEMPLATE_IN_USE", "蒙版正在被生成任务使用，任务结束后再删除")
+    if await repo.poster_template_is_in_active_job(
+        template_id, owner_uid
+    ) or await repo.poster_template_is_selected_by_task(template_id, owner_uid):
+        raise _error(409, "POSTER_TEMPLATE_IN_USE", "模板正在被内容任务或封面任务使用，不能删除")
     asset = await repo.get_asset_for_user(item.asset_id, owner_uid, for_update=True)
     if asset is not None:
         try:
@@ -794,7 +909,7 @@ async def create_cover_compose_job(db: AsyncSession, user: User, payload: CoverC
         _owner_uid(user),
         for_update=True,
     )
-    if len(assets) != len(payload.asset_ids) or any(item.role != "source" for item in assets):
+    if len(assets) != len(payload.asset_ids) or any(item.role not in {"source", "library_image"} for item in assets):
         raise _error(422, "COVER_SOURCE_ASSET_INVALID", "拼图素材不存在或角色不正确")
     artifact = await _resolve_artifact(db, user, payload.content_task_id)
     request = payload.model_dump()
@@ -860,7 +975,7 @@ async def _resolve_poster_context(
     if template_asset is None or template_asset.role != "poster_template":
         raise _error(409, "POSTER_TEMPLATE_ASSET_MISSING", "大字报蒙版原始文件不存在")
     product_asset = await repo.get_asset_for_user(product_asset_id, owner_uid, for_update=for_update)
-    if product_asset is None or product_asset.role != "source":
+    if product_asset is None or product_asset.role not in {"source", "library_image"}:
         raise _error(422, "POSTER_PRODUCT_ASSET_INVALID", "产品图片不存在或素材角色不正确")
     return template_record, template_asset, product_asset
 
@@ -952,12 +1067,20 @@ async def preview_poster_billboard(
         raise _error(500, "COVER_STORAGE_FAILED", "大字报素材读取失败", retryable=True) from exc
     except PosterBillboardError as exc:
         raise _error(422, "POSTER_PREVIEW_FAILED", str(exc)) from exc
+    category = await resolve_material_category(
+        db,
+        owner_uid=_owner_uid(user),
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+        category_id=template_record.category,
+    )
+    await db.commit()
     return {
         "preview_data_url": f"data:image/png;base64,{base64.b64encode(rendered).decode('ascii')}",
         "copy_plan": copy_plan,
         "transform": payload.transform.model_dump(mode="json"),
         "quality_report": quality_report,
-        "template": serialize_poster_template(template_record),
+        "template": serialize_poster_template(template_record, category.name),
     }
 
 
@@ -1023,7 +1146,9 @@ async def create_cover_generate_job(db: AsyncSession, user: User, payload: Cover
     repo = ContentCoverRepository(db)
     owner_uid = _owner_uid(user)
     source_assets = await repo.get_assets_for_user(payload.source_asset_ids, owner_uid, for_update=True)
-    if len(source_assets) != len(payload.source_asset_ids) or any(item.role != "source" for item in source_assets):
+    if len(source_assets) != len(payload.source_asset_ids) or any(
+        item.role not in {"source", "library_image"} for item in source_assets
+    ):
         raise _error(422, "COVER_SOURCE_ASSET_INVALID", "原图不存在或角色不正确")
     template = None
     if payload.template_asset_id:

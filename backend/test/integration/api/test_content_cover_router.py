@@ -123,7 +123,7 @@ async def test_poster_template_library_preview_and_owner_isolation(
     imported = await test_client.post(
         "/api/content/covers/poster-templates/import",
         headers=admin_headers,
-        data={"category": "产品", "tags": "上新,简约"},
+        data={"category": "product_promotion"},
         files=[("files", ("alpha-board.png", _overlay_png(), "image/png"))],
     )
     assert imported.status_code == 201, imported.text
@@ -131,25 +131,30 @@ async def test_poster_template_library_preview_and_owner_isolation(
     template = imported.json()["items"][0]["template"]
     assert template["status"] == "ready"
     assert template["template_type"] == "alpha_overlay"
+    assert template["category_name"] == "产品推广"
+    assert "tags" not in template
 
     material_library = await test_client.get(
         "/api/material-library/items?material_type=cover_template",
         headers=admin_headers,
     )
     assert material_library.status_code == 200, material_library.text
-    assert template["asset_id"] in {item["asset_id"] for item in material_library.json()["items"]}
+    library_item = next(item for item in material_library.json()["items"] if item["asset_id"] == template["asset_id"])
+    assert library_item["poster_template_id"] == template["id"]
+    assert library_item["template_status"] == "ready"
+    assert library_item["selectable"] is True
 
     duplicate = await test_client.post(
         "/api/content/covers/poster-templates/import",
         headers=admin_headers,
-        data={"category": "产品"},
+        data={"category": "product_promotion"},
         files=[("files", ("same-board.png", _overlay_png(), "image/png"))],
     )
     assert duplicate.status_code == 201, duplicate.text
     assert duplicate.json()["summary"]["duplicate"] == 1
 
     listed = await test_client.get(
-        "/api/content/covers/poster-templates?category=产品&status=ready",
+        "/api/content/covers/poster-templates?category=product_promotion&status=ready",
         headers=admin_headers,
     )
     assert listed.status_code == 200, listed.text
@@ -158,12 +163,12 @@ async def test_poster_template_library_preview_and_owner_isolation(
     managed = await test_client.patch(
         f"/api/content/covers/poster-templates/{template['id']}",
         headers=admin_headers,
-        json={"name": "poster-library-fixture", "tags": ["tag-search-fixture"]},
+        json={"name": "poster-library-fixture", "category": "marketing"},
     )
     assert managed.status_code == 200, managed.text
     template = managed.json()["template"]
     searched = await test_client.get(
-        "/api/content/covers/poster-templates?query=tag-search-fixture",
+        "/api/content/covers/poster-templates?query=poster-library-fixture",
         headers=admin_headers,
     )
     assert searched.status_code == 200, searched.text

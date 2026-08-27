@@ -34,11 +34,10 @@ export const contentApi = {
   testCoverImage2Config: (payload) => apiPost('/api/content/covers/image2-config/test', payload),
   previewCoverTemplateReplication: (payload) =>
     apiPost('/api/content/covers/template-replication/preview', payload),
-  importCoverPosterTemplates: (files, category = '未分类', tags = []) => {
+  importCoverPosterTemplates: (files, category) => {
     const form = new FormData()
     Array.from(files).forEach((file) => form.append('files', file))
     form.append('category', category)
-    form.append('tags', tags.join(','))
     return apiPost('/api/content/covers/poster-templates/import', form)
   },
   listCoverPosterTemplates: (params = {}) =>

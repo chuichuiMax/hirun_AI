@@ -30,6 +30,13 @@ class ContentTaskUpdate(BaseModel):
     mode: ContentMode | None = None
 
 
+class ContentVisualMaterialSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    image_item_id: str = Field(min_length=1, max_length=64)
+    poster_template_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class ContentBriefPayload(BaseModel):
     brand: dict[str, Any] = Field(default_factory=dict)
     audience: list[str] = Field(default_factory=list)
@@ -41,6 +48,7 @@ class ContentBriefPayload(BaseModel):
     locked_fields: list[str] = Field(default_factory=list)
     form_values: dict[str, Any] = Field(default_factory=dict)
     material_confirmations: list[dict[str, Any]] = Field(default_factory=list)
+    visual_material: ContentVisualMaterialSelection | None = None
 
 
 class ContentBriefSave(BaseModel):

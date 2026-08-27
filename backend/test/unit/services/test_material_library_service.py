@@ -6,8 +6,19 @@ import pytest
 from fastapi import HTTPException
 from PIL import Image
 
-from yuxi.services.material_library_service import MATERIAL_LIBRARY_BUCKET, _normalize_image
+from yuxi.services.material_library_service import MATERIAL_LIBRARY_BUCKET, _normalize_image, serialize_item
+from yuxi.services.material_library_categories import (
+    category_definition,
+    normalize_material_category,
+    validate_material_category,
+)
 from yuxi.storage.minio.client import MinIOClient
+from yuxi.storage.postgres.models_content import (
+    ContentCoverAsset,
+    ContentCoverPosterTemplate,
+    ContentMaterialCategory,
+    ContentMaterialLibraryItem,
+)
 
 
 def test_material_library_bucket_defaults_to_image():
@@ -32,3 +43,67 @@ def test_normalize_image_rejects_non_image():
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["error"]["code"] == "MATERIAL_IMAGE_INVALID"
+
+
+def test_material_categories_normalize_legacy_values_and_reject_free_form():
+    assert normalize_material_category("image", "产品商品") == "product"
+    assert normalize_material_category("cover_template", "unknown-old-value") == "uncategorized"
+    assert category_definition("cover_template", "营销促销")["code"] == "marketing"
+    with pytest.raises(ValueError):
+        validate_material_category("image", "uncategorized")
+    with pytest.raises(ValueError):
+        validate_material_category("image", "custom")
+
+
+def test_cover_template_item_exposes_linked_generation_status():
+    asset = ContentCoverAsset(
+        id="asset-1",
+        owner_uid="owner-1",
+        role="template",
+        original_file_name="poster.png",
+        content_type="image/png",
+        file_size=128,
+        image_width=1080,
+        image_height=1440,
+        sha256="checksum",
+        bucket_name="image",
+        object_name="material-library/owner-1/cover-templates/asset-1/poster.png",
+    )
+    item = ContentMaterialLibraryItem(
+        id="item-1",
+        owner_uid="owner-1",
+        asset_id=asset.id,
+        material_type="cover_template",
+        display_name="案例复盘",
+        category="case-study",
+        status="enabled",
+    )
+    category = ContentMaterialCategory(
+        owner_uid="owner-1",
+        material_type="cover_template",
+        id="case-study",
+        name="客户案例",
+    )
+    poster = ContentCoverPosterTemplate(
+        id="poster-1",
+        owner_uid="owner-1",
+        asset_id=asset.id,
+        name=item.display_name,
+        category=item.category,
+        canvas_width=1080,
+        canvas_height=1440,
+        product_box_json={"x": 0, "y": 0, "width": 1080, "height": 1440},
+        checksum="poster-checksum",
+        version=3,
+        status="ready",
+    )
+
+    result = serialize_item(item, asset, category, poster)
+
+    assert result["poster_template_id"] == poster.id
+    assert result["template_status"] == "ready"
+    assert result["template_version"] == 3
+    assert result["selectable"] is True
+
+    poster.status = "needs_annotation"
+    assert serialize_item(item, asset, category, poster)["selectable"] is False

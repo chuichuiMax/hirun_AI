@@ -193,6 +193,23 @@ async def process_content_run(ctx, run_id: str):
             )
             graph_input = None
         else:
+            visual_material = (task.runtime_config_snapshot_json or {}).get("visual_material") or {}
+            selected_media = []
+            if visual_material.get("image_asset_id"):
+                selected_media.append(
+                    {
+                        "id": visual_material["image_asset_id"],
+                        "attachment_id": visual_material.get("image_item_id"),
+                        "display_name": visual_material.get("image_name"),
+                        "verified_status": "user_confirmed",
+                        "privacy_status": "approved",
+                        "allowed_usage": ["visual"],
+                        "source_hash": visual_material.get("image_sha256"),
+                        "width": visual_material.get("image_width"),
+                        "height": visual_material.get("image_height"),
+                        "selected_for_cover": True,
+                    }
+                )
             graph_input = {
                 "task_id": task.id,
                 "run_id": run.id,
@@ -209,7 +226,7 @@ async def process_content_run(ctx, run_id: str):
                 "channel_profile": {},
                 "compliance_policies": [],
                 "lexicon_entries": [],
-                "media_evidence_items": [],
+                "media_evidence_items": selected_media,
                 "content_brief": task.brief_json or {},
                 "content_angles": [],
                 "selected_angle": None,

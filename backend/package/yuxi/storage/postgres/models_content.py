@@ -548,6 +548,9 @@ class ContentTask(Base):
     primary_narrative_axis = Column(String(80), nullable=True)
     selected_angle_json = Column(JSON, nullable=False, default=dict)
     runtime_config_snapshot_json = Column(JSON, nullable=False, default=dict)
+    # 跨素材表的引用由业务层校验和删除保护维护；避免 ContentTask/Asset 形成建表环依赖。
+    selected_image_item_id = Column(String(64), nullable=True, index=True)
+    selected_poster_template_id = Column(String(64), nullable=True, index=True)
     status = Column(String(32), nullable=False, default="draft", index=True)
     current_stage = Column(String(32), nullable=False, default="brief", index=True)
     brief_json = Column(JSON, nullable=False, default=dict)
@@ -589,6 +592,8 @@ class ContentTask(Base):
             "primary_narrative_axis": self.primary_narrative_axis,
             "selected_angle": self.selected_angle_json or {},
             "runtime_config_snapshot": self.runtime_config_snapshot_json or {},
+            "selected_image_item_id": self.selected_image_item_id,
+            "selected_poster_template_id": self.selected_poster_template_id,
             "status": self.status,
             "current_stage": self.current_stage,
             "brief": self.brief_json or {},
@@ -1055,9 +1060,61 @@ class ContentMaterialLibraryItem(Base):
             "material_type": self.material_type,
             "name": self.display_name,
             "category": self.category,
-            "tags": self.tags_json or [],
             "status": self.status,
             "metadata": self.metadata_json or {},
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentMaterialCategory(Base):
+    """用户维护的素材图片图库或封面模板分类。"""
+
+    __tablename__ = "content_material_categories"
+
+    owner_uid = Column(String(255), primary_key=True)
+    material_type = Column(String(32), primary_key=True, index=True)
+    id = Column(String(64), primary_key=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    name = Column(String(80), nullable=False)
+    description = Column(String(255), nullable=False, default="")
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_system = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "material_type IN ('image', 'cover_template')",
+            name="ck_content_material_category_type",
+        ),
+        Index(
+            "uq_content_material_category_owner_type_name_active",
+            "owner_uid",
+            "material_type",
+            text("lower(name)"),
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_content_material_category_owner_type_sort",
+            "owner_uid",
+            "material_type",
+            "sort_order",
+        ),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "code": self.id,
+            "material_type": self.material_type,
+            "name": self.name,
+            "description": self.description or "",
+            "sort_order": self.sort_order,
+            "is_system": self.is_system,
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
         }
@@ -1112,7 +1169,6 @@ class ContentCoverPosterTemplate(Base):
             "asset_id": self.asset_id,
             "name": self.name,
             "category": self.category,
-            "tags": self.tags_json or [],
             "template_type": self.template_type,
             "canvas_width": self.canvas_width,
             "canvas_height": self.canvas_height,
@@ -1552,37 +1608,6 @@ class ContentVariable(Base):
             "variable_code": self.variable_code,
             "name": self.name,
             "service_entry": self.service_entry,
-            "enabled": bool(self.enabled),
-            "created_by": self.created_by,
-            "created_at": format_utc_datetime(self.created_at),
-            "updated_at": format_utc_datetime(self.updated_at),
-        }
-
-
-class ContentCover(Base):
-    """内容封面。"""
-
-    __tablename__ = "content_covers"
-
-    id = Column(String(64), primary_key=True)
-    category = Column(String(32), nullable=False, index=True)
-    image_url = Column(String(1024), nullable=False)
-    image_name = Column(String(255), nullable=False)
-    title = Column(String(120), nullable=False, default="")
-    generation_count = Column(Integer, nullable=False, default=0)
-    enabled = Column(Boolean, nullable=False, default=True, index=True)
-    created_by = Column(String(64), nullable=False, index=True)
-    created_at = Column(DateTime, default=utc_now_naive)
-    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "category": self.category,
-            "image_url": self.image_url,
-            "image_name": self.image_name,
-            "title": self.title or "",
-            "generation_count": self.generation_count or 0,
             "enabled": bool(self.enabled),
             "created_by": self.created_by,
             "created_at": format_utc_datetime(self.created_at),
