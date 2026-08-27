@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
@@ -31,7 +31,10 @@ import { materialLibraryApi } from '@/apis/material_library_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
 import { formatEvidenceReference } from '@/utils/contentEvidencePresentation'
-import { buildContentWorkflowGroups } from '@/utils/contentWorkflowPresentation'
+import {
+  buildContentRuntimeTimeline,
+  buildContentWorkflowGroups
+} from '@/utils/contentWorkflowPresentation'
 
 const route = useRoute()
 const router = useRouter()
@@ -72,6 +75,7 @@ const posterTemplateUrls = ref({})
 const materialSelectorLoading = ref(false)
 const galleryImagesLoading = ref(false)
 const posterTemplatesRefreshing = ref(false)
+const runtimeTimelineElement = ref(null)
 const posterTemplateSyncIntervalMs = 10_000
 let draftSaveTimer = null
 let posterTemplateSyncTimer = null
@@ -144,6 +148,20 @@ const angleOptions = computed(() =>
   store.interrupt?.interrupt_type === 'content_direction' ? store.interrupt.options || [] : []
 )
 const workflowGroups = computed(() => buildContentWorkflowGroups(store.runEvents))
+const runtimeTimeline = computed(() =>
+  buildContentRuntimeTimeline(store.runEvents, store.runAudit?.events || [])
+)
+const formatRuntimeTime = (value) => {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? ''
+    : date.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+const formatRuntimeDuration = (durationMs) => {
+  if (durationMs === undefined || durationMs === null) return ''
+  return durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`
+}
 const reviewChecks = computed(() => store.artifact?.review_snapshot?.checks || store.task?.review?.checks || [])
 const canFinalize = computed(() => ['passed', 'warning'].includes(store.artifact?.review_snapshot?.status))
 const approvalAllowed = computed(() => {
@@ -599,6 +617,15 @@ const scheduleBriefSave = () => {
 
 watch(formValues, scheduleBriefSave, { deep: true })
 watch([selectedImageItemId, selectedPosterTemplateId], scheduleBriefSave)
+watch(
+  () => runtimeTimeline.value.length,
+  async () => {
+    await nextTick()
+    if (runtimeTimelineElement.value) {
+      runtimeTimelineElement.value.scrollTop = runtimeTimelineElement.value.scrollHeight
+    }
+  }
+)
 
 onBeforeUnmount(() => {
   window.clearTimeout(draftSaveTimer)
@@ -1040,6 +1067,41 @@ const openVersions = async () => {
             </details>
           </div>
 
+          <aside class="run-sidebar">
+            <section class="runtime-panel">
+              <div class="runtime-panel-heading">
+                <div>
+                  <span class="runtime-live-dot" :class="{ active: store.loading.running }"></span>
+                  <h3>运行详情</h3>
+                </div>
+                <small>{{ store.loading.running ? '实时更新' : `${runtimeTimeline.length} 条记录` }}</small>
+              </div>
+              <div ref="runtimeTimelineElement" class="runtime-event-list" aria-live="polite">
+                <div v-if="!runtimeTimeline.length" class="runtime-empty">
+                  <LoaderCircle v-if="store.loading.running" class="spin" :size="18" />
+                  <Clock3 v-else :size="18" />
+                  <span>{{ store.loading.running ? '正在等待第一条运行事件…' : '暂无运行详情' }}</span>
+                </div>
+                <article v-for="item in runtimeTimeline" :key="item.id" class="runtime-event" :class="item.status">
+                  <span class="runtime-event-status">
+                    <LoaderCircle v-if="item.status === 'running'" class="spin" :size="14" />
+                    <CheckCircle2 v-else-if="item.status === 'completed'" :size="14" />
+                    <CircleAlert v-else-if="item.status === 'failed'" :size="14" />
+                    <Clock3 v-else :size="14" />
+                  </span>
+                  <div class="runtime-event-copy">
+                    <strong>{{ item.label }}</strong>
+                    <span v-if="item.detail">{{ item.detail }}</span>
+                    <small v-if="item.nodeLabel">{{ item.nodeLabel }}</small>
+                  </div>
+                  <div class="runtime-event-meta">
+                    <time v-if="item.createdAt">{{ formatRuntimeTime(item.createdAt) }}</time>
+                    <span v-if="item.durationMs !== undefined">{{ formatRuntimeDuration(item.durationMs) }}</span>
+                  </div>
+                </article>
+              </div>
+            </section>
+
           <div v-if="store.interrupt?.interrupt_type === 'content_direction'" class="human-review-card">
             <div class="human-heading"><Sparkles :size="20" /><div><h3>选择本次内容方向</h3><p>Agent 已根据目标、事实和证据生成候选方向，选择后将由固定规则匹配组合组。</p></div></div>
             <a-radio-group v-model:value="selectedAngleId" class="title-options angle-options">
@@ -1179,11 +1241,12 @@ const openVersions = async () => {
             <p>节点类型：{{ store.interrupt.interrupt_type || '未知' }}。请联系管理员检查工作流版本。</p>
           </div>
 
-          <div v-else class="running-card">
+          <div v-else-if="!store.loading.running" class="running-card">
             <LoaderCircle class="spin" :size="26" />
             <h3>工作流正在执行</h3>
             <p>可以离开页面，任务状态与节点结果会持续保存。</p>
           </div>
+          </aside>
         </div>
       </section>
 
@@ -1389,6 +1452,27 @@ const openVersions = async () => {
 .run-node.running { background: var(--color-info-50); color: var(--color-info-700); }
 .run-node.completed { color: var(--color-success-700); }
 .run-node.failed { background: var(--color-error-50); color: var(--color-error-700); }
+.run-sidebar { min-width: 0; display: flex; flex-direction: column; gap: 12px; align-self: start; }
+.runtime-panel { min-width: 0; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
+.runtime-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--gray-150); }
+.runtime-panel-heading > div { display: flex; align-items: center; gap: 8px; }
+.runtime-panel-heading h3 { margin: 0; font-size: 15px; }
+.runtime-panel-heading small { color: var(--color-text-tertiary); font-size: 12px; }
+.runtime-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray-300); }
+.runtime-live-dot.active { background: var(--color-info-600); box-shadow: 0 0 0 4px var(--color-info-50); }
+.runtime-event-list { max-height: 520px; overflow-y: auto; overscroll-behavior: contain; }
+.runtime-empty { min-height: 132px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-tertiary); font-size: 13px; }
+.runtime-event { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--gray-100); }
+.runtime-event:last-child { border-bottom: 0; }
+.runtime-event-status { display: inline-flex; margin-top: 2px; color: var(--color-text-tertiary); }
+.runtime-event.running .runtime-event-status { color: var(--color-info-700); }
+.runtime-event.completed .runtime-event-status { color: var(--color-success-700); }
+.runtime-event.failed .runtime-event-status { color: var(--color-error-700); }
+.runtime-event-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.runtime-event-copy strong { overflow-wrap: anywhere; color: var(--color-text); font-size: 13px; line-height: 1.45; }
+.runtime-event-copy span, .runtime-event-copy small { overflow-wrap: anywhere; color: var(--color-text-secondary); font-size: 12px; line-height: 1.45; }
+.runtime-event-copy small { color: var(--color-text-tertiary); }
+.runtime-event-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; color: var(--color-text-tertiary); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .human-review-card, .running-card { align-self: start; }
 .failure-card { color: var(--color-error-700); background: var(--color-error-50); }
 .title-validation-failures { width: 100%; margin: 8px 0 4px; padding: 14px; text-align: left; color: var(--color-text); background: var(--gray-0); border: 1px solid var(--color-error-200); border-radius: 8px; }

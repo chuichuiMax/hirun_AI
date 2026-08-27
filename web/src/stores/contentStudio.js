@@ -157,7 +157,13 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
         (item) => item.node_id === payload.node_id && item.run_id === envelope.run_id
       )
       if (existing) Object.assign(existing, payload)
-      else runEvents.value.push({ ...payload, run_id: envelope.run_id })
+      else {
+        runEvents.value.push({
+          ...payload,
+          run_id: envelope.run_id,
+          created_at: envelope.created_at || null
+        })
+      }
     } else if (eventType === 'interrupt') {
       interrupt.value = payload
     } else if (eventType === 'error') {
@@ -167,7 +173,16 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
       const events = runAudit.value?.events || []
       runAudit.value = {
         ...(runAudit.value || {}),
-        events: [...events, { event_type: eventType, payload, run_id: envelope?.run_id }]
+        events: [
+          ...events,
+          {
+            seq: eventId,
+            event_type: eventType,
+            payload,
+            run_id: envelope?.run_id,
+            created_at: envelope?.created_at || null
+          }
+        ]
       }
     }
   }
