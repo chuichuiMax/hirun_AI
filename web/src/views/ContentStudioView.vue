@@ -67,7 +67,6 @@ const galleryImages = ref([])
 const posterTemplates = ref([])
 const selectedImageItemId = ref('')
 const selectedPosterTemplateId = ref('')
-const visualWorkflowEnabled = false
 const materialImageUrls = ref({})
 const posterTemplateUrls = ref({})
 const materialSelectorLoading = ref(false)
@@ -515,11 +514,9 @@ watch(
 )
 
 onMounted(async () => {
-  if (visualWorkflowEnabled) {
-    window.addEventListener('focus', syncPosterTemplatesWhenVisible)
-    document.addEventListener('visibilitychange', syncPosterTemplatesWhenVisible)
-    posterTemplateSyncTimer = window.setInterval(syncPosterTemplatesWhenVisible, posterTemplateSyncIntervalMs)
-  }
+  window.addEventListener('focus', syncPosterTemplatesWhenVisible)
+  document.addEventListener('visibilitychange', syncPosterTemplatesWhenVisible)
+  posterTemplateSyncTimer = window.setInterval(syncPosterTemplatesWhenVisible, posterTemplateSyncIntervalMs)
   try {
     await store.loadBootstrap()
     if (taskId.value) {
@@ -527,7 +524,7 @@ onMounted(async () => {
       initializeFormValues()
       initializeVisualSelection()
       syncEditor()
-      if (visualWorkflowEnabled && stage.value === 1) await loadVisualMaterials()
+      if (stage.value === 1) await loadVisualMaterials()
       if (
         store.task?.latest_run_id &&
         [
@@ -562,7 +559,7 @@ const createTask = async () => {
     await router.replace(`/content/tasks/${task.id}`)
     initializeFormValues()
     initializeVisualSelection()
-    if (visualWorkflowEnabled) await loadVisualMaterials()
+    await loadVisualMaterials()
     message.success('内容任务已创建')
   } catch (error) {
     message.error(error.message || '创建任务失败')
@@ -584,7 +581,7 @@ const buildBrief = () => ({
   attachments: [],
   locked_fields: [],
   form_values: { ...formValues },
-  visual_material: visualWorkflowEnabled && selectedImageItemId.value
+  visual_material: selectedImageItemId.value
     ? {
         image_item_id: selectedImageItemId.value,
         poster_template_id: selectedPosterTemplateId.value || null
@@ -619,10 +616,6 @@ onBeforeUnmount(() => {
 })
 
 const compileBrief = async () => {
-  if (visualWorkflowEnabled && !selectedImageItemId.value) {
-    message.warning('请先从素材库图库中选择一张图片')
-    return
-  }
   try {
     window.clearTimeout(draftSaveTimer)
     await store.compileBrief(buildBrief())
@@ -876,12 +869,12 @@ const openVersions = async () => {
               </ul>
             </aside>
           </div>
-          <section v-if="visualWorkflowEnabled" class="visual-material-card">
+          <section class="visual-material-card">
             <div class="visual-material-heading">
               <div>
                 <span class="section-kicker">视觉素材</span>
                 <h3>选择图库与封面模板</h3>
-                <p>图库图片将作为 V3 视觉生产的唯一原图；封面模板可选，选择后将固定用于大字报封面生成。</p>
+                <p>可提前保存图库图片和封面模板；当前 V3.4 暂不执行封面生成与交付，不影响标题和正文生产。</p>
               </div>
               <a-button @click="router.push('/materials/images')">
                 <FolderOpen :size="15" />管理素材库
@@ -891,8 +884,8 @@ const openVersions = async () => {
             <a-spin :spinning="materialSelectorLoading">
               <div class="material-selector-block">
                 <div class="material-selector-title">
-                  <div><Image :size="18" /><strong>选择图库图片</strong><em>必选 · 单选</em></div>
-                  <small>只能从当前账号的图库中选择一张已启用图片，任务页不提供本地上传。</small>
+                  <div><Image :size="18" /><strong>选择图库图片</strong><em>可选 · 单选</em></div>
+                  <small>可从当前账号的图库中选择一张已启用图片；不选择也可以进入内容生产。</small>
                 </div>
                 <div v-if="materialGalleries.length" class="gallery-tabs" role="tablist" aria-label="素材图库">
                   <button
@@ -942,7 +935,7 @@ const openVersions = async () => {
                       <RefreshCw :class="{ spin: posterTemplatesRefreshing }" :size="13" />与素材库实时同步
                     </span>
                   </div>
-                  <small>不选择时由 V3 自动生成封面；选择后使用对应大字报模板和上方图库原图合成。</small>
+                  <small>选择结果随业务简报保存，后续恢复视觉流程时可直接沿用。</small>
                 </div>
                 <div class="poster-choice-grid">
                   <button
@@ -953,8 +946,8 @@ const openVersions = async () => {
                     @click="selectedPosterTemplateId = ''"
                   >
                     <span class="poster-auto-preview"><Sparkles :size="24" /></span>
-                    <strong>系统自动生成</strong>
-                    <small>不使用固定模板</small>
+                    <strong>暂不指定模板</strong>
+                    <small>仅生产标题与正文</small>
                     <CheckCircle2 v-if="!selectedPosterTemplateId" class="choice-check" :size="20" />
                   </button>
                   <button
