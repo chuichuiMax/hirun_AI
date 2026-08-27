@@ -742,25 +742,26 @@ class ContentWorkflowAgent(BaseAgent):
             selected_cover = state.get("selected_cover") or {}
             cover_job_id = selected_cover.get("cover_job_id")
             cover_asset_id = selected_cover.get("asset_id")
-            cover_repo = ContentCoverRepository(db)
-            cover_job = await cover_repo.get_job(str(cover_job_id or ""))
-            cover_asset = await cover_repo.get_asset(str(cover_asset_id or ""))
-            passed_ids = {
-                item["asset_id"]
-                for item in (state.get("visual_review") or {}).get("assets") or []
-                if item.get("status") in {"passed", "warning"}
-            }
-            if (
-                cover_job is None
-                or cover_job.status != "succeeded"
-                or cover_job.content_task_id != task.id
-                or cover_asset is None
-                or cover_asset.owner_uid != state["uid"]
-                or cover_asset.role != "output"
-                or cover_asset.id not in ((cover_job.result_json or {}).get("asset_ids") or [])
-                or cover_asset.id not in passed_ids
-            ):
-                raise ValueError("ArtifactVersion 只能绑定本任务中通过视觉审核的 CoverJob 资产")
+            if selected_cover:
+                cover_repo = ContentCoverRepository(db)
+                cover_job = await cover_repo.get_job(str(cover_job_id or ""))
+                cover_asset = await cover_repo.get_asset(str(cover_asset_id or ""))
+                passed_ids = {
+                    item["asset_id"]
+                    for item in (state.get("visual_review") or {}).get("assets") or []
+                    if item.get("status") in {"passed", "warning"}
+                }
+                if (
+                    cover_job is None
+                    or cover_job.status != "succeeded"
+                    or cover_job.content_task_id != task.id
+                    or cover_asset is None
+                    or cover_asset.owner_uid != state["uid"]
+                    or cover_asset.role != "output"
+                    or cover_asset.id not in ((cover_job.result_json or {}).get("asset_ids") or [])
+                    or cover_asset.id not in passed_ids
+                ):
+                    raise ValueError("ArtifactVersion 只能绑定本任务中通过视觉审核的 CoverJob 资产")
             artifact = await repo.get_artifact_for_task(task.id)
             if artifact is None:
                 artifact = ContentArtifact(

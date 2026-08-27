@@ -845,14 +845,6 @@ async def save_content_brief(
                     "poster_template_version": poster.version,
                 }
             )
-    elif compile_now:
-        raise _content_error(
-            422,
-            "CONTENT_IMAGE_MATERIAL_REQUIRED",
-            "进入 V3 生产前必须从素材库图库中选择一张图片",
-            fields=[{"field": "visual_material.image_item_id", "label": "图库图片"}],
-        )
-
     task.selected_image_item_id = requested_image_item_id
     task.selected_poster_template_id = requested_poster_template_id
     compiled["visual_material"] = (

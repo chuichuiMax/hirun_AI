@@ -3,9 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 
-LEGACY_PLATFORM_WORKFLOW_V3_IDS = frozenset({"content-workflow-enterprise-v3", "content-workflow-enterprise-v3.1"})
-LEGACY_PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.1"
-PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.2"
+LEGACY_PLATFORM_WORKFLOW_V3_IDS = frozenset(
+    {
+        "content-workflow-enterprise-v3",
+        "content-workflow-enterprise-v3.1",
+        "content-workflow-enterprise-v3.2",
+        "content-workflow-enterprise-v3.3",
+    }
+)
+LEGACY_PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.3"
+PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.4"
 
 
 def _fixed(node_id: str) -> dict[str, Any]:
@@ -77,7 +84,22 @@ WORKFLOW_V3_NODES = [
         "ContentValueResultV1",
         state_inputs=("content_brief", "evidence_bundle", "content_type", "industry_pack", "channel_profile"),
     ),
-    _human("select_content_direction", "content_direction"),
+    _agent(
+        "select_content_direction",
+        "content-strategy-agent",
+        "content-value-analyzer",
+        "SelectContentDirectionInputV1",
+        "DirectionSelectionResultV1",
+        state_inputs=(
+            "content_brief",
+            "value_analysis",
+            "content_angles",
+            "evidence_bundle",
+            "content_type",
+            "industry_pack",
+            "channel_profile",
+        ),
+    ),
     _fixed("match_combination_group"),
     _agent(
         "explain_strategy",
@@ -180,7 +202,23 @@ WORKFLOW_V3_NODES = [
         optional_state_inputs=("title_validation_report",),
     ),
     _fixed("validate_title_candidates"),
-    _human("select_title", "title_selection"),
+    _agent(
+        "select_title",
+        "content-title-agent",
+        "content-title-generator",
+        "SelectTitleInputV1",
+        "TitleSelectionResultV1",
+        state_inputs=(
+            "content_brief",
+            "strategy_snapshot",
+            "product_evidence_pack",
+            "evidence_bundle",
+            "channel_profile",
+            "persona_profile",
+            "title_candidates",
+            "title_validation_report",
+        ),
+    ),
     _agent(
         "build_outline",
         "content-body-agent",
@@ -258,56 +296,7 @@ WORKFLOW_V3_NODES = [
     ),
     {"id": "revise_if_needed", "type": "revision_router", "handler": "revise_if_needed"},
     _human("human_content_approval", "content_approval"),
-    _agent(
-        "plan_visuals",
-        "content-visual-agent",
-        "content-visual-planner",
-        "PlanVisualsInputV1",
-        "VisualPlanResultV1",
-        state_inputs=(
-            "selected_title",
-            "content_draft",
-            "strategy_snapshot",
-            "evidence_bundle",
-            "media_evidence_items",
-            "artifact_version",
-            "channel_profile",
-        ),
-    ),
-    _agent(
-        "submit_cover_job",
-        "content-visual-agent",
-        "content-cover-generator",
-        "SubmitCoverJobInputV1",
-        "CoverJobSubmissionResultV1",
-        state_inputs=("visual_plan", "artifact_version", "media_evidence_items"),
-        max_tool_calls=2,
-    ),
-    {
-        "id": "wait_cover_job",
-        "type": "external_wait",
-        "external_job_type": "content_cover",
-        "timeout_seconds": 900,
-        "state_version_required": True,
-    },
-    _agent(
-        "visual_review",
-        "content-visual-agent",
-        "content-visual-reviewer",
-        "VisualReviewInputV1",
-        "VisualReviewResultV1",
-        state_inputs=(
-            "selected_title",
-            "content_draft",
-            "visual_plan",
-            "cover_job",
-            "cover_assets",
-            "evidence_bundle",
-        ),
-    ),
-    _human("select_cover", "cover_selection"),
     _fixed("save_artifact_snapshot"),
-    _fixed("package_for_distribution"),
 ]
 
 WORKFLOW_V3 = {
@@ -350,13 +339,10 @@ WORKFLOW_V3 = {
     ],
     "required_human_gates": sorted(
         {
-            "select_content_direction",
             "confirm_high_risk_facts",
             "lock_formula_selection",
             "confirm_strategy_product_facts",
-            "select_title",
             "human_content_approval",
-            "select_cover",
         }
     ),
 }

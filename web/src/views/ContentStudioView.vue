@@ -5,6 +5,7 @@ import { message } from 'ant-design-vue'
 import {
   BookOpenCheck,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   Clock3,
   FileClock,
@@ -30,6 +31,7 @@ import { materialLibraryApi } from '@/apis/material_library_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
 import { formatEvidenceReference } from '@/utils/contentEvidencePresentation'
+import { buildContentWorkflowGroups } from '@/utils/contentWorkflowPresentation'
 
 const route = useRoute()
 const router = useRouter()
@@ -65,6 +67,7 @@ const galleryImages = ref([])
 const posterTemplates = ref([])
 const selectedImageItemId = ref('')
 const selectedPosterTemplateId = ref('')
+const visualWorkflowEnabled = false
 const materialImageUrls = ref({})
 const posterTemplateUrls = ref({})
 const materialSelectorLoading = ref(false)
@@ -141,51 +144,7 @@ const evidenceReferenceText = (evidenceId, index = 0) =>
 const angleOptions = computed(() =>
   store.interrupt?.interrupt_type === 'content_direction' ? store.interrupt.options || [] : []
 )
-const nodeTimeline = computed(() => {
-  const v3Labels = {
-    compile_runtime_snapshot: '冻结运行配置',
-    ingest_real_materials: '导入真实素材',
-    normalize_evidence: '规范化证据',
-    analyze_content_value: 'Agent 分析内容价值',
-    select_content_direction: '人工锁定内容方向',
-    match_combination_group: '固定规则匹配组合组',
-    explain_strategy: 'Agent 解释策略',
-    resolve_formula_requirements: '解析公式所需事实',
-    collect_missing_evidence: 'Agent 收集缺失证据',
-    confirm_high_risk_facts: '人工确认高风险事实',
-    freeze_evidence_bundle: '冻结证据包',
-    rank_formula_candidates: 'Agent 排序公式候选',
-    lock_formula_selection: '锁定标题与正文公式',
-    resolve_product_material_requirements: '解析产品资料需求',
-    collect_strategy_product_evidence: '调研 Agent 定向检索产品资料',
-    confirm_strategy_product_facts: '人工确认产品高风险事实',
-    freeze_product_evidence_bundle: '冻结产品证据快照',
-    generate_title_candidates: '标题 Agent 生成候选',
-    validate_title_candidates: '校验标题候选',
-    select_title: '人工选择标题',
-    build_outline: '正文 Agent 构建大纲',
-    generate_body: '正文 Agent 生成正文',
-    persona_style_polish: '按人设润色表达',
-    adapt_to_channel: '适配发布渠道',
-    deterministic_validate: '执行确定性校验',
-    semantic_review: '审核 Agent 复核内容',
-    revise_if_needed: '按失败原因定点回修',
-    human_content_approval: '人工批准最终文案',
-    plan_visuals: '视觉 Agent 制定方案',
-    submit_cover_job: '提交封面任务',
-    wait_cover_job: '等待封面服务',
-    visual_review: '视觉 Agent 审核图片',
-    select_cover: '人工选择封面',
-    save_artifact_snapshot: '保存统一内容版本',
-    package_for_distribution: '生成不可变发布包'
-  }
-  const byNode = new Map(store.runEvents.map((item) => [item.node_id, item]))
-  return Object.entries(v3Labels).map(([id, label]) => ({
-    id,
-    label,
-    status: byNode.get(id)?.status || 'pending'
-  }))
-})
+const workflowGroups = computed(() => buildContentWorkflowGroups(store.runEvents))
 const reviewChecks = computed(() => store.artifact?.review_snapshot?.checks || store.task?.review?.checks || [])
 const canFinalize = computed(() => ['passed', 'warning'].includes(store.artifact?.review_snapshot?.status))
 const approvalAllowed = computed(() => {
@@ -556,9 +515,11 @@ watch(
 )
 
 onMounted(async () => {
-  window.addEventListener('focus', syncPosterTemplatesWhenVisible)
-  document.addEventListener('visibilitychange', syncPosterTemplatesWhenVisible)
-  posterTemplateSyncTimer = window.setInterval(syncPosterTemplatesWhenVisible, posterTemplateSyncIntervalMs)
+  if (visualWorkflowEnabled) {
+    window.addEventListener('focus', syncPosterTemplatesWhenVisible)
+    document.addEventListener('visibilitychange', syncPosterTemplatesWhenVisible)
+    posterTemplateSyncTimer = window.setInterval(syncPosterTemplatesWhenVisible, posterTemplateSyncIntervalMs)
+  }
   try {
     await store.loadBootstrap()
     if (taskId.value) {
@@ -566,7 +527,7 @@ onMounted(async () => {
       initializeFormValues()
       initializeVisualSelection()
       syncEditor()
-      if (stage.value === 1) await loadVisualMaterials()
+      if (visualWorkflowEnabled && stage.value === 1) await loadVisualMaterials()
       if (
         store.task?.latest_run_id &&
         [
@@ -601,7 +562,7 @@ const createTask = async () => {
     await router.replace(`/content/tasks/${task.id}`)
     initializeFormValues()
     initializeVisualSelection()
-    await loadVisualMaterials()
+    if (visualWorkflowEnabled) await loadVisualMaterials()
     message.success('内容任务已创建')
   } catch (error) {
     message.error(error.message || '创建任务失败')
@@ -623,7 +584,7 @@ const buildBrief = () => ({
   attachments: [],
   locked_fields: [],
   form_values: { ...formValues },
-  visual_material: selectedImageItemId.value
+  visual_material: visualWorkflowEnabled && selectedImageItemId.value
     ? {
         image_item_id: selectedImageItemId.value,
         poster_template_id: selectedPosterTemplateId.value || null
@@ -658,7 +619,7 @@ onBeforeUnmount(() => {
 })
 
 const compileBrief = async () => {
-  if (!selectedImageItemId.value) {
+  if (visualWorkflowEnabled && !selectedImageItemId.value) {
     message.warning('请先从素材库图库中选择一张图片')
     return
   }
@@ -915,7 +876,7 @@ const openVersions = async () => {
               </ul>
             </aside>
           </div>
-          <section class="visual-material-card">
+          <section v-if="visualWorkflowEnabled" class="visual-material-card">
             <div class="visual-material-heading">
               <div>
                 <span class="section-kicker">视觉素材</span>
@@ -1057,14 +1018,33 @@ const openVersions = async () => {
         </div>
 
         <div v-else class="run-layout">
-          <div class="run-timeline">
-            <div v-for="node in nodeTimeline" :key="node.id" class="run-node" :class="node.status">
-              <LoaderCircle v-if="node.status === 'running'" class="spin" :size="17" />
-              <CheckCircle2 v-else-if="node.status === 'completed'" :size="17" />
-              <CircleAlert v-else-if="node.status === 'failed'" :size="17" />
-              <Clock3 v-else :size="17" />
-              <span>{{ node.label }}</span>
-            </div>
+          <div class="workflow-groups">
+            <details v-for="group in workflowGroups" :key="group.id" class="workflow-group" :class="group.status" :open="group.isOpen">
+              <summary>
+                <span class="workflow-group-status">
+                  <LoaderCircle v-if="group.status === 'running'" class="spin" :size="19" />
+                  <CheckCircle2 v-else-if="group.status === 'completed'" :size="19" />
+                  <CircleAlert v-else-if="group.status === 'failed'" :size="19" />
+                  <Clock3 v-else :size="19" />
+                </span>
+                <span class="workflow-group-copy">
+                  <strong>{{ group.label }}</strong>
+                  <small>{{ group.description }}</small>
+                </span>
+                <span class="workflow-group-progress">{{ group.completedCount }}/{{ group.totalCount }}</span>
+                <ChevronDown class="workflow-group-chevron" :size="17" />
+              </summary>
+              <div class="workflow-group-current">{{ group.currentText }}</div>
+              <div class="run-timeline">
+                <div v-for="node in group.nodes" :key="node.id" class="run-node" :class="node.status">
+                  <LoaderCircle v-if="node.status === 'running'" class="spin" :size="16" />
+                  <CheckCircle2 v-else-if="node.status === 'completed'" :size="16" />
+                  <CircleAlert v-else-if="node.status === 'failed'" :size="16" />
+                  <Clock3 v-else :size="16" />
+                  <span>{{ node.label }}</span>
+                </div>
+              </div>
+            </details>
           </div>
 
           <div v-if="store.interrupt?.interrupt_type === 'content_direction'" class="human-review-card">
@@ -1333,7 +1313,7 @@ const openVersions = async () => {
 .template-card strong { font-size: 15px; }
 .template-card span, .template-card small { color: var(--color-text-secondary); }
 
-.form-card, .facts-preview, .run-timeline, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
+.form-card, .facts-preview, .workflow-groups, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
 .form-card, .content-editor-card { display: flex; flex-direction: column; gap: 18px; }
 .dynamic-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .dynamic-form .field-block:has(textarea), .dynamic-form .field-block:has(.ant-select-multiple) { grid-column: 1 / -1; }
@@ -1394,7 +1374,24 @@ const openVersions = async () => {
 .generation-start p { color: var(--color-text-secondary); }
 .generation-start :deep(.ant-input) { max-width: 500px; }
 .run-id { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-tertiary) !important; }
-.run-timeline { display: flex; flex-direction: column; gap: 3px; }
+.workflow-groups { display: flex; flex-direction: column; gap: 10px; }
+.workflow-group { overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
+.workflow-group summary { min-height: 68px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; list-style: none; }
+.workflow-group summary::-webkit-details-marker { display: none; }
+.workflow-group-status { display: inline-flex; color: var(--color-text-tertiary); }
+.workflow-group-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.workflow-group-copy strong { color: var(--color-text); font-size: 15px; line-height: 1.4; }
+.workflow-group-copy small, .workflow-group-current { color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.workflow-group-progress { min-width: 38px; color: var(--color-text-tertiary); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.workflow-group-chevron { color: var(--color-text-tertiary); transition: transform 0.2s ease; }
+.workflow-group[open] .workflow-group-chevron { transform: rotate(180deg); }
+.workflow-group.running, .workflow-group.active { border-color: var(--color-info-200); background: var(--color-info-50); }
+.workflow-group.running .workflow-group-status, .workflow-group.active .workflow-group-status { color: var(--color-info-700); }
+.workflow-group.completed .workflow-group-status { color: var(--color-success-700); }
+.workflow-group.failed { border-color: var(--color-error-200); background: var(--color-error-50); }
+.workflow-group.failed .workflow-group-status { color: var(--color-error-700); }
+.workflow-group-current { margin: 0 14px; padding: 9px 0; border-top: 1px solid var(--gray-150); }
+.run-timeline { display: flex; flex-direction: column; gap: 3px; padding: 2px 10px 12px; }
 .run-node { min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 8px 10px; color: var(--color-text-tertiary); border-radius: 6px; }
 .run-node.running { background: var(--color-info-50); color: var(--color-info-700); }
 .run-node.completed { color: var(--color-success-700); }
@@ -1485,6 +1482,10 @@ const openVersions = async () => {
   .visual-material-heading, .material-selector-title { flex-direction: column; }
   .material-selector-title small { text-align: left; }
   .image-choice-grid, .poster-choice-grid { grid-auto-columns: 124px; }
+  .workflow-groups { padding: 12px; }
+  .workflow-group summary { grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; padding: 11px; }
+  .workflow-group-progress { display: none; }
+  .workflow-group-copy small { white-space: normal; }
   .header-actions :deep(.ant-btn), .stage-actions :deep(.ant-btn), .editor-actions :deep(.ant-btn) { width: 100%; justify-content: center; }
 }
 </style>

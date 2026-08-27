@@ -45,6 +45,11 @@ VALID_PAYLOADS = {
         "reasoning": "reasoning",
         "evidence_ids": ["e-any"],
     },
+    "DirectionSelectionResultV1": {
+        "direction_code": "CT01",
+        "reason": "当前证据最充分",
+        "evidence_ids": ["e-any"],
+    },
     "StrategyExplanationResultV1": {
         "locked_group_id": "group-1",
         "explanation": "explanation",
@@ -80,6 +85,10 @@ VALID_PAYLOADS = {
         ],
         "selected_title_formula_code": "T1",
         "evidence_ids": ["e-title"],
+    },
+    "TitleSelectionResultV1": {
+        "selected_title_id": "title-1",
+        "reason": "公式和证据最完整",
     },
     "OutlineResultV1": {
         "body_formula_code": "B1",
@@ -127,6 +136,8 @@ VALID_PAYLOADS = {
 def _make_unknown(contract_name: str, payload: dict) -> dict:
     value = deepcopy(payload)
     if contract_name == "ContentValueResultV1":
+        value["evidence_ids"] = ["unknown"]
+    elif contract_name == "DirectionSelectionResultV1":
         value["evidence_ids"] = ["unknown"]
     elif contract_name == "StrategyExplanationResultV1":
         value["locked_group_id"] = "unknown"
@@ -296,7 +307,10 @@ def test_each_contract_rejects_out_of_scope_field(contract_name):
     assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 
 
-@pytest.mark.parametrize("contract_name", sorted(VALID_PAYLOADS))
+@pytest.mark.parametrize(
+    "contract_name",
+    [name for name in sorted(VALID_PAYLOADS) if name != "TitleSelectionResultV1"],
+)
 def test_each_contract_rejects_unknown_or_unlocked_id(contract_name):
     with pytest.raises(ContractDomainValidationError):
         invalid = _make_unknown(contract_name, VALID_PAYLOADS[contract_name])
@@ -313,6 +327,16 @@ def test_content_value_contract_rejects_temporary_direction_codes():
     assert exc_info.value.errors()[0]["loc"] == ("direction_candidates", 0, "direction_code")
 
 
+def test_direction_selection_contract_rejects_temporary_direction_codes():
+    payload = deepcopy(VALID_PAYLOADS["DirectionSelectionResultV1"])
+    payload["direction_code"] = "D01"
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_content_node_result("DirectionSelectionResultV1", payload, DOMAIN_CONTEXT)
+
+    assert exc_info.value.errors()[0]["loc"] == ("direction_code",)
+
+
 @pytest.mark.parametrize(
     ("contract_name", "forbidden_field"),
     [
@@ -320,6 +344,8 @@ def test_content_value_contract_rejects_temporary_direction_codes():
         ("ContentDraftResultV1", "title"),
         ("ContentReviewResultV1", "revised_body"),
         ("ContentValueResultV1", "locked_group_id"),
+        ("DirectionSelectionResultV1", "locked_group_id"),
+        ("TitleSelectionResultV1", "title"),
         ("EvidenceCollectionResultV1", "article"),
     ],
 )
@@ -424,4 +450,4 @@ async def test_structured_result_tool_uses_registered_pydantic_schema():
 
     assert tool.name == "submit_content_node_result"
     assert collector.submission_count == 1
-    assert len(CONTRACT_REGISTRY) == 13
+    assert len(CONTRACT_REGISTRY) == 15

@@ -10,7 +10,7 @@ defineEmits(['select'])
 const steps = [
   { index: 1, label: '业务素材', description: '形成统一简报' },
   { index: 2, label: 'V3 内容生产', description: 'Agent、Skill 与人工审批' },
-  { index: 3, label: '审核交付', description: '编辑、审核与版本' }
+  { index: 3, label: '审核与版本', description: '编辑、审核与版本' }
 ]
 </script>
 

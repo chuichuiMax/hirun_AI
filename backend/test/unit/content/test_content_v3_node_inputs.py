@@ -70,6 +70,20 @@ def _state() -> dict:
         "evidence_bundle": deepcopy(EVIDENCE_BUNDLE),
         "product_evidence_pack": deepcopy(PRODUCT_EVIDENCE_PACK),
         "title_evidence_requirements": [],
+        "title_candidates": [
+            {
+                "id": "title-1",
+                "text": "锁定标题",
+                "formula_code": "T03",
+                "evidence_ids": [],
+                "reason": "公式匹配",
+                "selectable": True,
+            }
+        ],
+        "title_validation_report": {
+            "status": "passed",
+            "items": [{"id": "title-1", "status": "passed", "checks": []}],
+        },
     }
 
 
@@ -205,11 +219,13 @@ def test_node_input_missing_fails_before_agent_delegation():
 def test_input_contract_registry_contains_every_agent_payload_contract():
     assert set(INPUT_CONTRACT_REGISTRY) == {
         "AnalyzeContentValueInputV1",
+        "SelectContentDirectionInputV1",
         "ExplainStrategyInputV1",
         "CollectMissingEvidenceInputV1",
         "RankFormulaCandidatesInputV1",
         "CollectStrategyProductEvidenceInputV1",
         "GenerateTitleCandidatesInputV1",
+        "SelectTitleInputV1",
         "BuildOutlineInputV1",
         "GenerateBodyInputV1",
         "PersonaStylePolishInputV1",
@@ -254,7 +270,13 @@ def test_every_published_agent_node_can_assemble_its_declared_payload():
         "channel_profile": {},
         "persona_profile": {},
         "media_evidence_items": [],
-        "value_analysis": {"value_points": ["value"]},
+        "value_analysis": {
+            "value_points": ["value"],
+            "direction_candidates": [{"direction_code": "CT05", "reason": "证据充分", "evidence_ids": []}],
+            "reasoning": "过程资料适合能力证明",
+            "evidence_ids": [],
+        },
+        "content_angles": [{"direction_code": "CT05", "reason": "证据充分", "evidence_ids": []}],
         "selected_angle": {"direction_code": "CT05"},
         "match_decision_snapshot": {"id": "match-1", "selected_group_id": "group-1"},
         "formula_candidate_pool": {"title_formula_codes": ["T03"], "body_formula_codes": ["C03"]},
@@ -284,3 +306,16 @@ def test_every_published_agent_node_can_assemble_its_declared_payload():
         if node["type"] == "agent":
             assembly = ContentNodeInputAssembler.build(node=node, state=state)
             assert assembly.contract_name == node["input_contract"]
+
+
+@pytest.mark.unit
+def test_title_selection_input_requires_a_selectable_candidate():
+    node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "select_title")
+    state = {**_state(), "channel_profile": {}, "persona_profile": {}}
+    state["title_candidates"][0]["selectable"] = False
+
+    with pytest.raises(ContentApplicationError) as exc_info:
+        ContentNodeInputAssembler.build(node=node, state=state)
+
+    assert exc_info.value.code == "node_input_invalid"
+    assert "至少需要一个通过确定性校验的候选" in exc_info.value.message

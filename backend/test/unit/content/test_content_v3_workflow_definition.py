@@ -51,11 +51,11 @@ def _node(definition: dict, node_id: str) -> dict:
 
 
 @pytest.mark.unit
-def test_v3_has_exactly_35_nodes_and_passes_full_catalog_validation():
+def test_v3_has_exactly_29_nodes_and_passes_full_catalog_validation():
     WorkflowDefinitionPolicy.validate(WORKFLOW_V3, catalog=CATALOG)
 
-    assert len(WORKFLOW_V3["nodes"]) == 35
-    assert len(WORKFLOW_V3["edges"]) == 33
+    assert len(WORKFLOW_V3["nodes"]) == 29
+    assert len(WORKFLOW_V3["edges"]) == 27
     assert len(workflow_definition_hash(WORKFLOW_V3)) == 64
     assert workflow_definition_hash(deepcopy(WORKFLOW_V3)) == workflow_definition_hash(WORKFLOW_V3)
 
@@ -64,6 +64,10 @@ def test_v3_has_exactly_35_nodes_and_passes_full_catalog_validation():
 def test_every_agent_node_declares_its_own_input_contract_and_upstream_state():
     expected = {
         "analyze_content_value": ("AnalyzeContentValueInputV1", {"content_brief", "evidence_bundle"}),
+        "select_content_direction": (
+            "SelectContentDirectionInputV1",
+            {"value_analysis", "content_angles", "evidence_bundle"},
+        ),
         "explain_strategy": ("ExplainStrategyInputV1", {"value_analysis", "match_decision_snapshot"}),
         "collect_missing_evidence": ("CollectMissingEvidenceInputV1", {"formula_candidate_pool", "evidence_bundle"}),
         "rank_formula_candidates": ("RankFormulaCandidatesInputV1", {"formula_candidate_pool", "evidence_bundle"}),
@@ -80,6 +84,10 @@ def test_every_agent_node_declares_its_own_input_contract_and_upstream_state():
                 "evidence_bundle",
             },
         ),
+        "select_title": (
+            "SelectTitleInputV1",
+            {"title_candidates", "title_validation_report", "strategy_snapshot", "product_evidence_pack"},
+        ),
         "build_outline": ("BuildOutlineInputV1", {"selected_title", "strategy_snapshot", "product_evidence_pack"}),
         "generate_body": (
             "GenerateBodyInputV1",
@@ -90,9 +98,6 @@ def test_every_agent_node_declares_its_own_input_contract_and_upstream_state():
             {"content_draft", "persona_profile", "product_evidence_pack"},
         ),
         "semantic_review": ("SemanticReviewInputV1", {"content_draft", "validation_report", "strategy_snapshot"}),
-        "plan_visuals": ("PlanVisualsInputV1", {"content_draft", "artifact_version", "strategy_snapshot"}),
-        "submit_cover_job": ("SubmitCoverJobInputV1", {"visual_plan", "artifact_version"}),
-        "visual_review": ("VisualReviewInputV1", {"visual_plan", "cover_assets", "content_draft"}),
     }
 
     agent_nodes = {item["id"]: item for item in WORKFLOW_V3["nodes"] if item["type"] == "agent"}
@@ -138,7 +143,7 @@ def test_system_v3_seed_upgrades_stale_workflow_definition_but_preserves_user_ow
 
     assert _upgrade_system_workflow_v3(stale) is True
     assert stale.definition_json == WORKFLOW_V3
-    assert stale.version == 6
+    assert stale.version == 8
     assert stale.definition_hash == workflow_definition_hash(WORKFLOW_V3)
     assert stale.input_schema == {"type": "ContentBrief", "version": 3}
     assert stale.output_schema == {"type": "ContentArtifact", "version": 3}
@@ -227,15 +232,46 @@ def test_match_node_cannot_be_agent_and_required_human_gate_cannot_be_removed():
     match_node.update(deepcopy(_node(agent_match, "generate_title_candidates")))
     match_node["id"] = "match_combination_group"
     missing_gate = deepcopy(WORKFLOW_V3)
-    missing_gate["nodes"] = [item for item in missing_gate["nodes"] if item["id"] != "select_title"]
-    missing_gate["edges"] = [edge for edge in missing_gate["edges"] if "select_title" not in edge] + [
-        ["validate_title_candidates", "build_outline"]
-    ]
+    missing_gate["nodes"] = [item for item in missing_gate["nodes"] if item["id"] != "human_content_approval"]
+    missing_gate["edges"] = [edge for edge in missing_gate["edges"] if "human_content_approval" not in edge]
 
     with pytest.raises(ValueError, match="禁止 Agent 化"):
         WorkflowDefinitionPolicy.validate(agent_match)
-    with pytest.raises(ValueError, match="35 个节点|人工关口"):
+    with pytest.raises(ValueError, match="29 个节点|人工关口"):
         WorkflowDefinitionPolicy.validate(missing_gate)
+
+
+@pytest.mark.unit
+def test_content_direction_is_selected_by_agent_without_human_gate():
+    node = _node(WORKFLOW_V3, "select_content_direction")
+
+    assert node["type"] == "agent"
+    assert node["agent_slug"] == "content-strategy-agent"
+    assert node["required_skills"] == ["content-value-analyzer"]
+    assert "select_content_direction" not in WORKFLOW_V3["required_human_gates"]
+
+
+@pytest.mark.unit
+def test_title_is_selected_by_agent_and_visual_delivery_nodes_are_absent():
+    node = _node(WORKFLOW_V3, "select_title")
+    node_ids = {item["id"] for item in WORKFLOW_V3["nodes"]}
+
+    assert node["type"] == "agent"
+    assert node["agent_slug"] == "content-title-agent"
+    assert node["required_skills"] == ["content-title-generator"]
+    assert "select_title" not in WORKFLOW_V3["required_human_gates"]
+    assert (
+        not {
+            "plan_visuals",
+            "submit_cover_job",
+            "wait_cover_job",
+            "visual_review",
+            "select_cover",
+            "package_for_distribution",
+        }
+        & node_ids
+    )
+    assert "save_artifact_snapshot" in node_ids
 
 
 @pytest.mark.unit

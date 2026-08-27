@@ -68,6 +68,16 @@ class AnalyzeContentValueInputV1(StrictContract):
     channel_profile: dict[str, Any]
 
 
+class SelectContentDirectionInputV1(StrictContract):
+    content_brief: dict[str, Any] = Field(min_length=1)
+    value_analysis: dict[str, Any] = Field(min_length=1)
+    content_angles: list[dict[str, Any]] = Field(min_length=1)
+    evidence_bundle: dict[str, Any] = Field(min_length=1)
+    content_type: dict[str, Any]
+    industry_pack: dict[str, Any]
+    channel_profile: dict[str, Any]
+
+
 class ExplainStrategyInputV1(StrictContract):
     rule_version_id: str
     content_brief: dict[str, Any] = Field(min_length=1)
@@ -203,6 +213,17 @@ class GenerateTitleCandidatesInputV1(ProductEvidenceBoundInputV1):
         return self
 
 
+class SelectTitleInputV1(ProductEvidenceBoundInputV1):
+    title_candidates: list[dict[str, Any]] = Field(min_length=1)
+    title_validation_report: dict[str, Any] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_selectable_candidate(self) -> SelectTitleInputV1:
+        if not any(item.get("selectable") is True for item in self.title_candidates):
+            raise ValueError("标题选择节点至少需要一个通过确定性校验的候选")
+        return self
+
+
 class BuildOutlineInputV1(ProductEvidenceBoundInputV1):
     selected_title: dict[str, Any] = Field(min_length=1)
 
@@ -256,11 +277,13 @@ INPUT_CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
     model.__name__: model
     for model in (
         AnalyzeContentValueInputV1,
+        SelectContentDirectionInputV1,
         ExplainStrategyInputV1,
         CollectMissingEvidenceInputV1,
         RankFormulaCandidatesInputV1,
         CollectStrategyProductEvidenceInputV1,
         GenerateTitleCandidatesInputV1,
+        SelectTitleInputV1,
         BuildOutlineInputV1,
         GenerateBodyInputV1,
         PersonaStylePolishInputV1,
@@ -282,6 +305,12 @@ class ContentValueResultV1(StrictContract):
     value_points: list[str] = Field(min_length=1)
     direction_candidates: list[DirectionCandidateV1] = Field(min_length=1)
     reasoning: str
+    evidence_ids: list[str]
+
+
+class DirectionSelectionResultV1(StrictContract):
+    direction_code: Literal["CT01", "CT02", "CT03", "CT04", "CT05", "CT06", "CT07"]
+    reason: str = Field(min_length=1)
     evidence_ids: list[str]
 
 
@@ -354,6 +383,11 @@ class OutlineSectionV1(StrictContract):
     section_id: str
     goal: str
     evidence_ids: list[str]
+
+
+class TitleSelectionResultV1(StrictContract):
+    selected_title_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
 
 
 class OutlineResultV1(StrictContract):
@@ -457,11 +491,13 @@ CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
     model.__name__: model
     for model in (
         ContentValueResultV1,
+        DirectionSelectionResultV1,
         StrategyExplanationResultV1,
         EvidenceCollectionResultV1,
         ProductEvidenceCollectionResultV1,
         FormulaRankingResultV1,
         TitleCandidatesResultV1,
+        TitleSelectionResultV1,
         OutlineResultV1,
         ContentDraftResultV1,
         PersonaPolishResultV1,
@@ -660,6 +696,8 @@ def validate_content_node_result(
         _validate_evidence_ids(result.evidence_ids, "any", context, "evidence_ids")
         for index, item in enumerate(result.direction_candidates):
             _validate_evidence_ids(item.evidence_ids, "any", context, f"direction_candidates.{index}.evidence_ids")
+    elif isinstance(result, DirectionSelectionResultV1):
+        _validate_evidence_ids(result.evidence_ids, "any", context, "evidence_ids")
     elif isinstance(result, StrategyExplanationResultV1):
         _require_equal(result.locked_group_id, context.locked_group_id, "locked_group_id")
         _validate_evidence_ids(result.evidence_ids, "any", context, "evidence_ids")

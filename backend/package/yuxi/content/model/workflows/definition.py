@@ -9,24 +9,23 @@ from typing import Any
 V3_NODE_TYPES = {"deterministic", "agent", "human_review", "external_wait", "revision_router"}
 V3_AGENT_NODE_TYPES = {"agent"}
 V3_HUMAN_GATE_IDS = {
-    "select_content_direction",
     "confirm_high_risk_facts",
     "lock_formula_selection",
     "confirm_strategy_product_facts",
-    "select_title",
     "human_content_approval",
-    "select_cover",
 }
 KNOWLEDGE_POLICIES = {"none", "agent_scope", "frozen_evidence_only"}
 DEFAULT_CONTRACTS = {
     "ContentAgentNodeInputV1",
     "ContentAgentNodeInputV2",
     "AnalyzeContentValueInputV1",
+    "SelectContentDirectionInputV1",
     "ExplainStrategyInputV1",
     "CollectMissingEvidenceInputV1",
     "RankFormulaCandidatesInputV1",
     "CollectStrategyProductEvidenceInputV1",
     "GenerateTitleCandidatesInputV1",
+    "SelectTitleInputV1",
     "BuildOutlineInputV1",
     "GenerateBodyInputV1",
     "PersonaStylePolishInputV1",
@@ -35,11 +34,13 @@ DEFAULT_CONTRACTS = {
     "SubmitCoverJobInputV1",
     "VisualReviewInputV1",
     "ContentValueResultV1",
+    "DirectionSelectionResultV1",
     "StrategyExplanationResultV1",
     "EvidenceCollectionResultV1",
     "ProductEvidenceCollectionResultV1",
     "FormulaRankingResultV1",
     "TitleCandidatesResultV1",
+    "TitleSelectionResultV1",
     "OutlineResultV1",
     "ContentDraftResultV1",
     "PersonaPolishResultV1",
@@ -110,8 +111,8 @@ class WorkflowDefinitionPolicy:
 
     @classmethod
     def _validate_v3_nodes(cls, node_by_id: dict[str, dict[str, Any]], catalog: WorkflowCatalog | None) -> None:
-        if len(node_by_id) != 35:
-            raise ValueError("V3 企业内容工作流必须声明 35 个节点")
+        if len(node_by_id) != 29:
+            raise ValueError("V3 企业内容工作流必须声明 29 个节点")
         missing_gates = sorted(V3_HUMAN_GATE_IDS - set(node_by_id))
         if missing_gates:
             raise ValueError(f"V3 工作流缺少必选人工关口: {', '.join(missing_gates)}")

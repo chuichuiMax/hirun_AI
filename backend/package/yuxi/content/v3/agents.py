@@ -26,10 +26,10 @@ CONTENT_AGENT_SPECS = (
     ContentAgentSpec(
         slug="content-strategy-agent",
         name="内容策略 Agent",
-        description="解释固定规则结果，分析内容价值并对候选公式排序。",
+        description="分析内容价值、从候选集中确定内容方向，并解释固定规则结果及排序候选公式。",
         skills=("content-value-analyzer", "content-strategy-planner"),
         skill_tools=("get_creation_rule_bundle",),
-        config_version=2,
+        config_version=3,
     ),
     ContentAgentSpec(
         slug="content-research-agent",
@@ -42,10 +42,10 @@ CONTENT_AGENT_SPECS = (
     ContentAgentSpec(
         slug="content-title-agent",
         name="标题创作 Agent",
-        description="按锁定标题公式和冻结证据生成候选标题。",
+        description="按锁定标题公式生成候选，并从确定性校验通过的候选中选择最终标题。",
         skills=("content-title-generator",),
         skill_tools=(),
-        config_version=3,
+        config_version=4,
     ),
     ContentAgentSpec(
         slug="content-body-agent",

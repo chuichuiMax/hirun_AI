@@ -1,30 +1,14 @@
 from __future__ import annotations
 
 import uuid
-import io
 
 import pytest
-from PIL import Image
 
 
 pytestmark = pytest.mark.asyncio
 
 
-def _png() -> bytes:
-    output = io.BytesIO()
-    Image.new("RGB", (48, 36), "#4A7BF7").save(output, format="PNG")
-    return output.getvalue()
-
-
 async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
-    material_response = await test_client.post(
-        "/api/material-library/images/import",
-        headers=admin_headers,
-        data={"category": "product"},
-        files=[("files", (f"content-{uuid.uuid4().hex}.png", _png(), "image/png"))],
-    )
-    assert material_response.status_code == 201, material_response.text
-    material = material_response.json()["items"][0]
     bootstrap_response = await test_client.get("/api/content/bootstrap", headers=admin_headers)
     assert bootstrap_response.status_code == 200, bootstrap_response.text
     bootstrap = bootstrap_response.json()
@@ -49,31 +33,11 @@ async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
     assert create_response.json()["task"]["runtime_config_snapshot"]["schema_version"] == 3
 
     try:
-        missing_image_response = await test_client.post(
-            f"/api/content/tasks/{task_id}/compile-brief",
-            headers=admin_headers,
-            json={
-                "brief": {
-                    "form_values": {
-                        "brand_name": "Pytest 品牌",
-                        "audience": ["准备装修的业主"],
-                        "pain": ["隐蔽工程难追溯"],
-                        "advantage": ["标准工序留档"],
-                        "project_type": "三室两厅",
-                        "craft_and_materials": "水电施工与隐蔽验收",
-                    }
-                }
-            },
-        )
-        assert missing_image_response.status_code == 422
-        assert missing_image_response.json()["detail"]["error"]["code"] == "CONTENT_IMAGE_MATERIAL_REQUIRED"
-
         compile_response = await test_client.post(
             f"/api/content/tasks/{task_id}/compile-brief",
             headers=admin_headers,
             json={
                 "brief": {
-                    "visual_material": {"image_item_id": material["id"]},
                     "form_values": {
                         "brand_name": "Pytest 品牌",
                         "audience": ["准备装修的业主"],
@@ -90,14 +54,8 @@ async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
         assert compiled["compiled"] is True
         assert compiled["task"]["status"] == "brief_ready"
         assert compiled["task"]["evidence_bundle"]["items"]
-        assert compiled["task"]["selected_image_item_id"] == material["id"]
-        assert compiled["task"]["runtime_config_snapshot"]["visual_material"]["image_asset_id"] == material["asset_id"]
-
-        protected_response = await test_client.delete(
-            f"/api/material-library/items/{material['id']}", headers=admin_headers
-        )
-        assert protected_response.status_code == 409
-        assert protected_response.json()["detail"]["error"]["code"] == "MATERIAL_IN_USE"
+        assert compiled["task"]["selected_image_item_id"] is None
+        assert compiled["task"]["runtime_config_snapshot"]["visual_material"] is None
 
         removed_strategy_response = await test_client.post(
             f"/api/content/tasks/{task_id}/strategy/recommend",
@@ -115,7 +73,3 @@ async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
     finally:
         delete_response = await test_client.delete(f"/api/content/tasks/{task_id}", headers=admin_headers)
         assert delete_response.status_code == 200, delete_response.text
-        material_delete = await test_client.delete(
-            f"/api/material-library/items/{material['id']}", headers=admin_headers
-        )
-        assert material_delete.status_code == 200, material_delete.text

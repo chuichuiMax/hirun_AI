@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
+import yuxi.agents.buildin.content_workflow.graph as content_workflow_graph_module
 from yuxi.agents.buildin.content_workflow.context import ContentWorkflowContext
 from yuxi.agents.buildin.content_workflow.graph import ContentWorkflowAgent
 from yuxi.agents.buildin.content_workflow.state import ContentWorkflowState
@@ -166,6 +168,36 @@ def test_persona_mapper_changes_language_only_and_preserves_locked_draft_fields(
     assert mapped["persona_diff"]["preserved_fact_checks"][0]["preserved"] is True
 
 
+@pytest.mark.unit
+def test_direction_selection_mapper_only_accepts_value_analysis_candidates():
+    state = {
+        "content_angles": [
+            {"direction_code": "CT03", "reason": "原候选原因", "evidence_ids": ["ev-1"]},
+            {"direction_code": "CT05", "reason": "原候选原因", "evidence_ids": ["ev-2"]},
+        ]
+    }
+
+    mapped = AgentNodeResultMapper.to_state(
+        "select_content_direction",
+        {"direction_code": "CT05", "reason": "过程证据更完整", "evidence_ids": ["ev-2"]},
+        state,
+    )
+
+    assert mapped["selected_angle"] == {
+        "direction_code": "CT05",
+        "reason": "过程证据更完整",
+        "evidence_ids": ["ev-2"],
+        "selected_by": "agent",
+    }
+
+    with pytest.raises(ValueError, match="不在价值分析候选集中"):
+        AgentNodeResultMapper.to_state(
+            "select_content_direction",
+            {"direction_code": "CT07", "reason": "越界选择", "evidence_ids": []},
+            state,
+        )
+
+
 @pytest.mark.asyncio
 async def test_v3_graph_compiles_revision_routes_as_controlled_conditional_edges():
     agent = ContentWorkflowAgent()
@@ -225,7 +257,7 @@ async def test_blocked_title_validation_routes_back_to_title_agent_without_human
 
 
 @pytest.mark.asyncio
-async def test_passed_title_validation_continues_to_human_title_selection():
+async def test_passed_title_validation_continues_to_title_agent_selection():
     result = await ContentWorkflowAgent()._execute_node(
         {"id": "revise_if_needed", "type": "revision_router"},
         {
@@ -240,6 +272,123 @@ async def test_passed_title_validation_continues_to_human_title_selection():
 
     assert result["revision_target"] == "select_title"
     assert result["revision_status"] == "continue"
+
+
+@pytest.mark.unit
+def test_title_selection_mapper_only_accepts_selectable_candidates():
+    state = {
+        "title_candidates": [
+            {
+                "id": "title-1",
+                "text": "候选一",
+                "formula_code": "T03",
+                "evidence_ids": ["ev-1"],
+                "selectable": False,
+            },
+            {
+                "id": "title-2",
+                "text": "候选二",
+                "formula_code": "T03",
+                "evidence_ids": ["ev-2"],
+                "selectable": True,
+            },
+        ]
+    }
+
+    mapped = AgentNodeResultMapper.to_state(
+        "select_title",
+        {"selected_title_id": "title-2", "reason": "证据与公式更完整"},
+        state,
+    )
+
+    assert mapped["selected_title"] == {
+        **state["title_candidates"][1],
+        "selection_reason": "证据与公式更完整",
+        "selected_by": "agent",
+    }
+
+    with pytest.raises(ValueError, match="只能选择通过确定性校验"):
+        AgentNodeResultMapper.to_state(
+            "select_title",
+            {"selected_title_id": "title-1", "reason": "错误选择"},
+            state,
+        )
+
+
+@pytest.mark.asyncio
+async def test_save_artifact_allows_content_version_without_cover(monkeypatch):
+    task = SimpleNamespace(id="task-1", tenant_id=None, rule_version_id="rules-v3")
+    saved = {}
+
+    class FakeDB:
+        def add(self, artifact):
+            saved["artifact"] = artifact
+
+        async def flush(self):
+            return None
+
+    class FakeRepository:
+        def __init__(self, db):
+            del db
+
+        async def get_task(self, task_id, for_update=False):
+            del for_update
+            return task if task_id == task.id else None
+
+        async def get_artifact_for_task(self, task_id):
+            assert task_id == task.id
+            return None
+
+        async def save_artifact_version(self, *, artifact, **kwargs):
+            del kwargs
+            return SimpleNamespace(
+                id="artifact-version-1",
+                version=1,
+                cover_asset_id=artifact.cover_asset_id,
+                cover_job_id=artifact.cover_job_id,
+            )
+
+        async def add_review_record(self, **kwargs):
+            del kwargs
+
+        async def track(self, *args, **kwargs):
+            del args, kwargs
+
+    @asynccontextmanager
+    async def fake_session_context():
+        yield FakeDB()
+
+    def reject_cover_repository(db):
+        del db
+        raise AssertionError("无视觉工作流时不应读取封面仓储")
+
+    monkeypatch.setattr(content_workflow_graph_module, "ContentRepository", FakeRepository)
+    monkeypatch.setattr(content_workflow_graph_module, "ContentCoverRepository", reject_cover_repository)
+    monkeypatch.setattr(
+        content_workflow_graph_module.pg_manager,
+        "get_async_session_context",
+        fake_session_context,
+    )
+
+    result = await ContentWorkflowAgent()._save_artifact(
+        {
+            "task_id": task.id,
+            "uid": "user-1",
+            "run_id": "run-1",
+            "content_draft": {"body": "已审核正文", "topics": ["装修"]},
+            "selected_title": {"id": "title-1", "text": "Agent 选择的标题"},
+            "strategy_snapshot": {"snapshot_hash": "s" * 64, "title_formula": {}, "body_formula": {}},
+            "evidence_bundle": {"bundle_hash": "e" * 64, "items": []},
+            "review_report": {"status": "passed", "checks": []},
+            "approval_result": {"status": "approved", "reviewer_uid": "user-1"},
+            "runtime_config_snapshot": {},
+        }
+    )
+
+    assert result["artifact_version"]["cover_asset_id"] is None
+    assert saved["artifact"].cover_asset_id is None
+    assert task.selected_title_json["text"] == "Agent 选择的标题"
+    assert task.status == "reviewed"
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,6 @@ import yuxi.agents.toolkits.content.tools as content_tools
 import yuxi.content.control.workflow.agent_node as agent_node_module
 from yuxi.content.control.workflow.agent_node import AgentNodeHandler, AgentNodeResultMapper
 from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
-from yuxi.content.v3.workflow import WORKFLOW_V3_NODES
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.storage.postgres.models_content import ContentCoverAsset, ContentCoverJob, ContentNodeRun, ContentTask
 
@@ -83,7 +82,23 @@ async def test_submit_cover_node_delegates_the_locked_visual_plan(monkeypatch):
             )
 
     monkeypatch.setattr(agent_node_module, "AgentDelegationService", FakeDelegationService)
-    node = next(item for item in WORKFLOW_V3_NODES if item["id"] == "submit_cover_job")
+    node = {
+        "id": "submit_cover_job",
+        "type": "agent",
+        "agent_slug": "content-visual-agent",
+        "required_skills": ["content-cover-generator"],
+        "input_contract": "SubmitCoverJobInputV1",
+        "state_inputs": ["visual_plan", "artifact_version", "media_evidence_items"],
+        "optional_state_inputs": [],
+        "output_contract": "CoverJobSubmissionResultV1",
+        "backend": "managed",
+        "knowledge_policy": "frozen_evidence_only",
+        "timeout_seconds": 120,
+        "max_execution_steps": 12,
+        "max_tool_calls": 2,
+        "token_budget": 8000,
+        "result_tool_name": "submit_content_node_result",
+    }
     result = await AgentNodeHandler().execute(
         db=FakeDB(),
         node=node,

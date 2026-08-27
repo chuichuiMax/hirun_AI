@@ -34,8 +34,8 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="content-value-analyzer",
         source_dir=_SKILLS_ROOT / "content-value-analyzer",
-        description="从已冻结证据中识别内容价值、候选方向和唯一主叙事轴。",
-        version="1.1.0",
+        description="从已冻结证据中识别内容价值、候选方向，并从候选集中确定唯一主叙事轴。",
+        version="1.2.0",
     ),
     BuiltinSkillSpec(
         slug="content-evidence-researcher",
@@ -54,8 +54,8 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="content-title-generator",
         source_dir=_SKILLS_ROOT / "content-title-generator",
-        description="按锁定标题公式和证据包生成 3～5 个可追溯标题候选。",
-        version="1.3.0",
+        description="按锁定标题公式生成候选，并从确定性校验通过的候选中选择最终标题。",
+        version="1.4.0",
     ),
     BuiltinSkillSpec(
         slug="content-body-generator",
