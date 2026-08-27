@@ -4,12 +4,14 @@ import hashlib
 import json
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content.control.evidence import EvidenceApplicationService
 from yuxi.content.control.strategy.recommend_v3 import StrategyPreviewActor
 from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
 from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
+from yuxi.content.model.contracts import StrategySnapshotV1
 from yuxi.content.model.evidence import (
     EvidenceBundleV1,
     EvidenceGovernanceError,
@@ -17,13 +19,18 @@ from yuxi.content.model.evidence import (
     freeze_evidence_bundle,
     next_evidence_bundle_version,
 )
+from yuxi.content.model.formulas.selector import (
+    FormulaCandidateDefinition,
+    FormulaCandidatePool,
+    FormulaSelectionRequest,
+    FormulaSelector,
+)
 from yuxi.content.model.rules.engine import CombinationMatcher, MatchRequest
 from yuxi.content.rules import brief_variable_map
-from yuxi.content.validators import validate_content
 from yuxi.content.validation import ComplianceEngine, validate_numeric_evidence_coverage
+from yuxi.content.validators import validate_content
 from yuxi.services.run_queue_service import append_run_stream_event
-from yuxi.storage.postgres.models_content import ContentTask
-
+from yuxi.storage.postgres.models_content import ContentFormula, ContentTask, CreationMethod, TitleFormula
 
 _SLOT_REQUIRED_VARIABLES = {
     "product_profile": {"product", "advantages", "pain_points"},
@@ -31,6 +38,17 @@ _SLOT_REQUIRED_VARIABLES = {
     "case_proof": {"number", "result", "scene", "location"},
     "brand": {"brand_name"},
 }
+
+
+def _available_variable_codes(state: dict[str, Any]) -> set[str]:
+    available = {
+        key
+        for key, value in brief_variable_map(state.get("content_brief") or {}).items()
+        if value not in (None, "", [], {})
+    }
+    for item in (state.get("evidence_bundle") or {}).get("items") or []:
+        available.update(str(code) for code in item.get("variable_codes") or [] if code)
+    return available
 
 
 def _annotate_product_slot_requirements(
@@ -117,9 +135,11 @@ class V3DeterministicNodeHandler:
             "compile_runtime_snapshot": self._compile_runtime_snapshot,
             "ingest_real_materials": self._ingest_real_materials,
             "normalize_evidence": self._normalize_evidence,
+            "lock_creation_strategy": self._lock_creation_strategy,
             "match_combination_group": self._match_combination_group,
             "resolve_formula_requirements": self._resolve_formula_requirements,
             "freeze_evidence_bundle": self._freeze_evidence_bundle,
+            "prepare_formula_selection": self._prepare_formula_selection,
             "resolve_product_material_requirements": self._resolve_product_material_requirements,
             "freeze_product_evidence_bundle": self._freeze_product_evidence_bundle,
             "validate_title_candidates": self._validate_title_candidates,
@@ -131,6 +151,203 @@ class V3DeterministicNodeHandler:
         if handler is None:
             raise ValueError(f"未注册的 V3 固定节点: {node['id']}")
         return await handler(db=db, state=state, node_run_id=node_run_id)
+
+    @staticmethod
+    async def _lock_creation_strategy(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
+        selection = state.get("strategy_selection") or {}
+        direction = str(selection.get("selected_direction_code") or "")
+        task = await db.get(ContentTask, state["task_id"])
+        if task is None or not direction:
+            raise ValueError("策略 Agent 未提交内容方向")
+        context = await PostgresStrategyPreviewRepository(db).load_context(
+            task_id=task.id,
+            actor=StrategyPreviewActor(
+                uid=state["uid"],
+                role="superadmin" if task.created_by != state["uid"] else "user",
+                tenant_id=task.tenant_id,
+            ),
+            requested_content_direction_code=direction,
+        )
+        if context is None:
+            raise ValueError("无权访问内容任务")
+        match = CombinationMatcher().match(
+            list(context.groups),
+            MatchRequest(
+                content_direction_code=direction,
+                industry_slug=context.industry_slug,
+                channel_code=context.channel_code,
+                content_goal_code=context.content_goal_code,
+                narrative_axis_code=context.narrative_axis_code,
+                available_variable_codes=context.available_variable_codes,
+                available_evidence_types=context.available_evidence_types,
+            ),
+        )
+        selected_group_id = str(selection.get("selected_group_id") or "")
+        match = match.with_selected_group(selected_group_id)
+        group = next(item for item in context.groups if item.code == selected_group_id)
+        method_codes = [item.method_code for item in group.method_members]
+        if selection.get("creation_method_codes") != method_codes:
+            raise ValueError("策略 Agent 选择的创作手法与组合组不一致")
+        title_code = str(selection.get("title_formula_code") or "")
+        body_code = str(selection.get("body_formula_code") or "")
+        if title_code not in group.title_formula_candidate_codes or body_code not in group.body_formula_candidate_codes:
+            raise ValueError("策略 Agent 选择了组合组外的标题或正文公式")
+
+        title_formula = (
+            await db.execute(
+                select(TitleFormula).where(
+                    TitleFormula.version_id == context.rule_version_id,
+                    TitleFormula.code == title_code,
+                    TitleFormula.enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        body_formula = (
+            await db.execute(
+                select(ContentFormula).where(
+                    ContentFormula.version_id == context.rule_version_id,
+                    ContentFormula.code == body_code,
+                    ContentFormula.enabled.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        methods = list(
+            (
+                await db.execute(
+                    select(CreationMethod).where(
+                        CreationMethod.version_id == context.rule_version_id,
+                        CreationMethod.code.in_(method_codes),
+                        CreationMethod.enabled.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+        if title_formula is None or body_formula is None or {item.code for item in methods} != set(method_codes):
+            raise ValueError("策略 Agent 选择的手法或公式不存在或已停用")
+
+        snapshots = PostgresDecisionSnapshotRepository(db)
+        match_snapshot = await snapshots.save_match_decision(
+            task_id=task.id,
+            content_run_id=state["run_id"],
+            node_run_id=node_run_id,
+            rule_version_id=context.rule_version_id,
+            industry_pack_version_id=context.industry_pack_version_id,
+            channel_profile_version_id=context.channel_profile_version_id,
+            decision=match,
+            selected_by="agent",
+        )
+        required_variables = set(title_formula.variable_schema or []) | set(body_formula.required_variables or [])
+        required_variables.update(variable for method in methods for variable in (method.variable_schema or []))
+        formula_decision = FormulaSelector().select(
+            FormulaCandidatePool(
+                combination_group_id=group.code,
+                rule_version_id=context.rule_version_id,
+                title_formula_codes=tuple(group.title_formula_candidate_codes),
+                body_formula_codes=tuple(group.body_formula_candidate_codes),
+            ),
+            [
+                FormulaCandidateDefinition(
+                    code=code,
+                    kind=kind,
+                    rule_version_id=context.rule_version_id,
+                )
+                for kind, codes in (
+                    ("title", group.title_formula_candidate_codes),
+                    ("body", group.body_formula_candidate_codes),
+                )
+                for code in codes
+            ],
+            FormulaSelectionRequest(
+                available_variable_codes=frozenset(required_variables),
+                agent_title_ranking=(title_code,),
+                agent_body_ranking=(body_code,),
+            ),
+        )
+        if formula_decision.status != "selected":
+            raise ValueError("策略 Agent 选择的标题/正文公式对不可用")
+        formula_snapshot = await snapshots.save_formula_selection(
+            task_id=task.id,
+            content_run_id=state["run_id"],
+            node_run_id=node_run_id,
+            match_snapshot_id=match_snapshot.id,
+            rule_version_id=context.rule_version_id,
+            evidence_bundle_hash=str((state.get("evidence_bundle") or {}).get("bundle_hash") or ""),
+            decision=formula_decision,
+            selected_by="agent",
+            delegated_agent_run_id=(state.get("delegated_agent_runs") or {}).get("select_creation_strategy"),
+        )
+        method_by_code = {item.code: item for item in methods}
+        strategy_payload = {
+            "content_direction": direction,
+            "selected_group_id": group.code,
+            "creation_methods": method_codes,
+            "creation_method_definitions": [
+                {
+                    "code": method_by_code[code].code,
+                    "name": method_by_code[code].name,
+                    "method_type": method_by_code[code].method_type,
+                    "principle": method_by_code[code].principle,
+                    "suitable_scenes": method_by_code[code].suitable_scenes or [],
+                    "sentence_patterns": method_by_code[code].sentence_patterns or [],
+                    "variable_schema": method_by_code[code].variable_schema or [],
+                    "risk_rules": method_by_code[code].risk_rules or [],
+                }
+                for code in method_codes
+            ],
+            "title_formula": {
+                "code": title_formula.code,
+                "name": title_formula.name,
+                "core_goal": title_formula.core_goal,
+                "reference_examples": title_formula.reference_examples or [],
+                "variable_schema": title_formula.variable_schema or [],
+                "compatible_methods": title_formula.compatible_methods or [],
+                "risk_rules": title_formula.risk_rules or [],
+            },
+            "body_formula": {
+                "code": body_formula.code,
+                "name": body_formula.name,
+                "structure_schema": body_formula.structure_schema or [],
+                "reference_examples": body_formula.reference_examples or [],
+                "required_variables": body_formula.required_variables or [],
+                "output_schema": body_formula.output_schema or {},
+                "compatible_methods": body_formula.compatible_methods or [],
+                "risk_rules": body_formula.risk_rules or [],
+            },
+            "rule_version_id": context.rule_version_id,
+            "match_snapshot_id": match_snapshot.id,
+            "formula_snapshot_id": formula_snapshot.id,
+        }
+        canonical = json.dumps(strategy_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        strategy_payload["snapshot_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
+        strategy_snapshot = StrategySnapshotV1.model_validate(strategy_payload).model_dump(mode="json")
+        missing = sorted(required_variables - _available_variable_codes(state))
+        match_payload = match.to_dict()
+        match_payload.update(
+            {
+                "id": match_snapshot.id,
+                "selected_group_id": group.code,
+                "eligible_title_formula_codes": list(group.title_formula_candidate_codes),
+                "eligible_body_formula_codes": list(group.body_formula_candidate_codes),
+            }
+        )
+        formula_payload = formula_decision.to_dict()
+        formula_payload["id"] = formula_snapshot.id
+        return {
+            "match_decision_snapshot": match_payload,
+            "formula_selection_snapshot": formula_payload,
+            "strategy_snapshot": strategy_snapshot,
+            "formula_candidate_pool": {
+                "combination_group_id": group.code,
+                "title_formula_codes": list(group.title_formula_candidate_codes),
+                "body_formula_codes": list(group.body_formula_candidate_codes),
+            },
+            "evidence_gap_analysis": {
+                "has_missing": bool(missing),
+                "missing_variable_codes": missing,
+                "missing_evidence_types": [],
+                "target_formula_pair": {"title_formula_code": title_code, "body_formula_code": body_code},
+            },
+        }
 
     @staticmethod
     async def _compile_runtime_snapshot(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
@@ -274,6 +491,64 @@ class V3DeterministicNodeHandler:
         )
         payload["eligible_title_formula_codes"] = list(selected_group.title_formula_candidate_codes)
         payload["eligible_body_formula_codes"] = list(selected_group.body_formula_candidate_codes)
+        title_formulas = list(
+            (
+                await db.execute(
+                    select(TitleFormula).where(
+                        TitleFormula.version_id == context.rule_version_id,
+                        TitleFormula.code.in_(selected_group.title_formula_candidate_codes),
+                        TitleFormula.enabled.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+        body_formulas = list(
+            (
+                await db.execute(
+                    select(ContentFormula).where(
+                        ContentFormula.version_id == context.rule_version_id,
+                        ContentFormula.code.in_(selected_group.body_formula_candidate_codes),
+                        ContentFormula.enabled.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+        if len(title_formulas) != len(selected_group.title_formula_candidate_codes) or len(body_formulas) != len(
+            selected_group.body_formula_candidate_codes
+        ):
+            raise ValueError("组合组引用了不存在或已停用的公式")
+        available_variables = _available_variable_codes(state)
+        title_missing = {
+            formula.code: set(str(code) for code in formula.variable_schema or [] if code) - available_variables
+            for formula in title_formulas
+        }
+        body_missing = {
+            formula.code: set(str(code) for code in formula.required_variables or [] if code) - available_variables
+            for formula in body_formulas
+        }
+        closest_pair = min(
+            (
+                (title_code, body_code, title_missing[title_code] | body_missing[body_code])
+                for title_code in selected_group.title_formula_candidate_codes
+                for body_code in selected_group.body_formula_candidate_codes
+            ),
+            key=lambda item: (len(item[2]), item[0], item[1]),
+        )
+        missing_variables = sorted(closest_pair[2])
+        formula_candidate_pool = {
+            "combination_group_id": decision.selected_group_code,
+            "title_formula_codes": list(selected_group.title_formula_candidate_codes),
+            "body_formula_codes": list(selected_group.body_formula_candidate_codes),
+        }
+        evidence_gap_analysis = {
+            "has_missing": bool(missing_variables),
+            "missing_variable_codes": missing_variables,
+            "missing_evidence_types": [],
+            "target_formula_pair": {
+                "title_formula_code": closest_pair[0],
+                "body_formula_code": closest_pair[1],
+            },
+        }
         await append_run_stream_event(
             state["run_id"],
             "content.rule.matched",
@@ -285,7 +560,11 @@ class V3DeterministicNodeHandler:
             },
             thread_id=task.id,
         )
-        return {"match_decision_snapshot": payload}
+        return {
+            "match_decision_snapshot": payload,
+            "formula_candidate_pool": formula_candidate_pool,
+            "evidence_gap_analysis": evidence_gap_analysis,
+        }
 
     @staticmethod
     async def _resolve_formula_requirements(
@@ -337,6 +616,74 @@ class V3DeterministicNodeHandler:
             added_evidence_ids=tuple(item.id for item in additions),
         )
         return {"evidence_bundle": bundle.model_dump(mode="json")}
+
+    @staticmethod
+    async def _prepare_formula_selection(
+        *, db: AsyncSession, state: dict[str, Any], node_run_id: str
+    ) -> dict[str, Any]:
+        del node_run_id
+        pool = dict(state.get("formula_candidate_pool") or {})
+        title_codes = tuple(pool.get("title_formula_codes") or ())
+        body_codes = tuple(pool.get("body_formula_codes") or ())
+        if not title_codes or not body_codes:
+            raise ValueError("公式候选池不能为空")
+        title_formulas = list(
+            (
+                await db.execute(
+                    select(TitleFormula).where(
+                        TitleFormula.version_id == state["rule_version_id"],
+                        TitleFormula.code.in_(title_codes),
+                        TitleFormula.enabled.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+        body_formulas = list(
+            (
+                await db.execute(
+                    select(ContentFormula).where(
+                        ContentFormula.version_id == state["rule_version_id"],
+                        ContentFormula.code.in_(body_codes),
+                        ContentFormula.enabled.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+        available_variables = _available_variable_codes(state)
+        valid_title_codes = [
+            code
+            for code in title_codes
+            if any(
+                formula.code == code and set(formula.variable_schema or []).issubset(available_variables)
+                for formula in title_formulas
+            )
+        ]
+        valid_body_codes = [
+            code
+            for code in body_codes
+            if any(
+                formula.code == code and set(formula.required_variables or []).issubset(available_variables)
+                for formula in body_formulas
+            )
+        ]
+        valid_pairs = [
+            {"title_formula_code": title_code, "body_formula_code": body_code}
+            for title_code in valid_title_codes
+            for body_code in valid_body_codes
+        ]
+        if not valid_pairs:
+            unresolved = (state.get("evidence_collection") or {}).get("unresolved_questions") or []
+            details = f"；未解决问题：{'、'.join(unresolved)}" if unresolved else ""
+            raise ValueError(f"补充证据后仍没有有效标题/正文公式对{details}")
+        return {
+            "formula_candidate_pool": {
+                **pool,
+                "title_formula_codes": valid_title_codes,
+                "body_formula_codes": valid_body_codes,
+                "valid_formula_pairs": valid_pairs,
+                "valid_formula_pair_count": len(valid_pairs),
+            }
+        }
 
     @staticmethod
     async def _resolve_product_material_requirements(

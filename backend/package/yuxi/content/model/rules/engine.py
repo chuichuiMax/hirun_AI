@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
 
@@ -139,6 +139,11 @@ class MatchDecision:
             "selected_group_code": self.selected_group_code,
             "selection_mode": self.selection_mode,
         }
+
+    def with_selected_group(self, group_code: str) -> MatchDecision:
+        if self.status != "matched" or group_code not in {item.group_code for item in self.eligible_groups}:
+            raise ValueError("选择的组合组不在固定规则通过集合中")
+        return replace(self, selected_group_code=group_code)
 
 
 class CombinationMatcher:

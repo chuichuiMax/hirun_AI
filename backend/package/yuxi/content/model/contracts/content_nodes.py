@@ -68,6 +68,19 @@ class AnalyzeContentValueInputV1(StrictContract):
     channel_profile: dict[str, Any]
 
 
+class AnalyzeAndSelectDirectionInputV1(AnalyzeContentValueInputV1):
+    pass
+
+
+class SelectCreationStrategyInputV1(StrictContract):
+    rule_version_id: str
+    content_brief: dict[str, Any] = Field(min_length=1)
+    evidence_bundle: dict[str, Any] = Field(min_length=1)
+    content_type: dict[str, Any]
+    industry_pack: dict[str, Any]
+    channel_profile: dict[str, Any]
+
+
 class SelectContentDirectionInputV1(StrictContract):
     content_brief: dict[str, Any] = Field(min_length=1)
     value_analysis: dict[str, Any] = Field(min_length=1)
@@ -97,8 +110,35 @@ class CollectMissingEvidenceInputV1(StrictContract):
     evidence_bundle: dict[str, Any] = Field(min_length=1)
 
 
+class CollectMissingEvidenceInputV2(StrictContract):
+    rule_version_id: str
+    content_brief: dict[str, Any] = Field(min_length=1)
+    selected_angle: dict[str, Any] = Field(min_length=1)
+    match_decision_snapshot: dict[str, Any] = Field(min_length=1)
+    formula_candidate_pool: dict[str, Any] = Field(min_length=1)
+    evidence_gap_analysis: dict[str, Any] = Field(min_length=1)
+    evidence_bundle: dict[str, Any] = Field(min_length=1)
+
+
+class CollectSelectedStrategyEvidenceInputV1(StrictContract):
+    rule_version_id: str
+    content_brief: dict[str, Any] = Field(min_length=1)
+    strategy_selection: dict[str, Any] = Field(min_length=1)
+    evidence_gap_analysis: dict[str, Any] = Field(min_length=1)
+    evidence_bundle: dict[str, Any] = Field(min_length=1)
+
+
 class RankFormulaCandidatesInputV1(CollectMissingEvidenceInputV1):
     pass
+
+
+class RankFormulaCandidatesInputV2(StrictContract):
+    rule_version_id: str
+    content_brief: dict[str, Any] = Field(min_length=1)
+    selected_angle: dict[str, Any] = Field(min_length=1)
+    match_decision_snapshot: dict[str, Any] = Field(min_length=1)
+    formula_candidate_pool: dict[str, Any] = Field(min_length=1)
+    evidence_bundle: dict[str, Any] = Field(min_length=1)
 
 
 class StrategySnapshotV1(StrictContract):
@@ -236,6 +276,15 @@ class PersonaStylePolishInputV1(GenerateBodyInputV1):
     content_draft: dict[str, Any] = Field(min_length=1)
 
 
+class GenerateContentInputV1(StrictContract):
+    content_brief: dict[str, Any] = Field(min_length=1)
+    strategy_snapshot: StrategySnapshotV1
+    evidence_bundle: dict[str, Any] = Field(min_length=1)
+    channel_profile: dict[str, Any]
+    persona_profile: dict[str, Any]
+    validation_report: dict[str, Any] | None = None
+
+
 class SemanticReviewInputV1(StrictContract):
     content_brief: dict[str, Any] = Field(min_length=1)
     strategy_snapshot: StrategySnapshotV1
@@ -277,16 +326,22 @@ INPUT_CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
     model.__name__: model
     for model in (
         AnalyzeContentValueInputV1,
+        AnalyzeAndSelectDirectionInputV1,
+        SelectCreationStrategyInputV1,
         SelectContentDirectionInputV1,
         ExplainStrategyInputV1,
         CollectMissingEvidenceInputV1,
+        CollectMissingEvidenceInputV2,
+        CollectSelectedStrategyEvidenceInputV1,
         RankFormulaCandidatesInputV1,
+        RankFormulaCandidatesInputV2,
         CollectStrategyProductEvidenceInputV1,
         GenerateTitleCandidatesInputV1,
         SelectTitleInputV1,
         BuildOutlineInputV1,
         GenerateBodyInputV1,
         PersonaStylePolishInputV1,
+        GenerateContentInputV1,
         SemanticReviewInputV1,
         PlanVisualsInputV1,
         SubmitCoverJobInputV1,
@@ -305,6 +360,22 @@ class ContentValueResultV1(StrictContract):
     value_points: list[str] = Field(min_length=1)
     direction_candidates: list[DirectionCandidateV1] = Field(min_length=1)
     reasoning: str
+    evidence_ids: list[str]
+
+
+class ContentDirectionDecisionResultV1(ContentValueResultV1):
+    selected_direction_code: Literal["CT01", "CT02", "CT03", "CT04", "CT05", "CT06", "CT07"]
+    selection_reason: str = Field(min_length=1)
+    selection_evidence_ids: list[str]
+
+
+class CreationStrategySelectionResultV1(StrictContract):
+    selected_direction_code: Literal["CT01", "CT02", "CT03", "CT04", "CT05", "CT06", "CT07"]
+    selected_group_id: str = Field(min_length=1)
+    creation_method_codes: list[str] = Field(min_length=1)
+    title_formula_code: str = Field(min_length=1)
+    body_formula_code: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
     evidence_ids: list[str]
 
 
@@ -407,6 +478,18 @@ class ContentDraftResultV1(StrictContract):
     body_formula_code: str
 
 
+class GeneratedTitleV1(StrictContract):
+    text: str = Field(min_length=1)
+    formula_code: str = Field(min_length=1)
+    evidence_ids: list[str]
+
+
+class GeneratedContentResultV1(StrictContract):
+    title: GeneratedTitleV1
+    outline: OutlineResultV1
+    draft: ContentDraftResultV1
+
+
 class PreservedFactCheckV1(StrictContract):
     evidence_id: str
     preserved: bool
@@ -491,6 +574,8 @@ CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
     model.__name__: model
     for model in (
         ContentValueResultV1,
+        ContentDirectionDecisionResultV1,
+        CreationStrategySelectionResultV1,
         DirectionSelectionResultV1,
         StrategyExplanationResultV1,
         EvidenceCollectionResultV1,
@@ -500,6 +585,7 @@ CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         TitleSelectionResultV1,
         OutlineResultV1,
         ContentDraftResultV1,
+        GeneratedContentResultV1,
         PersonaPolishResultV1,
         ContentReviewResultV1,
         VisualPlanResultV1,
@@ -696,7 +782,13 @@ def validate_content_node_result(
         _validate_evidence_ids(result.evidence_ids, "any", context, "evidence_ids")
         for index, item in enumerate(result.direction_candidates):
             _validate_evidence_ids(item.evidence_ids, "any", context, f"direction_candidates.{index}.evidence_ids")
+        if isinstance(result, ContentDirectionDecisionResultV1):
+            candidate_codes = {item.direction_code for item in result.direction_candidates}
+            _require_member(result.selected_direction_code, frozenset(candidate_codes), "selected_direction_code")
+            _validate_evidence_ids(result.selection_evidence_ids, "any", context, "selection_evidence_ids")
     elif isinstance(result, DirectionSelectionResultV1):
+        _validate_evidence_ids(result.evidence_ids, "any", context, "evidence_ids")
+    elif isinstance(result, CreationStrategySelectionResultV1):
         _validate_evidence_ids(result.evidence_ids, "any", context, "evidence_ids")
     elif isinstance(result, StrategyExplanationResultV1):
         _require_equal(result.locked_group_id, context.locked_group_id, "locked_group_id")
@@ -813,6 +905,17 @@ def validate_content_node_result(
         for index, item in enumerate(result.paragraph_evidence):
             _validate_evidence_ids(item.evidence_ids, "body", context, f"paragraph_evidence.{index}.evidence_ids")
         _validate_numbers("\n".join([result.body, *result.topics]), context, "body", "body")
+    elif isinstance(result, GeneratedContentResultV1):
+        _require_equal(result.title.formula_code, context.locked_title_formula_code, "title.formula_code")
+        _validate_evidence_ids(result.title.evidence_ids, "title", context, "title.evidence_ids")
+        _validate_numbers(result.title.text, context, "title.text", "title")
+        _require_equal(result.outline.body_formula_code, context.locked_body_formula_code, "outline.body_formula_code")
+        for index, item in enumerate(result.outline.sections):
+            _validate_evidence_ids(item.evidence_ids, "body", context, f"outline.sections.{index}.evidence_ids")
+        _require_equal(result.draft.body_formula_code, context.locked_body_formula_code, "draft.body_formula_code")
+        for index, item in enumerate(result.draft.paragraph_evidence):
+            _validate_evidence_ids(item.evidence_ids, "body", context, f"draft.paragraph_evidence.{index}.evidence_ids")
+        _validate_numbers("\n".join([result.draft.body, *result.draft.topics]), context, "draft.body", "body")
     elif isinstance(result, PersonaPolishResultV1):
         for index, item in enumerate(result.preserved_fact_checks):
             _validate_evidence_ids([item.evidence_id], "body", context, f"preserved_fact_checks.{index}.evidence_id")

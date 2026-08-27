@@ -175,6 +175,11 @@ class BaseContext:
         },
     )
 
+    reasoning_effort: str | None = field(
+        default=None,
+        metadata={"name": "模型推理强度", "configurable": False, "hide": True},
+    )
+
     tools: list[str] | None = field(
         default=None,
         metadata={

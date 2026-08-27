@@ -113,53 +113,16 @@ def test_generate_body_input_contains_locked_title_and_outline():
 
 
 @pytest.mark.unit
-def test_title_input_exposes_required_slots_and_previous_validation_report():
+def test_unified_generation_input_exposes_locked_strategy_and_previous_validation_report():
     state = {**_state(), "channel_profile": {}, "persona_profile": {}}
-    state["product_evidence_pack"]["slot_mappings"] = [
-        {
-            "slot": "product_profile",
-            "target_usage": "title",
-            "required": True,
-            "evidence_ids": ["ev-product"],
-            "integration_instruction": "在标题中呈现产品主体",
-        },
-        {
-            "slot": "brand",
-            "target_usage": "title",
-            "required": False,
-            "evidence_ids": ["ev-brand"],
-            "integration_instruction": "需要品牌背书时使用",
-        },
-    ]
-    pack_payload = {key: value for key, value in state["product_evidence_pack"].items() if key != "pack_hash"}
-    state["product_evidence_pack"]["pack_hash"] = hashlib.sha256(
-        json.dumps(pack_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    state["title_evidence_requirements"] = [
-        {
-            "slot": "product_profile",
-            "required": True,
-            "evidence_ids": ["ev-product"],
-            "integration_instruction": "在标题中呈现产品主体",
-        },
-        {
-            "slot": "brand",
-            "required": False,
-            "evidence_ids": ["ev-brand"],
-            "integration_instruction": "需要品牌背书时使用",
-        },
-    ]
-    state["title_validation_report"] = {
-        "status": "blocked",
-        "items": [{"id": "t1", "missing_required_slots": ["product_profile"]}],
-    }
-    node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "generate_title_candidates")
+    state["validation_report"] = {"status": "blocked", "checks": [{"code": "BODY_EVIDENCE_FAILED"}]}
+    node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "generate_content")
 
     assembly = ContentNodeInputAssembler.build(node=node, state=state)
 
-    assert assembly.payload["title_evidence_requirements"][0]["required"] is True
-    assert assembly.payload["title_evidence_requirements"][0]["evidence_ids"] == ["ev-product"]
-    assert assembly.payload["title_validation_report"]["status"] == "blocked"
+    assert assembly.payload["strategy_snapshot"]["title_formula"]["code"] == "T03"
+    assert assembly.payload["strategy_snapshot"]["body_formula"]["code"] == "C03"
+    assert assembly.payload["validation_report"]["status"] == "blocked"
 
 
 @pytest.mark.unit
@@ -219,16 +182,22 @@ def test_node_input_missing_fails_before_agent_delegation():
 def test_input_contract_registry_contains_every_agent_payload_contract():
     assert set(INPUT_CONTRACT_REGISTRY) == {
         "AnalyzeContentValueInputV1",
+        "AnalyzeAndSelectDirectionInputV1",
+        "SelectCreationStrategyInputV1",
         "SelectContentDirectionInputV1",
         "ExplainStrategyInputV1",
         "CollectMissingEvidenceInputV1",
+        "CollectMissingEvidenceInputV2",
+        "CollectSelectedStrategyEvidenceInputV1",
         "RankFormulaCandidatesInputV1",
+        "RankFormulaCandidatesInputV2",
         "CollectStrategyProductEvidenceInputV1",
         "GenerateTitleCandidatesInputV1",
         "SelectTitleInputV1",
         "BuildOutlineInputV1",
         "GenerateBodyInputV1",
         "PersonaStylePolishInputV1",
+        "GenerateContentInputV1",
         "SemanticReviewInputV1",
         "PlanVisualsInputV1",
         "SubmitCoverJobInputV1",
@@ -278,8 +247,22 @@ def test_every_published_agent_node_can_assemble_its_declared_payload():
         },
         "content_angles": [{"direction_code": "CT05", "reason": "证据充分", "evidence_ids": []}],
         "selected_angle": {"direction_code": "CT05"},
+        "strategy_selection": {
+            "selected_direction_code": "CT05",
+            "selected_group_id": "group-1",
+            "creation_method_codes": ["M03"],
+            "title_formula_code": "T03",
+            "body_formula_code": "C03",
+            "reason": "符合输入材料",
+            "evidence_ids": [],
+        },
         "match_decision_snapshot": {"id": "match-1", "selected_group_id": "group-1"},
         "formula_candidate_pool": {"title_formula_codes": ["T03"], "body_formula_codes": ["C03"]},
+        "evidence_gap_analysis": {
+            "has_missing": False,
+            "missing_variable_codes": [],
+            "missing_evidence_types": [],
+        },
         "strategy_explanation": {"locked_group_id": "group-1"},
         "product_material_requirements": {
             "strategy_snapshot_hash": STRATEGY["snapshot_hash"],
@@ -310,7 +293,14 @@ def test_every_published_agent_node_can_assemble_its_declared_payload():
 
 @pytest.mark.unit
 def test_title_selection_input_requires_a_selectable_candidate():
-    node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "select_title")
+    node = {
+        "id": "select_title",
+        "input_contract": "SelectTitleInputV1",
+        "state_inputs": [
+            "content_brief", "strategy_snapshot", "product_evidence_pack", "evidence_bundle",
+            "channel_profile", "persona_profile", "title_candidates", "title_validation_report",
+        ],
+    }
     state = {**_state(), "channel_profile": {}, "persona_profile": {}}
     state["title_candidates"][0]["selectable"] = False
 

@@ -1,14 +1,15 @@
 ---
 name: content-value-analyzer
 description: 基于 ContentBrief 与 EvidenceBundle 识别可创作价值、候选角度和唯一主叙事轴，不创造事实，也不决定工作流跳转。
-version: 1.2.0
+version: 1.3.0
 ---
 
 # 内容价值分析
 
 根据当前节点的输出契约执行以下唯一职责：
 
-- `ContentValueResultV1`：只使用 `payload.content_brief`、`payload.evidence_bundle`、`payload.content_type`、`payload.industry_pack` 和 `payload.channel_profile` 识别内容价值并给出候选方向。
+- `ContentDirectionDecisionResultV1`：只使用 `payload.content_brief`、`payload.evidence_bundle`、`payload.content_type`、`payload.industry_pack` 和 `payload.channel_profile` 识别内容价值、给出候选方向，并从候选中选择唯一内容方向。
+- `ContentValueResultV1`：兼容旧工作流，只识别内容价值并给出候选方向。
 - `DirectionSelectionResultV1`：只从 `payload.content_angles` 中选择唯一方向；结合 `payload.value_analysis`、内容目标、证据充分度、行业适配度和渠道适配度给出选择理由。
 
 - 输出 1～3 个候选内容方向，每个方向只允许一条主要叙事轴。
@@ -26,4 +27,4 @@ version: 1.2.0
 - 不补写价格、数字、效果、人物经历或服务承诺。
 - 选择方向时不得提交候选集之外的 `direction_code`，不得锁定组合组或公式。
 - 不选择下一个节点，不修改工作流结构。
-- 严格按当前节点要求提交 `ContentValueResultV1` 或 `DirectionSelectionResultV1`。
+- 新工作流严格提交 `ContentDirectionDecisionResultV1`；旧工作流按节点要求提交 `ContentValueResultV1` 或 `DirectionSelectionResultV1`。

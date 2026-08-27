@@ -13,8 +13,9 @@ from yuxi.services.agent_delegation_service import AgentDelegationRequest, Agent
 from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
 
-
 PROHIBITED_ACTIONS = {
+    "select_creation_strategy": ("不提交规则库外的组合组、创作手法或公式", "不编造事实", "不生成正文"),
+    "analyze_and_select_direction": ("不锁定组合组", "不选公式", "不修改工作流"),
     "analyze_content_value": ("不锁定组合组", "不选公式", "不修改工作流"),
     "select_content_direction": ("不选择候选集外方向", "不锁定组合组", "不选公式", "不修改工作流"),
     "explain_strategy": ("不改变固定匹配结果", "不扩大候选池"),
@@ -30,6 +31,7 @@ PROHIBITED_ACTIONS = {
     "select_title": ("不选择未通过校验的候选", "不修改标题文本、公式或证据 ID", "不生成正文"),
     "build_outline": ("不生成新事实", "不改正文公式"),
     "generate_body": ("不改锁定标题", "不检索网页或知识库"),
+    "generate_content": ("不修改锁定策略与公式", "不检索网页或知识库", "不引入冻结证据外的事实"),
     "persona_style_polish": ("不改数字、价格、承诺或证据 ID", "不改结构主干"),
     "semantic_review": ("不直接修改文稿", "不跳过确定性校验"),
     "plan_visuals": ("不新增无证据价格、人物或效果",),
@@ -41,6 +43,42 @@ PROHIBITED_ACTIONS = {
 class AgentNodeResultMapper:
     @staticmethod
     def to_state(node_id: str, result: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        if node_id == "select_creation_strategy":
+            return {
+                "selected_angle": {
+                    "direction_code": result["selected_direction_code"],
+                    "reason": result["reason"],
+                    "evidence_ids": result["evidence_ids"],
+                    "selected_by": "agent",
+                },
+                "strategy_selection": result,
+            }
+        if node_id == "analyze_and_select_direction":
+            selected = next(
+                (
+                    item
+                    for item in result["direction_candidates"]
+                    if item.get("direction_code") == result["selected_direction_code"]
+                ),
+                None,
+            )
+            if selected is None:
+                raise ValueError("Agent 选定内容方向不在价值分析候选集中")
+            return {
+                "value_analysis": {
+                    "value_points": result["value_points"],
+                    "direction_candidates": result["direction_candidates"],
+                    "reasoning": result["reasoning"],
+                    "evidence_ids": result["evidence_ids"],
+                },
+                "content_angles": result["direction_candidates"],
+                "selected_angle": {
+                    **selected,
+                    "reason": result["selection_reason"],
+                    "evidence_ids": result["selection_evidence_ids"],
+                    "selected_by": "agent",
+                },
+            }
         if node_id == "analyze_content_value":
             return {
                 "value_analysis": result,
@@ -97,6 +135,16 @@ class AgentNodeResultMapper:
             return {"content_outline": result}
         if node_id == "generate_body":
             return {"content_draft": result}
+        if node_id == "generate_content":
+            return {
+                "selected_title": {
+                    "id": "agent-selected-title",
+                    **result["title"],
+                    "selected_by": "agent",
+                },
+                "content_outline": result["outline"],
+                "content_draft": result["draft"],
+            }
         if node_id == "persona_style_polish":
             draft = dict(state.get("content_draft") or {})
             draft["body"] = result["polished_body"]
@@ -140,6 +188,31 @@ class AgentNodeHandler:
         ).scalar_one_or_none()
         if node_run is None or task is None or user is None:
             raise ValueError("Agent 节点缺少任务、用户或节点 Run")
+
+        if node["id"] == "collect_missing_evidence" and not (state.get("evidence_gap_analysis") or {}).get(
+            "has_missing"
+        ):
+            return {
+                "evidence_collection": {
+                    "evidence_items": [],
+                    "citations": [],
+                    "unresolved_questions": [],
+                    "skipped": True,
+                    "skip_reason": "当前公式候选池没有证据缺口",
+                }
+            }
+        if node["id"] == "rank_formula_candidates":
+            valid_pairs = (state.get("formula_candidate_pool") or {}).get("valid_formula_pairs") or []
+            if len(valid_pairs) == 1:
+                pair = valid_pairs[0]
+                return {
+                    "formula_rankings": {
+                        "title_rankings": [{"formula_code": pair["title_formula_code"], "reason": "唯一有效公式对"}],
+                        "body_rankings": [{"formula_code": pair["body_formula_code"], "reason": "唯一有效公式对"}],
+                        "skipped": True,
+                        "skip_reason": "固定规则已得到唯一有效公式对",
+                    }
+                }
 
         evidence_bundle = state.get("evidence_bundle") or {"items": []}
         evidence_hash = str(evidence_bundle.get("bundle_hash") or "")

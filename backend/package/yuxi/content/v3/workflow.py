@@ -2,17 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
-
 LEGACY_PLATFORM_WORKFLOW_V3_IDS = frozenset(
     {
         "content-workflow-enterprise-v3",
         "content-workflow-enterprise-v3.1",
         "content-workflow-enterprise-v3.2",
         "content-workflow-enterprise-v3.3",
+        "content-workflow-enterprise-v3.4",
     }
 )
-LEGACY_PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.3"
-PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.4"
+LEGACY_PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.4"
+PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.5"
 
 
 def _fixed(node_id: str) -> dict[str, Any]:
@@ -31,7 +31,7 @@ def _human(node_id: str, interrupt_type: str) -> dict[str, Any]:
 def _agent(
     node_id: str,
     agent_slug: str,
-    skill_slug: str,
+    skill_slugs: str | tuple[str, ...],
     input_contract: str,
     output_contract: str,
     *,
@@ -48,7 +48,7 @@ def _agent(
         "id": node_id,
         "type": "agent",
         "agent_slug": agent_slug,
-        "required_skills": [skill_slug],
+        "required_skills": [skill_slugs] if isinstance(skill_slugs, str) else list(skill_slugs),
         "input_contract": input_contract,
         "state_inputs": list(state_inputs),
         "optional_state_inputs": list(optional_state_inputs),
@@ -77,64 +77,37 @@ WORKFLOW_V3_NODES = [
     _fixed("ingest_real_materials"),
     _fixed("normalize_evidence"),
     _agent(
-        "analyze_content_value",
+        "select_creation_strategy",
         "content-strategy-agent",
-        "content-value-analyzer",
-        "AnalyzeContentValueInputV1",
-        "ContentValueResultV1",
-        state_inputs=("content_brief", "evidence_bundle", "content_type", "industry_pack", "channel_profile"),
-    ),
-    _agent(
-        "select_content_direction",
-        "content-strategy-agent",
-        "content-value-analyzer",
-        "SelectContentDirectionInputV1",
-        "DirectionSelectionResultV1",
+        ("content-value-analyzer", "content-strategy-planner"),
+        "SelectCreationStrategyInputV1",
+        "CreationStrategySelectionResultV1",
         state_inputs=(
+            "rule_version_id",
             "content_brief",
-            "value_analysis",
-            "content_angles",
             "evidence_bundle",
             "content_type",
             "industry_pack",
             "channel_profile",
         ),
     ),
-    _fixed("match_combination_group"),
-    _agent(
-        "explain_strategy",
-        "content-strategy-agent",
-        "content-strategy-planner",
-        "ExplainStrategyInputV1",
-        "StrategyExplanationResultV1",
-        state_inputs=(
-            "rule_version_id",
-            "content_brief",
-            "value_analysis",
-            "selected_angle",
-            "match_decision_snapshot",
-            "evidence_bundle",
-        ),
-    ),
-    _fixed("resolve_formula_requirements"),
+    _fixed("lock_creation_strategy"),
     _agent(
         "collect_missing_evidence",
         "content-research-agent",
         "content-evidence-researcher",
-        "CollectMissingEvidenceInputV1",
+        "CollectSelectedStrategyEvidenceInputV1",
         "EvidenceCollectionResultV1",
         state_inputs=(
             "rule_version_id",
             "content_brief",
-            "selected_angle",
-            "match_decision_snapshot",
-            "formula_candidate_pool",
-            "strategy_explanation",
+            "strategy_selection",
+            "evidence_gap_analysis",
             "evidence_bundle",
         ),
         knowledge_policy="agent_scope",
-        max_tool_calls=12,
-        max_retrieval_rounds=4,
+        max_tool_calls=4,
+        max_retrieval_rounds=1,
         max_knowledge_bases=3,
         max_chunks_per_knowledge_base=5,
         token_budget=12000,
@@ -142,137 +115,21 @@ WORKFLOW_V3_NODES = [
     _human("confirm_high_risk_facts", "high_risk_facts"),
     _fixed("freeze_evidence_bundle"),
     _agent(
-        "rank_formula_candidates",
-        "content-strategy-agent",
-        "content-strategy-planner",
-        "RankFormulaCandidatesInputV1",
-        "FormulaRankingResultV1",
-        state_inputs=(
-            "rule_version_id",
-            "content_brief",
-            "selected_angle",
-            "match_decision_snapshot",
-            "formula_candidate_pool",
-            "strategy_explanation",
-            "evidence_bundle",
-        ),
-    ),
-    {
-        **_human("lock_formula_selection", "formula_selection"),
-        "quick_mode_policy": "highest_valid_score",
-    },
-    _fixed("resolve_product_material_requirements"),
-    _agent(
-        "collect_strategy_product_evidence",
-        "content-research-agent",
-        "strategy-product-researcher",
-        "CollectStrategyProductEvidenceInputV1",
-        "ProductEvidenceCollectionResultV1",
+        "generate_content",
+        "content-generation-agent",
+        ("content-title-generator", "content-outline-builder", "content-body-generator"),
+        "GenerateContentInputV1",
+        "GeneratedContentResultV1",
         state_inputs=(
             "content_brief",
             "strategy_snapshot",
-            "product_material_requirements",
             "evidence_bundle",
             "channel_profile",
+            "persona_profile",
         ),
-        knowledge_policy="agent_scope",
-        max_tool_calls=12,
-        max_retrieval_rounds=4,
-        max_knowledge_bases=3,
-        max_chunks_per_knowledge_base=5,
+        optional_state_inputs=("validation_report",),
         token_budget=12000,
     ),
-    _human("confirm_strategy_product_facts", "strategy_product_facts"),
-    _fixed("freeze_product_evidence_bundle"),
-    _agent(
-        "generate_title_candidates",
-        "content-title-agent",
-        "content-title-generator",
-        "GenerateTitleCandidatesInputV1",
-        "TitleCandidatesResultV1",
-        state_inputs=(
-            "content_brief",
-            "strategy_snapshot",
-            "product_evidence_pack",
-            "title_evidence_requirements",
-            "evidence_bundle",
-            "channel_profile",
-            "persona_profile",
-        ),
-        optional_state_inputs=("title_validation_report",),
-    ),
-    _fixed("validate_title_candidates"),
-    _agent(
-        "select_title",
-        "content-title-agent",
-        "content-title-generator",
-        "SelectTitleInputV1",
-        "TitleSelectionResultV1",
-        state_inputs=(
-            "content_brief",
-            "strategy_snapshot",
-            "product_evidence_pack",
-            "evidence_bundle",
-            "channel_profile",
-            "persona_profile",
-            "title_candidates",
-            "title_validation_report",
-        ),
-    ),
-    _agent(
-        "build_outline",
-        "content-body-agent",
-        "content-outline-builder",
-        "BuildOutlineInputV1",
-        "OutlineResultV1",
-        state_inputs=(
-            "content_brief",
-            "strategy_snapshot",
-            "product_evidence_pack",
-            "evidence_bundle",
-            "channel_profile",
-            "persona_profile",
-            "selected_title",
-        ),
-    ),
-    _agent(
-        "generate_body",
-        "content-body-agent",
-        "content-body-generator",
-        "GenerateBodyInputV1",
-        "ContentDraftResultV1",
-        state_inputs=(
-            "content_brief",
-            "strategy_snapshot",
-            "product_evidence_pack",
-            "evidence_bundle",
-            "channel_profile",
-            "persona_profile",
-            "selected_title",
-            "content_outline",
-        ),
-    ),
-    {
-        **_agent(
-            "persona_style_polish",
-            "content-body-agent",
-            "persona-style-polisher",
-            "PersonaStylePolishInputV1",
-            "PersonaPolishResultV1",
-            state_inputs=(
-                "content_brief",
-                "strategy_snapshot",
-                "product_evidence_pack",
-                "evidence_bundle",
-                "channel_profile",
-                "persona_profile",
-                "selected_title",
-                "content_outline",
-                "content_draft",
-            ),
-        ),
-        "optional": True,
-    },
     _fixed("adapt_to_channel"),
     _fixed("deterministic_validate"),
     _agent(
@@ -292,7 +149,7 @@ WORKFLOW_V3_NODES = [
             "evidence_bundle",
         ),
         optional_state_inputs=("persona_diff",),
-        knowledge_policy="agent_scope",
+        knowledge_policy="frozen_evidence_only",
     ),
     {"id": "revise_if_needed", "type": "revision_router", "handler": "revise_if_needed"},
     _human("human_content_approval", "content_approval"),
@@ -301,47 +158,28 @@ WORKFLOW_V3_NODES = [
 
 WORKFLOW_V3 = {
     "schema_version": 3,
-    "runtime_limits": {"max_steps": 80, "max_revision_attempts": 5},
+    "runtime_limits": {"max_steps": 40, "max_revision_attempts": 3},
     "nodes": WORKFLOW_V3_NODES,
     "edges": [
         [WORKFLOW_V3_NODES[index]["id"], WORKFLOW_V3_NODES[index + 1]["id"]]
         for index in range(len(WORKFLOW_V3_NODES) - 1)
         if (WORKFLOW_V3_NODES[index]["id"], WORKFLOW_V3_NODES[index + 1]["id"])
-        not in {
-            ("validate_title_candidates", "select_title"),
-            ("deterministic_validate", "semantic_review"),
-            ("revise_if_needed", "human_content_approval"),
-        }
+        not in {("deterministic_validate", "semantic_review"), ("revise_if_needed", "human_content_approval")}
     ]
     + [
-        ["validate_title_candidates", "revise_if_needed"],
         ["deterministic_validate", "revise_if_needed"],
     ],
     "revision_routes": [
         {
             "from": "revise_if_needed",
-            "to": "generate_title_candidates",
-            "reason_codes": ["TITLE_VALIDATION_FAILED"],
+            "to": "generate_content",
+            "reason_codes": ["TITLE_VALIDATION_FAILED", "BODY_STRUCTURE_FAILED", "BODY_EVIDENCE_FAILED"],
             "max_attempts": 2,
-        },
-        {
-            "from": "revise_if_needed",
-            "to": "generate_body",
-            "reason_codes": ["BODY_STRUCTURE_FAILED", "BODY_EVIDENCE_FAILED"],
-            "max_attempts": 2,
-        },
-        {
-            "from": "revise_if_needed",
-            "to": "persona_style_polish",
-            "reason_codes": ["PERSONA_STYLE_FAILED"],
-            "max_attempts": 1,
         },
     ],
     "required_human_gates": sorted(
         {
             "confirm_high_risk_facts",
-            "lock_formula_selection",
-            "confirm_strategy_product_facts",
             "human_content_approval",
         }
     ),

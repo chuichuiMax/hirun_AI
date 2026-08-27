@@ -39,6 +39,15 @@ DOMAIN_CONTEXT = ContractDomainContext(
 
 
 VALID_PAYLOADS = {
+    "ContentDirectionDecisionResultV1": {
+        "value_points": ["value"],
+        "direction_candidates": [{"direction_code": "CT01", "reason": "reason", "evidence_ids": ["e-any"]}],
+        "reasoning": "reasoning",
+        "evidence_ids": ["e-any"],
+        "selected_direction_code": "CT01",
+        "selection_reason": "当前证据最充分",
+        "selection_evidence_ids": ["e-any"],
+    },
     "ContentValueResultV1": {
         "value_points": ["value"],
         "direction_candidates": [{"direction_code": "CT01", "reason": "reason", "evidence_ids": ["e-any"]}],
@@ -135,7 +144,9 @@ VALID_PAYLOADS = {
 
 def _make_unknown(contract_name: str, payload: dict) -> dict:
     value = deepcopy(payload)
-    if contract_name == "ContentValueResultV1":
+    if contract_name == "ContentDirectionDecisionResultV1":
+        value["selection_evidence_ids"] = ["unknown"]
+    elif contract_name == "ContentValueResultV1":
         value["evidence_ids"] = ["unknown"]
     elif contract_name == "DirectionSelectionResultV1":
         value["evidence_ids"] = ["unknown"]
@@ -450,4 +461,4 @@ async def test_structured_result_tool_uses_registered_pydantic_schema():
 
     assert tool.name == "submit_content_node_result"
     assert collector.submission_count == 1
-    assert len(CONTRACT_REGISTRY) == 15
+    assert len(CONTRACT_REGISTRY) == 18

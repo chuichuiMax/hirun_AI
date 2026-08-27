@@ -6,19 +6,19 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from langgraph.graph import END, START, StateGraph
 from langgraph.errors import GraphInterrupt
+from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from sqlalchemy import select
 
 from yuxi.agents import BaseAgent
-from yuxi.content.generation import SKILL_VERSIONS
+from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.control.workflow.agent_node import AgentNodeHandler
 from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
 from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
 from yuxi.content.control.workflow.revision import RevisionRouteController, resolve_revision_reason
-from yuxi.content.control.errors import ContentApplicationError
-from yuxi.content.model.workflows.definition import WorkflowDefinitionPolicy
+from yuxi.content.generation import SKILL_VERSIONS
+from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
 from yuxi.content.model.contracts import StrategySnapshotV1
 from yuxi.content.model.formulas.selector import (
     FormulaCandidateDefinition,
@@ -26,9 +26,9 @@ from yuxi.content.model.formulas.selector import (
     FormulaSelectionRequest,
     FormulaSelector,
 )
-from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
-from yuxi.repositories.content_repository import ContentRepository
+from yuxi.content.model.workflows.definition import WorkflowDefinitionPolicy
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
+from yuxi.repositories.content_repository import ContentRepository
 from yuxi.services.run_queue_service import append_run_stream_event, has_cancel_signal
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_content import (
@@ -95,7 +95,6 @@ class ContentWorkflowAgent(BaseAgent):
             incoming[target] += 1
             outgoing[source] += 1
         revision_targets = {
-            "select_title": "select_title",
             "semantic_review": "semantic_review",
             "human_content_approval": "human_content_approval",
             **{route["to"]: route["to"] for route in definition.get("revision_routes") or []},
@@ -456,13 +455,19 @@ class ContentWorkflowAgent(BaseAgent):
 
         if interrupt_type == "formula_selection":
             match = state.get("match_decision_snapshot") or {}
-            title_pool = tuple(match.get("eligible_title_formula_codes") or [])
-            body_pool = tuple(match.get("eligible_body_formula_codes") or [])
+            formula_pool = state.get("formula_candidate_pool") or {}
+            title_pool = tuple(formula_pool.get("title_formula_codes") or [])
+            body_pool = tuple(formula_pool.get("body_formula_codes") or [])
+            valid_pairs = formula_pool.get("valid_formula_pairs") or []
             ranking = state.get("formula_rankings") or {}
             title_ranking = tuple(item["formula_code"] for item in ranking.get("title_rankings") or [])
             body_ranking = tuple(item["formula_code"] for item in ranking.get("body_rankings") or [])
             selected_by = "quick_mode"
-            if state.get("task_mode") == "pro":
+            if len(valid_pairs) == 1:
+                title_ranking = ()
+                body_ranking = ()
+                selected_by = "deterministic"
+            elif state.get("task_mode") == "pro":
                 answer = require_resume({"title_formula_codes": title_pool, "body_formula_codes": body_pool})
                 title_ranking = (str(answer.get("title_formula_code") or ""),)
                 body_ranking = (str(answer.get("body_formula_code") or ""),)
@@ -480,6 +485,9 @@ class ContentWorkflowAgent(BaseAgent):
                     rule_version_id=state["rule_version_id"],
                     title_formula_codes=title_pool,
                     body_formula_codes=body_pool,
+                    allowed_formula_pairs=frozenset(
+                        (item["title_formula_code"], item["body_formula_code"]) for item in valid_pairs
+                    ),
                 ),
                 definitions,
                 FormulaSelectionRequest(

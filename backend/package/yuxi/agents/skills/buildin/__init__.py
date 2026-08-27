@@ -27,21 +27,21 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="content-strategy-planner",
         source_dir=_SKILLS_ROOT / "content-strategy-planner",
-        description="解释 V3 固定组合结果，并在锁定候选池内排序标题与正文公式。",
-        version="3.1.0",
+        description="根据 SOP1 输入和正式规则，一次选择方向、创作手法及标题正文公式。",
+        version="4.0.1",
         tool_dependencies=("get_creation_rule_bundle",),
     ),
     BuiltinSkillSpec(
         slug="content-value-analyzer",
         source_dir=_SKILLS_ROOT / "content-value-analyzer",
         description="从已冻结证据中识别内容价值、候选方向，并从候选集中确定唯一主叙事轴。",
-        version="1.2.0",
+        version="1.3.0",
     ),
     BuiltinSkillSpec(
         slug="content-evidence-researcher",
         source_dir=_SKILLS_ROOT / "content-evidence-researcher",
         description="仅围绕当前任务的证据缺口检索任务材料与知识库。",
-        version="1.1.0",
+        version="2.0.0",
         tool_dependencies=("get_business_facts", "query_kb", "open_kb_document", "find_kb_document"),
     ),
     BuiltinSkillSpec(
@@ -55,19 +55,19 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-title-generator",
         source_dir=_SKILLS_ROOT / "content-title-generator",
         description="按锁定标题公式生成候选，并从确定性校验通过的候选中选择最终标题。",
-        version="1.4.0",
+        version="2.0.0",
     ),
     BuiltinSkillSpec(
         slug="content-body-generator",
         source_dir=_SKILLS_ROOT / "content-body-generator",
         description="使用人工锁定标题、正文公式和同源证据生成正文与话题。",
-        version="1.2.0",
+        version="2.0.0",
     ),
     BuiltinSkillSpec(
         slug="content-outline-builder",
         source_dir=_SKILLS_ROOT / "content-outline-builder",
         description="把锁定的正文公式、槽位与证据编译为可执行大纲。",
-        version="1.2.0",
+        version="2.0.0",
     ),
     BuiltinSkillSpec(
         slug="persona-style-polisher",

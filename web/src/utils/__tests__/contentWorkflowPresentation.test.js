@@ -7,16 +7,16 @@ import {
 } from '../contentWorkflowPresentation.js'
 
 const groupedNodeIds = CONTENT_WORKFLOW_GROUPS.flatMap((group) => group.nodes)
-assert.equal(CONTENT_WORKFLOW_GROUPS.length, 5)
-assert.equal(groupedNodeIds.length, 29)
-assert.equal(new Set(groupedNodeIds).size, 29)
-assert.deepEqual(new Set(groupedNodeIds), new Set(Object.keys(CONTENT_WORKFLOW_NODE_LABELS)))
+assert.equal(CONTENT_WORKFLOW_GROUPS.length, 4)
+assert.equal(groupedNodeIds.length, 15)
+assert.equal(new Set(groupedNodeIds).size, 15)
+assert.ok(groupedNodeIds.every((nodeId) => CONTENT_WORKFLOW_NODE_LABELS[nodeId]))
 
 const groups = buildContentWorkflowGroups([
   { node_id: 'compile_runtime_snapshot', status: 'completed' },
   { node_id: 'ingest_real_materials', status: 'completed' },
   { node_id: 'normalize_evidence', status: 'completed' },
-  { node_id: 'analyze_content_value', status: 'running' }
+  { node_id: 'select_creation_strategy', status: 'running' }
 ])
 
 assert.equal(groups[0].status, 'completed')
@@ -24,9 +24,10 @@ assert.equal(groups[0].isOpen, false)
 assert.equal(groups[0].currentText, '已完成 3 个内部节点')
 assert.equal(groups[1].status, 'running')
 assert.equal(groups[1].isOpen, true)
-assert.equal(groups[1].currentNode.id, 'analyze_content_value')
-assert.equal(groups[1].currentText, '当前：Agent 分析内容价值')
+assert.equal(groups[1].currentNode.id, 'select_creation_strategy')
+assert.equal(groups[1].currentText, '当前：Agent 匹配创作手法、标题公式和正文公式')
 assert.equal(groups[1].completedCount, 0)
+assert.equal(groups[1].totalCount, 3)
 
 const failedGroups = buildContentWorkflowGroups([
   { node_id: 'compile_runtime_snapshot', status: 'completed' },
