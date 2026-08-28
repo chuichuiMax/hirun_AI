@@ -1065,8 +1065,9 @@ def test_system_content_agent_migration_does_not_overwrite_user_changes():
         updated_by="user-1",
     )
 
-    with pytest.raises(ValueError, match="已被用户修改"):
-        migrate_system_content_agent(existing, spec)
+    assert migrate_system_content_agent(existing, spec) is False
+    assert existing.config_version == 1
+    assert existing.updated_by == "user-1"
 
 
 def test_delegation_schema_has_unique_child_run_and_parent_node_index():
