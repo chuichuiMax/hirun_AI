@@ -593,6 +593,30 @@ async def test_successful_structured_result_submission_ends_content_agent_loop()
     assert result.update == {"messages": [tool_message]}
 
 
+def test_successful_structured_result_submission_ends_sync_content_agent_loop():
+    collector = SimpleNamespace(submission_count=0)
+    context = SimpleNamespace(_content_node_result_collector=collector)
+    request = SimpleNamespace(
+        runtime=SimpleNamespace(context=context),
+        tool_call={"name": "submit_content_node_result"},
+    )
+    tool_message = ToolMessage(
+        content='{"accepted":true}',
+        tool_call_id="call-result",
+        name="submit_content_node_result",
+    )
+
+    def handler(_request):
+        collector.submission_count = 1
+        return tool_message
+
+    result = ContentNodeResultMiddleware().wrap_tool_call(request, handler)
+
+    assert isinstance(result, Command)
+    assert result.goto == END
+    assert result.update == {"messages": [tool_message]}
+
+
 @pytest.mark.asyncio
 async def test_rejected_structured_result_submission_keeps_content_agent_loop_open():
     collector = SimpleNamespace(submission_count=0)

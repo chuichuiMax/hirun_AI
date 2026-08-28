@@ -44,6 +44,46 @@ class RuleBundleInput(BaseModel):
     rule_version_id: str = Field(description="任务锁定的创作规则版本 ID")
 
 
+def _filter_strategy_rule_bundle(
+    bundle: dict[str, Any], *, industry_slug: str, content_type_code: str
+) -> dict[str, Any]:
+    rules = [
+        item
+        for item in bundle.get("combination_rules") or []
+        if (not item.get("industry_scope") or industry_slug in item["industry_scope"])
+        and (not item.get("content_type_codes") or content_type_code in item["content_type_codes"])
+    ]
+    method_codes = {
+        str(member.get("method_code"))
+        for rule in rules
+        for member in rule.get("method_members") or []
+        if member.get("method_code")
+    }
+    method_codes.update(str(code) for rule in rules for code in rule.get("methods") or [] if code)
+    title_codes = {
+        str(code)
+        for rule in rules
+        for key in ("title_formula_candidate_codes", "title_formula_codes")
+        for code in rule.get(key) or []
+        if code
+    }
+    body_codes = {
+        str(code)
+        for rule in rules
+        for key in ("body_formula_candidate_codes", "body_pattern_codes")
+        for code in rule.get(key) or []
+        if code
+    }
+    body_codes.update(str(rule["content_formula_code"]) for rule in rules if rule.get("content_formula_code"))
+    return {
+        **bundle,
+        "methods": [item for item in bundle.get("methods") or [] if item.get("code") in method_codes],
+        "title_formulas": [item for item in bundle.get("title_formulas") or [] if item.get("code") in title_codes],
+        "content_formulas": [item for item in bundle.get("content_formulas") or [] if item.get("code") in body_codes],
+        "combination_rules": rules,
+    }
+
+
 class TaskFactsInput(BaseModel):
     task_id: str
 
@@ -103,15 +143,30 @@ async def _emit_content_tool_event(runtime: ToolRuntime | None, event_type: str,
 async def get_creation_rule_bundle(rule_version_id: str, runtime: ToolRuntime = None) -> dict[str, Any]:
     """读取指定版本的创作手法、标题公式、正文公式和组合规则。"""
     _runtime_uid(runtime)
+    runtime = _effective_runtime(runtime)
     await _emit_content_tool_event(
         runtime,
         "content.tool.called",
         {"tool_name": "get_creation_rule_bundle", "input_preview": {"rule_version_id": rule_version_id}},
     )
     async with pg_manager.get_async_session_context() as db:
-        bundle = await ContentRepository(db).get_rule_bundle(rule_version_id)
+        repository = ContentRepository(db)
+        bundle = await repository.get_rule_bundle(rule_version_id)
         if bundle is None:
             raise ValueError("规则版本不存在")
+        context = getattr(runtime, "context", None)
+        task_id = str(getattr(context, "_content_task_id", "") or "")
+        if task_id:
+            task = await repository.get_task(task_id)
+            pack = await repository.get_industry_pack(task.industry_pack_version_id) if task else None
+            if task and pack and task.content_type_code:
+                bundle = _filter_strategy_rule_bundle(
+                    bundle,
+                    industry_slug=pack.slug,
+                    content_type_code=task.content_type_code,
+                )
+                if not bundle["combination_rules"]:
+                    raise ValueError("当前行业和内容类型没有可用的创作组合规则")
         await _emit_content_tool_event(
             runtime,
             "content.tool.completed",

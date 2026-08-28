@@ -5,10 +5,52 @@ from langgraph.prebuilt.tool_node import _get_all_injected_args
 
 from yuxi.agents.middlewares.content_node_result import ContentNodeResultMiddleware
 from yuxi.agents.toolkits.content.tools import (
+    _filter_strategy_rule_bundle,
     _runtime_uid,
     get_business_facts,
     get_creation_rule_bundle,
 )
+
+
+def test_strategy_rule_bundle_keeps_only_current_industry_and_content_type_candidates():
+    bundle = {
+        "methods": [{"code": "M01"}, {"code": "M02"}, {"code": "M03"}],
+        "title_formulas": [{"code": "T01"}, {"code": "T02"}],
+        "content_formulas": [{"code": "C01"}, {"code": "C02"}],
+        "combination_rules": [
+            {
+                "id": "decoration-ct01",
+                "industry_scope": ["decoration"],
+                "content_type_codes": ["CT01"],
+                "method_members": [{"method_code": "M01"}, {"method_code": "M03"}],
+                "title_formula_candidate_codes": ["T01"],
+                "body_formula_candidate_codes": ["C02"],
+            },
+            {
+                "id": "decoration-ct02",
+                "industry_scope": ["decoration"],
+                "content_type_codes": ["CT02"],
+                "method_members": [{"method_code": "M02"}],
+                "title_formula_candidate_codes": ["T02"],
+                "body_formula_candidate_codes": ["C01"],
+            },
+            {
+                "id": "beauty-ct01",
+                "industry_scope": ["beauty"],
+                "content_type_codes": ["CT01"],
+                "method_members": [{"method_code": "M02"}],
+                "title_formula_candidate_codes": ["T02"],
+                "body_formula_candidate_codes": ["C01"],
+            },
+        ],
+    }
+
+    filtered = _filter_strategy_rule_bundle(bundle, industry_slug="decoration", content_type_code="CT01")
+
+    assert [item["id"] for item in filtered["combination_rules"]] == ["decoration-ct01"]
+    assert [item["code"] for item in filtered["methods"]] == ["M01", "M03"]
+    assert [item["code"] for item in filtered["title_formulas"]] == ["T01"]
+    assert [item["code"] for item in filtered["content_formulas"]] == ["C02"]
 
 
 @pytest.mark.parametrize(

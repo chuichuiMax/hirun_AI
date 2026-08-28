@@ -16,6 +16,19 @@ class ContentNodeResultMiddleware(AgentMiddleware):
 
     RESULT_TOOL_NAME = "submit_content_node_result"
 
+    def _finish_after_result_submission(self, request: Any, result: Any) -> Any:
+        tool_call = getattr(request, "tool_call", None) or {}
+        tool_name = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", None)
+        collector = getattr(request.runtime.context, "_content_node_result_collector", None)
+        if (
+            tool_name == self.RESULT_TOOL_NAME
+            and collector is not None
+            and collector.submission_count
+            and isinstance(result, ToolMessage)
+        ):
+            return Command(goto=END, update={"messages": [result]})
+        return result
+
     @staticmethod
     def _result_submission_messages(messages: list[Any]) -> list[Any]:
         """保留节点输入和工具结果，移除会诱导模型重复调用旧工具的历史调用骨架。"""
@@ -43,23 +56,14 @@ class ContentNodeResultMiddleware(AgentMiddleware):
         with content_tool_runtime(request.runtime):
             result = await handler(request)
 
-        tool_call = getattr(request, "tool_call", None) or {}
-        tool_name = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", None)
-        collector = getattr(request.runtime.context, "_content_node_result_collector", None)
-        if (
-            tool_name == self.RESULT_TOOL_NAME
-            and collector is not None
-            and collector.submission_count
-            and isinstance(result, ToolMessage)
-        ):
-            return Command(goto=END, update={"messages": [result]})
-        return result
+        return self._finish_after_result_submission(request, result)
 
     def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         from yuxi.agents.toolkits.content.tools import content_tool_runtime
 
         with content_tool_runtime(request.runtime):
-            return handler(request)
+            result = handler(request)
+        return self._finish_after_result_submission(request, result)
 
     async def awrap_model_call(
         self,

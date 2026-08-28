@@ -40,6 +40,62 @@ _SLOT_REQUIRED_VARIABLES = {
 }
 
 
+def _display_business_value(value: Any) -> str:
+    if isinstance(value, list):
+        return "、".join(str(item).strip() for item in value if str(item).strip())
+    return str(value).strip() if value not in (None, "") else ""
+
+
+def _brief_source_path(brief: dict[str, Any], key: str) -> str:
+    for section_name in ("business_variables", "form_values"):
+        section = brief.get(section_name)
+        if isinstance(section, dict) and _display_business_value(section.get(key)):
+            return f"{section_name}.{key}"
+    return key
+
+
+def _derive_scene_evidence(task_id: str, brief: dict[str, Any]) -> EvidenceItemV1 | None:
+    variables = brief_variable_map(brief)
+    if _display_business_value(variables.get("scene")):
+        return None
+
+    audience = _display_business_value(variables.get("audience"))
+    project_key = "project_type" if _display_business_value(variables.get("project_type")) else "product"
+    project = _display_business_value(variables.get(project_key))
+    area = _display_business_value(variables.get("area"))
+    pain_key = next(
+        (key for key in ("owner_pain", "pain_points", "pain") if _display_business_value(variables.get(key))),
+        "",
+    )
+    pain = _display_business_value(variables.get(pain_key))
+    if not audience or not project or not pain:
+        return None
+
+    parts = [("目标人群", audience), ("项目", project)]
+    source_fields = [_brief_source_path(brief, "audience"), _brief_source_path(brief, project_key)]
+    if area:
+        parts.append(("面积", area))
+        source_fields.append(_brief_source_path(brief, "area"))
+    parts.append(("业务痛点", pain))
+    source_fields.append(_brief_source_path(brief, pain_key))
+    value = "；".join(f"{label}：{content}" for label, content in parts)
+    source_hash = hashlib.sha256(
+        json.dumps([task_id, "scene", source_fields, value], ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+    return EvidenceItemV1(
+        id=f"ev_{source_hash[:16]}",
+        variable_codes=("scene",),
+        value=value,
+        source_type="manual_input",
+        source_id="derived_scene_from_business_brief",
+        source_version="brief-v1",
+        verified_status="user_confirmed",
+        allowed_usage=("body", "visual"),
+        source_hash=source_hash,
+        metadata={"derived_from_fields": source_fields},
+    )
+
+
 def _available_variable_codes(state: dict[str, Any]) -> set[str]:
     available = {
         key
@@ -410,6 +466,9 @@ class V3DeterministicNodeHandler:
                     source_hash=source_hash,
                 )
             )
+        derived_scene = _derive_scene_evidence(state["task_id"], state["content_brief"])
+        if derived_scene is not None:
+            items.append(derived_scene)
         for media in state.get("media_evidence_items") or []:
             value = media.get("extracted_text") or media.get("confirmed_facts") or ""
             if not value:
