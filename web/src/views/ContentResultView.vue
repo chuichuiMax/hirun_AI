@@ -21,6 +21,7 @@ import {
 import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import XiaohongshuDistributionDrawer from '@/components/content/XiaohongshuDistributionDrawer.vue'
 import { contentApi } from '@/apis/content_api'
+import { buildFormulaPresentation } from '@/utils/contentWorkflowPresentation'
 import { formatDateTime } from '@/utils/time'
 
 const route = useRoute()
@@ -42,7 +43,8 @@ const evidenceItems = computed(() => artifact.value?.evidence_snapshot?.items ||
 const strategy = computed(() => artifact.value?.strategy_snapshot || task.value?.strategy || {})
 const reviewStatus = computed(() => review.value.status || 'pending')
 const matchDecision = computed(() => runAudit.value?.match_decision || {})
-const formulaSelection = computed(() => runAudit.value?.formula_selection || {})
+const titleFormula = computed(() => buildFormulaPresentation(strategy.value, 'title'))
+const bodyFormula = computed(() => buildFormulaPresentation(strategy.value, 'body'))
 const delegatedAgents = computed(() => runAudit.value?.delegated_agents || [])
 const auditSummary = computed(() => runAudit.value?.event_summary || {})
 const skillEvents = computed(() =>
@@ -216,9 +218,15 @@ onBeforeUnmount(() => {
               <dt>命中组合组</dt>
               <dd>{{ matchDecision.selected_group_id || '-' }}</dd>
               <dt>标题公式</dt>
-              <dd>{{ formulaSelection.selected_title_formula_code || '-' }}</dd>
+              <dd class="formula-detail">
+                <strong>{{ titleFormula.name }}</strong>
+                <span v-if="titleFormula.detail">{{ titleFormula.detail }}</span>
+              </dd>
               <dt>正文公式</dt>
-              <dd>{{ formulaSelection.selected_body_formula_code || '-' }}</dd>
+              <dd class="formula-detail">
+                <strong>{{ bodyFormula.name }}</strong>
+                <span v-if="bodyFormula.detail">{{ bodyFormula.detail }}</span>
+              </dd>
               <dt>Skill 激活</dt>
               <dd>{{ auditSummary.skill_activation_count ?? 0 }} 次</dd>
               <dt>工具事件</dt>
@@ -271,9 +279,15 @@ onBeforeUnmount(() => {
               <dt>创作手法</dt>
               <dd>{{ strategy.methods?.join('、') || '-' }}</dd>
               <dt>标题公式</dt>
-              <dd>{{ formulaSelection.selected_title_formula_code || strategy.title_formula_code || '-' }}</dd>
+              <dd class="formula-detail">
+                <strong>{{ titleFormula.name }}</strong>
+                <span v-if="titleFormula.detail">{{ titleFormula.detail }}</span>
+              </dd>
               <dt>正文公式</dt>
-              <dd>{{ formulaSelection.selected_body_formula_code || strategy.content_formula_code || '-' }}</dd>
+              <dd class="formula-detail">
+                <strong>{{ bodyFormula.name }}</strong>
+                <span v-if="bodyFormula.detail">{{ bodyFormula.detail }}</span>
+              </dd>
               <dt>规则版本</dt>
               <dd>{{ task.rule_version_id || '-' }}</dd>
             </dl>
@@ -627,6 +641,15 @@ onBeforeUnmount(() => {
 
 .audit-grid {
   grid-template-columns: 86px minmax(0, 1fr);
+}
+
+.formula-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+
+  strong { color: var(--color-text); font-size: 12px; }
+  span { color: var(--color-text-secondary); line-height: 1.55; }
 }
 
 .agent-trace-list {

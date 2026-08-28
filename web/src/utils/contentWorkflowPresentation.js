@@ -35,6 +35,84 @@ export const CONTENT_WORKFLOW_NODE_LABELS = {
   save_artifact_snapshot: '保存统一内容版本'
 }
 
+const RUNTIME_EVENT_PRESENTATION = {
+  'content.agent.started': { status: 'running', label: 'Agent 开始执行' },
+  'content.agent.completed': { status: 'completed', label: 'Agent 执行完成' },
+  'content.agent.failed': { status: 'failed', label: 'Agent 执行失败' },
+  'content.skill.activated': { status: 'completed', label: 'Skill 已激活' },
+  'content.tool.called': { status: 'running', label: '工具调用中' },
+  'content.tool.completed': { status: 'completed', label: '工具调用完成' },
+  'content.tool.failed': { status: 'failed', label: '工具调用失败' },
+  'content.tool.rejected': { status: 'failed', label: '工具调用被拒绝' },
+  'content.knowledge.retrieved': { status: 'completed', label: '知识库检索完成' },
+  'content.validation.completed': { status: 'completed', label: '规则校验完成' }
+}
+
+const runtimeEventDetail = (eventType, payload) => {
+  if (eventType.startsWith('content.agent.')) return payload.agent_slug || '内容 Agent'
+  if (eventType === 'content.skill.activated') {
+    return [payload.skill_slug, payload.skill_version].filter(Boolean).join(' · ')
+  }
+  if (eventType.startsWith('content.tool.')) {
+    const detail = [payload.tool_name, payload.output_contract].filter(Boolean).join(' · ')
+    return payload.error_type ? `${detail} · ${payload.error_type}` : detail
+  }
+  if (eventType === 'content.knowledge.retrieved') {
+    return `${payload.knowledge_base_id || '知识库'} · ${payload.query_text || '执行检索'} · 返回 ${payload.result_count || 0} 条结果`
+  }
+  if (eventType === 'content.validation.completed') {
+    return `${payload.status || '已完成'} · ${payload.check_count || 0} 项检查`
+  }
+  return ''
+}
+
+export const buildContentRuntimeTimeline = (runEvents = [], auditEvents = []) => {
+  const nodeEvents = runEvents.map((event, index) => ({
+    id: `node-${event.run_id || 'run'}-${event.node_id}-${index}`,
+    status: event.status || 'pending',
+    label: CONTENT_WORKFLOW_NODE_LABELS[event.node_id] || event.node_id,
+    detail:
+      event.status === 'completed'
+        ? '节点处理完成'
+        : event.status === 'failed'
+          ? event.error_message || event.error_type || '节点执行失败'
+          : '节点正在处理',
+    outputPreview: event.output_preview || null,
+    createdAt: event.created_at || null,
+    order: event.created_at || `0-${String(index).padStart(6, '0')}`
+  }))
+  const runtimeEvents = auditEvents
+    .filter((event) => RUNTIME_EVENT_PRESENTATION[event?.event_type])
+    .map((event, index) => {
+      const presentation = RUNTIME_EVENT_PRESENTATION[event.event_type]
+      return {
+        id: `runtime-${event.run_id || 'run'}-${event.seq || index}`,
+        status: presentation.status,
+        label: presentation.label,
+        detail: runtimeEventDetail(event.event_type, event.payload || {}),
+        nodeLabel: CONTENT_WORKFLOW_NODE_LABELS[event.payload?.node_id] || event.payload?.node_id || '',
+        durationMs: event.payload?.duration_ms,
+        inputPreview: event.payload?.input_preview || null,
+        outputPreview: event.payload?.output_preview || null,
+        knowledgeResults: event.payload?.results || [],
+        createdAt: event.created_at || null,
+        order: event.created_at || event.seq || `1-${String(index).padStart(6, '0')}`
+      }
+    })
+
+  return [...nodeEvents, ...runtimeEvents].sort((left, right) => left.order.localeCompare(right.order))
+}
+
+export const buildFormulaPresentation = (strategy = {}, type) => {
+  const formula = type === 'title' ? strategy.title_formula : strategy.body_formula
+  if (!formula?.name) return { name: '-', detail: '' }
+  const detail =
+    type === 'title'
+      ? formula.core_goal || ''
+      : (formula.structure_schema || []).filter(Boolean).join(' → ')
+  return { name: formula.name, detail }
+}
+
 export const CONTENT_WORKFLOW_GROUPS = [
   {
     id: 'prepare',

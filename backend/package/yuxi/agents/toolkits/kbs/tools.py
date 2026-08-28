@@ -198,7 +198,12 @@ def _find_query_target(
     return target_info, normalized_kb_id, None
 
 
-async def _emit_content_knowledge_event(runtime: ToolRuntime | None, kb_id: str, output: dict[str, Any]) -> None:
+async def _emit_content_knowledge_event(
+    runtime: ToolRuntime | None,
+    kb_id: str,
+    query_text: str,
+    output: dict[str, Any],
+) -> None:
     context = getattr(runtime, "context", None)
     run_id = str(getattr(context, "run_id", "") or "").strip()
     if not run_id or not getattr(context, "_content_node_output_contract", None):
@@ -210,11 +215,18 @@ async def _emit_content_knowledge_event(runtime: ToolRuntime | None, kb_id: str,
         if isinstance(item, dict) and (item.get("id") or item.get("file_id"))
     ]
     from yuxi.services.run_queue_service import append_content_runtime_event
+    from yuxi.content.execution_trace import build_knowledge_result_preview
 
     await append_content_runtime_event(
         context,
         "content.knowledge.retrieved",
-        {"knowledge_base_id": kb_id, "source_ids": source_ids, "result_count": len(results)},
+        {
+            "knowledge_base_id": kb_id,
+            "query_text": query_text,
+            "source_ids": source_ids,
+            "result_count": len(results),
+            "results": build_knowledge_result_preview(results),
+        },
     )
     await append_content_runtime_event(
         context,
@@ -320,7 +332,7 @@ async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, ru
         await append_content_runtime_event(
             context,
             "content.tool.called",
-            {"tool_name": "query_kb", "knowledge_base_id": kb_id},
+            {"tool_name": "query_kb", "knowledge_base_id": kb_id, "input_preview": {"query_text": query_text}},
         )
     try:
         retriever = target_info["retriever"]
@@ -340,7 +352,7 @@ async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, ru
         maximum_chunks = int(getattr(context, "_content_max_chunks_per_knowledge_base", 0) or 0)
         if maximum_chunks and isinstance(output.get("results"), list):
             output["results"] = output["results"][:maximum_chunks]
-        await _emit_content_knowledge_event(runtime, target_kb_id, output)
+        await _emit_content_knowledge_event(runtime, target_kb_id, query_text, output)
         return output
 
     except Exception as e:
