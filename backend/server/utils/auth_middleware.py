@@ -1,6 +1,6 @@
 import hashlib
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,9 +91,12 @@ async def get_current_user(
     # JWT Token 认证
     try:
         payload = AuthUtils.verify_access_token(token)
+        if payload.get("typ") == "mp":
+            raise credentials_exception
         user_id = payload.get("sub")
         if user_id is None:
             raise credentials_exception
+        user_pk = int(user_id)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -101,7 +104,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    result = await db.execute(select(User).filter(User.id == int(user_id), User.is_deleted == 0))
+    result = await db.execute(select(User).filter(User.id == user_pk, User.is_deleted == 0))
     user = result.scalar_one_or_none()
     if user is None:
         raise credentials_exception
@@ -113,6 +116,16 @@ async def get_current_user(
         )
 
     return user
+
+
+async def get_mp_context(
+    authorization: str | None = Header(None),
+    access_token: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    from yuxi.services.mp_service import authenticate_mp_request
+
+    return await authenticate_mp_request(db, authorization, access_token=access_token)
 
 
 # 获取已登录用户（抛出401如果未登录）

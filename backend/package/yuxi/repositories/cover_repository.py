@@ -34,6 +34,12 @@ class CoverRepository:
         result = await self.db.execute(query.order_by(ContentCover.created_at.desc()))
         return list(result.scalars().all())
 
+    async def list_enabled(self) -> list[ContentCover]:
+        result = await self.db.execute(
+            select(ContentCover).where(ContentCover.enabled.is_(True)).order_by(ContentCover.created_at.desc())
+        )
+        return list(result.scalars().all())
+
     async def create(self, data: dict[str, Any]) -> ContentCover:
         cover = ContentCover(**data)
         self.db.add(cover)

@@ -25,6 +25,7 @@ from server.routers.cover_router import covers
 from server.routers.role_router import roles
 from server.routers.content_type_router import content_types
 from server.routers.variable_router import content_variables
+from server.routers.mp_router import mp
 
 _LITE_MODE = os.environ.get("LITE_MODE", "").lower() in ("true", "1")
 
@@ -57,6 +58,7 @@ router.include_router(covers)  # /api/covers/* 内容封面管理
 router.include_router(roles)  # /api/roles/* 内容发布角色与权限配置
 router.include_router(content_types)  # /api/content-types/* 内容类型配置
 router.include_router(content_variables)  # /api/content-variables/* 变量配置
+router.include_router(mp)  # /api/mp/* 获客小程序
 
 if not _LITE_MODE:
     from server.routers.graph_router import graph
