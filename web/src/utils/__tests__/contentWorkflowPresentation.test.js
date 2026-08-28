@@ -47,14 +47,24 @@ const timeline = buildContentRuntimeTimeline(
       seq: '1-0',
       event_type: 'content.agent.started',
       created_at: '2026-08-28T01:00:01Z',
-      payload: { node_id: 'select_creation_strategy', agent_slug: 'content-strategy-agent' }
+      payload: {
+        node_id: 'select_creation_strategy',
+        agent_slug: 'content-strategy-agent',
+        input_preview: { content_brief: { content_goal: 'acquire' } }
+      }
     },
     {
       run_id: 'run-1',
       seq: '2-0',
       event_type: 'content.knowledge.retrieved',
       created_at: '2026-08-28T01:00:02Z',
-      payload: { node_id: 'select_creation_strategy', knowledge_base_id: 'products', result_count: 3 }
+      payload: {
+        node_id: 'select_creation_strategy',
+        knowledge_base_id: 'products',
+        query_text: '杭州装修案例',
+        result_count: 3,
+        results: [{ file_name: '案例库.md', content: '89㎡三居改造案例' }]
+      }
     }
   ]
 )
@@ -62,7 +72,9 @@ assert.equal(timeline.length, 3)
 assert.equal(timeline[0].label, 'Agent 匹配创作手法与公式')
 assert.equal(timeline[1].detail, 'content-strategy-agent')
 assert.equal(timeline[1].nodeLabel, 'Agent 匹配创作手法与公式')
-assert.equal(timeline[2].detail, 'products · 返回 3 条结果')
+assert.deepEqual(timeline[1].inputPreview, { content_brief: { content_goal: 'acquire' } })
+assert.equal(timeline[2].detail, 'products · 杭州装修案例 · 返回 3 条结果')
+assert.equal(timeline[2].knowledgeResults[0].content, '89㎡三居改造案例')
 
 assert.deepEqual(
   buildFormulaPresentation(

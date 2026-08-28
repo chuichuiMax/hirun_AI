@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from yuxi.agents.buildin import agent_manager
 from yuxi.agents.context import normalize_agent_context_config, prepare_agent_runtime_context
 from yuxi.content.control.errors import ContentApplicationError
+from yuxi.content.execution_trace import build_execution_preview
 from yuxi.content.model.contracts import (
     ContentAgentNodeInputV2,
     ContentNodeResultCollector,
@@ -222,6 +223,7 @@ class AgentDelegationService:
                 "agent_slug": agent.slug,
                 "input_contract": request.input_contract,
                 "input_snapshot_hash": request.input_snapshot_hash,
+                "input_preview": build_execution_preview(visible_payload.model_dump(mode="json")),
                 "runtime_config_snapshot": runtime_snapshot,
             },
         )
@@ -293,6 +295,7 @@ class AgentDelegationService:
             {
                 "agent_slug": agent.slug,
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
+                "output_preview": build_execution_preview(output),
             },
         )
         return AgentDelegationResult(child_run.id, output, runtime_snapshot)

@@ -18,6 +18,7 @@ from yuxi.content.control.workflow.deterministic_node import V3DeterministicNode
 from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
 from yuxi.content.control.workflow.revision import RevisionRouteController, resolve_revision_reason
 from yuxi.content.generation import SKILL_VERSIONS
+from yuxi.content.execution_trace import build_execution_preview
 from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
 from yuxi.content.model.contracts import StrategySnapshotV1
 from yuxi.content.model.formulas.selector import (
@@ -236,7 +237,12 @@ class ContentWorkflowAgent(BaseAgent):
             await append_run_stream_event(
                 run_id,
                 "custom",
-                _event_payload(state, node_id, "completed"),
+                _event_payload(
+                    state,
+                    node_id,
+                    "completed",
+                    output_preview=build_execution_preview(result),
+                ),
                 thread_id=state["task_id"],
             )
             return {**result, "current_node": node_id}

@@ -44,7 +44,8 @@ const RUNTIME_EVENT_PRESENTATION = {
   'content.tool.completed': { status: 'completed', label: '工具调用完成' },
   'content.tool.failed': { status: 'failed', label: '工具调用失败' },
   'content.tool.rejected': { status: 'failed', label: '工具调用被拒绝' },
-  'content.knowledge.retrieved': { status: 'completed', label: '知识库检索完成' }
+  'content.knowledge.retrieved': { status: 'completed', label: '知识库检索完成' },
+  'content.validation.completed': { status: 'completed', label: '规则校验完成' }
 }
 
 const runtimeEventDetail = (eventType, payload) => {
@@ -57,7 +58,10 @@ const runtimeEventDetail = (eventType, payload) => {
     return payload.error_type ? `${detail} · ${payload.error_type}` : detail
   }
   if (eventType === 'content.knowledge.retrieved') {
-    return `${payload.knowledge_base_id || '知识库'} · 返回 ${payload.result_count || 0} 条结果`
+    return `${payload.knowledge_base_id || '知识库'} · ${payload.query_text || '执行检索'} · 返回 ${payload.result_count || 0} 条结果`
+  }
+  if (eventType === 'content.validation.completed') {
+    return `${payload.status || '已完成'} · ${payload.check_count || 0} 项检查`
   }
   return ''
 }
@@ -73,6 +77,7 @@ export const buildContentRuntimeTimeline = (runEvents = [], auditEvents = []) =>
         : event.status === 'failed'
           ? event.error_message || event.error_type || '节点执行失败'
           : '节点正在处理',
+    outputPreview: event.output_preview || null,
     createdAt: event.created_at || null,
     order: event.created_at || `0-${String(index).padStart(6, '0')}`
   }))
@@ -87,6 +92,9 @@ export const buildContentRuntimeTimeline = (runEvents = [], auditEvents = []) =>
         detail: runtimeEventDetail(event.event_type, event.payload || {}),
         nodeLabel: CONTENT_WORKFLOW_NODE_LABELS[event.payload?.node_id] || event.payload?.node_id || '',
         durationMs: event.payload?.duration_ms,
+        inputPreview: event.payload?.input_preview || null,
+        outputPreview: event.payload?.output_preview || null,
+        knowledgeResults: event.payload?.results || [],
         createdAt: event.created_at || null,
         order: event.created_at || event.seq || `1-${String(index).padStart(6, '0')}`
       }

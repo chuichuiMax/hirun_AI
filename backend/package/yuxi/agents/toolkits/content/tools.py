@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from yuxi.agents.toolkits.registry import tool
+from yuxi.content.execution_trace import build_execution_preview
 from yuxi.content_cover.schemas import CoverComposeCreate, CoverGenerateCreate, PosterGenerateCreate
 from yuxi.content.validators import normalize_manual_evidence, validate_content
 from yuxi.repositories.content_repository import ContentRepository
@@ -102,10 +103,43 @@ async def _emit_content_tool_event(runtime: ToolRuntime | None, event_type: str,
 async def get_creation_rule_bundle(rule_version_id: str, runtime: ToolRuntime = None) -> dict[str, Any]:
     """读取指定版本的创作手法、标题公式、正文公式和组合规则。"""
     _runtime_uid(runtime)
+    await _emit_content_tool_event(
+        runtime,
+        "content.tool.called",
+        {"tool_name": "get_creation_rule_bundle", "input_preview": {"rule_version_id": rule_version_id}},
+    )
     async with pg_manager.get_async_session_context() as db:
         bundle = await ContentRepository(db).get_rule_bundle(rule_version_id)
         if bundle is None:
             raise ValueError("规则版本不存在")
+        await _emit_content_tool_event(
+            runtime,
+            "content.tool.completed",
+            {
+                "tool_name": "get_creation_rule_bundle",
+                "output_preview": build_execution_preview(
+                    {
+                        "创作手法": [item.get("name") for item in bundle.get("methods") or [] if item.get("name")],
+                        "标题公式": [
+                            item.get("name") for item in bundle.get("title_formulas") or [] if item.get("name")
+                        ],
+                        "正文公式": [
+                            {
+                                "名称": item.get("name"),
+                                "内容结构": item.get("structure_schema") or [],
+                            }
+                            for item in bundle.get("content_formulas") or []
+                            if item.get("name")
+                        ],
+                        "组合规则": [
+                            item.get("scenario_description")
+                            for item in bundle.get("combination_rules") or []
+                            if item.get("scenario_description")
+                        ],
+                    }
+                ),
+            },
+        )
         return bundle
 
 

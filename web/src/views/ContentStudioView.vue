@@ -26,6 +26,7 @@ import {
 } from 'lucide-vue-next'
 import ContentStageStepper from '@/components/content/ContentStageStepper.vue'
 import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
+import ContentExecutionPreview from '@/components/content/ContentExecutionPreview.vue'
 import { contentApi } from '@/apis/content_api'
 import { materialLibraryApi } from '@/apis/material_library_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
@@ -1098,6 +1099,33 @@ const openVersions = async () => {
                     <time v-if="item.createdAt">{{ formatRuntimeTime(item.createdAt) }}</time>
                     <span v-if="item.durationMs !== undefined">{{ formatRuntimeDuration(item.durationMs) }}</span>
                   </div>
+                  <div
+                    v-if="item.inputPreview || item.outputPreview || item.knowledgeResults?.length"
+                    class="runtime-event-details"
+                  >
+                    <details v-if="item.inputPreview">
+                      <summary>查看本步骤使用的信息</summary>
+                      <div class="runtime-preview-content">
+                        <ContentExecutionPreview :value="item.inputPreview" />
+                      </div>
+                    </details>
+                    <details v-if="item.knowledgeResults?.length" open>
+                      <summary>查看命中的知识内容</summary>
+                      <ol class="runtime-knowledge-results">
+                        <li v-for="(result, resultIndex) in item.knowledgeResults" :key="result.source_id || resultIndex">
+                          <strong>{{ result.file_name || result.file_id || `命中片段 ${resultIndex + 1}` }}</strong>
+                          <p>{{ result.content }}</p>
+                          <small v-if="result.score !== null && result.score !== undefined">相关度：{{ Number(result.score).toFixed(3) }}</small>
+                        </li>
+                      </ol>
+                    </details>
+                    <details v-if="item.outputPreview" :open="item.status === 'failed'">
+                      <summary>查看决策依据与产出内容</summary>
+                      <div class="runtime-preview-content">
+                        <ContentExecutionPreview :value="item.outputPreview" />
+                      </div>
+                    </details>
+                  </div>
                 </article>
               </div>
             </section>
@@ -1473,6 +1501,15 @@ const openVersions = async () => {
 .runtime-event-copy span, .runtime-event-copy small { overflow-wrap: anywhere; color: var(--color-text-secondary); font-size: 12px; line-height: 1.45; }
 .runtime-event-copy small { color: var(--color-text-tertiary); }
 .runtime-event-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; color: var(--color-text-tertiary); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.runtime-event-details { grid-column: 2 / -1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.runtime-event-details details { overflow: hidden; border: 1px solid var(--gray-150); border-radius: 6px; background: var(--gray-25); }
+.runtime-event-details summary { padding: 7px 9px; color: var(--main-700); font-size: 11px; cursor: pointer; }
+.runtime-preview-content { max-height: 360px; padding: 9px; overflow: auto; border-top: 1px solid var(--gray-150); }
+.runtime-knowledge-results { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0 9px 9px; list-style: none; }
+.runtime-knowledge-results li { padding: 9px; border-radius: 6px; background: var(--gray-0); }
+.runtime-knowledge-results strong, .runtime-knowledge-results p, .runtime-knowledge-results small { display: block; margin: 0; font-size: 11px; line-height: 1.55; }
+.runtime-knowledge-results p { margin-top: 4px; color: var(--color-text-secondary); white-space: pre-wrap; }
+.runtime-knowledge-results small { margin-top: 4px; color: var(--color-text-tertiary); }
 .human-review-card, .running-card { align-self: start; }
 .failure-card { color: var(--color-error-700); background: var(--color-error-50); }
 .title-validation-failures { width: 100%; margin: 8px 0 4px; padding: 14px; text-align: left; color: var(--color-text); background: var(--gray-0); border: 1px solid var(--color-error-200); border-radius: 8px; }
