@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
@@ -12,6 +12,12 @@ from yuxi.repositories.variable_repository import VariableRepository
 from yuxi.storage.postgres.models_business import User
 
 SERVICE_ENTRIES: tuple[str, ...] = ("装修家居", "好评笔记")
+VariablePort = Literal["pc", "app"]
+VariableEdition = Literal["quick", "pro"]
+VARIABLE_PORT_ORDER: tuple[VariablePort, ...] = ("pc", "app")
+VARIABLE_EDITION_ORDER: tuple[VariableEdition, ...] = ("quick", "pro")
+DEFAULT_PORTS: list[str] = ["pc", "app"]
+DEFAULT_EDITIONS: list[str] = ["quick", "pro"]
 
 DEFAULT_VARIABLES: tuple[tuple[str, str, str, bool], ...] = (
     ("FWTD0001", "设计师", "好评笔记", True),
@@ -30,12 +36,16 @@ class VariableCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     service_entry: str = Field(min_length=1, max_length=64)
     variable_code: str | None = Field(default=None, max_length=32)
+    ports: list[VariablePort] = Field(default_factory=lambda: list(DEFAULT_PORTS), min_length=1)
+    editions: list[VariableEdition] = Field(default_factory=lambda: list(DEFAULT_EDITIONS), min_length=1)
     enabled: bool = True
 
 
 class VariableUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=64)
     service_entry: str | None = Field(default=None, min_length=1, max_length=64)
+    ports: list[VariablePort] | None = Field(default=None, min_length=1)
+    editions: list[VariableEdition] | None = Field(default=None, min_length=1)
     enabled: bool | None = None
 
 
@@ -70,6 +80,8 @@ async def ensure_default_variables(db: AsyncSession) -> None:
                 "variable_code": variable_code,
                 "name": name,
                 "service_entry": service_entry,
+                "ports": list(DEFAULT_PORTS),
+                "editions": list(DEFAULT_EDITIONS),
                 "enabled": enabled,
                 "created_by": "system",
             }
@@ -80,6 +92,20 @@ def _require_service_entry(service_entry: str) -> str:
     if service_entry not in SERVICE_ENTRIES:
         raise _variable_error(422, "VARIABLE_SERVICE_ENTRY_NOT_FOUND", "服务入口不存在")
     return service_entry
+
+
+def _normalize_ports(value: list[str]) -> list[str]:
+    ports = [item for item in VARIABLE_PORT_ORDER if item in value]
+    if not ports:
+        raise _variable_error(422, "VARIABLE_INVALID_FIELD", "请选择端口")
+    return ports
+
+
+def _normalize_editions(value: list[str]) -> list[str]:
+    editions = [item for item in VARIABLE_EDITION_ORDER if item in value]
+    if not editions:
+        raise _variable_error(422, "VARIABLE_INVALID_FIELD", "请选择版本")
+    return editions
 
 
 async def list_variables(db: AsyncSession, keyword: str | None = None) -> dict[str, Any]:
@@ -108,6 +134,8 @@ async def create_variable(db: AsyncSession, user: User, payload: VariableCreate)
                 "variable_code": variable_code,
                 "name": name,
                 "service_entry": service_entry,
+                "ports": _normalize_ports(payload.ports),
+                "editions": _normalize_editions(payload.editions),
                 "enabled": payload.enabled,
                 "created_by": str(user.uid),
             }
@@ -129,9 +157,11 @@ async def update_variable(db: AsyncSession, variable_pk: str, payload: VariableU
         if existing and existing.id != item.id:
             raise _variable_error(409, "VARIABLE_NAME_EXISTS", "变量名称已存在")
     if "service_entry" in data:
-        data["service_entry"] = _require_service_entry(
-            _normalize_text(data["service_entry"], field="服务入口")
-        )
+        data["service_entry"] = _require_service_entry(_normalize_text(data["service_entry"], field="服务入口"))
+    if "ports" in data:
+        data["ports"] = _normalize_ports(data["ports"])
+    if "editions" in data:
+        data["editions"] = _normalize_editions(data["editions"])
     try:
         item = await repo.update(item, data)
     except IntegrityError as exc:

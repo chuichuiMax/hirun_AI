@@ -1603,6 +1603,8 @@ class ContentVariable(Base):
     variable_code = Column(String(32), nullable=False, unique=True, index=True)
     name = Column(String(64), nullable=False, unique=True, index=True)
     service_entry = Column(String(64), nullable=False, index=True)
+    ports = Column(JSON, nullable=False, default=list)
+    editions = Column(JSON, nullable=False, default=list)
     enabled = Column(Boolean, nullable=False, default=True, index=True)
     created_by = Column(String(64), nullable=False, index=True)
     created_at = Column(DateTime, default=utc_now_naive)
@@ -1614,6 +1616,8 @@ class ContentVariable(Base):
             "variable_code": self.variable_code,
             "name": self.name,
             "service_entry": self.service_entry,
+            "ports": list(self.ports or []),
+            "editions": list(self.editions or []),
             "enabled": bool(self.enabled),
             "created_by": self.created_by,
             "created_at": format_utc_datetime(self.created_at),
