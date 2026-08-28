@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse, hook_config
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END
 from langgraph.types import Command
@@ -24,10 +24,12 @@ class ContentNodeResultMiddleware(AgentMiddleware):
             return {"jump_to": "end"}
         return None
 
+    @hook_config(can_jump_to=["end"])
     def before_model(self, state: Any, runtime: Any) -> dict[str, str] | None:
         del state
         return self._stop_before_reentering_model(runtime)
 
+    @hook_config(can_jump_to=["end"])
     async def abefore_model(self, state: Any, runtime: Any) -> dict[str, str] | None:
         del state
         return self._stop_before_reentering_model(runtime)

@@ -6,8 +6,12 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from langchain.agents import create_agent
 from langchain.agents.middleware import ModelResponse
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.types import Command
 
@@ -640,6 +644,64 @@ def test_unsubmitted_result_keeps_model_loop_open():
     result = ContentNodeResultMiddleware().before_model({}, runtime)
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_accepted_result_ends_compiled_agent_graph_without_second_model_call():
+    collector = SimpleNamespace(submission_count=0)
+
+    @tool
+    def submit_content_node_result() -> str:
+        """提交已通过业务校验的内容节点结果。"""
+        collector.submission_count += 1
+        return '{"accepted":true}'
+
+    class SingleCallModel(BaseChatModel):
+        call_count: int = 0
+
+        @property
+        def _llm_type(self) -> str:
+            return "single-call-content-result-test"
+
+        def bind_tools(self, tools, **kwargs):  # noqa: ARG002
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # noqa: ARG002
+            self.call_count += 1
+            if self.call_count > 1:
+                raise AssertionError("结果提交成功后不应再次调用模型")
+            return ChatResult(
+                generations=[
+                    ChatGeneration(
+                        message=AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "id": "call-result",
+                                    "name": "submit_content_node_result",
+                                    "args": {},
+                                }
+                            ],
+                        )
+                    )
+                ]
+            )
+
+    model = SingleCallModel()
+    graph = create_agent(
+        model=model,
+        tools=[submit_content_node_result],
+        middleware=[ContentNodeResultMiddleware()],
+    )
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content="提交审核结果")]},
+        context=SimpleNamespace(_content_node_result_collector=collector),
+    )
+
+    assert model.call_count == 1
+    assert collector.submission_count == 1
+    assert isinstance(result["messages"][-1], ToolMessage)
 
 
 @pytest.mark.asyncio
