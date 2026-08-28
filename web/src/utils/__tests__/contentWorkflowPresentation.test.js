@@ -13,6 +13,8 @@ import {
   formatElapsedDuration
 } from '../contentWorkflowPresentation.js'
 
+assert.deepEqual(buildContentNarrativeCodeLabels(null), {})
+
 const groupedNodeIds = CONTENT_WORKFLOW_GROUPS.flatMap((group) => group.nodes)
 assert.equal(CONTENT_WORKFLOW_GROUPS.length, 4)
 assert.equal(groupedNodeIds.length, 15)

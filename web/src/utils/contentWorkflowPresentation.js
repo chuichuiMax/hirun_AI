@@ -160,6 +160,7 @@ const asTextList = (value, maxItems = 4) =>
 
 export const buildContentNarrativeCodeLabels = (ruleBundle = {}) => {
   const labels = {}
+  if (!ruleBundle || typeof ruleBundle !== 'object' || Array.isArray(ruleBundle)) return labels
   for (const item of [
     ...(ruleBundle.content_types || []),
     ...(ruleBundle.methods || []),
