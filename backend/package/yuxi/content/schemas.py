@@ -81,6 +81,22 @@ class ContentArtifactUpdate(BaseModel):
     topics: list[str] = Field(default_factory=list)
 
 
+class ContentArtifactAIEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    instruction: str = Field(min_length=1, max_length=4000)
+    expected_version: int = Field(ge=1)
+    model_spec: str | None = Field(default=None, max_length=255)
+
+
+class ContentArtifactAIEditOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(min_length=1, max_length=100_000)
+    topics: list[str] = Field(default_factory=list, max_length=30)
+
+
 class ContentArtifactReview(BaseModel):
     model_spec: str | None = None
 

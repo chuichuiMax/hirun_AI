@@ -82,6 +82,7 @@ const props = defineProps({
   isLoading: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   sendButtonDisabled: { type: Boolean, default: false },
+  placeholder: { type: String, default: '问点什么？使用 @ 可以提及哦~' },
   mention: { type: Object, default: () => null },
   threadId: { type: String, default: '' },
   supportsFileUpload: { type: Boolean, default: false },
@@ -101,7 +102,6 @@ const emit = defineEmits([
 
 const inputRef = ref(null)
 const currentImage = ref(null)
-const placeholder = '问点什么？使用 @ 可以提及哦~'
 
 const previewAttachments = computed(() => normalizeAttachmentPreviews(props.attachments))
 

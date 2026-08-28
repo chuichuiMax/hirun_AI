@@ -5,10 +5,11 @@ import { message } from 'ant-design-vue'
 import {
   BookOpenCheck,
   CheckCircle2,
-  ChevronDown,
   CircleAlert,
   Clock3,
+  Copy,
   FileClock,
+  FileText,
   FolderOpen,
   History,
   Image,
@@ -22,18 +23,24 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
-  UserRoundCog
+  Tags,
+  UserRoundCog,
+  WandSparkles
 } from 'lucide-vue-next'
-import ContentStageStepper from '@/components/content/ContentStageStepper.vue'
+import AgentInputArea from '@/components/AgentInputArea.vue'
 import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
-import ContentExecutionPreview from '@/components/content/ContentExecutionPreview.vue'
+import XiaohongshuAccountPublishModal from '@/components/content/XiaohongshuAccountPublishModal.vue'
+import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import { contentApi } from '@/apis/content_api'
 import { materialLibraryApi } from '@/apis/material_library_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
 import { formatEvidenceReference } from '@/utils/contentEvidencePresentation'
+import { formatDateTime } from '@/utils/time'
 import {
-  buildContentRuntimeTimeline,
+  appendContentNarrativeText,
+  buildContentNarrativeCodeLabels,
+  buildContentNarrativeStream,
   buildContentWorkflowGroups
 } from '@/utils/contentWorkflowPresentation'
 
@@ -59,7 +66,11 @@ const confirmedEvidenceIds = ref([])
 const approvalNote = ref('')
 const modelSpec = ref('')
 const editor = reactive({ title: '', body: '', topics: [] })
+const aiEditInstruction = ref('')
 const versionDrawerOpen = ref(false)
+const resultDetailOpen = ref(false)
+const publishModalOpen = ref(false)
+const expandedResultIds = ref(new Set())
 const ocrModalOpen = ref(false)
 const coverUrl = ref('')
 const coverLoading = ref(false)
@@ -76,10 +87,13 @@ const posterTemplateUrls = ref({})
 const materialSelectorLoading = ref(false)
 const galleryImagesLoading = ref(false)
 const posterTemplatesRefreshing = ref(false)
-const runtimeTimelineElement = ref(null)
+const workflowStreamElement = ref(null)
+const accumulatedWorkflowNarrative = ref([])
+const streamedWorkflowNarrative = ref('')
 const posterTemplateSyncIntervalMs = 10_000
 let draftSaveTimer = null
 let posterTemplateSyncTimer = null
+let workflowNarrativeTimer = null
 let coverLoadGeneration = 0
 let coverCandidateLoadGeneration = 0
 let materialPreviewGeneration = 0
@@ -148,21 +162,51 @@ const evidenceReferenceText = (evidenceId, index = 0) =>
 const angleOptions = computed(() =>
   store.interrupt?.interrupt_type === 'content_direction' ? store.interrupt.options || [] : []
 )
-const workflowGroups = computed(() => buildContentWorkflowGroups(store.runEvents))
-const runtimeTimeline = computed(() =>
-  buildContentRuntimeTimeline(store.runEvents, store.runAudit?.events || [])
+const workflowNodeEvents = computed(() => {
+  const nodes = new Map((store.runAudit?.nodes || []).map((item) => [item.node_id, item]))
+  for (const item of store.runEvents) nodes.set(item.node_id, item)
+  return [...nodes.values()]
+})
+const workflowGroups = computed(() =>
+  buildContentWorkflowGroups(
+    workflowNodeEvents.value,
+    store.runAudit?.events || []
+  )
 )
-const formatRuntimeTime = (value) => {
-  if (!value) return ''
-  const date = new Date(value)
-  return Number.isNaN(date.getTime())
-    ? ''
-    : date.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
-const formatRuntimeDuration = (durationMs) => {
-  if (durationMs === undefined || durationMs === null) return ''
-  return durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`
-}
+const activeWorkflowGroup = computed(() => {
+  const incompleteGroups = workflowGroups.value.filter((group) => group.status !== 'completed')
+  return (
+    incompleteGroups.find((group) => ['failed', 'running', 'active'].includes(group.status)) ||
+    incompleteGroups[0] ||
+    null
+  )
+})
+const workflowNarrativeActivities = computed(() => {
+  const activities = workflowGroups.value.flatMap((group) =>
+    group.nodes.flatMap((node) => node.activities || [])
+  )
+  const uniqueActivities = new Map(activities.map((activity) => [activity.id, activity]))
+  return [...uniqueActivities.values()].sort((left, right) =>
+    String(left.order || '').localeCompare(String(right.order || ''))
+  )
+})
+const workflowNarrativeCodeLabels = computed(() =>
+  buildContentNarrativeCodeLabels(store.ruleBundle)
+)
+const activeWorkflowNarrative = computed(() =>
+  buildContentNarrativeStream(
+    workflowNarrativeActivities.value,
+    workflowNarrativeCodeLabels.value
+  )
+)
+const activeWorkflowNarrativeText = computed(() =>
+  accumulatedWorkflowNarrative.value.join('\n\n')
+)
+const workflowNarrativeActive = computed(
+  () =>
+    streamedWorkflowNarrative.value.length < activeWorkflowNarrativeText.value.length ||
+    ['running', 'active'].includes(activeWorkflowGroup.value?.status)
+)
 const reviewChecks = computed(() => store.artifact?.review_snapshot?.checks || store.task?.review?.checks || [])
 const canFinalize = computed(() => ['passed', 'warning'].includes(store.artifact?.review_snapshot?.status))
 const approvalAllowed = computed(() => {
@@ -189,6 +233,82 @@ const blockedTitleCandidates = computed(() =>
 const runFailed = computed(() =>
   ['failed', 'cancelled'].includes(store.currentRun?.status) || store.task?.status === 'failed'
 )
+const workflowRunStatus = computed(
+  () => store.currentRun?.status || store.runAudit?.run?.status || ''
+)
+const workflowCompleted = computed(
+  () => !!store.artifact && String(workflowRunStatus.value).toLowerCase() === 'completed'
+)
+const aiEditReady = computed(
+  () =>
+    workflowCompleted.value &&
+    !!store.artifact &&
+    !store.interrupt &&
+    !store.loading.running &&
+    !runFailed.value
+)
+const aiEditPlaceholder = computed(() =>
+  aiEditReady.value ? '告诉 AI 需要怎样调整标题、正文或话题' : '工作流成功完成后才能修改内容'
+)
+const aiEditHistory = computed(() =>
+  [...store.versions]
+    .reverse()
+    .flatMap((version) => {
+      const metadata = (version.edit_diff_snapshot || []).find((item) => item.type === 'ai_edit')
+      if (!metadata) return []
+      return [
+        { id: `${version.id}-user`, role: 'user', content: metadata.instruction },
+        {
+          id: `${version.id}-assistant`,
+          role: 'assistant',
+          content: `${metadata.reply} 当前版本 v${version.version}`
+        }
+      ]
+    })
+)
+const completionResults = computed(() => {
+  const versions = [...store.versions]
+  if (
+    store.artifact &&
+    !versions.some((item) => item.version === store.artifact.current_version)
+  ) {
+    versions.unshift({
+      ...store.artifact,
+      id: `${store.artifact.id}-current`,
+      version: store.artifact.current_version,
+      source_type: 'generated'
+    })
+  }
+  return versions.slice(0, 4).map((item) => ({
+    ...item,
+    isCurrent: item.version === store.artifact?.current_version
+  }))
+})
+const resultCategoryLabel = computed(() => {
+  if (store.template?.name) return store.template.name
+  const strategy = store.artifact?.strategy_snapshot || store.task?.strategy || {}
+  const contentTypeCode = strategy.content_direction || store.task?.content_type_code || ''
+  const contentType = (store.ruleBundle?.content_types || []).find(
+    (item) => item.code === contentTypeCode
+  )
+  return contentType?.name || contentTypeCode || '生成内容'
+})
+const resultLocation = computed(() => {
+  const brief = store.task?.brief || {}
+  const value = brief.form_values?.location ?? brief.business_variables?.location ?? brief.location
+  if (value && typeof value === 'object') {
+    return [value.province, value.city, value.district].filter(Boolean).join(' · ')
+  }
+  return String(value || '').trim()
+})
+const resultTime = (item) => formatDateTime(item.created_at || store.task?.updated_at)
+const isResultExpanded = (id) => expandedResultIds.value.has(id)
+const toggleResultExpanded = (id) => {
+  const next = new Set(expandedResultIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedResultIds.value = next
+}
 const externalWaitProgress = computed(() =>
   Math.min(100, Math.max(0, Number(store.interrupt?.progress || 0)))
 )
@@ -218,7 +338,7 @@ const saveStatusLabel = computed(() => {
 
 const stageFromTask = (task) => {
   if (!task) return 1
-  if (task.current_stage === 'review') return 3
+  if (task.current_stage === 'review') return task.latest_run_id ? 2 : 3
   if (['generation', 'strategy'].includes(task.current_stage)) return 2
   return 1
 }
@@ -442,6 +562,68 @@ watch(
 )
 
 watch(
+  workflowCompleted,
+  async (completed) => {
+    if (!completed) return
+    void store.loadVersions()
+    await nextTick()
+    if (workflowStreamElement.value) {
+      workflowStreamElement.value.scrollTop = workflowStreamElement.value.scrollHeight
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  taskId,
+  () => {
+    window.clearTimeout(workflowNarrativeTimer)
+    accumulatedWorkflowNarrative.value = []
+    streamedWorkflowNarrative.value = ''
+  }
+)
+
+watch(
+  activeWorkflowNarrative,
+  (narrative) => {
+    const nextNarrative = appendContentNarrativeText(
+      accumulatedWorkflowNarrative.value,
+      narrative
+    )
+    if (nextNarrative.length !== accumulatedWorkflowNarrative.value.length) {
+      accumulatedWorkflowNarrative.value = nextNarrative
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  activeWorkflowNarrativeText,
+  (targetText) => {
+    window.clearTimeout(workflowNarrativeTimer)
+    if (!targetText.startsWith(streamedWorkflowNarrative.value)) {
+      streamedWorkflowNarrative.value = ''
+    }
+    const appendChunk = async () => {
+      const remaining = targetText.length - streamedWorkflowNarrative.value.length
+      if (remaining <= 0) return
+      const chunkSize = remaining > 500 ? 12 : remaining > 160 ? 6 : 3
+      streamedWorkflowNarrative.value += targetText.slice(
+        streamedWorkflowNarrative.value.length,
+        streamedWorkflowNarrative.value.length + chunkSize
+      )
+      await nextTick()
+      if (workflowStreamElement.value) {
+        workflowStreamElement.value.scrollTop = workflowStreamElement.value.scrollHeight
+      }
+      workflowNarrativeTimer = window.setTimeout(appendChunk, 18)
+    }
+    void appendChunk()
+  },
+  { immediate: true }
+)
+
+watch(
   () => store.interrupt,
   (interrupt) => {
     selectedAngleId.value = ''
@@ -556,6 +738,13 @@ onMounted(async () => {
         ].includes(store.task.status)
       ) {
         void store.recoverRun(store.task.latest_run_id)
+      } else if (store.task?.latest_run_id) {
+        const audit = await store.loadRunAudit(store.task.latest_run_id)
+        store.currentRun = {
+          run_id: audit.run.id,
+          status: audit.run.status,
+          request_id: audit.run.request_id
+        }
       }
     } else {
       store.resetCurrentTask()
@@ -618,18 +807,9 @@ const scheduleBriefSave = () => {
 
 watch(formValues, scheduleBriefSave, { deep: true })
 watch([selectedImageItemId, selectedPosterTemplateId], scheduleBriefSave)
-watch(
-  () => runtimeTimeline.value.length,
-  async () => {
-    await nextTick()
-    if (runtimeTimelineElement.value) {
-      runtimeTimelineElement.value.scrollTop = runtimeTimelineElement.value.scrollHeight
-    }
-  }
-)
-
 onBeforeUnmount(() => {
   window.clearTimeout(draftSaveTimer)
+  window.clearTimeout(workflowNarrativeTimer)
   window.clearInterval(posterTemplateSyncTimer)
   window.removeEventListener('focus', syncPosterTemplatesWhenVisible)
   document.removeEventListener('visibilitychange', syncPosterTemplatesWhenVisible)
@@ -758,6 +938,38 @@ const saveArtifact = async () => {
   }
 }
 
+const submitAiEdit = async () => {
+  const instruction = aiEditInstruction.value.trim()
+  if (!instruction || !aiEditReady.value || store.loading.refining) return
+  try {
+    const response = await store.aiEditArtifact(instruction, modelSpec.value)
+    aiEditInstruction.value = ''
+    syncEditor()
+    message.success(response.reply)
+  } catch (error) {
+    if (error.response?.status === 409) {
+      await store.loadTask(store.task.id)
+      syncEditor()
+    }
+    message.error(error.message || 'AI 修改内容失败')
+  }
+}
+
+const handleAiEditKeydown = (event) => {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+  event.preventDefault()
+  void submitAiEdit()
+}
+
+const copyResultText = async (value, label) => {
+  try {
+    await navigator.clipboard.writeText(value)
+    message.success(`${label}已复制`)
+  } catch {
+    message.error(`${label}复制失败，请稍后重试`)
+  }
+}
+
 const reviewArtifact = async () => {
   try {
     await store.reviewArtifact(modelSpec.value)
@@ -805,8 +1017,6 @@ const openVersions = async () => {
         </a-button>
       </div>
     </header>
-
-    <ContentStageStepper :current="stage" @select="stage = $event" />
 
     <main v-if="!store.loading.bootstrap" class="studio-main">
       <section v-if="stage === 1" class="stage-panel">
@@ -1024,12 +1234,11 @@ const openVersions = async () => {
         </template>
       </section>
 
-      <section v-else-if="stage === 2" class="stage-panel">
-        <div class="panel-heading">
-          <div><span>阶段 2</span><h2>V3 内容工作流</h2></div>
-          <span v-if="store.currentRun" class="run-id">Run {{ store.currentRun.run_id }}</span>
-        </div>
-
+      <section
+        v-else-if="stage === 2"
+        class="stage-panel"
+        :class="{ 'completion-stage': workflowCompleted }"
+      >
         <div v-if="!store.currentRun && !store.interrupt" class="generation-start">
           <Sparkles :size="30" />
           <h3>事实简报已锁定</h3>
@@ -1038,97 +1247,159 @@ const openVersions = async () => {
           <a-button type="primary" size="large" @click="startGeneration"><Play :size="17" />开始生成</a-button>
         </div>
 
-        <div v-else class="run-layout">
-          <div class="workflow-groups">
-            <details v-for="group in workflowGroups" :key="group.id" class="workflow-group" :class="group.status" :open="group.isOpen">
-              <summary>
-                <span class="workflow-group-status">
-                  <LoaderCircle v-if="group.status === 'running'" class="spin" :size="19" />
-                  <CheckCircle2 v-else-if="group.status === 'completed'" :size="19" />
-                  <CircleAlert v-else-if="group.status === 'failed'" :size="19" />
-                  <Clock3 v-else :size="19" />
-                </span>
-                <span class="workflow-group-copy">
-                  <strong>{{ group.label }}</strong>
-                  <small>{{ group.description }}</small>
-                </span>
-                <span class="workflow-group-progress">{{ group.completedCount }}/{{ group.totalCount }}</span>
-                <ChevronDown class="workflow-group-chevron" :size="17" />
-              </summary>
-              <div class="workflow-group-current">{{ group.currentText }}</div>
-              <div class="run-timeline">
-                <div v-for="node in group.nodes" :key="node.id" class="run-node" :class="node.status">
-                  <LoaderCircle v-if="node.status === 'running'" class="spin" :size="16" />
-                  <CheckCircle2 v-else-if="node.status === 'completed'" :size="16" />
-                  <CircleAlert v-else-if="node.status === 'failed'" :size="16" />
-                  <Clock3 v-else :size="16" />
-                  <span>{{ node.label }}</span>
-                </div>
-              </div>
-            </details>
-          </div>
-
-          <aside class="run-sidebar">
-            <section class="runtime-panel">
-              <div class="runtime-panel-heading">
-                <div>
-                  <span class="runtime-live-dot" :class="{ active: store.loading.running }"></span>
-                  <h3>运行详情</h3>
-                </div>
-                <small>{{ store.loading.running ? '实时更新' : `${runtimeTimeline.length} 条记录` }}</small>
-              </div>
-              <div ref="runtimeTimelineElement" class="runtime-event-list" aria-live="polite">
-                <div v-if="!runtimeTimeline.length" class="runtime-empty">
-                  <LoaderCircle v-if="store.loading.running" class="spin" :size="18" />
-                  <Clock3 v-else :size="18" />
-                  <span>{{ store.loading.running ? '正在等待第一条运行事件…' : '暂无运行详情' }}</span>
-                </div>
-                <article v-for="item in runtimeTimeline" :key="item.id" class="runtime-event" :class="item.status">
-                  <span class="runtime-event-status">
-                    <LoaderCircle v-if="item.status === 'running'" class="spin" :size="14" />
-                    <CheckCircle2 v-else-if="item.status === 'completed'" :size="14" />
-                    <CircleAlert v-else-if="item.status === 'failed'" :size="14" />
-                    <Clock3 v-else :size="14" />
-                  </span>
-                  <div class="runtime-event-copy">
-                    <strong>{{ item.label }}</strong>
-                    <span v-if="item.detail">{{ item.detail }}</span>
-                    <small v-if="item.nodeLabel">{{ item.nodeLabel }}</small>
+        <div
+          v-else
+          class="run-layout"
+          :class="{
+            'completion-layout': workflowCompleted,
+            'active-run-layout': !workflowCompleted
+          }"
+        >
+          <template v-if="workflowCompleted">
+            <div class="completion-left completion-conversation">
+              <div ref="workflowStreamElement" class="workflow-stream">
+                <section class="codex-workflow-status completed" aria-live="polite">
+                  <div class="workflow-narrative completion-narrative">
+                    <div v-if="streamedWorkflowNarrative" class="workflow-narrative-copy">
+                      {{ streamedWorkflowNarrative }}
+                    </div>
+                    <div class="workflow-complete-line">
+                      <CheckCircle2 :size="16" />
+                      <strong>内容生成完成</strong>
+                    </div>
                   </div>
-                  <div class="runtime-event-meta">
-                    <time v-if="item.createdAt">{{ formatRuntimeTime(item.createdAt) }}</time>
-                    <span v-if="item.durationMs !== undefined">{{ formatRuntimeDuration(item.durationMs) }}</span>
-                  </div>
+                </section>
+                <div v-if="aiEditHistory.length" class="ai-edit-history" aria-live="polite">
                   <div
-                    v-if="item.inputPreview || item.outputPreview || item.knowledgeResults?.length"
-                    class="runtime-event-details"
+                    v-for="item in aiEditHistory"
+                    :key="item.id"
+                    class="ai-edit-message"
+                    :class="item.role"
                   >
-                    <details v-if="item.inputPreview">
-                      <summary>查看本步骤使用的信息</summary>
-                      <div class="runtime-preview-content">
-                        <ContentExecutionPreview :value="item.inputPreview" />
-                      </div>
-                    </details>
-                    <details v-if="item.knowledgeResults?.length" open>
-                      <summary>查看命中的知识内容</summary>
-                      <ol class="runtime-knowledge-results">
-                        <li v-for="(result, resultIndex) in item.knowledgeResults" :key="result.source_id || resultIndex">
-                          <strong>{{ result.file_name || result.file_id || `命中片段 ${resultIndex + 1}` }}</strong>
-                          <p>{{ result.content }}</p>
-                          <small v-if="result.score !== null && result.score !== undefined">相关度：{{ Number(result.score).toFixed(3) }}</small>
-                        </li>
-                      </ol>
-                    </details>
-                    <details v-if="item.outputPreview" :open="item.status === 'failed'">
-                      <summary>查看决策依据与产出内容</summary>
-                      <div class="runtime-preview-content">
-                        <ContentExecutionPreview :value="item.outputPreview" />
-                      </div>
-                    </details>
+                    {{ item.content }}
                   </div>
-                </article>
+                </div>
               </div>
-            </section>
+              <section class="workflow-chat-panel" aria-label="AI 修改内容">
+                <AgentInputArea
+                  v-model="aiEditInstruction"
+                  :is-loading="store.loading.refining"
+                  :disabled="!aiEditReady"
+                  :send-button-disabled="!aiEditReady || !aiEditInstruction.trim()"
+                  :placeholder="aiEditPlaceholder"
+                  @send="submitAiEdit"
+                  @keydown="handleAiEditKeydown"
+                />
+              </section>
+            </div>
+
+            <aside class="completion-results">
+              <div class="completion-results-heading">
+                <div>
+                  <span class="completion-results-icon"><WandSparkles :size="16" /></span>
+                  <strong>查看生成结果</strong>
+                </div>
+                <span>实时更新</span>
+              </div>
+              <article
+                v-for="item in completionResults"
+                :key="item.id"
+                class="completion-result-item"
+                :class="{ current: item.isCurrent }"
+              >
+                <div class="completion-result-main">
+                  <div class="completion-result-meta">
+                    <span>{{ resultCategoryLabel }}</span>
+                    <div class="completion-result-meta-details">
+                      <small v-if="resultLocation">{{ resultLocation }}</small>
+                      <small>{{ resultTime(item) }}</small>
+                    </div>
+                  </div>
+                  <h3>{{ item.title }}</h3>
+                  <div class="completion-result-content">
+                    <div class="completion-result-copy">
+                      <div class="completion-result-body" :class="{ expanded: isResultExpanded(item.id) }">
+                        <MarkdownPreview :content="item.body || ''" />
+                      </div>
+                      <button
+                        v-if="item.body"
+                        type="button"
+                        class="completion-result-expand"
+                        @click="toggleResultExpanded(item.id)"
+                      >
+                        {{ isResultExpanded(item.id) ? '收起全文' : '展开全文' }}
+                      </button>
+                    </div>
+                    <div class="completion-result-media">
+                      <img
+                        v-if="item.isCurrent && coverUrl"
+                        class="completion-result-cover"
+                        :src="coverUrl"
+                        alt="当前内容封面"
+                      />
+                      <div v-else class="completion-result-cover-placeholder">
+                        <Image :size="20" />
+                        <span>{{ item.isCurrent && coverLoading ? '封面加载中' : '暂无封面' }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="completion-result-actions">
+                  <template v-if="item.isCurrent">
+                    <a-button @click="resultDetailOpen = true">查看详情</a-button>
+                    <a-button type="primary" @click="publishModalOpen = true">发布</a-button>
+                  </template>
+                  <a-button v-else class="completion-version-button" @click="openVersions">版本记录</a-button>
+                </div>
+              </article>
+            </aside>
+          </template>
+
+          <template v-else>
+            <div ref="workflowStreamElement" class="workflow-stream">
+            <Transition name="workflow-list" mode="out-in">
+              <section
+                v-if="activeWorkflowGroup"
+                :key="activeWorkflowGroup.id"
+                class="codex-workflow-status"
+                :class="activeWorkflowGroup.status"
+                aria-live="polite"
+              >
+                <div class="codex-workflow-heading">
+                  <span class="codex-workflow-icon">
+                    <LoaderCircle
+                      v-if="['running', 'active'].includes(activeWorkflowGroup.status)"
+                      class="spin"
+                      :size="17"
+                    />
+                    <CircleAlert v-else-if="activeWorkflowGroup.status === 'failed'" :size="17" />
+                    <Clock3 v-else :size="17" />
+                  </span>
+                  <span class="codex-workflow-copy">
+                    <strong>{{ activeWorkflowGroup.label }}</strong>
+                  </span>
+                </div>
+                <div class="workflow-narrative" aria-live="polite" aria-atomic="false">
+                  <div v-if="streamedWorkflowNarrative" class="workflow-narrative-copy">
+                    {{ streamedWorkflowNarrative }}<span
+                      v-if="workflowNarrativeActive"
+                      class="workflow-thinking-indicator"
+                      role="status"
+                    >
+                      <LoaderCircle class="spin" :size="14" aria-hidden="true" />
+                      <span>正在思考</span>
+                      <span class="workflow-thinking-dots" aria-hidden="true">
+                        <i></i><i></i><i></i>
+                      </span>
+                    </span>
+                  </div>
+                  <div v-else class="workflow-awaiting-event">
+                    <LoaderCircle class="spin" :size="15" />
+                    <span>正在分析现有资料，稍后会在这里持续输出有效信息…</span>
+                  </div>
+                </div>
+              </section>
+            </Transition>
 
           <div v-if="store.interrupt?.interrupt_type === 'content_direction'" class="human-review-card">
             <div class="human-heading"><Sparkles :size="20" /><div><h3>选择本次内容方向</h3><p>Agent 已根据目标、事实和证据生成候选方向，选择后将由固定规则匹配组合组。</p></div></div>
@@ -1274,7 +1545,18 @@ const openVersions = async () => {
             <h3>工作流正在执行</h3>
             <p>可以离开页面，任务状态与节点结果会持续保存。</p>
           </div>
-          </aside>
+            </div>
+
+          <section class="workflow-chat-panel" aria-label="AI 修改内容">
+            <AgentInputArea
+              v-model="aiEditInstruction"
+              disabled
+              send-button-disabled
+              :placeholder="aiEditPlaceholder"
+            />
+            <p>流程执行完成后，可在这里要求 AI 修改标题、正文或话题。</p>
+          </section>
+          </template>
         </div>
       </section>
 
@@ -1338,6 +1620,102 @@ const openVersions = async () => {
 
     <div v-else class="page-loading"><LoaderCircle class="spin" :size="28" />正在加载内容工作台</div>
 
+    <a-modal
+      v-model:open="resultDetailOpen"
+      class="result-detail-modal"
+      title="生成结果详情"
+      :width="920"
+      centered
+      destroy-on-close
+    >
+      <div v-if="store.artifact" class="result-detail-layout">
+        <section class="result-detail-cover" aria-label="内容封面">
+          <div class="result-detail-section-heading">
+            <div><Image :size="18" /><strong>封面</strong></div>
+          </div>
+          <div class="result-detail-cover-frame">
+            <div v-if="coverLoading" class="result-detail-cover-state">
+              <LoaderCircle class="spin" :size="24" />
+              <span>正在加载封面</span>
+            </div>
+            <img v-else-if="coverUrl" :src="coverUrl" alt="当前内容封面" />
+            <div v-else class="result-detail-cover-state empty">
+              <Image :size="30" />
+              <strong>暂无封面</strong>
+              <span>当前内容没有绑定封面，仍可继续发布。</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="result-detail-content">
+          <section class="result-detail-section">
+            <div class="result-detail-section-heading">
+              <div><FileText :size="18" /><strong>发布标题</strong></div>
+              <a-button
+                type="text"
+                size="small"
+                :disabled="!store.artifact.title"
+                @click="copyResultText(store.artifact.title || '', '标题')"
+              >
+                <Copy :size="15" />复制标题
+              </a-button>
+            </div>
+            <h2 class="result-detail-title">{{ store.artifact.title || '暂无标题' }}</h2>
+          </section>
+
+          <section class="result-detail-section result-detail-body-section">
+            <div class="result-detail-section-heading">
+              <div><FileText :size="18" /><strong>正文文案</strong></div>
+              <a-button
+                type="text"
+                size="small"
+                :disabled="!store.artifact.body"
+                @click="copyResultText(store.artifact.body || '', '正文')"
+              >
+                <Copy :size="15" />复制正文
+              </a-button>
+            </div>
+            <div v-if="store.artifact.body" class="result-detail-body">
+              <MarkdownPreview :content="store.artifact.body" />
+            </div>
+            <p v-else class="result-detail-empty">暂无正文内容</p>
+          </section>
+
+          <section class="result-detail-section result-detail-topics-section">
+            <div class="result-detail-section-heading">
+              <div><Tags :size="18" /><strong>发布标签</strong></div>
+              <a-button
+                type="text"
+                size="small"
+                :disabled="!store.artifact.topics?.length"
+                @click="copyResultText((store.artifact.topics || []).map((topic) => `#${topic}`).join(' '), '标签')"
+              >
+                <Copy :size="15" />复制标签
+              </a-button>
+            </div>
+            <div v-if="store.artifact.topics?.length" class="result-detail-topics">
+              <span v-for="topic in store.artifact.topics" :key="topic">#{{ topic }}</span>
+            </div>
+            <p v-else class="result-detail-empty">暂无发布标签</p>
+          </section>
+        </div>
+      </div>
+      <a-empty v-else description="内容资产尚未生成完成" />
+
+      <template #footer>
+        <div class="result-detail-footer">
+          <a-button @click="resultDetailOpen = false">关闭</a-button>
+          <a-button
+            type="primary"
+            :disabled="!store.artifact"
+            @click="resultDetailOpen = false; publishModalOpen = true"
+          >
+            发布
+          </a-button>
+        </div>
+      </template>
+    </a-modal>
+
     <a-drawer v-model:open="versionDrawerOpen" title="内容版本记录" width="520">
       <a-timeline>
         <a-timeline-item v-for="item in store.versions" :key="item.id">
@@ -1350,6 +1728,10 @@ const openVersions = async () => {
         </a-timeline-item>
       </a-timeline>
     </a-drawer>
+    <XiaohongshuAccountPublishModal
+      v-model:open="publishModalOpen"
+      :artifact="store.artifact"
+    />
     <ContentOcrDrawer v-if="store.task" v-model:open="ocrModalOpen" :task-id="store.task.id" />
   </div>
 </template>
@@ -1380,15 +1762,16 @@ const openVersions = async () => {
 .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .header-actions :deep(.ant-btn), .panel-heading :deep(.ant-btn), .stage-actions :deep(.ant-btn), .editor-actions :deep(.ant-btn) { display: inline-flex; align-items: center; gap: 6px; }
 
-:deep(.content-stage-stepper), .studio-main { max-width: 1180px; margin-left: auto; margin-right: auto; }
-.studio-main { margin-top: 18px; }
+.studio-main { max-width: 1180px; margin: 18px auto 0; }
 .stage-panel { background: var(--gray-0); border: 1px solid var(--gray-150); border-radius: 8px; padding: 24px; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
 .panel-heading span { color: var(--main-700); font-size: 12px; font-weight: 600; }
 .panel-heading h2 { margin: 2px 0 0; font-size: 20px; }
 .panel-heading p { max-width: 460px; margin: 0; color: var(--color-text-secondary); }
 
-.setup-grid, .brief-layout, .run-layout, .review-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr); gap: 20px; }
+.setup-grid, .brief-layout, .review-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr); gap: 20px; }
+.run-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.active-run-layout { width: 100%; max-width: 900px; height: max(560px, calc(100vh - 280px)); margin: 0 auto; display: flex; flex-direction: column; gap: 0; }
 .setup-grid { grid-template-columns: 1fr 1fr; margin-bottom: 20px; }
 .template-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .template-card { min-height: 116px; padding: 16px; display: flex; flex-direction: column; gap: 7px; text-align: left; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); color: var(--color-text); cursor: pointer; }
@@ -1397,7 +1780,7 @@ const openVersions = async () => {
 .template-card strong { font-size: 15px; }
 .template-card span, .template-card small { color: var(--color-text-secondary); }
 
-.form-card, .facts-preview, .workflow-groups, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
+.form-card, .facts-preview, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
 .form-card, .content-editor-card { display: flex; flex-direction: column; gap: 18px; }
 .dynamic-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .dynamic-form .field-block:has(textarea), .dynamic-form .field-block:has(.ant-select-multiple) { grid-column: 1 / -1; }
@@ -1457,59 +1840,99 @@ const openVersions = async () => {
 .generation-start h3, .generation-start p { margin: 0; }
 .generation-start p { color: var(--color-text-secondary); }
 .generation-start :deep(.ant-input) { max-width: 500px; }
-.run-id { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-tertiary) !important; }
-.workflow-groups { display: flex; flex-direction: column; gap: 10px; }
-.workflow-group { overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
-.workflow-group summary { min-height: 68px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; list-style: none; }
-.workflow-group summary::-webkit-details-marker { display: none; }
-.workflow-group-status { display: inline-flex; color: var(--color-text-tertiary); }
-.workflow-group-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.workflow-group-copy strong { color: var(--color-text); font-size: 15px; line-height: 1.4; }
-.workflow-group-copy small, .workflow-group-current { color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
-.workflow-group-progress { min-width: 38px; color: var(--color-text-tertiary); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
-.workflow-group-chevron { color: var(--color-text-tertiary); transition: transform 0.2s ease; }
-.workflow-group[open] .workflow-group-chevron { transform: rotate(180deg); }
-.workflow-group.running, .workflow-group.active { border-color: var(--color-info-200); background: var(--color-info-50); }
-.workflow-group.running .workflow-group-status, .workflow-group.active .workflow-group-status { color: var(--color-info-700); }
-.workflow-group.completed .workflow-group-status { color: var(--color-success-700); }
-.workflow-group.failed { border-color: var(--color-error-200); background: var(--color-error-50); }
-.workflow-group.failed .workflow-group-status { color: var(--color-error-700); }
-.workflow-group-current { margin: 0 14px; padding: 9px 0; border-top: 1px solid var(--gray-150); }
-.run-timeline { display: flex; flex-direction: column; gap: 3px; padding: 2px 10px 12px; }
-.run-node { min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 8px 10px; color: var(--color-text-tertiary); border-radius: 6px; }
-.run-node.running { background: var(--color-info-50); color: var(--color-info-700); }
-.run-node.completed { color: var(--color-success-700); }
-.run-node.failed { background: var(--color-error-50); color: var(--color-error-700); }
-.run-sidebar { min-width: 0; display: flex; flex-direction: column; gap: 12px; align-self: start; }
-.runtime-panel { min-width: 0; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
-.runtime-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--gray-150); }
-.runtime-panel-heading > div { display: flex; align-items: center; gap: 8px; }
-.runtime-panel-heading h3 { margin: 0; font-size: 15px; }
-.runtime-panel-heading small { color: var(--color-text-tertiary); font-size: 12px; }
-.runtime-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray-300); }
-.runtime-live-dot.active { background: var(--color-info-600); box-shadow: 0 0 0 4px var(--color-info-50); }
-.runtime-event-list { max-height: 520px; overflow-y: auto; overscroll-behavior: contain; }
-.runtime-empty { min-height: 132px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-tertiary); font-size: 13px; }
-.runtime-event { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--gray-100); }
-.runtime-event:last-child { border-bottom: 0; }
-.runtime-event-status { display: inline-flex; margin-top: 2px; color: var(--color-text-tertiary); }
-.runtime-event.running .runtime-event-status { color: var(--color-info-700); }
-.runtime-event.completed .runtime-event-status { color: var(--color-success-700); }
-.runtime-event.failed .runtime-event-status { color: var(--color-error-700); }
-.runtime-event-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.runtime-event-copy strong { overflow-wrap: anywhere; color: var(--color-text); font-size: 13px; line-height: 1.45; }
-.runtime-event-copy span, .runtime-event-copy small { overflow-wrap: anywhere; color: var(--color-text-secondary); font-size: 12px; line-height: 1.45; }
-.runtime-event-copy small { color: var(--color-text-tertiary); }
-.runtime-event-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; color: var(--color-text-tertiary); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.runtime-event-details { grid-column: 2 / -1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
-.runtime-event-details details { overflow: hidden; border: 1px solid var(--gray-150); border-radius: 6px; background: var(--gray-25); }
-.runtime-event-details summary { padding: 7px 9px; color: var(--main-700); font-size: 11px; cursor: pointer; }
-.runtime-preview-content { max-height: 360px; padding: 9px; overflow: auto; border-top: 1px solid var(--gray-150); }
-.runtime-knowledge-results { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0 9px 9px; list-style: none; }
-.runtime-knowledge-results li { padding: 9px; border-radius: 6px; background: var(--gray-0); }
-.runtime-knowledge-results strong, .runtime-knowledge-results p, .runtime-knowledge-results small { display: block; margin: 0; font-size: 11px; line-height: 1.55; }
-.runtime-knowledge-results p { margin-top: 4px; color: var(--color-text-secondary); white-space: pre-wrap; }
-.runtime-knowledge-results small { margin-top: 4px; color: var(--color-text-tertiary); }
+.completion-stage { padding: 0; border: 0; background: transparent; }
+.completion-layout { grid-template-columns: minmax(0, 1.65fr) minmax(300px, 0.85fr); align-items: start; }
+.completion-left { min-width: 0; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
+.completion-conversation { height: max(560px, calc(100vh - 280px)); display: flex; flex-direction: column; }
+.completion-narrative { margin-top: 0; }
+.workflow-complete-line { display: flex; align-items: center; gap: 8px; margin-top: 20px; color: var(--color-success-700); }
+.workflow-complete-line strong { color: var(--color-text); font-size: 14px; }
+.ai-edit-history { display: flex; flex-direction: column; gap: 8px; margin: 22px 27px 0; }
+.ai-edit-message { max-width: 78%; padding: 8px 10px; border-radius: 8px; color: var(--color-text); background: var(--gray-0); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.ai-edit-message.user { align-self: flex-end; color: var(--main-700); background: var(--main-30); }
+.ai-edit-message.assistant { align-self: flex-start; border: 1px solid var(--gray-150); }
+.completion-results { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 0 12px 12px; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
+.completion-results-heading { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 -12px 4px; padding: 0 14px; border-bottom: 1px solid var(--gray-150); }
+.completion-results-heading > div { display: flex; align-items: center; gap: 8px; }
+.completion-results-icon { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; color: var(--color-info-500); background: var(--color-info-50); }
+.completion-results-heading strong { font-size: 14px; }
+.completion-results-heading > span { position: relative; padding-left: 11px; color: var(--color-text-tertiary); font-size: 11px; }
+.completion-results-heading > span::before { content: ''; position: absolute; top: 50%; left: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--color-success-700); transform: translateY(-50%); }
+.completion-result-item { min-width: 0; padding: 14px; border: 1px solid var(--color-info-100); border-radius: 6px; background: var(--color-info-10); }
+.completion-result-main { min-width: 0; }
+.completion-result-copy { min-width: 0; }
+.completion-result-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.completion-result-meta span { padding: 3px 8px; border-radius: 3px; color: var(--color-info-700); background: var(--color-info-50); font-size: 11px; font-weight: 600; }
+.completion-result-meta-details { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.completion-result-meta small { color: var(--color-text-tertiary); font-size: 10px; white-space: nowrap; }
+.completion-result-content { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 104px; gap: 10px; align-items: start; }
+.completion-result-media { width: 104px; aspect-ratio: 1; overflow: hidden; border-radius: 0; background: var(--gray-50); }
+.completion-result-cover, .completion-result-cover-placeholder { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+.completion-result-cover { object-fit: cover; }
+.completion-result-cover-placeholder { flex-direction: column; gap: 5px; color: var(--color-text-tertiary); border: 1px dashed var(--gray-200); font-size: 10px; }
+.completion-result-item h3 { margin: 10px 0 8px; color: var(--color-text); font-size: 13px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+.completion-result-body { max-height: 66px; overflow: hidden; color: var(--color-text-secondary); font-size: 11px; line-height: 1.65; }
+.completion-result-body.expanded { max-height: none; }
+.completion-result-body :deep(.yk-markdown-preview) { color: var(--color-text-secondary); font-size: 11px; line-height: 1.65; }
+.completion-result-body :deep(p) { margin: 0 0 4px; }
+.completion-result-expand { display: inline-flex; margin-top: 5px; padding: 0; border: 0; color: var(--main-700); background: transparent; font-size: 11px; cursor: pointer; }
+.completion-result-expand:hover { color: var(--main-800); }
+.completion-result-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding-top: 12px; }
+.completion-result-actions :deep(.ant-btn) { height: 36px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; font-size: 13px; }
+.completion-result-actions :deep(.ant-btn-primary) { border-color: var(--color-info-500); background: var(--color-info-500); box-shadow: none; }
+.completion-result-actions :deep(.ant-btn-primary:hover) { border-color: var(--color-info-700); background: var(--color-info-700); }
+.completion-version-button { grid-column: 1 / -1; }
+.result-detail-layout { height: min(620px, calc(100vh - 230px)); max-height: calc(100vh - 230px); display: grid; grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr); overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; }
+.result-detail-cover { min-width: 0; display: flex; flex-direction: column; padding: 20px; background: var(--gray-25); border-right: 1px solid var(--gray-150); }
+.result-detail-section-heading { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.result-detail-section-heading > div { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.result-detail-section-heading svg { flex: 0 0 auto; color: var(--main-700); }
+.result-detail-section-heading strong { font-size: 14px; }
+.result-detail-section-heading :deep(.ant-btn) { display: inline-flex; align-items: center; gap: 5px; color: var(--main-700); }
+.result-detail-cover-frame { min-height: 0; flex: 1; display: flex; align-items: center; justify-content: center; margin-top: 12px; overflow: hidden; }
+.result-detail-cover-frame img { display: block; width: min(100%, 400px); max-height: 100%; aspect-ratio: 3 / 4; border-radius: 6px; object-fit: contain; background: var(--gray-100); }
+.result-detail-cover-state { min-height: 240px; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-secondary); text-align: center; }
+.result-detail-cover-state.empty span { max-width: 240px; color: var(--color-text-tertiary); font-size: 12px; line-height: 1.6; }
+.result-detail-content { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; padding: 0 20px; background: var(--gray-0); }
+.result-detail-section { padding: 20px 0; border-bottom: 1px solid var(--gray-150); }
+.result-detail-section:last-child { border-bottom: 0; }
+.result-detail-title { margin: 12px 0 0; padding: 12px 14px; border: 1px solid var(--gray-150); border-radius: 6px; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
+.result-detail-body-section { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.result-detail-body { min-height: 0; flex: 1; margin-top: 12px; padding-right: 8px; overflow-y: auto; overscroll-behavior: contain; color: var(--color-text); font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; }
+.result-detail-body :deep(p:first-child) { margin-top: 0; }
+.result-detail-body :deep(p:last-child) { margin-bottom: 0; }
+.result-detail-topics-section { margin: 14px 0 16px; padding: 12px 14px; border: 1px solid var(--gray-150); border-radius: 8px; }
+.result-detail-topics { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+.result-detail-topics span { color: var(--main-700); font-size: 13px; line-height: 1.6; }
+.result-detail-empty { margin: 12px 0 0; color: var(--color-text-tertiary); font-size: 13px; }
+.result-detail-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.result-detail-footer :deep(.ant-btn) { min-width: 132px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.workflow-stream { min-width: 0; min-height: 0; flex: 1; padding: 8px 18px 28px; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
+.codex-workflow-status { min-width: 0; padding: 4px 0 10px; }
+.codex-workflow-heading { min-height: 52px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
+.codex-workflow-icon { display: inline-flex; color: var(--color-text-tertiary); }
+.codex-workflow-status.running .codex-workflow-icon, .codex-workflow-status.active .codex-workflow-icon { color: var(--color-info-700); }
+.codex-workflow-status.failed .codex-workflow-icon { color: var(--color-error-700); }
+.codex-workflow-copy { min-width: 0; }
+.codex-workflow-copy strong { color: var(--color-text); font-size: 14px; line-height: 1.4; }
+.workflow-narrative { min-width: 0; max-width: 760px; margin: 8px 0 0 27px; }
+.workflow-narrative-copy { color: var(--color-text); font-size: 14px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workflow-thinking-indicator { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; color: var(--color-info-700); font-size: 12px; line-height: 1; vertical-align: 0.05em; white-space: nowrap; }
+.workflow-thinking-indicator > svg { flex: 0 0 auto; }
+.workflow-thinking-dots { display: inline-flex; align-items: center; gap: 2px; height: 12px; }
+.workflow-thinking-dots i { width: 3px; height: 3px; display: block; border-radius: 50%; background: currentColor; animation: workflow-thinking-pulse 1.2s ease-in-out infinite; }
+.workflow-thinking-dots i:nth-child(2) { animation-delay: 0.16s; }
+.workflow-thinking-dots i:nth-child(3) { animation-delay: 0.32s; }
+.workflow-awaiting-event { min-height: 44px; display: flex; align-items: center; gap: 8px; color: var(--color-text-secondary); font-size: 13px; }
+@keyframes workflow-thinking-pulse { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) {
+  .workflow-thinking-dots i { animation: none; opacity: 0.65; }
+}
+.workflow-list-enter-active, .workflow-list-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.workflow-list-enter-from { opacity: 0; transform: translateY(6px); }
+.workflow-list-leave-to { opacity: 0; transform: translateY(-6px); }
+.workflow-chat-panel { flex: 0 0 auto; padding: 8px 18px 0; background: var(--gray-0); }
+.workflow-chat-panel > p { margin: 6px 0 0; color: var(--color-text-tertiary); font-size: 11px; line-height: 1.5; text-align: center; }
 .human-review-card, .running-card { align-self: start; }
 .failure-card { color: var(--color-error-700); background: var(--color-error-50); }
 .title-validation-failures { width: 100%; margin: 8px 0 4px; padding: 14px; text-align: left; color: var(--color-text); background: var(--gray-0); border: 1px solid var(--color-error-200); border-radius: 8px; }
@@ -1583,23 +2006,33 @@ const openVersions = async () => {
 
 @media (max-width: 900px) {
   .studio-header, .panel-heading { flex-direction: column; }
-  .setup-grid, .brief-layout, .run-layout, .review-layout { grid-template-columns: 1fr; }
+  .setup-grid, .brief-layout, .review-layout { grid-template-columns: 1fr; }
+  .completion-layout { grid-template-columns: 1fr; }
+  .result-detail-layout { grid-template-columns: 1fr; overflow-y: auto; }
+  .result-detail-cover { min-height: 420px; border-right: 0; border-bottom: 1px solid var(--gray-150); }
+  .result-detail-content { height: auto; display: block; overflow: visible; }
+  .result-detail-body-section { overflow: visible; }
+  .result-detail-body { padding-right: 0; overflow: visible; }
   .template-grid { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 600px) {
   .content-studio-page { padding-top: 14px; }
   .stage-panel { padding: 16px; }
+  .active-run-layout { height: max(520px, calc(100vh - 230px)); }
+  .workflow-stream, .workflow-chat-panel { padding-left: 0; padding-right: 0; }
+  .workflow-narrative { margin-left: 0; }
+  .completion-stage { padding: 0; }
+  .ai-edit-message { max-width: 92%; }
+  .result-detail-cover { min-height: 340px; padding: 16px; }
+  .result-detail-content { padding: 0 16px; }
+  .result-detail-footer :deep(.ant-btn) { min-width: 0; flex: 1; }
   .template-grid, .dynamic-form { grid-template-columns: 1fr; }
   .dynamic-form .field-block { grid-column: auto; }
   .header-actions, .stage-actions, .stage-actions.split, .editor-actions { width: 100%; flex-direction: column; }
   .visual-material-heading, .material-selector-title { flex-direction: column; }
   .material-selector-title small { text-align: left; }
   .image-choice-grid, .poster-choice-grid { grid-auto-columns: 124px; }
-  .workflow-groups { padding: 12px; }
-  .workflow-group summary { grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; padding: 11px; }
-  .workflow-group-progress { display: none; }
-  .workflow-group-copy small { white-space: normal; }
   .header-actions :deep(.ant-btn), .stage-actions :deep(.ant-btn), .editor-actions :deep(.ant-btn) { width: 100%; justify-content: center; }
 }
 </style>

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Uplo
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.content.schemas import (
+    ContentArtifactAIEdit,
     ContentArtifactRegenerate,
     ContentArtifactReview,
     ContentArtifactUpdate,
@@ -50,6 +51,7 @@ from yuxi.services.content_ocr_service import (
 from yuxi.services.content_service import (
     activate_content_rule_version,
     activate_content_workflow_version,
+    ai_edit_content_artifact,
     create_content_rule_draft,
     create_content_run,
     create_content_task,
@@ -583,6 +585,16 @@ async def update_artifact(
     db: AsyncSession = Depends(get_db),
 ):
     return await update_content_artifact(db, current_user, artifact_id, payload)
+
+
+@content.post("/artifacts/{artifact_id}/ai-edit")
+async def ai_edit_artifact(
+    artifact_id: str,
+    payload: ContentArtifactAIEdit,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await ai_edit_content_artifact(db, current_user, artifact_id, payload)
 
 
 @content.post("/artifacts/{artifact_id}/review")

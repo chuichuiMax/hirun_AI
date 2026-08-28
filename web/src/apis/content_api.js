@@ -100,6 +100,8 @@ export const contentApi = {
   getTaskArtifact: (taskId) => apiGet(`/api/content/tasks/${taskId}/artifact`),
   updateArtifact: (artifactId, payload) =>
     apiPatch(`/api/content/artifacts/${artifactId}`, payload),
+  aiEditArtifact: (artifactId, payload) =>
+    apiPost(`/api/content/artifacts/${artifactId}/ai-edit`, payload),
   reviewArtifact: (artifactId, payload = {}) =>
     apiPost(`/api/content/artifacts/${artifactId}/review`, payload),
   finalizeArtifact: (artifactId, payload = {}) =>

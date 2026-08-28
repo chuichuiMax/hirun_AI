@@ -70,6 +70,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     task: false,
     saving: false,
     running: false,
+    refining: false,
     reviewing: false,
     history: false
   })
@@ -171,18 +172,22 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     }
     if (eventType.startsWith('content.')) {
       const events = runAudit.value?.events || []
+      const nextEvent = {
+        seq: eventId,
+        event_type: eventType,
+        payload,
+        run_id: envelope?.run_id,
+        created_at: envelope?.created_at || null
+      }
+      const existingIndex = eventId
+        ? events.findIndex((item) => item.seq === eventId && item.run_id === envelope?.run_id)
+        : -1
       runAudit.value = {
         ...(runAudit.value || {}),
-        events: [
-          ...events,
-          {
-            seq: eventId,
-            event_type: eventType,
-            payload,
-            run_id: envelope?.run_id,
-            created_at: envelope?.created_at || null
-          }
-        ]
+        events:
+          existingIndex >= 0
+            ? events.map((item, index) => (index === existingIndex ? nextEvent : item))
+            : [...events, nextEvent]
       }
     }
   }
@@ -336,6 +341,31 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     return artifact.value
   }
 
+  async function aiEditArtifact(instruction, modelSpec = null) {
+    if (!artifact.value?.id) return null
+    loading.refining = true
+    try {
+      const response = await contentApi.aiEditArtifact(artifact.value.id, {
+        instruction,
+        expected_version: artifact.value.current_version,
+        model_spec: modelSpec || null
+      })
+      artifact.value = response.artifact
+      if (task.value) {
+        task.value = {
+          ...task.value,
+          status: 'review_required',
+          current_stage: 'review',
+          review: response.artifact.review_snapshot
+        }
+      }
+      await loadVersions()
+      return response
+    } finally {
+      loading.refining = false
+    }
+  }
+
   async function reviewArtifact(modelSpec = null) {
     loading.reviewing = true
     try {
@@ -420,6 +450,7 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     loadRunAudit,
     retryNode,
     saveArtifact,
+    aiEditArtifact,
     reviewArtifact,
     finalizeArtifact,
     loadVersions,

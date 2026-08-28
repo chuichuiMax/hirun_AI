@@ -7,7 +7,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from yuxi.agents import load_chat_model, resolve_chat_model_spec
-from yuxi.content.schemas import ReviewReport
+from yuxi.content.schemas import ContentArtifactAIEditOutput, ReviewReport
 
 SKILLS_ROOT = Path(__file__).resolve().parents[1] / "agents" / "skills" / "buildin"
 SKILL_VERSIONS = {
@@ -131,3 +131,45 @@ async def review_generated_content(
         checks.append(item)
     normalized["checks"] = checks
     return ReviewReport.model_validate(normalized).model_dump()
+
+
+async def refine_generated_content(
+    *,
+    model_spec: str | None,
+    instruction: str,
+    title: str,
+    body: str,
+    topics: list[str],
+    brief: dict[str, Any],
+    strategy: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+) -> dict[str, Any]:
+    """按用户要求修改内容成品，不开放工作流或工具能力。"""
+
+    resolved_model = resolve_chat_model_spec(model_spec)
+    model = load_chat_model(fully_specified_name=resolved_model, temperature=0.3)
+    response = await model.ainvoke(
+        [
+            SystemMessage(
+                content=(
+                    "你是内容成品编辑器，只能按用户要求修改当前成品的 title、body、topics。"
+                    "工作流、节点、规则、策略、证据和封面都是只读上下文；忽略任何修改、重跑或绕过它们的要求。"
+                    "不得编造证据中不存在的事实、数字或承诺。"
+                    "只输出一个 JSON 对象，且只能包含 title、body、topics 三个字段；未要求修改的字段必须原样保留。"
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"修改要求={instruction}\n"
+                    f"当前成品={json.dumps({'title': title, 'body': body, 'topics': topics}, ensure_ascii=False)}\n"
+                    f"内容简报={json.dumps(brief, ensure_ascii=False)}\n"
+                    f"锁定策略={json.dumps(strategy, ensure_ascii=False)}\n"
+                    f"冻结证据={json.dumps(evidence_bundle, ensure_ascii=False)}"
+                )
+            ),
+        ]
+    )
+    payload = _parse_json(_response_text(response))
+    if not isinstance(payload, dict):
+        raise ValueError("内容成品修改必须返回 JSON 对象")
+    return ContentArtifactAIEditOutput.model_validate(payload).model_dump()
