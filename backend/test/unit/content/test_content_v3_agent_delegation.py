@@ -618,6 +618,31 @@ def test_successful_structured_result_submission_ends_sync_content_agent_loop():
 
 
 @pytest.mark.asyncio
+async def test_accepted_result_stops_before_async_model_reentry():
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            _content_node_result_collector=SimpleNamespace(submission_count=1),
+        )
+    )
+
+    result = await ContentNodeResultMiddleware().abefore_model({}, runtime)
+
+    assert result == {"jump_to": "end"}
+
+
+def test_unsubmitted_result_keeps_model_loop_open():
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            _content_node_result_collector=SimpleNamespace(submission_count=0),
+        )
+    )
+
+    result = ContentNodeResultMiddleware().before_model({}, runtime)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_rejected_structured_result_submission_keeps_content_agent_loop_open():
     collector = SimpleNamespace(submission_count=0)
     context = SimpleNamespace(_content_node_result_collector=collector)

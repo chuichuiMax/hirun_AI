@@ -16,6 +16,22 @@ class ContentNodeResultMiddleware(AgentMiddleware):
 
     RESULT_TOOL_NAME = "submit_content_node_result"
 
+    @staticmethod
+    def _stop_before_reentering_model(runtime: Any) -> dict[str, str] | None:
+        """结果已验收后，在工具节点的固定回边触发模型前结束图执行。"""
+        collector = getattr(runtime.context, "_content_node_result_collector", None)
+        if collector is not None and collector.submission_count:
+            return {"jump_to": "end"}
+        return None
+
+    def before_model(self, state: Any, runtime: Any) -> dict[str, str] | None:
+        del state
+        return self._stop_before_reentering_model(runtime)
+
+    async def abefore_model(self, state: Any, runtime: Any) -> dict[str, str] | None:
+        del state
+        return self._stop_before_reentering_model(runtime)
+
     def _finish_after_result_submission(self, request: Any, result: Any) -> Any:
         tool_call = getattr(request, "tool_call", None) or {}
         tool_name = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", None)
