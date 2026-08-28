@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.storage.postgres.models_content import (
@@ -12,6 +12,8 @@ from yuxi.storage.postgres.models_content import (
     ContentCoverAsset,
     ContentCoverImage2Setting,
     ContentCoverJob,
+    ContentCoverPosterTemplate,
+    ContentTask,
 )
 from yuxi.utils.datetime_utils import utc_now_naive
 
@@ -38,6 +40,9 @@ class ContentCoverRepository:
         base_url: str,
         api_key: str,
         model: str,
+        capabilities_json: dict[str, Any] | None = None,
+        verification_status: str = "unverified",
+        verified_at=None,
     ) -> ContentCoverImage2Setting:
         setting = await self.get_image2_setting(owner_uid, for_update=True)
         if setting is None:
@@ -46,12 +51,18 @@ class ContentCoverRepository:
                 base_url=base_url,
                 api_key=api_key,
                 model=model,
+                capabilities_json=capabilities_json or {},
+                verification_status=verification_status,
+                verified_at=verified_at,
             )
             self.db.add(setting)
         else:
             setting.base_url = base_url
             setting.api_key = api_key
             setting.model = model
+            setting.capabilities_json = capabilities_json or {}
+            setting.verification_status = verification_status
+            setting.verified_at = verified_at
             setting.updated_at = utc_now_naive()
         await self.db.flush()
         return setting
@@ -61,6 +72,117 @@ class ContentCoverRepository:
         self.db.add(item)
         await self.db.flush()
         return item
+
+    async def update_asset_metadata(
+        self,
+        asset: ContentCoverAsset,
+        metadata: dict[str, Any],
+    ) -> None:
+        asset.metadata_json = metadata
+        await self.db.flush()
+
+    async def create_poster_template(self, **values: Any) -> ContentCoverPosterTemplate:
+        item = ContentCoverPosterTemplate(**values)
+        self.db.add(item)
+        await self.db.flush()
+        return item
+
+    async def get_poster_template_by_checksum(
+        self,
+        owner_uid: str,
+        checksum: str,
+    ) -> ContentCoverPosterTemplate | None:
+        return (
+            await self.db.execute(
+                select(ContentCoverPosterTemplate).where(
+                    ContentCoverPosterTemplate.owner_uid == owner_uid,
+                    ContentCoverPosterTemplate.checksum == checksum,
+                    ContentCoverPosterTemplate.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+
+    async def get_poster_template_for_user(
+        self,
+        template_id: str,
+        owner_uid: str,
+        *,
+        for_update: bool = False,
+    ) -> ContentCoverPosterTemplate | None:
+        query = select(ContentCoverPosterTemplate).where(
+            ContentCoverPosterTemplate.id == template_id,
+            ContentCoverPosterTemplate.owner_uid == owner_uid,
+            ContentCoverPosterTemplate.deleted_at.is_(None),
+        )
+        if for_update:
+            query = query.with_for_update()
+        return (await self.db.execute(query)).scalar_one_or_none()
+
+    async def list_poster_templates(
+        self,
+        owner_uid: str,
+        *,
+        category: str | None,
+        status: str | None,
+        query_text: str | None,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[ContentCoverPosterTemplate], int]:
+        filters = [
+            ContentCoverPosterTemplate.owner_uid == owner_uid,
+            ContentCoverPosterTemplate.deleted_at.is_(None),
+        ]
+        if category:
+            filters.append(ContentCoverPosterTemplate.category == category)
+        if status:
+            filters.append(ContentCoverPosterTemplate.status == status)
+        if query_text:
+            pattern = f"%{query_text.strip()}%"
+            filters.append(
+                or_(
+                    ContentCoverPosterTemplate.name.ilike(pattern),
+                    ContentCoverPosterTemplate.category.ilike(pattern),
+                )
+            )
+        total = (await self.db.execute(select(func.count(ContentCoverPosterTemplate.id)).where(*filters))).scalar_one()
+        items = (
+            await self.db.execute(
+                select(ContentCoverPosterTemplate)
+                .where(*filters)
+                .order_by(ContentCoverPosterTemplate.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        ).scalars()
+        return list(items), int(total)
+
+    async def poster_template_is_in_active_job(self, template_id: str, owner_uid: str) -> bool:
+        requests = (
+            await self.db.execute(
+                select(ContentCoverJob.request_json).where(
+                    ContentCoverJob.owner_uid == owner_uid,
+                    ContentCoverJob.status.not_in(("succeeded", "failed", "cancelled")),
+                    ContentCoverJob.mode == "poster_billboard",
+                )
+            )
+        ).scalars()
+        return any((request or {}).get("poster_template_id") == template_id for request in requests)
+
+    async def poster_template_is_selected_by_task(
+        self,
+        template_id: str,
+        owner_uid: str,
+        *,
+        locked_only: bool = False,
+    ) -> bool:
+        filters = [
+            ContentTask.created_by == owner_uid,
+            ContentTask.selected_poster_template_id == template_id,
+            ContentTask.deleted_at.is_(None),
+        ]
+        if locked_only:
+            filters.append(ContentTask.current_stage != "brief")
+        return bool((await self.db.execute(select(func.count(ContentTask.id)).where(*filters))).scalar_one())
 
     async def get_asset(self, asset_id: str, *, for_update: bool = False) -> ContentCoverAsset | None:
         query = select(ContentCoverAsset).where(
@@ -115,7 +237,9 @@ class ContentCoverRepository:
         for request in jobs:
             payload = request or {}
             referenced = list(payload.get("asset_ids") or []) + list(payload.get("source_asset_ids") or [])
-            referenced.extend([payload.get("template_asset_id"), payload.get("mask_asset_id")])
+            referenced.extend(
+                [payload.get("template_asset_id"), payload.get("mask_asset_id"), payload.get("product_asset_id")]
+            )
             if asset_id in referenced:
                 return True
         return False

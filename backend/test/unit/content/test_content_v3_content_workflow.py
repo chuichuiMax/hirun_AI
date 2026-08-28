@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -8,13 +9,16 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
+import yuxi.agents.buildin.content_workflow.graph as content_workflow_graph_module
 from yuxi.agents.buildin.content_workflow.context import ContentWorkflowContext
 from yuxi.agents.buildin.content_workflow.graph import ContentWorkflowAgent
 from yuxi.agents.buildin.content_workflow.state import ContentWorkflowState
-from yuxi.content.control.workflow.agent_node import AgentNodeResultMapper
+from yuxi.content.control.workflow.agent_node import AgentNodeHandler, AgentNodeResultMapper
+from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
 from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.control.workflow.revision import resolve_revision_reason
 from yuxi.content.v3.workflow import WORKFLOW_V3
+from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
 
 
 @pytest.mark.unit
@@ -166,6 +170,249 @@ def test_persona_mapper_changes_language_only_and_preserves_locked_draft_fields(
     assert mapped["persona_diff"]["preserved_fact_checks"][0]["preserved"] is True
 
 
+@pytest.mark.unit
+def test_direction_selection_mapper_only_accepts_value_analysis_candidates():
+    state = {
+        "content_angles": [
+            {"direction_code": "CT03", "reason": "原候选原因", "evidence_ids": ["ev-1"]},
+            {"direction_code": "CT05", "reason": "原候选原因", "evidence_ids": ["ev-2"]},
+        ]
+    }
+
+    mapped = AgentNodeResultMapper.to_state(
+        "select_content_direction",
+        {"direction_code": "CT05", "reason": "过程证据更完整", "evidence_ids": ["ev-2"]},
+        state,
+    )
+
+    assert mapped["selected_angle"] == {
+        "direction_code": "CT05",
+        "reason": "过程证据更完整",
+        "evidence_ids": ["ev-2"],
+        "selected_by": "agent",
+    }
+
+    with pytest.raises(ValueError, match="不在价值分析候选集中"):
+        AgentNodeResultMapper.to_state(
+            "select_content_direction",
+            {"direction_code": "CT07", "reason": "越界选择", "evidence_ids": []},
+            state,
+        )
+
+
+@pytest.mark.unit
+def test_combined_value_direction_mapper_selects_only_its_own_candidate():
+    result = {
+        "value_points": ["空间改造前后差异明确"],
+        "direction_candidates": [
+            {"direction_code": "CT03", "reason": "避坑", "evidence_ids": ["ev-1"]},
+            {"direction_code": "CT05", "reason": "过程", "evidence_ids": ["ev-2"]},
+        ],
+        "reasoning": "过程证据更完整",
+        "evidence_ids": ["ev-1", "ev-2"],
+        "selected_direction_code": "CT05",
+        "selection_reason": "过程证据更完整",
+        "selection_evidence_ids": ["ev-2"],
+    }
+
+    mapped = AgentNodeResultMapper.to_state("analyze_and_select_direction", result, {})
+
+    assert mapped["content_angles"] == result["direction_candidates"]
+    assert mapped["selected_angle"]["direction_code"] == "CT05"
+    assert mapped["selected_angle"]["selected_by"] == "agent"
+
+    with pytest.raises(ValueError, match="不在价值分析候选集中"):
+        AgentNodeResultMapper.to_state(
+            "analyze_and_select_direction",
+            {**result, "selected_direction_code": "CT07"},
+            {},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("node_id", "state", "result_key"),
+    [
+        (
+            "collect_missing_evidence",
+            {"evidence_gap_analysis": {"has_missing": False}},
+            "evidence_collection",
+        ),
+        (
+            "rank_formula_candidates",
+            {
+                "formula_candidate_pool": {
+                    "valid_formula_pairs": [{"title_formula_code": "T03", "body_formula_code": "C03"}]
+                }
+            },
+            "formula_rankings",
+        ),
+    ],
+)
+async def test_conditional_agent_nodes_skip_delegation(node_id, state, result_key):
+    node_run = SimpleNamespace(id="node-run-1")
+    task = SimpleNamespace(id="task-1")
+    user = SimpleNamespace(uid="user-1")
+
+    class Result:
+        def scalar_one_or_none(self):
+            return user
+
+    class FakeDB:
+        async def get(self, model, _key):
+            if model is ContentNodeRun:
+                return node_run
+            if model is ContentTask:
+                return task
+            raise AssertionError(f"unexpected model: {model}")
+
+        async def execute(self, statement):
+            assert statement is not None
+            return Result()
+
+    result = await AgentNodeHandler().execute(
+        db=FakeDB(),
+        node={"id": node_id},
+        state={"task_id": "task-1", "uid": "user-1", **state},
+        node_run_id="node-run-1",
+    )
+
+    assert result[result_key]["skipped"] is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_formula_selection_keeps_only_pairs_covered_by_evidence():
+    results = iter(
+        [
+            [
+                SimpleNamespace(code="T01", variable_schema=["audience", "number", "result"]),
+                SimpleNamespace(code="T03", variable_schema=["audience", "pain_points"]),
+            ],
+            [SimpleNamespace(code="C03", required_variables=["pain_points", "advantages"])],
+        ]
+    )
+
+    class Result:
+        def __init__(self, values):
+            self.values = values
+
+        def scalars(self):
+            return self.values
+
+    class FakeDB:
+        async def execute(self, statement):
+            assert statement is not None
+            return Result(next(results))
+
+    result = await V3DeterministicNodeHandler()._prepare_formula_selection(
+        db=FakeDB(),
+        state={
+            "rule_version_id": "rules-v3",
+            "content_brief": {
+                "audience": "小户型业主",
+                "form_values": {"pain_points": "收纳不足"},
+            },
+            "evidence_bundle": {"items": [{"variable_codes": ["advantages", "result"], "value": "增加收纳空间"}]},
+            "formula_candidate_pool": {
+                "combination_group_id": "group-1",
+                "title_formula_codes": ["T01", "T03"],
+                "body_formula_codes": ["C03"],
+            },
+        },
+        node_run_id="node-run-1",
+    )
+
+    pool = result["formula_candidate_pool"]
+    assert pool["title_formula_codes"] == ["T03"]
+    assert pool["body_formula_codes"] == ["C03"]
+    assert pool["valid_formula_pair_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_high_risk_gate_does_not_interrupt_without_new_high_risk_facts(monkeypatch):
+    monkeypatch.setattr(
+        content_workflow_graph_module,
+        "interrupt",
+        lambda _payload: pytest.fail("没有高风险新事实时不应触发人工中断"),
+    )
+
+    result = await ContentWorkflowAgent()._v3_human_review(
+        {"id": "confirm_high_risk_facts", "interrupt_type": "high_risk_facts"},
+        {
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "state_version": 1,
+            "evidence_collection": {
+                "evidence_items": [{"id": "ev-1", "risk_level": "normal", "verified_status": "retrieved"}]
+            },
+        },
+    )
+
+    assert result["state_version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_unique_formula_pair_is_locked_deterministically_even_in_pro_mode(monkeypatch):
+    captured = {}
+
+    class FakeSelectionRepository:
+        def __init__(self, _db):
+            pass
+
+        async def save_formula_selection(self, **kwargs):
+            captured["selected_by"] = kwargs["selected_by"]
+            captured["decision"] = kwargs["decision"]
+            return SimpleNamespace(id="formula-snapshot-1")
+
+    @asynccontextmanager
+    async def fake_session_context():
+        yield object()
+
+    async def fake_strategy_snapshot(**_kwargs):
+        return {"snapshot_hash": "a" * 64}
+
+    async def fake_append(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(content_workflow_graph_module, "PostgresDecisionSnapshotRepository", FakeSelectionRepository)
+    monkeypatch.setattr(content_workflow_graph_module.pg_manager, "get_async_session_context", fake_session_context)
+    monkeypatch.setattr(ContentWorkflowAgent, "_build_strategy_snapshot", staticmethod(fake_strategy_snapshot))
+    monkeypatch.setattr(content_workflow_graph_module, "append_run_stream_event", fake_append)
+    monkeypatch.setattr(
+        content_workflow_graph_module,
+        "interrupt",
+        lambda _payload: pytest.fail("唯一有效公式对不应触发专业模式人工覆盖"),
+    )
+
+    result = await ContentWorkflowAgent()._v3_human_review(
+        {"id": "lock_formula_selection", "interrupt_type": "formula_selection"},
+        {
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "uid": "user-1",
+            "rule_version_id": "rules-v3",
+            "state_version": 1,
+            "task_mode": "pro",
+            "match_decision_snapshot": {"id": "match-1", "selected_group_id": "group-1"},
+            "formula_candidate_pool": {
+                "title_formula_codes": ["T03"],
+                "body_formula_codes": ["C03"],
+                "valid_formula_pairs": [{"title_formula_code": "T03", "body_formula_code": "C03"}],
+            },
+            "formula_rankings": {
+                "title_rankings": [{"formula_code": "T03", "reason": "唯一有效公式对"}],
+                "body_rankings": [{"formula_code": "C03", "reason": "唯一有效公式对"}],
+            },
+            "evidence_bundle": {"bundle_hash": "evidence-hash"},
+        },
+    )
+
+    assert captured["selected_by"] == "deterministic"
+    assert captured["decision"].selection_mode == "deterministic"
+    assert result["formula_selection_snapshot"]["selected_title_formula_code"] == "T03"
+    assert result["formula_selection_snapshot"]["selected_body_formula_code"] == "C03"
+
+
 @pytest.mark.asyncio
 async def test_v3_graph_compiles_revision_routes_as_controlled_conditional_edges():
     agent = ContentWorkflowAgent()
@@ -182,14 +429,7 @@ async def test_v3_graph_compiles_revision_routes_as_controlled_conditional_edges
         edge.target for edge in workflow.get_graph().edges if edge.source == "revise_if_needed" and edge.conditional
     }
 
-    assert revision_edges == {
-        "select_title",
-        "semantic_review",
-        "generate_title_candidates",
-        "generate_body",
-        "persona_style_polish",
-        "human_content_approval",
-    }
+    assert revision_edges == {"semantic_review", "generate_content", "human_content_approval"}
 
 
 @pytest.mark.asyncio
@@ -219,13 +459,13 @@ async def test_blocked_title_validation_routes_back_to_title_agent_without_human
         WORKFLOW_V3,
     )
 
-    assert result["revision_target"] == "generate_title_candidates"
+    assert result["revision_target"] == "generate_content"
     assert result["revision_status"] == "route"
-    assert result["retry_counts"] == {"generate_title_candidates": 1}
+    assert result["retry_counts"] == {"generate_content": 1}
 
 
 @pytest.mark.asyncio
-async def test_passed_title_validation_continues_to_human_title_selection():
+async def test_passed_title_validation_continues_to_title_agent_selection():
     result = await ContentWorkflowAgent()._execute_node(
         {"id": "revise_if_needed", "type": "revision_router"},
         {
@@ -240,6 +480,147 @@ async def test_passed_title_validation_continues_to_human_title_selection():
 
     assert result["revision_target"] == "select_title"
     assert result["revision_status"] == "continue"
+
+
+@pytest.mark.unit
+def test_title_selection_mapper_only_accepts_selectable_candidates():
+    state = {
+        "title_candidates": [
+            {
+                "id": "title-1",
+                "text": "候选一",
+                "formula_code": "T03",
+                "evidence_ids": ["ev-1"],
+                "selectable": False,
+            },
+            {
+                "id": "title-2",
+                "text": "候选二",
+                "formula_code": "T03",
+                "evidence_ids": ["ev-2"],
+                "selectable": True,
+            },
+        ]
+    }
+
+    mapped = AgentNodeResultMapper.to_state(
+        "select_title",
+        {"selected_title_id": "title-2", "reason": "证据与公式更完整"},
+        state,
+    )
+
+    assert mapped["selected_title"] == {
+        **state["title_candidates"][1],
+        "selection_reason": "证据与公式更完整",
+        "selected_by": "agent",
+    }
+
+    with pytest.raises(ValueError, match="只能选择通过确定性校验"):
+        AgentNodeResultMapper.to_state(
+            "select_title",
+            {"selected_title_id": "title-1", "reason": "错误选择"},
+            state,
+        )
+
+
+@pytest.mark.unit
+def test_unified_generation_mapper_publishes_title_outline_and_body_together():
+    result = {
+        "title": {"text": "统一生成标题", "formula_code": "T03", "evidence_ids": ["ev-1"]},
+        "outline": {
+            "body_formula_code": "C03",
+            "sections": [{"section_id": "s1", "goal": "说明价值", "evidence_ids": ["ev-1"]}],
+        },
+        "draft": {
+            "body": "统一生成正文",
+            "topics": ["装修"],
+            "paragraph_evidence": [{"paragraph_id": "p1", "evidence_ids": ["ev-1"]}],
+            "body_formula_code": "C03",
+        },
+    }
+
+    mapped = AgentNodeResultMapper.to_state("generate_content", result, {})
+
+    assert mapped["selected_title"]["text"] == "统一生成标题"
+    assert mapped["selected_title"]["selected_by"] == "agent"
+    assert mapped["content_outline"] == result["outline"]
+    assert mapped["content_draft"] == result["draft"]
+
+
+@pytest.mark.asyncio
+async def test_save_artifact_allows_content_version_without_cover(monkeypatch):
+    task = SimpleNamespace(id="task-1", tenant_id=None, rule_version_id="rules-v3")
+    saved = {}
+
+    class FakeDB:
+        def add(self, artifact):
+            saved["artifact"] = artifact
+
+        async def flush(self):
+            return None
+
+    class FakeRepository:
+        def __init__(self, db):
+            del db
+
+        async def get_task(self, task_id, for_update=False):
+            del for_update
+            return task if task_id == task.id else None
+
+        async def get_artifact_for_task(self, task_id):
+            assert task_id == task.id
+            return None
+
+        async def save_artifact_version(self, *, artifact, **kwargs):
+            del kwargs
+            return SimpleNamespace(
+                id="artifact-version-1",
+                version=1,
+                cover_asset_id=artifact.cover_asset_id,
+                cover_job_id=artifact.cover_job_id,
+            )
+
+        async def add_review_record(self, **kwargs):
+            del kwargs
+
+        async def track(self, *args, **kwargs):
+            del args, kwargs
+
+    @asynccontextmanager
+    async def fake_session_context():
+        yield FakeDB()
+
+    def reject_cover_repository(db):
+        del db
+        raise AssertionError("无视觉工作流时不应读取封面仓储")
+
+    monkeypatch.setattr(content_workflow_graph_module, "ContentRepository", FakeRepository)
+    monkeypatch.setattr(content_workflow_graph_module, "ContentCoverRepository", reject_cover_repository)
+    monkeypatch.setattr(
+        content_workflow_graph_module.pg_manager,
+        "get_async_session_context",
+        fake_session_context,
+    )
+
+    result = await ContentWorkflowAgent()._save_artifact(
+        {
+            "task_id": task.id,
+            "uid": "user-1",
+            "run_id": "run-1",
+            "content_draft": {"body": "已审核正文", "topics": ["装修"]},
+            "selected_title": {"id": "title-1", "text": "Agent 选择的标题"},
+            "strategy_snapshot": {"snapshot_hash": "s" * 64, "title_formula": {}, "body_formula": {}},
+            "evidence_bundle": {"bundle_hash": "e" * 64, "items": []},
+            "review_report": {"status": "passed", "checks": []},
+            "approval_result": {"status": "approved", "reviewer_uid": "user-1"},
+            "runtime_config_snapshot": {},
+        }
+    )
+
+    assert result["artifact_version"]["cover_asset_id"] is None
+    assert saved["artifact"].cover_asset_id is None
+    assert task.selected_title_json["text"] == "Agent 选择的标题"
+    assert task.status == "reviewed"
 
 
 @pytest.mark.asyncio
@@ -281,7 +662,7 @@ async def test_deterministic_block_pauses_for_human_before_targeted_agent_revisi
     interrupted = await workflow.aget_state(config)
     payload = interrupted.interrupts[0].value
     assert payload["interrupt_type"] == "content_correction"
-    assert payload["suggested_target"] == "generate_body"
+    assert payload["suggested_target"] == "generate_content"
 
     await workflow.ainvoke(
         Command(
@@ -295,8 +676,8 @@ async def test_deterministic_block_pauses_for_human_before_targeted_agent_revisi
         config=config,
     )
     completed = await workflow.aget_state(config)
-    assert completed.values["revision_target"] == "generate_body"
-    assert completed.values["retry_counts"] == {"generate_body": 1}
+    assert completed.values["revision_target"] == "generate_content"
+    assert completed.values["retry_counts"] == {"generate_content": 1}
 
 
 @pytest.mark.asyncio

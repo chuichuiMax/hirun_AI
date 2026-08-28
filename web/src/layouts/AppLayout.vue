@@ -147,6 +147,14 @@ const mainList = computed(() => {
   })
 
   items.push({
+    name: '素材库',
+    path: '/materials/images',
+    activePaths: ['/materials'],
+    icon: LibraryBig,
+    activeIcon: LibraryBig
+  })
+
+  items.push({
     name: '工作区',
     path: '/workspace',
     icon: FolderKanban,
@@ -191,13 +199,6 @@ const mainList = computed(() => {
     path: '/model-manage/employees',
     icon: IdCard,
     activeIcon: IdCard
-  })
-
-  items.push({
-    name: '封面管理',
-    path: '/model-manage/covers',
-    icon: Images,
-    activeIcon: Images
   })
 
   items.push({

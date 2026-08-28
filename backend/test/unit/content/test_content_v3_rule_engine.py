@@ -98,6 +98,32 @@ def test_matcher_order_is_repeatable_and_never_falls_back_to_v2():
 
 
 @pytest.mark.unit
+def test_agent_can_select_any_group_that_passes_hard_rules():
+    groups = [group for group in _groups() if group.content_direction_code == "CT03"]
+    decision = CombinationMatcher().match(
+        groups,
+        MatchRequest(content_direction_code="CT03", industry_slug="decoration"),
+    )
+    agent_selected_group = decision.eligible_groups[-1].group_code
+
+    locked = decision.with_selected_group(agent_selected_group)
+
+    assert agent_selected_group != decision.eligible_groups[0].group_code
+    assert locked.selected_group_code == agent_selected_group
+
+
+@pytest.mark.unit
+def test_agent_cannot_select_group_rejected_by_hard_rules():
+    decision = CombinationMatcher().match(
+        [group for group in _groups() if group.content_direction_code == "CT03"],
+        MatchRequest(content_direction_code="CT03", industry_slug="decoration"),
+    )
+
+    with pytest.raises(ValueError, match="不在固定规则通过集合中"):
+        decision.with_selected_group("group-outside-eligible-set")
+
+
+@pytest.mark.unit
 def test_scene_method_supports_primary_and_supporting_roles_and_all_group_sizes():
     groups = _groups()
     scene_members = [member for group in groups for member in group.method_members if member.method_code == "S01"]

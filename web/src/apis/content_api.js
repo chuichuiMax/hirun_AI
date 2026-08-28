@@ -31,6 +31,29 @@ export const contentApi = {
     apiGet(`/api/content/ocr-results/${resultId}/image`, {}, true, 'blob'),
   getCoverBootstrap: () => apiGet('/api/content/covers/bootstrap'),
   updateCoverImage2Config: (payload) => apiPut('/api/content/covers/image2-config', payload),
+  testCoverImage2Config: (payload) => apiPost('/api/content/covers/image2-config/test', payload),
+  previewCoverTemplateReplication: (payload) =>
+    apiPost('/api/content/covers/template-replication/preview', payload),
+  importCoverPosterTemplates: (files, category) => {
+    const form = new FormData()
+    Array.from(files).forEach((file) => form.append('files', file))
+    form.append('category', category)
+    return apiPost('/api/content/covers/poster-templates/import', form)
+  },
+  listCoverPosterTemplates: (params = {}) =>
+    apiGet(`/api/content/covers/poster-templates${encodeQuery(params)}`),
+  getCoverPosterTemplate: (templateId) =>
+    apiGet(`/api/content/covers/poster-templates/${templateId}`),
+  updateCoverPosterTemplate: (templateId, payload) =>
+    apiPatch(`/api/content/covers/poster-templates/${templateId}`, payload),
+  deleteCoverPosterTemplate: (templateId) =>
+    apiDelete(`/api/content/covers/poster-templates/${templateId}`),
+  analyzeCoverPosterTemplate: (templateId) =>
+    apiPost(`/api/content/covers/poster-templates/${templateId}/analyze`),
+  previewCoverPosterBillboard: (payload) =>
+    apiPost('/api/content/covers/poster-billboard/preview', payload),
+  generateCoverPosterBillboard: (payload) =>
+    apiPost('/api/content/covers/poster-billboard/generate', payload),
   uploadCoverAsset: (file, role = 'source', contentTaskId = null) => {
     const form = new FormData()
     form.append('file', file)

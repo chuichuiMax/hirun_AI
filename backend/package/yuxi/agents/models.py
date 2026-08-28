@@ -68,6 +68,9 @@ def load_chat_model(fully_specified_name: str | None, **kwargs) -> BaseChatModel
     api_key = info.api_key
     base_url = get_docker_safe_url(info.base_url)
 
+    if info.headers:
+        kwargs.setdefault("default_headers", info.headers)
+
     logger.debug(f"Loading model {fully_specified_name} with provider_type={info.provider_type}")
 
     if info.provider_type == "anthropic":
@@ -87,6 +90,14 @@ def load_chat_model(fully_specified_name: str | None, **kwargs) -> BaseChatModel
             google_api_key=SecretStr(api_key),
             **kwargs,
         )
+
+    if info.extra:
+        if "use_responses_api" in info.extra:
+            kwargs.setdefault("use_responses_api", bool(info.extra["use_responses_api"]))
+        if "reasoning_effort" in info.extra:
+            kwargs.setdefault("reasoning_effort", str(info.extra["reasoning_effort"]))
+        if "disable_response_storage" in info.extra:
+            kwargs.setdefault("store", not bool(info.extra["disable_response_storage"]))
 
     return _ToolCallChunkFixChatOpenAI(
         model=info.model_id,

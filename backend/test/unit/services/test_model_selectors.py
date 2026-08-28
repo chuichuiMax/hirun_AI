@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 
 import httpx
@@ -110,9 +111,11 @@ def test_select_model_wraps_langchain_model_and_expands_model_params(monkeypatch
 
     monkeypatch.setattr(
         "yuxi.models.chat.model_cache.get_model_info",
-        lambda spec: _chat_model_info("test-provider", "namespace/chat-model")
-        if spec == "test-provider:namespace/chat-model"
-        else None,
+        lambda spec: (
+            _chat_model_info("test-provider", "namespace/chat-model")
+            if spec == "test-provider:namespace/chat-model"
+            else None
+        ),
     )
 
     def fake_load_chat_model(spec, **kwargs):
@@ -142,9 +145,11 @@ def test_select_model_maps_anthropic_max_completion_tokens(monkeypatch):
 
     monkeypatch.setattr(
         "yuxi.models.chat.model_cache.get_model_info",
-        lambda spec: _chat_model_info("anthropic", "mimo-v2.5", provider_type="anthropic")
-        if spec == "anthropic:mimo-v2.5"
-        else None,
+        lambda spec: (
+            _chat_model_info("anthropic", "mimo-v2.5", provider_type="anthropic")
+            if spec == "anthropic:mimo-v2.5"
+            else None
+        ),
     )
     monkeypatch.setattr(
         "yuxi.models.chat.load_chat_model",
@@ -161,9 +166,11 @@ def test_load_chat_model_uses_toolcall_chunk_fix_for_openai_compatible(monkeypat
 
     monkeypatch.setattr(
         "yuxi.agents.models.model_cache.get_model_info",
-        lambda spec: _chat_model_info("siliconflow-cn", "deepseek-ai/DeepSeek-V4-Flash")
-        if spec == "siliconflow-cn:deepseek-ai/DeepSeek-V4-Flash"
-        else None,
+        lambda spec: (
+            _chat_model_info("siliconflow-cn", "deepseek-ai/DeepSeek-V4-Flash")
+            if spec == "siliconflow-cn:deepseek-ai/DeepSeek-V4-Flash"
+            else None
+        ),
     )
 
     model = load_chat_model("siliconflow-cn:deepseek-ai/DeepSeek-V4-Flash")
@@ -176,9 +183,11 @@ def test_load_chat_model_uses_toolcall_chunk_fix_for_openai_compatible(monkeypat
 def test_load_chat_model_keeps_non_siliconflow_openai_streaming(monkeypatch):
     monkeypatch.setattr(
         "yuxi.agents.models.model_cache.get_model_info",
-        lambda spec: _chat_model_info("openai-compatible", "namespace/chat-model")
-        if spec == "openai-compatible:namespace/chat-model"
-        else None,
+        lambda spec: (
+            _chat_model_info("openai-compatible", "namespace/chat-model")
+            if spec == "openai-compatible:namespace/chat-model"
+            else None
+        ),
     )
 
     model = load_chat_model("openai-compatible:namespace/chat-model")
@@ -186,6 +195,27 @@ def test_load_chat_model_keeps_non_siliconflow_openai_streaming(monkeypatch):
 
     assert model.disable_streaming is False
     assert explicit.disable_streaming is True
+
+
+def test_load_chat_model_applies_provider_headers_and_responses_options(monkeypatch):
+    info = _chat_model_info("keenlight-openai", "gpt-5.5")
+    info = replace(
+        info,
+        headers={"x-openai-actor-authorization": "local-image-extension"},
+        extra={
+            "use_responses_api": True,
+            "reasoning_effort": "xhigh",
+            "disable_response_storage": True,
+        },
+    )
+    monkeypatch.setattr("yuxi.agents.models.model_cache.get_model_info", lambda _spec: info)
+
+    model = load_chat_model("keenlight-openai:gpt-5.5")
+
+    assert model.default_headers == {"x-openai-actor-authorization": "local-image-extension"}
+    assert model.use_responses_api is True
+    assert model.reasoning_effort == "xhigh"
+    assert model.store is False
 
 
 @pytest.mark.asyncio

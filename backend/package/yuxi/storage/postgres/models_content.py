@@ -548,6 +548,9 @@ class ContentTask(Base):
     primary_narrative_axis = Column(String(80), nullable=True)
     selected_angle_json = Column(JSON, nullable=False, default=dict)
     runtime_config_snapshot_json = Column(JSON, nullable=False, default=dict)
+    # 跨素材表的引用由业务层校验和删除保护维护；避免 ContentTask/Asset 形成建表环依赖。
+    selected_image_item_id = Column(String(64), nullable=True, index=True)
+    selected_poster_template_id = Column(String(64), nullable=True, index=True)
     status = Column(String(32), nullable=False, default="draft", index=True)
     current_stage = Column(String(32), nullable=False, default="brief", index=True)
     brief_json = Column(JSON, nullable=False, default=dict)
@@ -589,6 +592,8 @@ class ContentTask(Base):
             "primary_narrative_axis": self.primary_narrative_axis,
             "selected_angle": self.selected_angle_json or {},
             "runtime_config_snapshot": self.runtime_config_snapshot_json or {},
+            "selected_image_item_id": self.selected_image_item_id,
+            "selected_poster_template_id": self.selected_poster_template_id,
             "status": self.status,
             "current_stage": self.current_stage,
             "brief": self.brief_json or {},
@@ -965,6 +970,9 @@ class ContentCoverImage2Setting(Base):
     base_url = Column(String(500), nullable=False)
     api_key = Column(String(500), nullable=False)
     model = Column(String(255), nullable=False, default="gpt-image-2")
+    capabilities_json = Column(JSON, nullable=False, default=dict)
+    verification_status = Column(String(32), nullable=False, default="unverified")
+    verified_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now_naive)
     updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
@@ -1004,6 +1012,178 @@ class ContentCoverAsset(Base):
             "sha256": self.sha256,
             "metadata": self.metadata_json or {},
             "created_at": format_utc_datetime(self.created_at),
+        }
+
+
+class ContentMaterialLibraryItem(Base):
+    """用户素材库目录项；文件事实由 ContentCoverAsset 承载。"""
+
+    __tablename__ = "content_material_library_items"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    asset_id = Column(String(64), ForeignKey("content_cover_assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    material_type = Column(String(32), nullable=False, index=True)
+    display_name = Column(String(255), nullable=False)
+    category = Column(String(80), nullable=False, default="未分类", index=True)
+    tags_json = Column(JSON, nullable=False, default=list)
+    status = Column(String(32), nullable=False, default="enabled", index=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "material_type IN ('image', 'cover_template')",
+            name="ck_content_material_library_type",
+        ),
+        CheckConstraint(
+            "status IN ('enabled', 'disabled')",
+            name="ck_content_material_library_status",
+        ),
+        Index(
+            "uq_content_material_library_asset_active",
+            "asset_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+        Index("idx_content_material_library_owner_type_created", "owner_uid", "material_type", "created_at"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "asset_id": self.asset_id,
+            "material_type": self.material_type,
+            "name": self.display_name,
+            "category": self.category,
+            "status": self.status,
+            "metadata": self.metadata_json or {},
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentMaterialCategory(Base):
+    """用户维护的素材图片图库或封面模板分类。"""
+
+    __tablename__ = "content_material_categories"
+
+    owner_uid = Column(String(255), primary_key=True)
+    material_type = Column(String(32), primary_key=True, index=True)
+    id = Column(String(64), primary_key=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    name = Column(String(80), nullable=False)
+    description = Column(String(255), nullable=False, default="")
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_system = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "material_type IN ('image', 'cover_template')",
+            name="ck_content_material_category_type",
+        ),
+        Index(
+            "uq_content_material_category_owner_type_name_active",
+            "owner_uid",
+            "material_type",
+            text("lower(name)"),
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_content_material_category_owner_type_sort",
+            "owner_uid",
+            "material_type",
+            "sort_order",
+        ),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "code": self.id,
+            "material_type": self.material_type,
+            "name": self.name,
+            "description": self.description or "",
+            "sort_order": self.sort_order,
+            "is_system": self.is_system,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentCoverPosterTemplate(Base):
+    __tablename__ = "content_cover_poster_templates"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    asset_id = Column(
+        String(64), ForeignKey("content_cover_assets.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    name = Column(String(255), nullable=False)
+    category = Column(String(80), nullable=False, default="未分类", index=True)
+    tags_json = Column(JSON, nullable=False, default=list)
+    template_type = Column(String(32), nullable=False, default="alpha_overlay", index=True)
+    canvas_width = Column(Integer, nullable=False)
+    canvas_height = Column(Integer, nullable=False)
+    product_box_json = Column(JSON, nullable=True)
+    safe_area_json = Column(JSON, nullable=False, default=dict)
+    text_slots_json = Column(JSON, nullable=False, default=list)
+    fixed_regions_json = Column(JSON, nullable=False, default=list)
+    editable_regions_json = Column(JSON, nullable=False, default=list)
+    analysis_json = Column(JSON, nullable=False, default=dict)
+    checksum = Column(String(64), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    analysis_version = Column(String(64), nullable=False, default="poster-v1")
+    status = Column(String(32), nullable=False, default="ready", index=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (
+        Index(
+            "uq_content_cover_poster_owner_checksum_active",
+            "owner_uid",
+            "checksum",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+        Index("idx_content_cover_poster_owner_created", "owner_uid", "created_at"),
+        Index("idx_content_cover_poster_owner_status", "owner_uid", "status"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "asset_id": self.asset_id,
+            "name": self.name,
+            "category": self.category,
+            "template_type": self.template_type,
+            "canvas_width": self.canvas_width,
+            "canvas_height": self.canvas_height,
+            "product_box": self.product_box_json,
+            "safe_area": self.safe_area_json or {},
+            "text_slots": self.text_slots_json or [],
+            "fixed_regions": self.fixed_regions_json or [],
+            "editable_regions": self.editable_regions_json or [],
+            "analysis": self.analysis_json or {},
+            "version": self.version,
+            "analysis_version": self.analysis_version,
+            "status": self.status,
+            "error_message": self.error_message,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
         }
 
 

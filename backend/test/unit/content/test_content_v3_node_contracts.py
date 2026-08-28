@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
@@ -38,10 +39,24 @@ DOMAIN_CONTEXT = ContractDomainContext(
 
 
 VALID_PAYLOADS = {
+    "ContentDirectionDecisionResultV1": {
+        "value_points": ["value"],
+        "direction_candidates": [{"direction_code": "CT01", "reason": "reason", "evidence_ids": ["e-any"]}],
+        "reasoning": "reasoning",
+        "evidence_ids": ["e-any"],
+        "selected_direction_code": "CT01",
+        "selection_reason": "当前证据最充分",
+        "selection_evidence_ids": ["e-any"],
+    },
     "ContentValueResultV1": {
         "value_points": ["value"],
         "direction_candidates": [{"direction_code": "CT01", "reason": "reason", "evidence_ids": ["e-any"]}],
         "reasoning": "reasoning",
+        "evidence_ids": ["e-any"],
+    },
+    "DirectionSelectionResultV1": {
+        "direction_code": "CT01",
+        "reason": "当前证据最充分",
         "evidence_ids": ["e-any"],
     },
     "StrategyExplanationResultV1": {
@@ -79,6 +94,10 @@ VALID_PAYLOADS = {
         ],
         "selected_title_formula_code": "T1",
         "evidence_ids": ["e-title"],
+    },
+    "TitleSelectionResultV1": {
+        "selected_title_id": "title-1",
+        "reason": "公式和证据最完整",
     },
     "OutlineResultV1": {
         "body_formula_code": "B1",
@@ -125,7 +144,11 @@ VALID_PAYLOADS = {
 
 def _make_unknown(contract_name: str, payload: dict) -> dict:
     value = deepcopy(payload)
-    if contract_name == "ContentValueResultV1":
+    if contract_name == "ContentDirectionDecisionResultV1":
+        value["selection_evidence_ids"] = ["unknown"]
+    elif contract_name == "ContentValueResultV1":
+        value["evidence_ids"] = ["unknown"]
+    elif contract_name == "DirectionSelectionResultV1":
         value["evidence_ids"] = ["unknown"]
     elif contract_name == "StrategyExplanationResultV1":
         value["locked_group_id"] = "unknown"
@@ -154,6 +177,17 @@ def _make_unknown(contract_name: str, payload: dict) -> dict:
 def test_each_contract_accepts_valid_payload(contract_name):
     result = validate_content_node_result(contract_name, VALID_PAYLOADS[contract_name], DOMAIN_CONTEXT)
     assert result.__class__.__name__ == contract_name
+
+
+def test_visual_plan_must_use_exactly_the_task_locked_gallery_image():
+    context = replace(DOMAIN_CONTEXT, required_source_asset_ids=("asset-1",))
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["source_asset_ids"] = []
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    assert exc_info.value.code == "visual_source_locked"
 
 
 def test_formula_ranking_pool_comes_from_match_snapshot_before_selection_exists():
@@ -284,7 +318,10 @@ def test_each_contract_rejects_out_of_scope_field(contract_name):
     assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
 
 
-@pytest.mark.parametrize("contract_name", sorted(VALID_PAYLOADS))
+@pytest.mark.parametrize(
+    "contract_name",
+    [name for name in sorted(VALID_PAYLOADS) if name != "TitleSelectionResultV1"],
+)
 def test_each_contract_rejects_unknown_or_unlocked_id(contract_name):
     with pytest.raises(ContractDomainValidationError):
         invalid = _make_unknown(contract_name, VALID_PAYLOADS[contract_name])
@@ -301,6 +338,16 @@ def test_content_value_contract_rejects_temporary_direction_codes():
     assert exc_info.value.errors()[0]["loc"] == ("direction_candidates", 0, "direction_code")
 
 
+def test_direction_selection_contract_rejects_temporary_direction_codes():
+    payload = deepcopy(VALID_PAYLOADS["DirectionSelectionResultV1"])
+    payload["direction_code"] = "D01"
+
+    with pytest.raises(ValidationError) as exc_info:
+        validate_content_node_result("DirectionSelectionResultV1", payload, DOMAIN_CONTEXT)
+
+    assert exc_info.value.errors()[0]["loc"] == ("direction_code",)
+
+
 @pytest.mark.parametrize(
     ("contract_name", "forbidden_field"),
     [
@@ -308,6 +355,8 @@ def test_content_value_contract_rejects_temporary_direction_codes():
         ("ContentDraftResultV1", "title"),
         ("ContentReviewResultV1", "revised_body"),
         ("ContentValueResultV1", "locked_group_id"),
+        ("DirectionSelectionResultV1", "locked_group_id"),
+        ("TitleSelectionResultV1", "title"),
         ("EvidenceCollectionResultV1", "article"),
     ],
 )
@@ -412,4 +461,4 @@ async def test_structured_result_tool_uses_registered_pydantic_schema():
 
     assert tool.name == "submit_content_node_result"
     assert collector.submission_count == 1
-    assert len(CONTRACT_REGISTRY) == 13
+    assert len(CONTRACT_REGISTRY) == 18

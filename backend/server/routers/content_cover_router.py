@@ -12,22 +12,37 @@ from yuxi.content_cover.schemas import (
     CoverGenerateCreate,
     CoverRetryCreate,
     CoverSetCurrentCreate,
+    Image2ConfigTestRequest,
     Image2GlobalConfigUpdate,
+    PosterGenerateCreate,
+    PosterPreviewCreate,
+    PosterTemplateUpdate,
+    TemplateReplicatePlanCreate,
 )
 from yuxi.services.content_cover_service import (
     cancel_cover_job,
     create_cover_asset,
     create_cover_compose_job,
     create_cover_generate_job,
+    create_poster_billboard_job,
     delete_cover_asset,
+    delete_poster_template,
     get_cover_asset_file,
     get_cover_bootstrap,
     get_cover_job,
+    get_poster_template,
+    import_poster_templates,
     list_cover_jobs,
+    list_poster_templates,
+    preview_poster_billboard,
+    preview_template_replication_plan,
+    reanalyze_poster_template,
     retry_cover_job,
     set_current_cover,
     stream_cover_job_events,
+    test_image2_global_config,
     update_image2_global_config,
+    update_poster_template,
 )
 from yuxi.storage.postgres.models_business import User
 
@@ -51,6 +66,15 @@ async def update_cover_image2_config(
     return {"image2": await update_image2_global_config(db, current_user, payload)}
 
 
+@content_covers.post("/image2-config/test")
+async def test_cover_image2_config(
+    payload: Image2ConfigTestRequest,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await test_image2_global_config(db, current_user, payload)
+
+
 @content_covers.post("/assets", status_code=status.HTTP_201_CREATED)
 async def upload_cover_asset(
     file: UploadFile = File(...),
@@ -60,6 +84,107 @@ async def upload_cover_asset(
     db: AsyncSession = Depends(get_db),
 ):
     return await create_cover_asset(db, current_user, file, role=role, content_task_id=content_task_id)
+
+
+@content_covers.post("/poster-templates/import", status_code=status.HTTP_201_CREATED)
+async def import_cover_poster_templates(
+    files: list[UploadFile] = File(...),
+    category: str = Form(...),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await import_poster_templates(
+        db,
+        current_user,
+        files,
+        category=category,
+    )
+
+
+@content_covers.get("/poster-templates")
+async def cover_poster_templates(
+    category: str | None = Query(None),
+    template_status: str | None = Query(None, alias="status"),
+    query: str | None = Query(None, max_length=100),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(24, ge=1, le=100),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_poster_templates(
+        db,
+        current_user,
+        category=category,
+        status=template_status,
+        query=query,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@content_covers.get("/poster-templates/{template_id}")
+async def cover_poster_template(
+    template_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_poster_template(db, current_user, template_id)
+
+
+@content_covers.patch("/poster-templates/{template_id}")
+async def edit_cover_poster_template(
+    template_id: str,
+    payload: PosterTemplateUpdate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await update_poster_template(db, current_user, template_id, payload)
+
+
+@content_covers.delete("/poster-templates/{template_id}")
+async def remove_cover_poster_template(
+    template_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await delete_poster_template(db, current_user, template_id)
+
+
+@content_covers.post("/poster-templates/{template_id}/analyze")
+async def analyze_cover_poster_template(
+    template_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await reanalyze_poster_template(db, current_user, template_id)
+
+
+@content_covers.post("/poster-billboard/preview")
+async def preview_cover_poster_billboard(
+    payload: PosterPreviewCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await preview_poster_billboard(db, current_user, payload)
+
+
+@content_covers.post("/poster-billboard/generate", status_code=status.HTTP_202_ACCEPTED)
+async def generate_cover_poster_billboard(
+    payload: PosterGenerateCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_poster_billboard_job(db, current_user, payload)
+
+
+@content_covers.post("/template-replication/preview")
+async def preview_cover_template_replication(
+    payload: TemplateReplicatePlanCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return OCR slots and editable copy before a paid image2 request."""
+    return await preview_template_replication_plan(db, current_user, payload)
 
 
 @content_covers.get("/assets/{asset_id}/file")

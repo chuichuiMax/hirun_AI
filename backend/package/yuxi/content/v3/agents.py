@@ -19,6 +19,7 @@ class ContentAgentSpec:
     description: str
     skills: tuple[str, ...]
     skill_tools: tuple[str, ...] = ()
+    reasoning_effort: str | None = None
     config_version: int = 1
 
 
@@ -26,10 +27,11 @@ CONTENT_AGENT_SPECS = (
     ContentAgentSpec(
         slug="content-strategy-agent",
         name="内容策略 Agent",
-        description="解释固定规则结果，分析内容价值并对候选公式排序。",
+        description="分析内容价值、从候选集中确定内容方向，并解释固定规则结果及排序候选公式。",
         skills=("content-value-analyzer", "content-strategy-planner"),
         skill_tools=("get_creation_rule_bundle",),
-        config_version=2,
+        reasoning_effort="medium",
+        config_version=4,
     ),
     ContentAgentSpec(
         slug="content-research-agent",
@@ -42,10 +44,10 @@ CONTENT_AGENT_SPECS = (
     ContentAgentSpec(
         slug="content-title-agent",
         name="标题创作 Agent",
-        description="按锁定标题公式和冻结证据生成候选标题。",
+        description="按锁定标题公式生成候选，并从确定性校验通过的候选中选择最终标题。",
         skills=("content-title-generator",),
         skill_tools=(),
-        config_version=3,
+        config_version=4,
     ),
     ContentAgentSpec(
         slug="content-body-agent",
@@ -54,6 +56,14 @@ CONTENT_AGENT_SPECS = (
         skills=("content-outline-builder", "content-body-generator", "persona-style-polisher"),
         skill_tools=(),
         config_version=2,
+    ),
+    ContentAgentSpec(
+        slug="content-generation-agent",
+        name="内容创作 Agent",
+        description="按已锁定的创作手法、标题公式和正文公式，一次生成标题、大纲与正文。",
+        skills=("content-title-generator", "content-outline-builder", "content-body-generator"),
+        skill_tools=(),
+        config_version=1,
     ),
     ContentAgentSpec(
         slug="content-review-agent",
@@ -75,13 +85,16 @@ CONTENT_AGENT_SPECS = (
 
 
 def _agent_context(spec: ContentAgentSpec) -> dict:
-    return {
+    context = {
         "system_prompt": (
             f"你是{spec.name}。你只执行当前工作流节点的职责，不修改固定工作流、规则匹配结果、人工审批结果或证据事实。"
         ),
         "skills": list(spec.skills),
         "skill_tool_allowlist": list(spec.skill_tools),
     }
+    if spec.reasoning_effort:
+        context["reasoning_effort"] = spec.reasoning_effort
+    return context
 
 
 def validate_existing_content_agent(agent: Agent, spec: ContentAgentSpec) -> None:

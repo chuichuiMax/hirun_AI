@@ -17,7 +17,7 @@ async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
     assert len(bootstrap["rule_bundle"]["title_formulas"]) == 7
     assert len(bootstrap["rule_bundle"]["content_formulas"]) == 4
 
-    template = bootstrap["industry_templates"][0]
+    template = next(item for item in bootstrap["industry_templates"] if item["slug"] == "decoration")
     create_response = await test_client.post(
         "/api/content/tasks",
         headers=admin_headers,
@@ -40,11 +40,12 @@ async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
                 "brief": {
                     "form_values": {
                         "brand_name": "Pytest 品牌",
-                        "product": "企业内容服务",
-                        "pain_points": ["内容缺少事实依据"],
-                        "result": "连续7天完成内容复盘",
-                        "advantages": ["使用统一证据包"],
-                    }
+                        "audience": ["准备装修的业主"],
+                        "pain": ["隐蔽工程难追溯"],
+                        "advantage": ["标准工序留档"],
+                        "project_type": "三室两厅",
+                        "craft_and_materials": "水电施工与隐蔽验收",
+                    },
                 }
             },
         )
@@ -53,6 +54,8 @@ async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
         assert compiled["compiled"] is True
         assert compiled["task"]["status"] == "brief_ready"
         assert compiled["task"]["evidence_bundle"]["items"]
+        assert compiled["task"]["selected_image_item_id"] is None
+        assert compiled["task"]["runtime_config_snapshot"]["visual_material"] is None
 
         removed_strategy_response = await test_client.post(
             f"/api/content/tasks/{task_id}/strategy/recommend",

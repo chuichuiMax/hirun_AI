@@ -5,43 +5,50 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-
 V3_NODE_TYPES = {"deterministic", "agent", "human_review", "external_wait", "revision_router"}
 V3_AGENT_NODE_TYPES = {"agent"}
 V3_HUMAN_GATE_IDS = {
-    "select_content_direction",
     "confirm_high_risk_facts",
-    "lock_formula_selection",
-    "confirm_strategy_product_facts",
-    "select_title",
     "human_content_approval",
-    "select_cover",
 }
 KNOWLEDGE_POLICIES = {"none", "agent_scope", "frozen_evidence_only"}
 DEFAULT_CONTRACTS = {
     "ContentAgentNodeInputV1",
     "ContentAgentNodeInputV2",
     "AnalyzeContentValueInputV1",
+    "AnalyzeAndSelectDirectionInputV1",
+    "SelectCreationStrategyInputV1",
+    "SelectContentDirectionInputV1",
     "ExplainStrategyInputV1",
     "CollectMissingEvidenceInputV1",
+    "CollectMissingEvidenceInputV2",
+    "CollectSelectedStrategyEvidenceInputV1",
     "RankFormulaCandidatesInputV1",
+    "RankFormulaCandidatesInputV2",
     "CollectStrategyProductEvidenceInputV1",
     "GenerateTitleCandidatesInputV1",
+    "SelectTitleInputV1",
     "BuildOutlineInputV1",
     "GenerateBodyInputV1",
     "PersonaStylePolishInputV1",
+    "GenerateContentInputV1",
     "SemanticReviewInputV1",
     "PlanVisualsInputV1",
     "SubmitCoverJobInputV1",
     "VisualReviewInputV1",
     "ContentValueResultV1",
+    "ContentDirectionDecisionResultV1",
+    "CreationStrategySelectionResultV1",
+    "DirectionSelectionResultV1",
     "StrategyExplanationResultV1",
     "EvidenceCollectionResultV1",
     "ProductEvidenceCollectionResultV1",
     "FormulaRankingResultV1",
     "TitleCandidatesResultV1",
+    "TitleSelectionResultV1",
     "OutlineResultV1",
     "ContentDraftResultV1",
+    "GeneratedContentResultV1",
     "PersonaPolishResultV1",
     "ContentReviewResultV1",
     "VisualPlanResultV1",
@@ -110,16 +117,16 @@ class WorkflowDefinitionPolicy:
 
     @classmethod
     def _validate_v3_nodes(cls, node_by_id: dict[str, dict[str, Any]], catalog: WorkflowCatalog | None) -> None:
-        if len(node_by_id) != 35:
-            raise ValueError("V3 企业内容工作流必须声明 35 个节点")
+        if len(node_by_id) != 15:
+            raise ValueError("V3 简化内容工作流必须声明 15 个节点")
         missing_gates = sorted(V3_HUMAN_GATE_IDS - set(node_by_id))
         if missing_gates:
             raise ValueError(f"V3 工作流缺少必选人工关口: {', '.join(missing_gates)}")
         for node_id in V3_HUMAN_GATE_IDS:
             if node_by_id[node_id].get("type") != "human_review":
                 raise ValueError(f"必选人工关口 {node_id} 必须使用 human_review 类型")
-        if node_by_id.get("match_combination_group", {}).get("type") != "deterministic":
-            raise ValueError("match_combination_group 必须是固定规则节点，禁止 Agent 化")
+        if node_by_id.get("lock_creation_strategy", {}).get("type") != "deterministic":
+            raise ValueError("lock_creation_strategy 必须用固定规则校验并锁定 Agent 选择")
         input_contracts = [node.get("input_contract") for node in node_by_id.values() if node.get("type") == "agent"]
         if len(input_contracts) != len(set(input_contracts)):
             raise ValueError("每个 V3 Agent 节点必须声明独立输入契约，禁止共用通用输入")
@@ -141,19 +148,15 @@ class WorkflowDefinitionPolicy:
     def _validate_v3_control_flow(edges: list[Any]) -> None:
         edge_set = {tuple(edge) for edge in edges}
         required = {
-            ("validate_title_candidates", "revise_if_needed"),
             ("deterministic_validate", "revise_if_needed"),
             ("semantic_review", "revise_if_needed"),
-            ("lock_formula_selection", "resolve_product_material_requirements"),
-            ("resolve_product_material_requirements", "collect_strategy_product_evidence"),
-            ("collect_strategy_product_evidence", "confirm_strategy_product_facts"),
-            ("confirm_strategy_product_facts", "freeze_product_evidence_bundle"),
-            ("freeze_product_evidence_bundle", "generate_title_candidates"),
+            ("select_creation_strategy", "lock_creation_strategy"),
+            ("lock_creation_strategy", "collect_missing_evidence"),
+            ("freeze_evidence_bundle", "generate_content"),
         }
         if not required <= edge_set:
-            raise ValueError("V3 工作流缺少固定回修路由或公式锁定后的产品资料二次 RAG 链路")
+            raise ValueError("V3 工作流缺少策略锁定、单次按需检索或固定回修链路")
         forbidden = {
-            ("validate_title_candidates", "select_title"),
             ("deterministic_validate", "semantic_review"),
             ("revise_if_needed", "human_content_approval"),
         }

@@ -50,11 +50,6 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
         "lists": [_entry("employee", "员工管理", _CRUD)],
     },
     {
-        "module_key": "cover",
-        "module": "封面管理",
-        "lists": [_entry("cover", "封面管理", _CRUD)],
-    },
-    {
         "module_key": "config",
         "module": "配置管理",
         "lists": [

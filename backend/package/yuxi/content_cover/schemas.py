@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -11,6 +12,7 @@ AI_MODES = {"text_to_image", "image_to_image", "multi_reference", "mask"}
 class Image2GlobalConfigUpdate(BaseModel):
     base_url: str = Field(min_length=8, max_length=500)
     api_key: str | None = Field(default=None, max_length=500)
+    model: str = Field(default="gpt-image-2", min_length=1, max_length=255)
 
     @field_validator("base_url")
     @classmethod
@@ -25,6 +27,32 @@ class Image2GlobalConfigUpdate(BaseModel):
     def strip_api_key(cls, value: str | None) -> str | None:
         value = value.strip() if value is not None else None
         return value or None
+
+    @field_validator("model")
+    @classmethod
+    def strip_model(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("image2 模型不能为空")
+        return value
+
+
+class Image2ConfigTestRequest(Image2GlobalConfigUpdate):
+    """A draft configuration may be verified before or after it is saved."""
+
+
+class Image2CapabilityProfile(BaseModel):
+    model: str
+    reachable: bool
+    model_discovered: bool | None = None
+    supports_generation: bool
+    supports_edit: bool
+    supports_multi_reference: bool
+    supports_mask: bool
+    supports_async: bool | None = None
+    unsupported_parameters: list[str] = Field(default_factory=list)
+    checked_at: datetime
+    message: str = ""
 
 
 class CoverComposeCreate(BaseModel):
@@ -51,6 +79,12 @@ class CoverComposeCreate(BaseModel):
         return value
 
 
+class SlotLayoutOverride(BaseModel):
+    x_offset: float = Field(default=0, ge=-0.02, le=0.02)
+    y_offset: float = Field(default=0, ge=-0.02, le=0.02)
+    font_scale: float = Field(default=1, ge=0.85, le=1.15)
+
+
 class CoverGenerateCreate(BaseModel):
     mode: Literal["text_to_image", "image_to_image", "multi_reference", "mask"]
     content_task_id: str | None = None
@@ -63,6 +97,8 @@ class CoverGenerateCreate(BaseModel):
     size: str = "1080x1440"
     n: int = Field(default=1, ge=1, le=4)
     parameters: dict[str, Any] = Field(default_factory=dict)
+    copy_overrides: dict[str, str] = Field(default_factory=dict)
+    layout_overrides: dict[str, SlotLayoutOverride] = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=8, max_length=128)
 
     @field_validator("size")
@@ -109,6 +145,163 @@ class CoverGenerateCreate(BaseModel):
         return self
 
 
+class NormalizedBox(BaseModel):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+    @model_validator(mode="after")
+    def stays_inside_canvas(self):
+        if self.x + self.width > 1.000001 or self.y + self.height > 1.000001:
+            raise ValueError("归一化区域必须位于画布内")
+        return self
+
+
+class TemplateTextStyle(BaseModel):
+    fill: str = "#FFFFFF"
+    stroke: str | None = None
+    stroke_width_ratio: float = Field(default=0, ge=0, le=0.1)
+    font_size_ratio: float = Field(gt=0, le=0.5)
+    bold: bool = False
+    align: Literal["left", "center", "right"] = "center"
+    panel_fill: str | None = None
+    panel_radius_ratio: float = Field(default=0, ge=0, le=0.5)
+
+
+class TemplateTextSlot(BaseModel):
+    id: str
+    role: Literal["eyebrow", "title", "subtitle", "tag", "slogan", "other"]
+    source_text: str
+    box: NormalizedBox
+    style: TemplateTextStyle
+    max_chars: int = Field(ge=1, le=120)
+    max_lines: int = Field(ge=1, le=4)
+
+
+class TemplateAnalysis(BaseModel):
+    processing_version: str
+    canvas_width: int = Field(gt=0)
+    canvas_height: int = Field(gt=0)
+    text_slots: list[TemplateTextSlot] = Field(default_factory=list)
+    decoration_regions: list[NormalizedBox] = Field(default_factory=list)
+    editable_regions: list[NormalizedBox] = Field(default_factory=list)
+    layout_fingerprint: str
+
+
+class CopySlotPlan(BaseModel):
+    slot_id: str
+    role: str
+    source_text: str
+    text: str
+    max_chars: int
+    max_lines: int
+    changed: bool
+
+
+class CopyPlan(BaseModel):
+    processing_version: str
+    source: Literal["template", "content_asset", "manual"]
+    slots: list[CopySlotPlan] = Field(default_factory=list)
+
+
+class RenderPlan(BaseModel):
+    processing_version: str
+    target_width: int
+    target_height: int
+    source_fit: Literal["cover"] = "cover"
+    image2_mode: Literal["edit"] = "edit"
+    locked_regions: list[NormalizedBox] = Field(default_factory=list)
+    editable_regions: list[NormalizedBox] = Field(default_factory=list)
+
+
+class QualityReport(BaseModel):
+    processing_version: str
+    passed: bool
+    output_width: int
+    output_height: int
+    output_format: str
+    locked_ssim: float = Field(ge=0, le=1)
+    layout_deviation: float = Field(ge=0)
+    ocr_accuracy: float = Field(ge=0, le=1)
+    mosaic_count: int = Field(ge=0)
+    residual_text_count: int = Field(ge=0)
+    overflow_count: int = Field(ge=0)
+    failures: list[str] = Field(default_factory=list)
+
+
+class TemplateReplicatePlanCreate(BaseModel):
+    template_asset_id: str
+    source_asset_id: str
+    content_task_id: str | None = None
+    title: str = Field(default="", max_length=60)
+    copy_overrides: dict[str, str] = Field(default_factory=dict)
+    layout_overrides: dict[str, SlotLayoutOverride] = Field(default_factory=dict)
+    size: str = "1080x1440"
+
+    @field_validator("size")
+    @classmethod
+    def supported_size(cls, value: str) -> str:
+        if value != "1080x1440":
+            raise ValueError("模板复刻 V2 当前固定输出 1080×1440 PNG")
+        return value
+
+
+class PosterTextSlot(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    role: Literal["eyebrow", "title", "subtitle", "tag", "slogan", "product", "other"] = "other"
+    source_text: str = Field(default="", max_length=240)
+    editable: bool = True
+    box: NormalizedBox
+    style: TemplateTextStyle
+    max_chars: int = Field(default=24, ge=1, le=120)
+    max_lines: int = Field(default=2, ge=1, le=4)
+
+
+class PosterProductTransform(BaseModel):
+    fit: Literal["cover", "contain"] = "cover"
+    scale: float = Field(default=1, ge=0.5, le=2)
+    focal_x: float = Field(default=0.5, ge=0, le=1)
+    focal_y: float = Field(default=0.5, ge=0, le=1)
+    x_offset: float = Field(default=0, ge=-0.5, le=0.5)
+    y_offset: float = Field(default=0, ge=-0.5, le=0.5)
+
+
+class PosterTemplateUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    category: str | None = Field(default=None, min_length=1, max_length=80)
+    product_box: NormalizedBox | None = None
+    safe_area: NormalizedBox | None = None
+    text_slots: list[PosterTextSlot] | None = Field(default=None, max_length=20)
+    fixed_regions: list[NormalizedBox] | None = Field(default=None, max_length=40)
+    editable_regions: list[NormalizedBox] | None = Field(default=None, max_length=40)
+    status: Literal["ready", "disabled"] | None = None
+
+
+class PosterPreviewCreate(BaseModel):
+    poster_template_id: str
+    product_asset_id: str
+    content_task_id: str | None = None
+    title: str = Field(default="", max_length=60)
+    copy_overrides: dict[str, str] = Field(default_factory=dict)
+    transform: PosterProductTransform = Field(default_factory=PosterProductTransform)
+
+
+class PosterGenerateCreate(PosterPreviewCreate):
+    enhance_with_image2: bool = False
+    enhancement_prompt: str = Field(default="", max_length=2000)
+    negative_prompt: str | None = Field(default=None, max_length=2000)
+    n: int = Field(default=1, ge=1, le=4)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="after")
+    def deterministic_generation_is_single(self):
+        if not self.enhance_with_image2 and self.n != 1:
+            raise ValueError("关闭 image2 美化时确定性大字报仅生成 1 张")
+        return self
+
+
 class CoverRetryCreate(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
 
@@ -121,6 +314,7 @@ class CoverAssetRole(str):
     SOURCE = "source"
     TEMPLATE = "template"
     MASK = "mask"
+    POSTER_TEMPLATE = "poster_template"
     OUTPUT = "output"
 
 

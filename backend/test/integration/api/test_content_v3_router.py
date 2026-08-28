@@ -1,14 +1,30 @@
 from __future__ import annotations
 
 import uuid
+import io
 
 import pytest
+from PIL import Image
 
 
 pytestmark = pytest.mark.asyncio
 
 
+def _png() -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (48, 36), "#315EFB").save(output, format="PNG")
+    return output.getvalue()
+
+
 async def test_v3_strategy_preview_permissions_and_removed_v2_route(test_client, admin_headers, standard_user):
+    material_response = await test_client.post(
+        "/api/material-library/images/import",
+        headers=admin_headers,
+        data={"category": "product"},
+        files=[("files", (f"content-v3-{uuid.uuid4().hex}.png", _png(), "image/png"))],
+    )
+    assert material_response.status_code == 201, material_response.text
+    material = material_response.json()["items"][0]
     bootstrap_response = await test_client.get("/api/content/bootstrap", headers=admin_headers)
     assert bootstrap_response.status_code == 200, bootstrap_response.text
     template = next(item for item in bootstrap_response.json()["industry_templates"] if item["slug"] == "decoration")
@@ -35,6 +51,7 @@ async def test_v3_strategy_preview_permissions_and_removed_v2_route(test_client,
             headers=admin_headers,
             json={
                 "brief": {
+                    "visual_material": {"image_item_id": material["id"]},
                     "audience": ["准备装修的业主"],
                     "form_values": {
                         "brand_name": "V3 测试品牌",
@@ -86,3 +103,7 @@ async def test_v3_strategy_preview_permissions_and_removed_v2_route(test_client,
     finally:
         delete_response = await test_client.delete(f"/api/content/tasks/{task_id}", headers=admin_headers)
         assert delete_response.status_code == 200, delete_response.text
+        material_delete = await test_client.delete(
+            f"/api/material-library/items/{material['id']}", headers=admin_headers
+        )
+        assert material_delete.status_code == 200, material_delete.text

@@ -11,7 +11,7 @@ from yuxi.agents.middlewares.skills import SkillsMiddleware
 from yuxi.agents.middlewares.token_usage import TokenUsageMiddleware
 from yuxi.content.catalog import CONTENT_TYPES
 from yuxi.content.rules import BODY_FORMULAS, METHODS, TITLE_FORMULAS
-from yuxi.content.schemas import ContentRunCreate, ContentTaskCreate
+from yuxi.content.schemas import ContentBriefPayload, ContentRunCreate, ContentTaskCreate
 from yuxi.content.v3.fixtures import load_decoration_matrix
 from yuxi.content.v3.workflow import LEGACY_PLATFORM_WORKFLOW_V3_ID, PLATFORM_WORKFLOW_V3_ID
 
@@ -53,6 +53,63 @@ def test_task_create_rejects_legacy_version_pinning_fields():
             industry_template_id="industry-decoration-v3",
             workflow_version_id="workflow-v2",
         )
+
+
+@pytest.mark.asyncio
+async def test_v34_brief_compiles_without_visual_material(monkeypatch):
+    task = SimpleNamespace(
+        id="task-v34",
+        workflow_version_id=PLATFORM_WORKFLOW_V3_ID,
+        industry_template_version_id="industry-decoration-v3",
+        current_stage="brief",
+        selected_image_item_id=None,
+        selected_poster_template_id=None,
+        runtime_config_snapshot_json={"schema_version": 3},
+        strategy_json={},
+        to_dict=lambda: {
+            "id": "task-v34",
+            "selected_image_item_id": task.selected_image_item_id,
+            "runtime_config_snapshot": task.runtime_config_snapshot_json,
+        },
+    )
+
+    class FakeRepo:
+        def __init__(self, db):
+            del db
+
+        async def get_task_for_user(self, task_id, user, for_update=False):
+            del user, for_update
+            return task if task_id == task.id else None
+
+        async def get_template(self, template_id):
+            return SimpleNamespace(id=template_id)
+
+        async def track(self, *args, **kwargs):
+            del args, kwargs
+
+    class FakeDB:
+        async def commit(self):
+            return None
+
+    monkeypatch.setattr(content_service, "ContentRepository", FakeRepo)
+    monkeypatch.setattr(
+        content_service,
+        "compile_content_brief",
+        lambda **kwargs: ({"form_values": kwargs["brief"].form_values}, []),
+    )
+    monkeypatch.setattr(content_service, "normalize_manual_evidence", lambda task_id, compiled: {"items": []})
+
+    result = await content_service.save_content_brief(
+        FakeDB(),
+        SimpleNamespace(uid="user-1"),
+        task.id,
+        ContentBriefPayload(form_values={"brand_name": "测试品牌"}),
+        compile_now=True,
+    )
+
+    assert result["compiled"] is True
+    assert task.selected_image_item_id is None
+    assert task.runtime_config_snapshot_json["visual_material"] is None
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import io
 import json
@@ -17,21 +18,51 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yuxi.content_cover import COVER_SIZES, COVER_TEMPLATES, COVER_THEMES
+from yuxi.content_cover import COVER_PROCESSING_VERSION, COVER_SIZES, COVER_TEMPLATES, COVER_THEMES
 from yuxi.content_cover.image2_client import Image2Error
 from yuxi.content_cover.image2_settings import (
     get_image2_config_state,
     resolve_image2_config,
     save_image2_config,
+    verify_image2_config,
+)
+from yuxi.content_cover.poster_billboard import (
+    POSTER_PROCESSING_VERSION,
+    PosterBillboardError,
+    analyze_poster_template,
+    build_poster_copy_plan,
+    evaluate_poster_quality,
+    normalize_poster_text_slots,
+    render_poster_billboard,
 )
 from yuxi.content_cover.schemas import (
     CoverComposeCreate,
     CoverGenerateCreate,
     CoverRetryCreate,
+    Image2ConfigTestRequest,
     Image2GlobalConfigUpdate,
+    PosterGenerateCreate,
+    PosterPreviewCreate,
+    PosterTemplateUpdate,
+    TemplateReplicatePlanCreate,
+)
+from yuxi.content_cover.template_replication import (
+    TemplateReplicationError,
+    apply_layout_overrides,
+    analyze_template,
+    build_copy_plan,
+    build_render_plan,
+    ensure_clean_source,
 )
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
+from yuxi.repositories.material_library_repository import MaterialLibraryRepository
+from yuxi.services.material_library_service import (
+    MATERIAL_LIBRARY_BUCKET,
+    create_library_item_for_asset,
+    ensure_material_categories,
+    resolve_material_category,
+)
 from yuxi.services.run_queue_service import (
     get_arq_pool,
     get_last_run_stream_seq,
@@ -41,7 +72,13 @@ from yuxi.services.run_queue_service import (
 )
 from yuxi.storage.minio.client import StorageError, get_minio_client
 from yuxi.storage.postgres.models_business import User
-from yuxi.storage.postgres.models_content import ContentArtifact, ContentCoverAsset, ContentCoverJob
+from yuxi.storage.postgres.models_content import (
+    ContentArtifact,
+    ContentCoverAsset,
+    ContentCoverJob,
+    ContentCoverPosterTemplate,
+    ContentMaterialLibraryItem,
+)
 from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.logging_config import logger
 from yuxi.utils.upload_utils import read_upload_with_limit
@@ -81,7 +118,12 @@ def _compact_cover_copy(value: str, *, limit: int) -> str:
     return (suitable[0] if suitable else normalized[:limit]).strip("，。！？；：,.!?;:—- ")
 
 
-def _template_texts(artifact: ContentArtifact | None, title: str) -> dict[str, Any]:
+def _template_texts(
+    artifact: ContentArtifact | None,
+    title: str,
+    *,
+    source: str | None = None,
+) -> dict[str, Any]:
     summarized_title = _compact_cover_copy(title, limit=14)
     subtitle = ""
     tags: list[str] = []
@@ -102,7 +144,7 @@ def _template_texts(artifact: ContentArtifact | None, title: str) -> dict[str, A
         "subtitle": subtitle,
         "tags": tags,
         "preserve_fixed_copy": True,
-        "source": "content_asset" if artifact is not None else "manual",
+        "source": source or ("content_asset" if artifact is not None else ("manual" if title.strip() else "template")),
     }
 
 
@@ -130,6 +172,22 @@ def serialize_job(item: ContentCoverJob) -> dict[str, Any]:
     data["result_assets"] = [
         {"id": asset_id, "file_url": f"/api/content/covers/assets/{asset_id}/file"} for asset_id in asset_ids
     ]
+    return data
+
+
+def serialize_poster_template(
+    item: ContentCoverPosterTemplate,
+    category_name: str | None = None,
+    library_item: ContentMaterialLibraryItem | None = None,
+) -> dict[str, Any]:
+    data = item.to_dict()
+    if library_item is not None:
+        data["name"] = library_item.display_name
+    data["category"] = library_item.category if library_item is not None else item.category
+    data["category_name"] = category_name or "未分类"
+    data["text_slots"] = normalize_poster_text_slots(data.get("text_slots") or [])
+    data["file_url"] = f"/api/content/covers/assets/{item.asset_id}/file"
+    data["thumbnail_url"] = data["file_url"]
     return data
 
 
@@ -205,10 +263,12 @@ async def create_cover_asset(
         raise _error(400, "COVER_IMAGE_TOO_LARGE", "图片规范化后超过 20 MB，请降低分辨率后重试")
     owner_uid = _owner_uid(user)
     asset_id = f"cca_{uuid.uuid4().hex}"
-    object_name = f"content-covers/{owner_uid}/{asset_id}/image.png"
+    material_type = "image" if role == "source" else "cover_template"
+    object_group = "images" if material_type == "image" else "cover-templates"
+    object_name = f"material-library/{owner_uid}/{object_group}/{asset_id}/image.png"
     try:
         uploaded = await get_minio_client().aupload_file(
-            bucket_name=COVER_BUCKET,
+            bucket_name=MATERIAL_LIBRARY_BUCKET,
             object_name=object_name,
             data=normalized,
             content_type=content_type,
@@ -232,11 +292,488 @@ async def create_cover_asset(
             object_name=uploaded.object_name,
             metadata_json={"original_content_type": file.content_type or ""},
         )
+        if role != "mask":
+            await create_library_item_for_asset(
+                db,
+                asset=item,
+                material_type=material_type,
+                name=Path(file.filename).stem,
+                category="uncategorized",
+                metadata={"cover_role": role},
+            )
         await db.commit()
     except Exception:
         await get_minio_client().adelete_file(uploaded.bucket_name, uploaded.object_name)
         raise
     return {"asset": serialize_asset(item)}
+
+
+def _open_cover_image(data: bytes, *, error_message: str) -> Image.Image:
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            image = ImageOps.exif_transpose(source).convert("RGBA")
+            image.load()
+            return image
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise PosterBillboardError(error_message) from exc
+
+
+async def _analyze_poster_image(image: Image.Image) -> dict[str, Any]:
+    text_analysis = None
+    try:
+        text_analysis = await asyncio.to_thread(
+            analyze_template,
+            image,
+            target_size=(1080, 1440),
+        )
+    except TemplateReplicationError as exc:
+        if "未识别到" not in str(exc):
+            raise
+    return await asyncio.to_thread(analyze_poster_template, image, text_analysis=text_analysis)
+
+
+async def import_poster_templates(
+    db: AsyncSession,
+    user: User,
+    files: list[UploadFile],
+    *,
+    category: str,
+) -> dict[str, Any]:
+    if not files:
+        raise _error(400, "POSTER_TEMPLATE_FILES_REQUIRED", "请至少上传一张大字报蒙版")
+    if len(files) > 100:
+        raise _error(400, "POSTER_TEMPLATE_BATCH_TOO_LARGE", "单次最多导入 100 张蒙版")
+    owner_uid = _owner_uid(user)
+    repo = ContentCoverRepository(db)
+    resolved_category = await resolve_material_category(
+        db,
+        owner_uid=owner_uid,
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+        category_id=category,
+    )
+    category_names = {
+        item.id: item.name for item in await MaterialLibraryRepository(db).list_categories(owner_uid, "cover_template")
+    }
+    results: list[dict[str, Any]] = []
+    uploaded_objects: list[tuple[str, str]] = []
+    created = 0
+    duplicate = 0
+    failed = 0
+    normalized_category = resolved_category.id
+    try:
+        for index, file in enumerate(files):
+            file_name = Path((file.filename or f"poster-{index + 1}.png").replace("\\", "/")).name
+            try:
+                raw = await read_upload_with_limit(
+                    file,
+                    max_size_bytes=MAX_COVER_IMAGE_BYTES,
+                    too_large_message="图片过大，当前仅支持 20 MB 以内的文件",
+                )
+                if not raw:
+                    raise _error(400, "COVER_IMAGE_EMPTY", "上传图片不能为空")
+                normalized, width, height, content_type = _normalize_upload(raw, "poster_template")
+                checksum = hashlib.sha256(normalized).hexdigest()
+                existing = await repo.get_poster_template_by_checksum(owner_uid, checksum)
+                if existing is not None:
+                    existing_asset = await repo.get_asset_for_user(existing.asset_id, owner_uid)
+                    if existing_asset is not None:
+                        library_item = await create_library_item_for_asset(
+                            db,
+                            asset=existing_asset,
+                            material_type="cover_template",
+                            name=existing.name,
+                            category=existing.category,
+                            metadata={"poster_template_id": existing.id},
+                        )
+                        library_item.status = "enabled" if existing.status == "ready" else "disabled"
+                    duplicate += 1
+                    results.append(
+                        {
+                            "file_name": file_name,
+                            "status": "duplicate",
+                            "template": serialize_poster_template(existing, category_names.get(existing.category)),
+                        }
+                    )
+                    continue
+                image = _open_cover_image(normalized, error_message="大字报蒙版不是有效图片")
+                analysis = await _analyze_poster_image(image)
+                asset_id = f"cca_{uuid.uuid4().hex}"
+                template_id = f"cpt_{uuid.uuid4().hex}"
+                object_name = f"material-library/{owner_uid}/cover-templates/{asset_id}/image.png"
+                uploaded = await get_minio_client().aupload_file(
+                    bucket_name=MATERIAL_LIBRARY_BUCKET,
+                    object_name=object_name,
+                    data=normalized,
+                    content_type=content_type,
+                )
+                uploaded_objects.append((uploaded.bucket_name, uploaded.object_name))
+                async with db.begin_nested():
+                    asset = await repo.create_asset(
+                        id=asset_id,
+                        owner_uid=owner_uid,
+                        tenant_id=_tenant_id(user),
+                        content_task_id=None,
+                        role="poster_template",
+                        original_file_name=file_name,
+                        content_type=content_type,
+                        file_size=len(normalized),
+                        image_width=width,
+                        image_height=height,
+                        sha256=checksum,
+                        bucket_name=uploaded.bucket_name,
+                        object_name=uploaded.object_name,
+                        metadata_json={
+                            "original_content_type": file.content_type or "",
+                            "poster_template_id": template_id,
+                            "processing_version": POSTER_PROCESSING_VERSION,
+                        },
+                    )
+                    item = await repo.create_poster_template(
+                        id=template_id,
+                        owner_uid=owner_uid,
+                        tenant_id=_tenant_id(user),
+                        asset_id=asset_id,
+                        name=Path(file_name).stem[:255] or f"大字报画板 {index + 1}",
+                        category=normalized_category,
+                        tags_json=[],
+                        template_type=analysis["template_type"],
+                        canvas_width=1080,
+                        canvas_height=1440,
+                        product_box_json=analysis.get("product_box"),
+                        safe_area_json=analysis["safe_area"],
+                        text_slots_json=analysis["text_slots"],
+                        fixed_regions_json=analysis["fixed_regions"],
+                        editable_regions_json=analysis["editable_regions"],
+                        analysis_json=analysis,
+                        checksum=checksum,
+                        analysis_version=POSTER_PROCESSING_VERSION,
+                        status=analysis["status"],
+                    )
+                    library_item = await create_library_item_for_asset(
+                        db,
+                        asset=asset,
+                        material_type="cover_template",
+                        name=item.name,
+                        category=item.category,
+                        metadata={"poster_template_id": item.id},
+                    )
+                    library_item.status = "enabled" if item.status == "ready" else "disabled"
+                created += 1
+                results.append(
+                    {
+                        "file_name": file_name,
+                        "status": "created",
+                        "template": serialize_poster_template(item, resolved_category.name),
+                    }
+                )
+            except HTTPException as exc:
+                failed += 1
+                detail = exc.detail.get("error", {}) if isinstance(exc.detail, dict) else {}
+                results.append(
+                    {
+                        "file_name": file_name,
+                        "status": "failed",
+                        "error": {
+                            "code": detail.get("code", "POSTER_TEMPLATE_IMPORT_FAILED"),
+                            "message": detail.get("message", str(exc.detail)),
+                        },
+                    }
+                )
+            except IntegrityError as exc:
+                uploaded_key = (uploaded.bucket_name, uploaded.object_name)
+                try:
+                    await get_minio_client().adelete_file(*uploaded_key)
+                except StorageError:
+                    logger.warning("Failed to clean duplicate poster object: %s/%s", *uploaded_key)
+                if uploaded_key in uploaded_objects:
+                    uploaded_objects.remove(uploaded_key)
+                existing = await repo.get_poster_template_by_checksum(owner_uid, checksum)
+                if existing is not None:
+                    existing_asset = await repo.get_asset_for_user(existing.asset_id, owner_uid)
+                    if existing_asset is not None:
+                        library_item = await create_library_item_for_asset(
+                            db,
+                            asset=existing_asset,
+                            material_type="cover_template",
+                            name=existing.name,
+                            category=existing.category,
+                            metadata={"poster_template_id": existing.id},
+                        )
+                        library_item.status = "enabled" if existing.status == "ready" else "disabled"
+                    duplicate += 1
+                    results.append(
+                        {
+                            "file_name": file_name,
+                            "status": "duplicate",
+                            "template": serialize_poster_template(existing, category_names.get(existing.category)),
+                        }
+                    )
+                else:
+                    failed += 1
+                    results.append(
+                        {
+                            "file_name": file_name,
+                            "status": "failed",
+                            "error": {"code": "POSTER_TEMPLATE_IMPORT_CONFLICT", "message": str(exc)},
+                        }
+                    )
+            except (PosterBillboardError, TemplateReplicationError, StorageError) as exc:
+                failed += 1
+                results.append(
+                    {
+                        "file_name": file_name,
+                        "status": "failed",
+                        "error": {"code": "POSTER_TEMPLATE_IMPORT_FAILED", "message": str(exc)},
+                    }
+                )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        for bucket_name, object_name in uploaded_objects:
+            try:
+                await get_minio_client().adelete_file(bucket_name, object_name)
+            except Exception:
+                logger.warning("Failed to clean poster template object: %s/%s", bucket_name, object_name)
+        raise
+    return {
+        "items": results,
+        "summary": {"total": len(files), "created": created, "duplicate": duplicate, "failed": failed},
+    }
+
+
+async def list_poster_templates(
+    db: AsyncSession,
+    user: User,
+    *,
+    category: str | None,
+    status: str | None,
+    query: str | None,
+    page: int,
+    page_size: int,
+) -> dict[str, Any]:
+    categories = await ensure_material_categories(
+        db,
+        owner_uid=_owner_uid(user),
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+    )
+    category_names = {item.id: item.name for item in categories}
+    resolved_category = (
+        await resolve_material_category(
+            db,
+            owner_uid=_owner_uid(user),
+            tenant_id=_tenant_id(user),
+            material_type="cover_template",
+            category_id=category,
+        )
+        if category
+        else None
+    )
+    cover_repo = ContentCoverRepository(db)
+    items, total = await cover_repo.list_poster_templates(
+        _owner_uid(user),
+        category=resolved_category.id if resolved_category else None,
+        status=status,
+        query_text=query,
+        page=page,
+        page_size=page_size,
+    )
+    library_items = await MaterialLibraryRepository(db).list_items_by_asset_ids(
+        _owner_uid(user),
+        [item.asset_id for item in items],
+    )
+    library_by_asset = {item.asset_id: item for item in library_items}
+    for item in items:
+        if item.asset_id in library_by_asset:
+            continue
+        asset = await cover_repo.get_asset_for_user(item.asset_id, _owner_uid(user))
+        if asset is None:
+            continue
+        library_item = await create_library_item_for_asset(
+            db,
+            asset=asset,
+            material_type="cover_template",
+            name=item.name,
+            category=item.category,
+            metadata={"poster_template_id": item.id},
+        )
+        library_item.status = "enabled" if item.status == "ready" else "disabled"
+        library_by_asset[item.asset_id] = library_item
+    await db.commit()
+    return {
+        "items": [
+            serialize_poster_template(
+                item,
+                category_names.get(library_by_asset.get(item.asset_id, item).category),
+                library_by_asset.get(item.asset_id),
+            )
+            for item in items
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+async def get_poster_template(db: AsyncSession, user: User, template_id: str) -> dict[str, Any]:
+    item = await ContentCoverRepository(db).get_poster_template_for_user(template_id, _owner_uid(user))
+    if item is None:
+        raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(item.asset_id)
+    category = await resolve_material_category(
+        db,
+        owner_uid=_owner_uid(user),
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+        category_id=library_item.category if library_item is not None else item.category,
+    )
+    await db.commit()
+    return {"template": serialize_poster_template(item, category.name, library_item)}
+
+
+async def update_poster_template(
+    db: AsyncSession,
+    user: User,
+    template_id: str,
+    payload: PosterTemplateUpdate,
+) -> dict[str, Any]:
+    item = await ContentCoverRepository(db).get_poster_template_for_user(template_id, _owner_uid(user), for_update=True)
+    if item is None:
+        raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
+    if await ContentCoverRepository(db).poster_template_is_selected_by_task(
+        template_id,
+        _owner_uid(user),
+        locked_only=True,
+    ):
+        raise _error(409, "POSTER_TEMPLATE_IN_USE", "模板已被内容任务锁定，不能修改")
+    changes = payload.model_dump(exclude_unset=True, mode="json")
+    if "name" in changes:
+        item.name = changes["name"].strip()
+    if "category" in changes:
+        category = await resolve_material_category(
+            db,
+            owner_uid=_owner_uid(user),
+            tenant_id=_tenant_id(user),
+            material_type="cover_template",
+            category_id=changes["category"],
+        )
+        item.category = category.id
+    else:
+        category = await resolve_material_category(
+            db,
+            owner_uid=_owner_uid(user),
+            tenant_id=_tenant_id(user),
+            material_type="cover_template",
+            category_id=item.category,
+        )
+    field_map = {
+        "product_box": "product_box_json",
+        "safe_area": "safe_area_json",
+        "text_slots": "text_slots_json",
+        "fixed_regions": "fixed_regions_json",
+        "editable_regions": "editable_regions_json",
+    }
+    for source, target in field_map.items():
+        if source in changes:
+            setattr(item, target, changes[source])
+    if "status" in changes:
+        if changes["status"] == "ready" and not item.product_box_json:
+            raise _error(422, "POSTER_TEMPLATE_PRODUCT_BOX_REQUIRED", "标注产品替换区域后才能启用蒙版")
+        item.status = changes["status"]
+    elif "product_box" in changes and item.status == "needs_annotation":
+        item.status = "ready"
+    item.version += 1
+    item.updated_at = utc_now_naive()
+    analysis = dict(item.analysis_json or {})
+    analysis.update(
+        {
+            "product_box": item.product_box_json,
+            "safe_area": item.safe_area_json or {},
+            "text_slots": item.text_slots_json or [],
+            "fixed_regions": item.fixed_regions_json or [],
+            "editable_regions": item.editable_regions_json or [],
+            "status": item.status,
+        }
+    )
+    item.analysis_json = analysis
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(item.asset_id)
+    if library_item is not None:
+        library_item.display_name = item.name
+        library_item.category = item.category
+        library_item.status = "enabled" if item.status == "ready" else "disabled"
+        library_item.updated_at = utc_now_naive()
+    await db.commit()
+    return {"template": serialize_poster_template(item, category.name)}
+
+
+async def reanalyze_poster_template(
+    db: AsyncSession,
+    user: User,
+    template_id: str,
+) -> dict[str, Any]:
+    repo = ContentCoverRepository(db)
+    item = await repo.get_poster_template_for_user(template_id, _owner_uid(user), for_update=True)
+    if item is None:
+        raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
+    asset = await repo.get_asset_for_user(item.asset_id, _owner_uid(user))
+    if asset is None:
+        raise _error(409, "POSTER_TEMPLATE_ASSET_MISSING", "大字报蒙版原始文件不存在")
+    try:
+        data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+        analysis = await _analyze_poster_image(_open_cover_image(data, error_message="大字报蒙版不是有效图片"))
+    except StorageError as exc:
+        raise _error(500, "COVER_STORAGE_FAILED", "大字报蒙版读取失败", retryable=True) from exc
+    item.template_type = analysis["template_type"]
+    item.product_box_json = analysis.get("product_box")
+    item.safe_area_json = analysis["safe_area"]
+    item.text_slots_json = analysis["text_slots"]
+    item.fixed_regions_json = analysis["fixed_regions"]
+    item.editable_regions_json = analysis["editable_regions"]
+    item.analysis_json = analysis
+    item.analysis_version = POSTER_PROCESSING_VERSION
+    item.status = analysis["status"]
+    item.error_message = None
+    item.version += 1
+    item.updated_at = utc_now_naive()
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(item.asset_id)
+    if library_item is not None:
+        library_item.status = "enabled" if item.status == "ready" else "disabled"
+        library_item.updated_at = utc_now_naive()
+    category = await resolve_material_category(
+        db,
+        owner_uid=_owner_uid(user),
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+        category_id=item.category,
+    )
+    await db.commit()
+    return {"template": serialize_poster_template(item, category.name)}
+
+
+async def delete_poster_template(db: AsyncSession, user: User, template_id: str) -> dict[str, bool]:
+    repo = ContentCoverRepository(db)
+    owner_uid = _owner_uid(user)
+    item = await repo.get_poster_template_for_user(template_id, owner_uid, for_update=True)
+    if item is None:
+        raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
+    if await repo.poster_template_is_in_active_job(
+        template_id, owner_uid
+    ) or await repo.poster_template_is_selected_by_task(template_id, owner_uid):
+        raise _error(409, "POSTER_TEMPLATE_IN_USE", "模板正在被内容任务或封面任务使用，不能删除")
+    asset = await repo.get_asset_for_user(item.asset_id, owner_uid, for_update=True)
+    if asset is not None:
+        try:
+            await get_minio_client().adelete_file(asset.bucket_name, asset.object_name)
+        except StorageError as exc:
+            raise _error(500, "COVER_STORAGE_FAILED", "大字报蒙版删除失败", retryable=True) from exc
+        asset.deleted_at = utc_now_naive()
+        library_item = await MaterialLibraryRepository(db).get_item_by_asset(asset.id)
+        if library_item is not None:
+            library_item.deleted_at = utc_now_naive()
+    item.deleted_at = utc_now_naive()
+    await db.commit()
+    return {"success": True}
 
 
 async def get_cover_asset_file(db: AsyncSession, user: User, asset_id: str) -> tuple[bytes, str, str]:
@@ -258,6 +795,8 @@ async def delete_cover_asset(db: AsyncSession, user: User, asset_id: str) -> dic
         raise _error(404, "COVER_ASSET_NOT_FOUND", "封面素材不存在")
     if item.role == "output":
         raise _error(409, "COVER_OUTPUT_DELETE_FORBIDDEN", "生成结果需通过任务历史保留，不能单独删除")
+    if item.role == "poster_template":
+        raise _error(409, "POSTER_TEMPLATE_DELETE_REQUIRED", "请从大字报素材库删除蒙版")
     if await repo.asset_is_in_active_job(item.id, owner_uid):
         raise _error(409, "COVER_ASSET_IN_USE", "素材正在被封面任务使用，任务结束后再删除")
     try:
@@ -265,6 +804,9 @@ async def delete_cover_asset(db: AsyncSession, user: User, asset_id: str) -> dic
     except StorageError as exc:
         raise _error(500, "COVER_STORAGE_FAILED", "封面素材删除失败", retryable=True) from exc
     item.deleted_at = utc_now_naive()
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(item.id)
+    if library_item is not None:
+        library_item.deleted_at = utc_now_naive()
     await db.commit()
     return {"success": True}
 
@@ -367,10 +909,11 @@ async def create_cover_compose_job(db: AsyncSession, user: User, payload: CoverC
         _owner_uid(user),
         for_update=True,
     )
-    if len(assets) != len(payload.asset_ids) or any(item.role != "source" for item in assets):
+    if len(assets) != len(payload.asset_ids) or any(item.role not in {"source", "library_image"} for item in assets):
         raise _error(422, "COVER_SOURCE_ASSET_INVALID", "拼图素材不存在或角色不正确")
     artifact = await _resolve_artifact(db, user, payload.content_task_id)
     request = payload.model_dump()
+    request["processing_version"] = COVER_PROCESSING_VERSION
     job, deduplicated = await _create_job(
         db,
         user,
@@ -413,6 +956,188 @@ async def _content_prompt(
     return "\n\n".join(sections), artifact, linked_title
 
 
+async def _resolve_poster_context(
+    db: AsyncSession,
+    user: User,
+    *,
+    poster_template_id: str,
+    product_asset_id: str,
+    for_update: bool = False,
+) -> tuple[ContentCoverPosterTemplate, ContentCoverAsset, ContentCoverAsset]:
+    repo = ContentCoverRepository(db)
+    owner_uid = _owner_uid(user)
+    template_record = await repo.get_poster_template_for_user(poster_template_id, owner_uid, for_update=for_update)
+    if template_record is None:
+        raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
+    if template_record.status != "ready" or not template_record.product_box_json:
+        raise _error(422, "POSTER_TEMPLATE_NOT_READY", "该蒙版尚未标注产品替换区域或已被停用")
+    template_asset = await repo.get_asset_for_user(template_record.asset_id, owner_uid, for_update=for_update)
+    if template_asset is None or template_asset.role != "poster_template":
+        raise _error(409, "POSTER_TEMPLATE_ASSET_MISSING", "大字报蒙版原始文件不存在")
+    product_asset = await repo.get_asset_for_user(product_asset_id, owner_uid, for_update=for_update)
+    if product_asset is None or product_asset.role not in {"source", "library_image"}:
+        raise _error(422, "POSTER_PRODUCT_ASSET_INVALID", "产品图片不存在或素材角色不正确")
+    return template_record, template_asset, product_asset
+
+
+def _poster_template_snapshot(item: ContentCoverPosterTemplate) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "asset_id": item.asset_id,
+        "name": item.name,
+        "version": item.version,
+        "template_type": item.template_type,
+        "canvas_width": item.canvas_width,
+        "canvas_height": item.canvas_height,
+        "product_box": item.product_box_json,
+        "safe_area": item.safe_area_json or {},
+        "text_slots": normalize_poster_text_slots(item.text_slots_json or []),
+        "fixed_regions": item.fixed_regions_json or [],
+        "editable_regions": item.editable_regions_json or [],
+        "analysis_version": item.analysis_version,
+    }
+
+
+async def _poster_copy_context(
+    db: AsyncSession,
+    user: User,
+    payload: PosterPreviewCreate,
+) -> tuple[ContentArtifact | None, dict[str, Any], dict[str, Any]]:
+    artifact = await _resolve_artifact(db, user, payload.content_task_id)
+    task = (
+        await ContentRepository(db).get_task_for_user(payload.content_task_id, user)
+        if payload.content_task_id
+        else None
+    )
+    linked_title = _linked_content_title(artifact, task)
+    title = payload.title.strip() or linked_title
+    text_context = _template_texts(
+        artifact,
+        title,
+        source="content_asset" if payload.content_task_id else ("manual" if payload.title.strip() else "template"),
+    )
+    if artifact is None and not title:
+        text_context["source"] = "template"
+    return (
+        artifact,
+        text_context,
+        {
+            "title": title,
+            "linked_title": linked_title,
+        },
+    )
+
+
+async def preview_poster_billboard(
+    db: AsyncSession,
+    user: User,
+    payload: PosterPreviewCreate,
+) -> dict[str, Any]:
+    template_record, template_asset, product_asset = await _resolve_poster_context(
+        db,
+        user,
+        poster_template_id=payload.poster_template_id,
+        product_asset_id=payload.product_asset_id,
+    )
+    _, texts, _ = await _poster_copy_context(db, user, payload)
+    copy_plan = build_poster_copy_plan(
+        template_record.text_slots_json or [],
+        title=str(texts.get("title") or ""),
+        subtitle=str(texts.get("subtitle") or ""),
+        tags=list(texts.get("tags") or []),
+        source=str(texts.get("source") or "template"),
+        overrides=payload.copy_overrides,
+    )
+    try:
+        template_data, product_data = await asyncio.gather(
+            get_minio_client().adownload_file(template_asset.bucket_name, template_asset.object_name),
+            get_minio_client().adownload_file(product_asset.bucket_name, product_asset.object_name),
+        )
+        rendered, metadata = await asyncio.to_thread(
+            render_poster_billboard,
+            _open_cover_image(template_data, error_message="大字报蒙版不是有效图片"),
+            _open_cover_image(product_data, error_message="产品图片不是有效图片"),
+            _poster_template_snapshot(template_record),
+            copy_plan,
+            transform=payload.transform.model_dump(mode="json"),
+        )
+        output_image = _open_cover_image(rendered, error_message="大字报预览生成失败")
+        quality_report = evaluate_poster_quality(output_image, _poster_template_snapshot(template_record), metadata)
+    except StorageError as exc:
+        raise _error(500, "COVER_STORAGE_FAILED", "大字报素材读取失败", retryable=True) from exc
+    except PosterBillboardError as exc:
+        raise _error(422, "POSTER_PREVIEW_FAILED", str(exc)) from exc
+    category = await resolve_material_category(
+        db,
+        owner_uid=_owner_uid(user),
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+        category_id=template_record.category,
+    )
+    await db.commit()
+    return {
+        "preview_data_url": f"data:image/png;base64,{base64.b64encode(rendered).decode('ascii')}",
+        "copy_plan": copy_plan,
+        "transform": payload.transform.model_dump(mode="json"),
+        "quality_report": quality_report,
+        "template": serialize_poster_template(template_record, category.name),
+    }
+
+
+async def create_poster_billboard_job(
+    db: AsyncSession,
+    user: User,
+    payload: PosterGenerateCreate,
+) -> dict[str, Any]:
+    template_record, _, _ = await _resolve_poster_context(
+        db,
+        user,
+        poster_template_id=payload.poster_template_id,
+        product_asset_id=payload.product_asset_id,
+        for_update=True,
+    )
+    image2_config = None
+    if payload.enhance_with_image2:
+        if template_record.template_type != "alpha_overlay":
+            raise _error(
+                422,
+                "POSTER_IMAGE2_REQUIRES_ALPHA",
+                "不透明画板仅支持确定性合成，转换为透明蒙版后才能开启 image2 美化",
+            )
+        try:
+            image2_config = await resolve_image2_config(db, owner_uid=_owner_uid(user))
+        except Image2Error as exc:
+            raise _error(503, "IMAGE2_NOT_CONFIGURED", "开启 image2 美化前请先配置可用的中转站") from exc
+    artifact, texts, title_context = await _poster_copy_context(db, user, payload)
+    copy_plan = build_poster_copy_plan(
+        template_record.text_slots_json or [],
+        title=str(texts.get("title") or ""),
+        subtitle=str(texts.get("subtitle") or ""),
+        tags=list(texts.get("tags") or []),
+        source=str(texts.get("source") or "template"),
+        overrides=payload.copy_overrides,
+    )
+    request = {
+        **payload.model_dump(mode="json"),
+        "size": "1080x1440",
+        "processing_version": POSTER_PROCESSING_VERSION,
+        "poster_template_snapshot": _poster_template_snapshot(template_record),
+        "copy_plan": copy_plan,
+        "title": title_context["title"],
+    }
+    job, deduplicated = await _create_job(
+        db,
+        user,
+        mode="poster_billboard",
+        content_task_id=payload.content_task_id,
+        artifact_id=artifact.id if artifact else None,
+        idempotency_key=payload.idempotency_key,
+        request=request,
+        model=image2_config.model if image2_config else None,
+    )
+    return {"job": serialize_job(job), "deduplicated": deduplicated}
+
+
 async def create_cover_generate_job(db: AsyncSession, user: User, payload: CoverGenerateCreate) -> dict[str, Any]:
     try:
         image2_config = await resolve_image2_config(db, owner_uid=_owner_uid(user))
@@ -421,7 +1146,9 @@ async def create_cover_generate_job(db: AsyncSession, user: User, payload: Cover
     repo = ContentCoverRepository(db)
     owner_uid = _owner_uid(user)
     source_assets = await repo.get_assets_for_user(payload.source_asset_ids, owner_uid, for_update=True)
-    if len(source_assets) != len(payload.source_asset_ids) or any(item.role != "source" for item in source_assets):
+    if len(source_assets) != len(payload.source_asset_ids) or any(
+        item.role not in {"source", "library_image"} for item in source_assets
+    ):
         raise _error(422, "COVER_SOURCE_ASSET_INVALID", "原图不存在或角色不正确")
     template = None
     if payload.template_asset_id:
@@ -437,6 +1164,8 @@ async def create_cover_generate_job(db: AsyncSession, user: User, payload: Cover
         if (mask.image_width, mask.image_height) != (source.image_width, source.image_height):
             raise _error(422, "COVER_MASK_SIZE_MISMATCH", "蒙版尺寸必须与原图一致")
     template_replicate = payload.mode == "multi_reference" and bool(payload.template_asset_id)
+    if template_replicate and payload.size != "1080x1440":
+        raise _error(422, "COVER_TEMPLATE_SIZE_INVALID", "模板复刻 V2 当前固定输出 1080×1440 PNG")
     prompt, artifact, linked_title = await _content_prompt(
         db,
         user,
@@ -445,7 +1174,15 @@ async def create_cover_generate_job(db: AsyncSession, user: User, payload: Cover
         allow_empty=template_replicate,
     )
     title = payload.title.strip() or linked_title[:60]
-    template_texts = _template_texts(artifact, title) if template_replicate else None
+    template_texts = (
+        _template_texts(
+            artifact,
+            title,
+            source="content_asset" if payload.content_task_id else ("manual" if payload.title.strip() else "template"),
+        )
+        if template_replicate
+        else None
+    )
     mode_guidance = {
         "text_to_image": "生成高点击率的小红书封面底图，构图简洁、主体突出、层次清晰。",
         "image_to_image": "保留原图主体身份与关键细节，优化构图、光影和小红书封面氛围，不要凭空替换主体。",
@@ -484,6 +1221,7 @@ async def create_cover_generate_job(db: AsyncSession, user: User, payload: Cover
             "原图置于卡片、圆角相框、白色大面板、新增边框、左右分栏、参考板、深色分隔线"
         )
     request = payload.model_dump()
+    request["processing_version"] = COVER_PROCESSING_VERSION
     request["prompt"] = prompt
     request["title"] = title
     request["template_texts"] = template_texts
@@ -494,7 +1232,6 @@ async def create_cover_generate_job(db: AsyncSession, user: User, payload: Cover
             {
                 "template_replicate": True,
                 "quality": "high",
-                "input_fidelity": "high",
                 "output_format": "png",
             }
             if template_replicate
@@ -515,6 +1252,83 @@ async def create_cover_generate_job(db: AsyncSession, user: User, payload: Cover
         model=image2_config.model,
     )
     return {"job": serialize_job(job), "deduplicated": deduplicated}
+
+
+async def preview_template_replication_plan(
+    db: AsyncSession,
+    user: User,
+    payload: TemplateReplicatePlanCreate,
+) -> dict[str, Any]:
+    repo = ContentCoverRepository(db)
+    owner_uid = _owner_uid(user)
+    template = await repo.get_asset_for_user(payload.template_asset_id, owner_uid)
+    source = await repo.get_asset_for_user(payload.source_asset_id, owner_uid)
+    if template is None or template.role != "template":
+        raise _error(422, "COVER_TEMPLATE_ASSET_INVALID", "模板图不存在或角色不正确")
+    if source is None or source.role != "source":
+        raise _error(422, "COVER_SOURCE_ASSET_INVALID", "原图不存在或角色不正确")
+    size = COVER_SIZES[payload.size]
+    try:
+        template_data, source_data = await asyncio.gather(
+            get_minio_client().adownload_file(template.bucket_name, template.object_name),
+            get_minio_client().adownload_file(source.bucket_name, source.object_name),
+        )
+        with Image.open(io.BytesIO(template_data)) as opened_template:
+            template_image = ImageOps.exif_transpose(opened_template).convert("RGB")
+            template_image.load()
+        with Image.open(io.BytesIO(source_data)) as opened_source:
+            source_image = ImageOps.exif_transpose(opened_source).convert("RGB")
+            source_image.load()
+        base_analysis = await asyncio.to_thread(
+            analyze_template,
+            template_image,
+            target_size=(size["width"], size["height"]),
+        )
+        analysis = apply_layout_overrides(base_analysis, payload.layout_overrides)
+        await asyncio.to_thread(ensure_clean_source, source_image, analysis)
+        metadata = dict(template.metadata_json or {})
+        cache = dict(metadata.get("template_replication_analysis") or {})
+        cache[payload.size] = base_analysis.model_dump(mode="json")
+        metadata["template_replication_analysis"] = cache
+        await repo.update_asset_metadata(template, metadata)
+        await db.commit()
+    except (StorageError, UnidentifiedImageError, OSError) as exc:
+        raise _error(422, "COVER_TEMPLATE_ANALYSIS_FAILED", "模板或原图读取失败") from exc
+    except TemplateReplicationError as exc:
+        raise _error(422, "COVER_TEMPLATE_ANALYSIS_FAILED", str(exc)) from exc
+    artifact = await _resolve_artifact(db, user, payload.content_task_id)
+    task = (
+        await ContentRepository(db).get_task_for_user(payload.content_task_id, user)
+        if payload.content_task_id
+        else None
+    )
+    linked_title = _linked_content_title(artifact, task)
+    title = payload.title.strip() or linked_title
+    texts = _template_texts(
+        artifact,
+        title,
+        source="content_asset" if payload.content_task_id else ("manual" if payload.title.strip() else "template"),
+    )
+    if artifact is None and not title:
+        texts["source"] = "template"
+    copy_plan = build_copy_plan(
+        analysis,
+        title=str(texts.get("title") or ""),
+        subtitle=str(texts.get("subtitle") or ""),
+        tags=list(texts.get("tags") or []),
+        source=str(texts.get("source") or "template"),
+        overrides=payload.copy_overrides,
+    )
+    return {
+        "analysis": analysis.model_dump(mode="json"),
+        "copy_plan": copy_plan.model_dump(mode="json"),
+        "render_plan": build_render_plan(analysis).model_dump(mode="json"),
+        "source_preview": {
+            "width": source_image.width,
+            "height": source_image.height,
+            "fit": "cover",
+        },
+    }
 
 
 async def get_cover_job(db: AsyncSession, user: User, job_id: str) -> dict[str, Any]:
@@ -552,7 +1366,10 @@ async def retry_cover_job(
     if old.status not in {"failed", "cancelled", "succeeded"}:
         raise _error(409, "COVER_JOB_NOT_RETRYABLE", "任务结束后才能重新生成")
     image2_config = None
-    if old.mode != "compose":
+    requires_image2 = old.mode not in {"compose", "poster_billboard"} or (
+        old.mode == "poster_billboard" and bool((old.request_json or {}).get("enhance_with_image2"))
+    )
+    if requires_image2:
         try:
             image2_config = await resolve_image2_config(db, owner_uid=_owner_uid(user))
         except Image2Error as exc:
@@ -603,11 +1420,29 @@ async def update_image2_global_config(
             db,
             base_url=payload.base_url,
             api_key=payload.api_key,
+            model=payload.model,
             owner_uid=_owner_uid(user),
         )
     except Image2Error as exc:
         raise _error(422, exc.code, str(exc)) from exc
     return await get_image2_config_state(db, owner_uid=_owner_uid(user))
+
+
+async def test_image2_global_config(
+    db: AsyncSession,
+    user: User,
+    payload: Image2ConfigTestRequest,
+) -> dict[str, Any]:
+    try:
+        return await verify_image2_config(
+            db,
+            base_url=payload.base_url,
+            api_key=payload.api_key,
+            model=payload.model,
+            owner_uid=_owner_uid(user),
+        )
+    except Image2Error as exc:
+        raise _error(422, exc.code, str(exc), retryable=exc.retryable) from exc
 
 
 async def cancel_cover_job(db: AsyncSession, user: User, job_id: str) -> dict[str, Any]:

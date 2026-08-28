@@ -994,18 +994,22 @@ async def test_delegation_agent_resolution_fails_closed(monkeypatch, agent, acce
 
 
 def test_formal_content_agent_catalog_and_conflict_policy():
-    assert len(CONTENT_AGENT_SPECS) == 6
+    assert len(CONTENT_AGENT_SPECS) == 7
     assert {item.slug for item in CONTENT_AGENT_SPECS} == {
         "content-strategy-agent",
         "content-research-agent",
         "content-title-agent",
         "content-body-agent",
+        "content-generation-agent",
         "content-review-agent",
         "content-visual-agent",
     }
     title_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-title-agent")
     assert title_spec.skill_tools == ()
-    assert title_spec.config_version == 3
+    assert title_spec.config_version == 4
+    strategy_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-strategy-agent")
+    assert strategy_spec.reasoning_effort == "medium"
+    assert strategy_spec.config_version == 4
     spec = CONTENT_AGENT_SPECS[0]
     existing = Agent(
         slug=spec.slug,

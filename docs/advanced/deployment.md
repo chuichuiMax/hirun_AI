@@ -32,7 +32,7 @@ cp .env.template .env.prod
 - `JWT_SECRET_KEY`：至少 32 个字符的持久化随机密钥
 - `YUXI_INSTANCE_ID`：至少 12 个字符且部署后保持不变，避免令牌签发方在重启后变化
 - `SILICONFLOW_API_KEY` 等模型密钥
-- `IMAGE2_BASE_URL` / `IMAGE2_API_KEY` / `IMAGE2_MODEL`：封面生成使用的 image2 中转站地址、密钥和模型名；文生图、图片编辑或异步状态接口不是默认路径时，分别设置 `IMAGE2_SUBMIT_PATH`、`IMAGE2_EDIT_PATH` 与 `IMAGE2_STATUS_PATH`。用户也可在封面生成页右上角保存账号级全局 Base URL 与 API Key；账号配置优先，环境变量作为未配置时的回退，API Key 不通过读取接口回显。
+- `IMAGE2_BASE_URL` / `IMAGE2_API_KEY` / `IMAGE2_MODEL`：封面生成使用的 image2 中转站地址、密钥和模型名；文生图、图片编辑或异步状态接口不是默认路径时，分别设置 `IMAGE2_SUBMIT_PATH`、`IMAGE2_EDIT_PATH` 与 `IMAGE2_STATUS_PATH`。用户也可在封面生成页右上角保存账号级全局 Base URL、API Key 与模型；账号配置优先，环境变量作为未配置时的回退，API Key 不通过读取接口回显。模板复刻 V2 默认启用；紧急回滚时可将 `CONTENT_COVER_TEMPLATE_REPLICATION_V2=false`，使 Worker 暂时使用旧版最终合成器。
 - `XHS_GATEWAY_TOKEN`：至少 32 个字符的随机内部浏览器网关密钥，不能使用开发默认值
 - `SANDBOX_IMAGE`：使用固定版本或 digest，禁止使用 `latest`
 - `YUXI_API_IMAGE`、`YUXI_WEB_IMAGE`、`YUXI_SANDBOX_PROVISIONER_IMAGE`：镜像仓库地址

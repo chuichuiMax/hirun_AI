@@ -14,10 +14,10 @@ from yuxi.content.catalog import (
     XHS_CHANNEL_VERSION_ID,
     content_form_fields,
 )
+from yuxi.content.model.workflows.definition import workflow_definition_hash
 from yuxi.content.rules import BODY_FORMULAS, INDUSTRIES, METHODS, TITLE_FORMULAS
 from yuxi.content.v3.fixtures import load_decoration_matrix
 from yuxi.content.v3.workflow import PLATFORM_WORKFLOW_V3_ID, WORKFLOW_V3
-from yuxi.content.model.workflows.definition import workflow_definition_hash
 from yuxi.storage.postgres.models_content import (
     ContentCombinationRule,
     ContentFormula,
@@ -34,7 +34,6 @@ from yuxi.storage.postgres.models_content import (
     VariableDefinition,
 )
 from yuxi.utils.datetime_utils import utc_now_naive
-
 
 PLATFORM_RULE_V3_ID = "content-rules-platform-v3"
 DECORATION_INDUSTRY_PACK_V3_ID = "industry-pack-decoration-v3"
@@ -230,7 +229,7 @@ async def _ensure_workflow_v3(db: AsyncSession) -> None:
             id=PLATFORM_WORKFLOW_V3_ID,
             slug="enterprise-content",
             tenant_id=None,
-            version=6,
+            version=10,
             schema_version=3,
             status="draft",
             definition_json=deepcopy(WORKFLOW_V3),
@@ -253,10 +252,10 @@ def _upgrade_system_workflow_v3(workflow: ContentWorkflowVersion) -> bool:
     if (
         workflow.definition_json == expected_definition
         and workflow.definition_hash == expected_hash
-        and int(getattr(workflow, "version", 0) or 0) == 6
+        and int(getattr(workflow, "version", 0) or 0) == 10
     ):
         return False
-    workflow.version = 6
+    workflow.version = 10
     workflow.schema_version = 3
     workflow.definition_json = expected_definition
     workflow.definition_hash = expected_hash
@@ -506,7 +505,8 @@ async def _activate_v3_seed_data(db: AsyncSession) -> None:
             "review_policy": {
                 "require_sources_for_numbers": True,
                 "block_unsupported_effect_claims": True,
-                "human_title_selection": True,
+                "human_title_selection": False,
+                "agent_title_selection": True,
                 "single_narrative_axis": True,
             },
             "published_at": now,

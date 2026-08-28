@@ -99,7 +99,25 @@ jobs:
           uv run pytest \
             test/unit/content/test_cover_generation.py \
             test/integration/test_cover_generation_flow.py \
-            test/unit/content/test_content_ocr.py
+            test/unit/content/test_content_ocr.py \
+            test/unit/services/test_material_library_service.py \
+            test/unit/scripts/test_migrate_material_library_to_image.py \
+            test/e2e/test_material_library_migration.py
+
+      - name: Lint material library changes
+        working-directory: backend
+        run: |
+          uv run ruff check \
+            package/yuxi/storage/postgres/models_content.py \
+            package/yuxi/repositories/material_library_repository.py \
+            package/yuxi/services/material_library_service.py \
+            package/yuxi/services/content_cover_service.py \
+            server/routers/material_library_router.py \
+            scripts/migrate_material_library_to_image.py \
+            test/unit/services/test_material_library_service.py \
+            test/unit/scripts/test_migrate_material_library_to_image.py \
+            test/integration/test_cover_generation_flow.py \
+            test/e2e/test_material_library_migration.py
 
       - name: Test Xiaohongshu distribution and browser sessions
         working-directory: backend
@@ -124,6 +142,7 @@ jobs:
         working-directory: web
         run: |
           pnpm install --frozen-lockfile
+          pnpm exec eslint .
           pnpm run build
 
       - name: Reclaim runner disk before image builds

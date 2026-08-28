@@ -22,13 +22,25 @@ from yuxi.content_cover.renderer import (
 )
 from yuxi.content_cover.schemas import (
     CoverGenerateCreate,
+    Image2CapabilityProfile,
     Image2GlobalConfigUpdate,
     Image2Input,
     Image2Output,
     Image2Request,
     Image2Submission,
+    TemplateReplicatePlanCreate,
 )
 from yuxi.content_cover.templates import COVER_TEMPLATES
+from yuxi.content_cover.template_replication import (
+    apply_layout_overrides,
+    analyze_template,
+    build_copy_plan,
+    build_edit_mask,
+    ensure_clean_source,
+    evaluate_quality,
+    render_template_replication,
+    _wrap,
+)
 from yuxi.content.schemas import XiaohongshuDistributionCreate
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.services.content_cover_service import (
@@ -45,6 +57,216 @@ def _image(color: str, size: tuple[int, int] = (320, 240)) -> bytes:
     output = io.BytesIO()
     Image.new("RGB", size, color).save(output, format="PNG")
     return output.getvalue()
+
+
+def _template_analysis_fixture():
+    template = Image.new("RGB", (1080, 1440), "#E8E2DC")
+    draw = ImageDraw.Draw(template)
+    draw.text((90, 120), "装修避坑", fill="white", font=content_cover_renderer._font(112, bold=True))
+    draw.rounded_rectangle((90, 280, 880, 350), radius=24, fill="#706B68")
+    draw.text((120, 292), "设计定制/环保定制", fill="#FFF1C7", font=content_cover_renderer._font(42))
+    blocks = [
+        {"text": "装修避坑", "box": (90, 120, 690, 235)},
+        {"text": "设计定制/环保定制", "box": (120, 292, 820, 338)},
+    ]
+    return template, analyze_template(template, target_size=(1080, 1440), ocr_blocks=blocks)
+
+
+def test_template_replication_analysis_and_copy_plan_keep_slot_budgets():
+    _, analysis = _template_analysis_fixture()
+    plan = build_copy_plan(
+        analysis,
+        title="这是一段明显超过模板标题槽位预算的内容资产标题需要被压缩",
+        subtitle="五大装修服务一次讲清",
+        source="content_asset",
+    )
+
+    assert analysis.processing_version == "template-replication-v2"
+    assert [slot.role for slot in analysis.text_slots] == ["title", "subtitle"]
+    assert all(len(item.text) <= item.max_chars for item in plan.slots)
+    assert plan.slots[0].changed is True
+
+
+def test_template_replication_plan_rejects_non_portrait_output():
+    with pytest.raises(ValidationError):
+        TemplateReplicatePlanCreate(
+            template_asset_id="template-asset",
+            source_asset_id="source-asset",
+            size="1080x1080",
+        )
+
+
+def test_template_replication_title_wrap_avoids_orphan_character_line():
+    canvas = Image.new("RGB", (1080, 1440), "white")
+    draw = ImageDraw.Draw(canvas)
+    font = content_cover_renderer._font(100, bold=True)
+    text = "专业服务·干货教育"
+    width = draw.textbbox((0, 0), text[:7], font=font)[2]
+
+    lines = _wrap(draw, text, font, width, 2).splitlines()
+
+    assert len(lines) == 2
+    assert min(map(len, lines)) >= 2
+    assert abs(len(lines[0]) - len(lines[1])) <= 1
+    assert lines[1][0] not in "·，。！？；：、,.!?;:"
+
+
+def test_template_replication_layout_micro_adjustment_is_bounded():
+    _, analysis = _template_analysis_fixture()
+    original = analysis.text_slots[0]
+    adjusted = apply_layout_overrides(
+        analysis,
+        {original.id: {"x_offset": 0.02, "y_offset": -0.02, "font_scale": 1.15}},
+    )
+
+    slot = adjusted.text_slots[0]
+    assert slot.box.x == pytest.approx(original.box.x + 0.02)
+    assert slot.box.y == pytest.approx(original.box.y - 0.02)
+    assert slot.style.font_size_ratio == pytest.approx(original.style.font_size_ratio * 1.15)
+    assert adjusted.layout_fingerprint != analysis.layout_fingerprint
+    with pytest.raises(ValidationError):
+        apply_layout_overrides(analysis, {original.id: {"x_offset": 0.021}})
+
+
+def test_template_replication_mask_only_opens_declared_overlay_regions():
+    _, analysis = _template_analysis_fixture()
+    with Image.open(io.BytesIO(build_edit_mask(analysis))) as mask:
+        assert mask.mode == "RGBA"
+        assert mask.getpixel((5, 5))[3] == 255
+        title = analysis.editable_regions[0]
+        center = (
+            round((title.x + title.width / 2) * mask.width),
+            round((title.y + title.height / 2) * mask.height),
+        )
+        assert mask.getpixel(center)[3] == 0
+
+
+def test_template_replication_rejects_a_generated_cover_as_source():
+    _, analysis = _template_analysis_fixture()
+
+    with pytest.raises(ValueError, match="干净原片"):
+        ensure_clean_source(
+            Image.new("RGB", (1080, 1440), "#FFFFFF"),
+            analysis,
+            recognized_text="".join(slot.source_text for slot in analysis.text_slots),
+        )
+
+
+def test_template_replication_renders_on_locked_source_and_passes_quality_gate():
+    template, analysis = _template_analysis_fixture()
+    source = Image.new("RGB", (1080, 1440), "#36788D")
+    plan = build_copy_plan(
+        analysis,
+        title="装修获客增长",
+        subtitle="五大服务一次讲清",
+        source="content_asset",
+    )
+
+    rendered, overflow_count = render_template_replication(source, template, analysis, plan)
+    with Image.open(io.BytesIO(rendered)) as output:
+        output.load()
+        report = evaluate_quality(
+            source,
+            output,
+            analysis,
+            plan,
+            overflow_count=overflow_count,
+            recognized_text="".join(item.text for item in plan.slots),
+        )
+        assert output.size == (1080, 1440)
+        assert output.format == "PNG"
+        assert output.getpixel((10, 10)) == source.getpixel((10, 10))
+        assert report.locked_ssim >= 0.98
+        assert report.ocr_accuracy == 1
+        assert report.passed is True
+
+
+def test_quality_gate_only_counts_checkerboard_introduced_by_generation():
+    template, analysis = _template_analysis_fixture()
+    source = Image.new("RGB", (1080, 1440), "#36788D")
+    source_draw = ImageDraw.Draw(source)
+    for y in range(1100, 1180, 10):
+        for x in range(800, 880, 10):
+            source_draw.rectangle(
+                (x, y, x + 9, y + 9),
+                fill="#CCCCCC" if (x + y) // 10 % 2 else "#EEEEEE",
+            )
+    plan = build_copy_plan(analysis, source="template")
+    rendered, overflow_count = render_template_replication(source, template, analysis, plan)
+
+    with Image.open(io.BytesIO(rendered)) as output:
+        report = evaluate_quality(
+            source,
+            output,
+            analysis,
+            plan,
+            overflow_count=overflow_count,
+            recognized_text={item.slot_id: item.text for item in plan.slots},
+        )
+
+    assert report.mosaic_count == 0
+    assert report.passed is True
+
+
+def test_quality_gate_detects_old_copy_residue_in_a_changed_slot():
+    template, analysis = _template_analysis_fixture()
+    source = Image.new("RGB", (1080, 1440), "#36788D")
+    plan = build_copy_plan(analysis, title="NEW TITLE", source="content_asset")
+    rendered, overflow_count = render_template_replication(source, template, analysis, plan)
+    recognized = {item.slot_id: item.text for item in plan.slots}
+    changed = next(item for item in plan.slots if item.changed)
+    recognized[changed.slot_id] += changed.source_text
+
+    with Image.open(io.BytesIO(rendered)) as output:
+        report = evaluate_quality(
+            source,
+            output,
+            analysis,
+            plan,
+            overflow_count=overflow_count,
+            recognized_text=recognized,
+        )
+
+    assert report.residual_text_count == 1
+    assert report.passed is False
+
+
+def test_template_reference_is_normalized_to_the_edit_mask_size():
+    reference = content_cover_worker._compact_template_reference(
+        _image("#336699", (768, 1024)),
+        "source.png",
+        target_size=(1080, 1440),
+    )
+
+    with Image.open(io.BytesIO(reference.data)) as normalized:
+        assert normalized.size == (1080, 1440)
+        assert normalized.format == "PNG"
+
+
+def test_image2_output_is_consumed_only_inside_detected_decoration_regions():
+    template = Image.new("RGB", (1080, 1440), "#E8E2DC")
+    ImageDraw.Draw(template).ellipse((910, 60, 990, 140), fill="#FF5A20")
+    analysis = analyze_template(
+        template,
+        target_size=(1080, 1440),
+        ocr_blocks=[{"text": "模板标题", "box": (90, 170, 720, 280)}],
+    )
+    assert analysis.decoration_regions
+    source = Image.new("RGB", (1080, 1440), "#36788D")
+    generated = Image.new("RGB", (1080, 1440), "#35A853")
+    plan = build_copy_plan(analysis, source="template")
+
+    rendered, _ = render_template_replication(
+        source,
+        template,
+        analysis,
+        plan,
+        generated=generated,
+    )
+
+    with Image.open(io.BytesIO(rendered)) as output:
+        assert output.getpixel((950, 100)) != source.getpixel((950, 100))
+        assert output.getpixel((20, 1000)) == source.getpixel((20, 1000))
 
 
 @pytest.fixture(autouse=True)
@@ -76,10 +298,12 @@ def test_global_image2_config_normalizes_values():
     payload = Image2GlobalConfigUpdate(
         base_url=" https://relay.example.com/v1 ",
         api_key=" request-secret ",
+        model=" gpt-image-2 ",
     )
 
     assert payload.base_url == "https://relay.example.com/v1"
     assert payload.api_key == "request-secret"
+    assert payload.model == "gpt-image-2"
 
 
 @pytest.mark.asyncio
@@ -129,6 +353,43 @@ async def test_global_image2_config_preserves_saved_key_and_never_returns_it(
     assert state["base_url"] == "https://new-relay.example.com/v1"
     assert state["api_key_configured"] is True
     assert "api_key" not in state
+
+
+@pytest.mark.asyncio
+async def test_global_image2_config_reuses_environment_key_when_database_setting_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured = {}
+
+    class FakeDb:
+        async def commit(self):
+            captured["committed"] = True
+
+    class FakeRepo:
+        def __init__(self, db):
+            del db
+
+        async def get_image2_setting(self, owner_uid, *, for_update=False):
+            assert owner_uid == "alice"
+            del for_update
+            return None
+
+        async def upsert_image2_setting(self, **values):
+            captured["values"] = values
+            return SimpleNamespace(**values)
+
+    monkeypatch.setenv("IMAGE2_API_KEY", "environment-secret")
+    monkeypatch.setattr(image2_settings, "ContentCoverRepository", FakeRepo)
+
+    await image2_settings.save_image2_config(
+        FakeDb(),
+        base_url="https://relay.example.com/v1",
+        api_key=None,
+        owner_uid="alice",
+    )
+
+    assert captured["values"]["api_key"] == "environment-secret"
+    assert captured["committed"] is True
 
 
 @pytest.mark.parametrize(
@@ -274,6 +535,13 @@ def test_template_texts_are_derived_from_linked_content_asset():
         "preserve_fixed_copy": True,
         "source": "content_asset",
     }
+
+
+def test_template_texts_mark_linked_task_title_as_content_asset_without_artifact():
+    texts = _template_texts(None, "专业服务 · 干货教育", source="content_asset")
+
+    assert texts["title"] == "专业服务·干货教育"
+    assert texts["source"] == "content_asset"
 
 
 def test_linked_content_title_falls_back_to_selected_task_title_or_name():
@@ -475,7 +743,7 @@ def _client(handler, *, resolver=None) -> Image2Client:
 
 
 @pytest.mark.asyncio
-async def test_image2_payload_contains_source_template_and_mask_data_urls():
+async def test_gpt_image_2_generation_payload_uses_supported_contract_only():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -483,14 +751,10 @@ async def test_image2_payload_contains_source_template_and_mask_data_urls():
         encoded = base64.b64encode(_image("#123456")).decode()
         return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
 
-    image = Image2Input(data=_image("#FFFFFF"), content_type="image/png", file_name="source.png")
     request = Image2Request(
-        mode="multi_reference",
+        mode="text_to_image",
         prompt="生成小红书封面",
         size="1080x1440",
-        source_images=[image],
-        template_image=image,
-        mask_image=image,
         extra={
             "strength": 0.7,
             "quality": "low",
@@ -500,18 +764,23 @@ async def test_image2_payload_contains_source_template_and_mask_data_urls():
             "size": "1x1",
         },
     )
-    async with _client(handler) as client:
+    client = Image2Client(
+        Image2Config(base_url="https://relay.example.com/v1", api_key="test-key", model="gpt-image-2"),
+        transport=httpx.MockTransport(handler),
+    )
+    async with client:
         result = await client.submit(request)
         raw, content_type = await client.read_output(result.images[0])
 
     assert result.status == "completed"
-    assert captured["model"] == "image2-test"
-    assert captured["size"] == "1080x1440"
-    assert [item["role"] for item in captured["images"]] == ["source", "template"]
-    assert captured["mask"].startswith("data:image/png;base64,")
-    assert captured["strength"] == 0.7
+    assert captured["model"] == "gpt-image-2"
+    assert captured["size"] == "1024x1536"
+    assert "images" not in captured
+    assert "image" not in captured
+    assert "mask" not in captured
+    assert "strength" not in captured
     assert captured["quality"] == "high"
-    assert captured["input_fidelity"] == "high"
+    assert "input_fidelity" not in captured
     assert captured["output_format"] == "png"
     assert content_type == "image/png"
     assert raw.startswith(b"\x89PNG")
@@ -548,10 +817,63 @@ async def test_template_replicate_places_primary_source_before_style_reference()
     assert captured["body"].index(b'filename="source.png"') < captured["body"].index(b'filename="template.png"')
     assert b'name="image[]"' in captured["body"]
     assert b'name="quality"' in captured["body"]
-    assert b'name="input_fidelity"' in captured["body"]
+    assert b'name="input_fidelity"' not in captured["body"]
     assert b'name="output_format"' in captured["body"]
     assert b"high" in captured["body"]
     assert b"png" in captured["body"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["image_to_image", "multi_reference", "mask"])
+async def test_all_image_edit_modes_use_multipart_edit_endpoint(mode: str):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = request.content
+        encoded = base64.b64encode(_image("#123456")).decode()
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
+
+    source = Image2Input(data=_image("#FFFFFF"), content_type="image/png", file_name="source.png")
+    template = Image2Input(data=_image("#000000"), content_type="image/png", file_name="template.png")
+    request = Image2Request(
+        mode=mode,
+        prompt="编辑封面",
+        size="1080x1440",
+        source_images=[source],
+        template_image=template if mode == "multi_reference" else None,
+        mask_image=template if mode == "mask" else None,
+    )
+
+    async with _client(handler) as client:
+        await client.submit(request)
+
+    assert captured["path"].endswith("/images/edits")
+    assert b'filename="source.png"' in captured["body"]
+    assert (b'filename="template.png"' in captured["body"]) is (mode in {"multi_reference", "mask"})
+    assert b'name="input_fidelity"' not in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_image2_capability_probe_reports_model_contract_without_paid_generation():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        return httpx.Response(200, json={"data": [{"id": "gpt-image-2"}]})
+
+    client = Image2Client(
+        Image2Config(base_url="https://relay.example.com/v1", api_key="test-key", model="gpt-image-2"),
+        transport=httpx.MockTransport(handler),
+    )
+    async with client:
+        profile = await client.probe_capabilities()
+
+    assert isinstance(profile, Image2CapabilityProfile)
+    assert calls == [("GET", "/v1/models")]
+    assert profile.model_discovered is True
+    assert profile.supports_edit is True
+    assert "input_fidelity" in profile.unsupported_parameters
 
 
 @pytest.mark.asyncio
@@ -892,10 +1214,11 @@ async def test_worker_generates_multiple_candidates_sequentially(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_worker_template_replica_uses_two_references_and_full_generated_canvas(
+async def test_worker_template_replica_uses_masked_edit_and_locked_source_canvas(
     monkeypatch: pytest.MonkeyPatch,
 ):
     captured = {}
+    _, analysis = _template_analysis_fixture()
     source_asset = SimpleNamespace(role="source", content_type="image/png", original_file_name="source.png")
     template_asset = SimpleNamespace(role="template", content_type="image/png", original_file_name="template.png")
 
@@ -937,7 +1260,12 @@ async def test_worker_template_replica_uses_two_references_and_full_generated_ca
     monkeypatch.setattr(content_cover_worker, "_check_cancelled", no_event)
     monkeypatch.setattr(content_cover_worker, "_set_job", no_event)
     monkeypatch.setattr(content_cover_worker, "_emit", no_event)
-    monkeypatch.setattr(content_cover_renderer, "_extract_template_text_blocks", lambda image: [])
+    monkeypatch.setattr(content_cover_worker, "analyze_template", lambda image, target_size: analysis)
+    monkeypatch.setattr(
+        content_cover_worker,
+        "recognize_slot_texts",
+        lambda image, current_analysis: "装修避坑设计定制/环保定制",
+    )
     job = SimpleNamespace(
         id="ccj-template-transfer",
         owner_uid="alice",
@@ -962,7 +1290,8 @@ async def test_worker_template_replica_uses_two_references_and_full_generated_ca
     assert request.source_images[0].content_type == "image/png"
     assert request.template_image.file_name == "template-reference.png"
     assert request.template_image.content_type == "image/png"
-    assert request.mask_image is None
+    assert request.mask_image.file_name == "template-edit-mask.png"
+    assert request.mask_image.content_type == "image/png"
     with Image.open(io.BytesIO(request.source_images[0].data)) as source_reference:
         assert source_reference.size == (1080, 1440)
         assert source_reference.getpixel((200, 500))[2] > source_reference.getpixel((200, 500))[1]
@@ -970,8 +1299,8 @@ async def test_worker_template_replica_uses_two_references_and_full_generated_ca
         assert template_reference.size == (1080, 1440)
         assert template_reference.getpixel((200, 500))[1] > template_reference.getpixel((200, 500))[2]
     with Image.open(io.BytesIO(output)) as result:
-        assert result.getpixel((10, 10)) == (238, 68, 34)
-        assert result.getpixel((540, 720)) == (238, 68, 34)
+        assert result.getpixel((10, 10)) == (34, 68, 170)
+        assert result.getpixel((540, 720)) == (34, 68, 170)
 
 
 @pytest.mark.asyncio

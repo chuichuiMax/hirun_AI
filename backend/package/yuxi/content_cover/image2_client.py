@@ -7,11 +7,18 @@ import os
 import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 
-from yuxi.content_cover.schemas import Image2Input, Image2Output, Image2Request, Image2Submission
+from yuxi.content_cover.schemas import (
+    Image2CapabilityProfile,
+    Image2Input,
+    Image2Output,
+    Image2Request,
+    Image2Submission,
+)
 from yuxi.utils.logging_config import logger
 
 
@@ -152,36 +159,28 @@ class Image2Client:
         encoded = base64.b64encode(image.data).decode("ascii")
         return f"data:{image.content_type};base64,{encoded}"
 
+    @property
+    def _is_gpt_image_2(self) -> bool:
+        return self.config.model.lower().startswith("gpt-image-2")
+
+    @staticmethod
+    def _provider_size(size: str) -> str:
+        return "1024x1024" if size == "1080x1080" else "1024x1536"
+
+    def _prompt(self, request: Image2Request) -> str:
+        if not request.negative_prompt:
+            return request.prompt
+        return f"{request.prompt}\n\n必须避免：{request.negative_prompt}"
+
     def build_payload(self, request: Image2Request) -> dict:
         payload: dict = {
             "model": self.config.model,
-            "prompt": request.prompt,
-            "size": request.size,
+            "prompt": self._prompt(request),
+            "size": self._provider_size(request.size),
             "n": request.n,
-            "mode": request.mode,
             "quality": "high",
             "output_format": "png",
         }
-        if request.negative_prompt:
-            payload["negative_prompt"] = request.negative_prompt
-        inputs = [
-            {"role": "source", "image": self._data_url(item), "file_name": item.file_name}
-            for item in request.source_images
-        ]
-        if request.template_image:
-            inputs.append(
-                {
-                    "role": "template",
-                    "image": self._data_url(request.template_image),
-                    "file_name": request.template_image.file_name,
-                }
-            )
-        if inputs:
-            payload["images"] = inputs
-            payload["image"] = inputs[0]["image"] if len(inputs) == 1 else [item["image"] for item in inputs]
-            payload["input_fidelity"] = "high"
-        if request.mask_image:
-            payload["mask"] = self._data_url(request.mask_image)
         if self.config.send_response_format:
             payload["response_format"] = "b64_json"
         reserved = {
@@ -200,10 +199,41 @@ class Image2Client:
             "response_format",
             "template_replicate",
         }
+        allowed_extra = {"background", "moderation", "output_compression", "user"}
         for key, value in request.extra.items():
-            if key not in reserved:
+            if key not in reserved and key in allowed_extra:
                 payload[key] = value
         return payload
+
+    async def probe_capabilities(self) -> Image2CapabilityProfile:
+        """Probe relay reachability and model discovery without creating a paid image."""
+        body = await self._request_json("GET", self._url("/models"))
+        candidates = body.get("data") or body.get("models") or []
+        if isinstance(candidates, dict):
+            candidates = candidates.get("data") or candidates.get("items") or list(candidates.values())
+        model_ids = {
+            str(item.get("id") or item.get("model") or item.get("name") or "").strip()
+            for item in candidates
+            if isinstance(item, dict)
+        }
+        model_discovered = self.config.model in model_ids
+        return Image2CapabilityProfile(
+            model=self.config.model,
+            reachable=True,
+            model_discovered=model_discovered,
+            supports_generation=True,
+            supports_edit=True,
+            supports_multi_reference=True,
+            supports_mask=True,
+            supports_async=None,
+            unsupported_parameters=["input_fidelity"] if self._is_gpt_image_2 else [],
+            checked_at=datetime.now(UTC),
+            message=(
+                "中转站可访问，已发现目标模型"
+                if model_discovered
+                else "中转站可访问，但模型列表中未发现目标模型；请确认中转站别名配置"
+            ),
+        )
 
     @staticmethod
     def _extract_outputs(body: dict) -> list[Image2Output]:
@@ -346,7 +376,9 @@ class Image2Client:
 
     async def submit(self, request: Image2Request, *, idempotency_key: str | None = None) -> Image2Submission:
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}
-        if request.extra.get("template_replicate") and request.source_images:
+        if request.mode != "text_to_image":
+            if not request.source_images:
+                raise Image2Error("IMAGE2_INPUT_REQUIRED", "image2 编辑请求至少需要一张原图")
             references = [*request.source_images]
             if request.template_image:
                 references.append(request.template_image)
@@ -363,20 +395,20 @@ class Image2Client:
                         ),
                     )
                 )
-            prompt = request.prompt
-            if request.negative_prompt:
-                prompt = f"{prompt}\n\n必须避免：{request.negative_prompt}"
             form = {
                 "model": self.config.model,
-                "prompt": prompt,
-                "size": "1024x1024" if request.size == "1080x1080" else "1024x1536",
+                "prompt": self._prompt(request),
+                "size": self._provider_size(request.size),
                 "n": str(request.n),
                 "quality": "high",
-                "input_fidelity": "high",
                 "output_format": "png",
             }
             if self.config.send_response_format:
                 form["response_format"] = "b64_json"
+            for key in ("background", "output_compression", "user"):
+                value = request.extra.get(key)
+                if value is not None:
+                    form[key] = str(value)
             body = await self._request_json(
                 "POST",
                 self._url(self.config.edit_path),
