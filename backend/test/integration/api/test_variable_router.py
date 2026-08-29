@@ -29,6 +29,8 @@ async def test_variable_crud_search_and_toggle(test_client, admin_headers):
     variable_pk = item["id"]
     assert item["variable_code"].startswith("FWTD")
     assert item["service_entry"] == service_entry
+    assert item["ports"] == ["pc", "app"]
+    assert item["editions"] == ["quick", "pro"]
 
     try:
         searched = await test_client.get(
@@ -66,10 +68,12 @@ async def test_variable_crud_search_and_toggle(test_client, admin_headers):
         toggled = await test_client.patch(
             f"/api/content-variables/{variable_pk}",
             headers=admin_headers,
-            json={"enabled": False},
+            json={"enabled": False, "ports": ["app"], "editions": ["quick"]},
         )
         assert toggled.status_code == 200, toggled.text
         assert toggled.json()["variable"]["enabled"] is False
+        assert toggled.json()["variable"]["ports"] == ["app"]
+        assert toggled.json()["variable"]["editions"] == ["quick"]
     finally:
         deleted = await test_client.delete(f"/api/content-variables/{variable_pk}", headers=admin_headers)
         assert deleted.status_code == 200, deleted.text

@@ -1514,6 +1514,9 @@ class ContentEmployee(Base):
     login_port = Column(JSON, nullable=False, default=list)
     role = Column(String(64), nullable=False)
     enabled = Column(Boolean, nullable=False, default=True, index=True)
+    avatar = Column(String(1024), nullable=True)
+    bio = Column(Text, nullable=True)
+    last_login_at = Column(DateTime, nullable=True)
     created_by = Column(String(64), nullable=False, index=True)
     created_at = Column(DateTime, default=utc_now_naive)
     updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
@@ -1528,6 +1531,9 @@ class ContentEmployee(Base):
             "login_port": list(self.login_port or []),
             "role": self.role,
             "enabled": bool(self.enabled),
+            "avatar": self.avatar,
+            "bio": self.bio or "",
+            "last_login_at": format_utc_datetime(self.last_login_at),
             "created_by": self.created_by,
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
@@ -1597,6 +1603,8 @@ class ContentVariable(Base):
     variable_code = Column(String(32), nullable=False, unique=True, index=True)
     name = Column(String(64), nullable=False, unique=True, index=True)
     service_entry = Column(String(64), nullable=False, index=True)
+    ports = Column(JSON, nullable=False, default=list)
+    editions = Column(JSON, nullable=False, default=list)
     enabled = Column(Boolean, nullable=False, default=True, index=True)
     created_by = Column(String(64), nullable=False, index=True)
     created_at = Column(DateTime, default=utc_now_naive)
@@ -1608,8 +1616,56 @@ class ContentVariable(Base):
             "variable_code": self.variable_code,
             "name": self.name,
             "service_entry": self.service_entry,
+            "ports": list(self.ports or []),
+            "editions": list(self.editions or []),
             "enabled": bool(self.enabled),
             "created_by": self.created_by,
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
         }
+
+
+class ContentCover(Base):
+    """内容封面。"""
+
+    __tablename__ = "content_covers"
+
+    id = Column(String(64), primary_key=True)
+    category = Column(String(32), nullable=False, index=True)
+    image_url = Column(String(1024), nullable=False)
+    image_name = Column(String(255), nullable=False)
+    title = Column(String(120), nullable=False, default="")
+    generation_count = Column(Integer, nullable=False, default=0)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "category": self.category,
+            "image_url": self.image_url,
+            "image_name": self.image_name,
+            "title": self.title or "",
+            "generation_count": self.generation_count or 0,
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentMpFavorite(Base):
+    """小程序内容收藏，按员工隔离。"""
+
+    __tablename__ = "content_mp_favorites"
+
+    id = Column(String(64), primary_key=True)
+    employee_id = Column(
+        String(64), ForeignKey("content_employees.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+
+    __table_args__ = (UniqueConstraint("employee_id", "task_id", name="uq_content_mp_favorites_employee_task"),)

@@ -120,7 +120,7 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
     if current_version >= spec.config_version:
         return False
     if agent.created_by != "system" or agent.updated_by != "system":
-        raise ValueError(f"正式内容 Agent '{spec.slug}' 已被用户修改，需要显式迁移")
+        return False
     context = (agent.config_json or {}).get("context")
     if (
         agent.backend_id != DEFAULT_AGENT_BACKEND_ID

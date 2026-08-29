@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse, hook_config
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END
 from langgraph.types import Command
@@ -15,6 +15,37 @@ class ContentNodeResultMiddleware(AgentMiddleware):
     """Require a content Agent to finish through its dedicated result tool."""
 
     RESULT_TOOL_NAME = "submit_content_node_result"
+
+    @staticmethod
+    def _stop_before_reentering_model(runtime: Any) -> dict[str, str] | None:
+        """结果已验收后，在工具节点的固定回边触发模型前结束图执行。"""
+        collector = getattr(runtime.context, "_content_node_result_collector", None)
+        if collector is not None and collector.submission_count:
+            return {"jump_to": "end"}
+        return None
+
+    @hook_config(can_jump_to=["end"])
+    def before_model(self, state: Any, runtime: Any) -> dict[str, str] | None:
+        del state
+        return self._stop_before_reentering_model(runtime)
+
+    @hook_config(can_jump_to=["end"])
+    async def abefore_model(self, state: Any, runtime: Any) -> dict[str, str] | None:
+        del state
+        return self._stop_before_reentering_model(runtime)
+
+    def _finish_after_result_submission(self, request: Any, result: Any) -> Any:
+        tool_call = getattr(request, "tool_call", None) or {}
+        tool_name = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", None)
+        collector = getattr(request.runtime.context, "_content_node_result_collector", None)
+        if (
+            tool_name == self.RESULT_TOOL_NAME
+            and collector is not None
+            and collector.submission_count
+            and isinstance(result, ToolMessage)
+        ):
+            return Command(goto=END, update={"messages": [result]})
+        return result
 
     @staticmethod
     def _result_submission_messages(messages: list[Any]) -> list[Any]:
@@ -43,23 +74,14 @@ class ContentNodeResultMiddleware(AgentMiddleware):
         with content_tool_runtime(request.runtime):
             result = await handler(request)
 
-        tool_call = getattr(request, "tool_call", None) or {}
-        tool_name = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", None)
-        collector = getattr(request.runtime.context, "_content_node_result_collector", None)
-        if (
-            tool_name == self.RESULT_TOOL_NAME
-            and collector is not None
-            and collector.submission_count
-            and isinstance(result, ToolMessage)
-        ):
-            return Command(goto=END, update={"messages": [result]})
-        return result
+        return self._finish_after_result_submission(request, result)
 
     def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
         from yuxi.agents.toolkits.content.tools import content_tool_runtime
 
         with content_tool_runtime(request.runtime):
-            return handler(request)
+            result = handler(request)
+        return self._finish_after_result_submission(request, result)
 
     async def awrap_model_call(
         self,

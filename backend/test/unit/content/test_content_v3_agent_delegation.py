@@ -6,8 +6,12 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from langchain.agents import create_agent
 from langchain.agents.middleware import ModelResponse
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.tools import tool
 from langgraph.graph import END
 from langgraph.types import Command
 
@@ -593,6 +597,113 @@ async def test_successful_structured_result_submission_ends_content_agent_loop()
     assert result.update == {"messages": [tool_message]}
 
 
+def test_successful_structured_result_submission_ends_sync_content_agent_loop():
+    collector = SimpleNamespace(submission_count=0)
+    context = SimpleNamespace(_content_node_result_collector=collector)
+    request = SimpleNamespace(
+        runtime=SimpleNamespace(context=context),
+        tool_call={"name": "submit_content_node_result"},
+    )
+    tool_message = ToolMessage(
+        content='{"accepted":true}',
+        tool_call_id="call-result",
+        name="submit_content_node_result",
+    )
+
+    def handler(_request):
+        collector.submission_count = 1
+        return tool_message
+
+    result = ContentNodeResultMiddleware().wrap_tool_call(request, handler)
+
+    assert isinstance(result, Command)
+    assert result.goto == END
+    assert result.update == {"messages": [tool_message]}
+
+
+@pytest.mark.asyncio
+async def test_accepted_result_stops_before_async_model_reentry():
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            _content_node_result_collector=SimpleNamespace(submission_count=1),
+        )
+    )
+
+    result = await ContentNodeResultMiddleware().abefore_model({}, runtime)
+
+    assert result == {"jump_to": "end"}
+
+
+def test_unsubmitted_result_keeps_model_loop_open():
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            _content_node_result_collector=SimpleNamespace(submission_count=0),
+        )
+    )
+
+    result = ContentNodeResultMiddleware().before_model({}, runtime)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_accepted_result_ends_compiled_agent_graph_without_second_model_call():
+    collector = SimpleNamespace(submission_count=0)
+
+    @tool
+    def submit_content_node_result() -> str:
+        """提交已通过业务校验的内容节点结果。"""
+        collector.submission_count += 1
+        return '{"accepted":true}'
+
+    class SingleCallModel(BaseChatModel):
+        call_count: int = 0
+
+        @property
+        def _llm_type(self) -> str:
+            return "single-call-content-result-test"
+
+        def bind_tools(self, tools, **kwargs):  # noqa: ARG002
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # noqa: ARG002
+            self.call_count += 1
+            if self.call_count > 1:
+                raise AssertionError("结果提交成功后不应再次调用模型")
+            return ChatResult(
+                generations=[
+                    ChatGeneration(
+                        message=AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "id": "call-result",
+                                    "name": "submit_content_node_result",
+                                    "args": {},
+                                }
+                            ],
+                        )
+                    )
+                ]
+            )
+
+    model = SingleCallModel()
+    graph = create_agent(
+        model=model,
+        tools=[submit_content_node_result],
+        middleware=[ContentNodeResultMiddleware()],
+    )
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content="提交审核结果")]},
+        context=SimpleNamespace(_content_node_result_collector=collector),
+    )
+
+    assert model.call_count == 1
+    assert collector.submission_count == 1
+    assert isinstance(result["messages"][-1], ToolMessage)
+
+
 @pytest.mark.asyncio
 async def test_rejected_structured_result_submission_keeps_content_agent_loop_open():
     collector = SimpleNamespace(submission_count=0)
@@ -1065,8 +1176,9 @@ def test_system_content_agent_migration_does_not_overwrite_user_changes():
         updated_by="user-1",
     )
 
-    with pytest.raises(ValueError, match="已被用户修改"):
-        migrate_system_content_agent(existing, spec)
+    assert migrate_system_content_agent(existing, spec) is False
+    assert existing.config_version == 1
+    assert existing.updated_by == "user-1"
 
 
 def test_delegation_schema_has_unique_child_run_and_parent_node_index():

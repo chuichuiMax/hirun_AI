@@ -9,9 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yuxi.content.generation import SKILL_VERSIONS, review_generated_content
+from yuxi.content.generation import SKILL_VERSIONS, refine_generated_content, review_generated_content
 from yuxi.content.rules import CONTENT_GOALS
 from yuxi.content.schemas import (
+    ContentArtifactAIEdit,
     ContentArtifactUpdate,
     ContentArtifactRegenerate,
     ContentBriefPayload,
@@ -1605,6 +1606,7 @@ async def update_content_artifact(
     artifact.current_version += 1
     artifact.status = "draft"
     artifact.review_snapshot = {"status": "pending", "checks": []}
+    artifact.edit_diff_snapshot = []
     artifact.updated_at = utc_now_naive()
     task.status = "review_required"
     task.current_stage = "review"
@@ -1621,6 +1623,146 @@ async def update_content_artifact(
     )
     await db.commit()
     return {"artifact": artifact.to_dict()}
+
+
+async def ai_edit_content_artifact(
+    db: AsyncSession,
+    user: User,
+    artifact_id: str,
+    payload: ContentArtifactAIEdit,
+) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    artifact = await repo.get_artifact_for_user(artifact_id, user)
+    if artifact is None:
+        raise _content_error(404, "CONTENT_ARTIFACT_NOT_FOUND", "内容资产不存在")
+    task = await repo.get_task_for_user(artifact.task_id, user)
+    _require_v3_task(task)
+    if not task.latest_run_id:
+        raise _content_error(409, "CONTENT_AI_EDIT_WORKFLOW_INCOMPLETE", "内容工作流尚未执行完成")
+    run = await AgentRunRepository(db).get_run(task.latest_run_id)
+    if run is None or run.status != "completed":
+        raise _content_error(409, "CONTENT_AI_EDIT_WORKFLOW_INCOMPLETE", "内容工作流完成后才能使用 AI 修改")
+    if artifact.current_version != payload.expected_version:
+        raise _content_error(
+            409,
+            "CONTENT_ARTIFACT_VERSION_CONFLICT",
+            "内容版本已更新，请刷新后重新提交修改要求",
+            current_version=artifact.current_version,
+        )
+
+    model_spec = _validate_model_spec(payload.model_spec)
+    source_version = artifact.current_version
+    source_title = artifact.title
+    source_body = artifact.body
+    source_topics = list(artifact.topics or [])
+    strategy_snapshot = deepcopy(artifact.strategy_snapshot or {})
+    evidence_snapshot = deepcopy(artifact.evidence_snapshot or {})
+    validation_strategy = {
+        "methods": strategy_snapshot.get("creation_methods") or [],
+        "title_formula_code": (strategy_snapshot.get("title_formula") or {}).get("code"),
+        "body_formula_code": (strategy_snapshot.get("body_formula") or {}).get("code"),
+    }
+    latest_run_id = task.latest_run_id
+    refined = await refine_generated_content(
+        model_spec=model_spec,
+        instruction=payload.instruction,
+        title=source_title,
+        body=source_body,
+        topics=source_topics,
+        brief=deepcopy(task.brief_json or {}),
+        strategy=strategy_snapshot,
+        evidence_bundle=evidence_snapshot,
+    )
+    refined["topics"] = _clean_list(refined["topics"])
+    validation = validate_content(
+        title=refined["title"],
+        body=refined["body"],
+        topics=refined["topics"],
+        brief=task.brief_json or {},
+        evidence_bundle=evidence_snapshot,
+        strategy=validation_strategy,
+    )
+    if validation["status"] == "blocked":
+        raise _content_error(
+            422,
+            "CONTENT_AI_EDIT_VALIDATION_FAILED",
+            "AI 修改结果未通过内容校验，原版本未发生变化",
+            checks=validation["checks"],
+        )
+
+    changes = []
+    for field, before in (("title", source_title), ("body", source_body), ("topics", source_topics)):
+        after = refined[field]
+        if before != after:
+            changes.append({"field": field, "before": before, "after": after})
+    if not changes:
+        raise _content_error(422, "CONTENT_AI_EDIT_NO_CHANGES", "AI 未产生可保存的内容修改")
+
+    locked_artifact = await repo.get_artifact_for_user(artifact_id, user, for_update=True)
+    if locked_artifact is None:
+        raise _content_error(404, "CONTENT_ARTIFACT_NOT_FOUND", "内容资产不存在")
+    await db.refresh(locked_artifact)
+    locked_task = await repo.get_task_for_user(locked_artifact.task_id, user, for_update=True)
+    _require_v3_task(locked_task)
+    if locked_artifact.current_version != source_version or locked_task.latest_run_id != latest_run_id:
+        raise _content_error(
+            409,
+            "CONTENT_ARTIFACT_VERSION_CONFLICT",
+            "内容或工作流状态已更新，请刷新后重新提交修改要求",
+            current_version=locked_artifact.current_version,
+        )
+
+    changed_fields = [item["field"] for item in changes]
+    field_labels = {"title": "标题", "body": "正文", "topics": "话题"}
+    reply = f"已按要求修改{'、'.join(field_labels[field] for field in changed_fields)}，生成新版本。"
+    locked_artifact.title = refined["title"]
+    locked_artifact.body = refined["body"]
+    locked_artifact.topics = refined["topics"]
+    locked_artifact.current_version += 1
+    locked_artifact.status = "draft"
+    locked_artifact.review_snapshot = {"status": "pending", "checks": []}
+    locked_artifact.edit_diff_snapshot = [
+        {
+            "type": "ai_edit",
+            "instruction": payload.instruction,
+            "reply": reply,
+            "changed_fields": changed_fields,
+        },
+        *changes,
+    ]
+    locked_artifact.updated_at = utc_now_naive()
+    locked_task.status = "review_required"
+    locked_task.current_stage = "review"
+    locked_task.review_json = locked_artifact.review_snapshot
+    await repo.save_artifact_version(
+        artifact=locked_artifact,
+        source_type="ai_edit",
+        model_spec=model_spec,
+        skill_versions={},
+        rule_version_id=locked_task.rule_version_id,
+        knowledge_snapshot=locked_task.evidence_json or {},
+        review_snapshot=locked_artifact.review_snapshot,
+        created_by=str(user.uid),
+    )
+    await repo.track(
+        "content_artifact_ai_edited",
+        uid=str(user.uid),
+        task_id=locked_task.id,
+        run_id=latest_run_id,
+        properties={
+            "artifact_id": locked_artifact.id,
+            "version": locked_artifact.current_version,
+            "changed_fields": changed_fields,
+            "model_spec": model_spec,
+        },
+    )
+    await db.commit()
+    return {
+        "artifact": locked_artifact.to_dict(),
+        "reply": reply,
+        "changed_fields": changed_fields,
+        "validation": validation,
+    }
 
 
 def _merge_reviews(deterministic: dict[str, Any], llm: dict[str, Any]) -> dict[str, Any]:

@@ -898,6 +898,17 @@ class PostgresManager(metaclass=SingletonMeta):
                 "ALTER TABLE IF EXISTS content_artifact_versions "
                 "ADD COLUMN IF NOT EXISTS edit_diff_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb"
             ),
+            "ALTER TABLE IF EXISTS content_employees ADD COLUMN IF NOT EXISTS avatar VARCHAR(1024)",
+            "ALTER TABLE IF EXISTS content_employees ADD COLUMN IF NOT EXISTS bio TEXT",
+            "ALTER TABLE IF EXISTS content_employees ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP",
+            (
+                "ALTER TABLE IF EXISTS content_variables "
+                'ADD COLUMN IF NOT EXISTS ports JSONB NOT NULL DEFAULT \'["pc","app"]\'::jsonb'
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_variables "
+                'ADD COLUMN IF NOT EXISTS editions JSONB NOT NULL DEFAULT \'["quick","pro"]\'::jsonb'
+            ),
         ]
         async with self.async_engine.begin() as conn:
             await conn.execute(

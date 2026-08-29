@@ -10,11 +10,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 import yuxi.agents.buildin.content_workflow.graph as content_workflow_graph_module
+import yuxi.content.control.workflow.deterministic_node as deterministic_node_module
 from yuxi.agents.buildin.content_workflow.context import ContentWorkflowContext
 from yuxi.agents.buildin.content_workflow.graph import ContentWorkflowAgent
 from yuxi.agents.buildin.content_workflow.state import ContentWorkflowState
 from yuxi.content.control.workflow.agent_node import AgentNodeHandler, AgentNodeResultMapper
-from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
+from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler, _derive_scene_evidence
 from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.control.workflow.revision import resolve_revision_reason
 from yuxi.content.v3.workflow import WORKFLOW_V3
@@ -51,6 +52,87 @@ def test_revision_reason_is_empty_when_all_checks_pass():
         )
         is None
     )
+
+
+@pytest.mark.unit
+def test_scene_evidence_is_derived_only_from_traceable_business_fields():
+    derived = _derive_scene_evidence(
+        "task-1",
+        {
+            "audience": ["杭州改善型装修三口之家"],
+            "business_variables": {
+                "project_type": "三室两厅一卫",
+                "area": "89㎡",
+                "owner_pain": "厨房操作台不足，儿童房需要学习与储物",
+            },
+        },
+    )
+
+    assert derived is not None
+    assert derived.variable_codes == ("scene",)
+    assert derived.verified_status == "user_confirmed"
+    assert "杭州改善型装修三口之家" in derived.value
+    assert "三室两厅一卫" in derived.value
+    assert "89㎡" in derived.value
+    assert "厨房操作台不足" in derived.value
+    assert derived.metadata["derived_from_fields"] == [
+        "audience",
+        "business_variables.project_type",
+        "business_variables.area",
+        "business_variables.owner_pain",
+    ]
+
+
+@pytest.mark.unit
+def test_scene_evidence_is_not_invented_without_a_business_pain():
+    assert (
+        _derive_scene_evidence(
+            "task-1",
+            {
+                "audience": ["杭州业主"],
+                "business_variables": {"project_type": "三室两厅一卫", "area": "89㎡"},
+            },
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_normalize_evidence_adds_derived_scene_to_frozen_bundle(monkeypatch):
+    persisted = {}
+
+    class FakeEvidenceService:
+        def __init__(self, _db):
+            pass
+
+        async def persist_frozen_bundle(self, bundle, **kwargs):
+            persisted["bundle"] = bundle
+            persisted["kwargs"] = kwargs
+
+    monkeypatch.setattr(deterministic_node_module, "EvidenceApplicationService", FakeEvidenceService)
+
+    result = await V3DeterministicNodeHandler()._normalize_evidence(
+        db=SimpleNamespace(),
+        state={
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "content_brief": {
+                "audience": ["杭州改善型装修三口之家"],
+                "business_variables": {
+                    "project_type": "三室两厅一卫",
+                    "area": "89㎡",
+                    "owner_pain": "厨房操作台不足",
+                },
+            },
+            "media_evidence_items": [],
+        },
+        node_run_id="node-run-1",
+    )
+
+    scene_items = [item for item in result["evidence_bundle"]["items"] if "scene" in item["variable_codes"]]
+    assert len(scene_items) == 1
+    assert scene_items[0]["source_id"] == "derived_scene_from_business_brief"
+    assert persisted["kwargs"]["added_evidence_ids"]
 
 
 @pytest.mark.asyncio
