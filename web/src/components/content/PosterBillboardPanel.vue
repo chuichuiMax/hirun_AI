@@ -21,6 +21,8 @@ import {
 } from 'lucide-vue-next'
 import { useCoverGenerationStore } from '@/stores/coverGeneration'
 import { materialLibraryApi } from '@/apis/material_library_api'
+import MaterialImagePickerModal from '@/components/material/MaterialImagePickerModal.vue'
+import PosterCanvasPreview from './PosterCanvasPreview.vue'
 
 const props = defineProps({
   contentTaskId: { type: String, default: '' },
@@ -40,6 +42,7 @@ const productPreviewUrl = ref('')
 const showImport = ref(false)
 const showManagement = ref(false)
 const showAdvanced = ref(false)
+const imagePickerOpen = ref(false)
 let restoreJobVersion = 0
 const page = ref(1)
 const filters = reactive({ query: '', category: '', status: '' })
@@ -89,10 +92,10 @@ const currentStep = computed(() => {
   return 4
 })
 const generateHint = computed(() => {
-  if (!selectedTemplate.value) return '请先选择一个可使用的蒙版'
-  if (!templateReady.value) return '请先完成产品区域标注并启用蒙版'
-  if (!productAsset.value) return '请上传需要美化的产品图片'
-  if (form.enhance && selectedTemplate.value?.template_type !== 'alpha_overlay') return '当前蒙版不支持 image2，请关闭智能美化或改用透明蒙版'
+  if (!selectedTemplate.value) return '请先选择一个可使用的封面模板'
+  if (!templateReady.value) return '请先完成底图区域标注并启用模板'
+  if (!productAsset.value) return '请从素材库选择一张图片作为底图'
+  if (form.enhance && selectedTemplate.value?.template_type !== 'alpha_overlay') return '当前模板不支持 image2，请关闭智能美化或改用透明 PNG 模板'
   if (form.enhance && !props.image2Ready) return '请先在右上角完成 image2 全局配置'
   if (store.isRunning || store.loading.submit) return '任务正在处理中，请稍候'
   return previewDataUrl.value ? '预览已就绪，可以生成高清成品' : '建议先预览排版，确认后再生成'
@@ -168,7 +171,7 @@ function collectFiles(event) {
 
 async function importTemplates(files = importFiles.value) {
   if (!files.length) return
-  if (!importForm.category) return message.warning('请选择蒙版分类')
+  if (!importForm.category) return message.warning('请选择模板分类')
   try {
     const response = await store.importPosterTemplates(
       files,
@@ -180,37 +183,36 @@ async function importTemplates(files = importFiles.value) {
     message.success(`导入完成：新增 ${summary.created || 0}，重复 ${summary.duplicate || 0}，失败 ${summary.failed || 0}`)
     if (summary.created) showImport.value = false
   } catch (error) {
-    message.error(error.message || '蒙版批量导入失败')
+    message.error(error.message || '模板批量导入失败')
   }
 }
 
-async function uploadProductFile(file) {
-  if (!file || store.isRunning) return
+async function selectLibraryImage(item) {
+  if (!item?.asset_id || store.isRunning) return
   try {
-    if (productAsset.value) await removeProduct()
-    const [asset] = await store.upload([file], 'source', props.contentTaskId || null)
-    productPreviewUrl.value = URL.createObjectURL(file)
-    productAsset.value = { ...asset, previewUrl: productPreviewUrl.value, localName: file.name }
+    const response = await materialLibraryApi.getItemFile(item.id)
+    const nextPreviewUrl = URL.createObjectURL(await response.blob())
+    if (productPreviewUrl.value) URL.revokeObjectURL(productPreviewUrl.value)
+    productPreviewUrl.value = nextPreviewUrl
+    productAsset.value = {
+      id: item.asset_id,
+      materialItemId: item.id,
+      galleryId: item.category,
+      categoryName: item.category_name,
+      previewUrl: nextPreviewUrl,
+      localName: item.name,
+      width: item.width,
+      height: item.height,
+      source: 'library'
+    }
     previewDataUrl.value = ''
   } catch (error) {
-    message.error(error.message || '产品图片上传失败')
+    message.error(error.message || '素材库底图加载失败')
   }
 }
 
-async function onProductInput(event) {
-  const file = event.target.files?.[0]
-  event.target.value = ''
-  await uploadProductFile(file)
-}
-
-async function removeProduct() {
+function removeProduct() {
   if (!productAsset.value) return
-  try {
-    await store.deleteAsset(productAsset.value.id)
-  } catch (error) {
-    message.error(error.message || '产品图片删除失败')
-    return
-  }
   if (productPreviewUrl.value) URL.revokeObjectURL(productPreviewUrl.value)
   productPreviewUrl.value = ''
   productAsset.value = null
@@ -229,13 +231,12 @@ function onDragLeave(role, event) {
   if (dragging.value === role) dragging.value = ''
 }
 
-async function onDrop(role, event) {
+function onDrop(role, event) {
   event.preventDefault()
   dragging.value = ''
   const files = Array.from(event.dataTransfer.files || [])
   if (!files.length) return
   if (role === 'library') importFiles.value = files
-  else await uploadProductFile(files[0])
 }
 
 function resetTransform() {
@@ -255,7 +256,7 @@ async function saveAnnotation() {
   const right = annotation.x + annotation.width
   const bottom = annotation.y + annotation.height
   if (right > 1 || bottom > 1) {
-    message.warning('产品区域不能超出画布')
+    message.warning('底图区域不能超出画布')
     return
   }
   try {
@@ -269,14 +270,14 @@ async function saveAnnotation() {
       status: 'ready'
     })
     chooseTemplate(updated)
-    message.success('产品替换区域已保存，蒙版现在可以使用')
+    message.success('底图展示区域已保存，模板现在可以使用')
   } catch (error) {
-    message.error(error.message || '产品区域保存失败')
+    message.error(error.message || '底图区域保存失败')
   }
 }
 
 async function deleteTemplate(item) {
-  if (!window.confirm(`确定删除蒙版“${item.name}”吗？`)) return
+  if (!window.confirm(`确定删除模板“${item.name}”吗？`)) return
   try {
     await store.deletePosterTemplate(item.id)
     if (selectedTemplateId.value === item.id) {
@@ -284,9 +285,9 @@ async function deleteTemplate(item) {
       selectedTemplateRecord.value = null
       previewDataUrl.value = ''
     }
-    message.success('蒙版已删除')
+    message.success('模板已删除')
   } catch (error) {
-    message.error(error.message || '蒙版删除失败')
+    message.error(error.message || '模板删除失败')
   }
 }
 
@@ -326,9 +327,9 @@ async function saveTemplateMetadata() {
     if (templateForm.status !== 'needs_annotation') payload.status = templateForm.status
     const updated = await store.updatePosterTemplate(selectedTemplate.value.id, payload)
     chooseTemplate(updated)
-    message.success('蒙版信息已保存')
+    message.success('模板信息已保存')
   } catch (error) {
-    message.error(error.message || '蒙版信息保存失败')
+    message.error(error.message || '模板信息保存失败')
   }
 }
 
@@ -382,12 +383,13 @@ async function restoreFromJob(job) {
       productAsset.value = {
         id: request.product_asset_id,
         previewUrl,
-        localName: '历史产品图'
+        localName: '历史任务底图',
+        source: 'history'
       }
     } catch (error) {
       if (version === restoreJobVersion) {
         productAsset.value = null
-        message.warning(error.message || '历史产品图已被删除，无法恢复预览')
+        message.warning(error.message || '历史任务底图已被删除，无法恢复预览')
       }
     }
   }
@@ -412,7 +414,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="poster-panel">
     <nav class="workflow-steps" aria-label="大字报制作进度">
-      <div v-for="(label, index) in ['选择蒙版', '上传产品', '调整内容', '预览生成']" :key="label" class="workflow-step" :data-state="stepState(index + 1)">
+      <div v-for="(label, index) in ['选择模板', '选择底图', '调整内容', '预览生成']" :key="label" class="workflow-step" :data-state="stepState(index + 1)">
         <span class="step-index"><Check v-if="stepState(index + 1) === 'done'" :size="14" />{{ stepState(index + 1) === 'done' ? '' : index + 1 }}</span>
         <span>{{ label }}</span>
       </div>
@@ -420,21 +422,21 @@ onBeforeUnmount(() => {
 
     <section class="poster-section library-section">
       <div class="section-head">
-        <div class="section-title"><span class="section-number">1</span><div><strong>选择蒙版</strong><small>选择一套大字报样式，文字、装饰和品牌元素会保留</small></div></div>
-        <div class="section-actions"><span class="result-count">{{ store.posterTemplateTotal }} 个结果</span><button type="button" class="secondary" @click="showImport = !showImport"><FolderUp :size="16" />{{ showImport ? '收起导入' : '导入蒙版' }}</button></div>
+        <div class="section-title"><span class="section-number">1</span><div><strong>选择封面模板</strong><small>透明 PNG 模板中的文字、装饰和品牌元素会覆盖到底图上</small></div></div>
+        <div class="section-actions"><span class="result-count">{{ store.posterTemplateTotal }} 个结果</span><button type="button" class="secondary" @click="showImport = !showImport"><FolderUp :size="16" />{{ showImport ? '收起导入' : '导入模板' }}</button></div>
       </div>
 
       <div class="library-toolbar">
-        <label class="search-field"><span class="sr-only">搜索蒙版</span><Search :size="16" /><input v-model="filters.query" placeholder="搜索蒙版名称" @keyup.enter="page = 1; loadTemplates()" /></label>
-        <label><span class="sr-only">蒙版分类</span><select v-model="filters.category" @change="page = 1; loadTemplates()"><option value="">全部分类</option><option v-for="item in categoryOptions" :key="item.code" :value="item.code">{{ item.name }}</option></select></label>
-        <label><span class="sr-only">蒙版状态</span><select v-model="filters.status" @change="page = 1; loadTemplates()"><option value="">全部状态</option><option value="ready">可使用</option><option value="needs_annotation">待标注</option><option value="disabled">已停用</option></select></label>
+        <label class="search-field"><span class="sr-only">搜索模板</span><Search :size="16" /><input v-model="filters.query" placeholder="搜索模板名称" @keyup.enter="page = 1; loadTemplates()" /></label>
+        <label><span class="sr-only">模板分类</span><select v-model="filters.category" @change="page = 1; loadTemplates()"><option value="">全部分类</option><option v-for="item in categoryOptions" :key="item.code" :value="item.code">{{ item.name }}</option></select></label>
+        <label><span class="sr-only">模板状态</span><select v-model="filters.status" @change="page = 1; loadTemplates()"><option value="">全部状态</option><option value="ready">可使用</option><option value="needs_annotation">待标注</option><option value="disabled">已停用</option></select></label>
         <button type="button" class="secondary" :disabled="store.loading.posterTemplates" @click="page = 1; loadTemplates()"><SlidersHorizontal :size="15" />筛选</button>
         <button v-if="hasFilters" type="button" class="text-button" @click="clearFilters"><X :size="14" />清除</button>
       </div>
 
       <div v-if="showImport" class="import-panel">
         <label class="dropzone compact" :class="{ dragging: dragging === 'library' }" @dragover="onDragOver('library', $event)" @dragleave="onDragLeave('library', $event)" @drop="onDrop('library', $event)">
-          <UploadCloud :size="24" /><strong>{{ importFiles.length ? `已选择 ${importFiles.length} 张蒙版` : '拖拽或点击选择蒙版' }}</strong><span>PNG / JPG / WebP，单次最多 100 张，单张不超过 20 MB</span>
+          <UploadCloud :size="24" /><strong>{{ importFiles.length ? `已选择 ${importFiles.length} 张模板` : '拖拽或点击选择透明 PNG 模板' }}</strong><span>建议使用透明背景 PNG；单次最多 100 张，单张不超过 20 MB</span>
           <input type="file" accept="image/png,image/jpeg,image/webp" multiple @change="collectFiles" />
         </label>
         <div class="import-settings">
@@ -443,45 +445,45 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="store.loading.posterTemplates" class="library-loading" role="status"><RefreshCw :size="18" />正在加载蒙版…</div>
+      <div v-if="store.loading.posterTemplates" class="library-loading" role="status"><RefreshCw :size="18" />正在加载模板…</div>
       <div v-else-if="store.posterTemplates.length" class="poster-library">
         <article v-for="item in store.posterTemplates" :key="item.id" class="poster-template-card" :class="{ active: selectedTemplateId === item.id }">
           <button type="button" class="template-select" :aria-pressed="selectedTemplateId === item.id" @click="chooseTemplate(item)">
-            <span class="template-image"><img :src="item.thumbnail_url" :alt="`${item.name} 蒙版预览`" /><span v-if="selectedTemplateId === item.id" class="selected-mark"><Check :size="14" />已选择</span></span>
+            <span class="template-image"><img :src="item.thumbnail_url" :alt="`${item.name} 模板预览`" /><span v-if="selectedTemplateId === item.id" class="selected-mark"><Check :size="14" />已选择</span></span>
             <span class="template-meta"><strong :title="item.name">{{ item.name }}</strong><small>{{ item.category_name }}</small><em :data-status="item.status">{{ item.status === 'ready' ? '可使用' : item.status === 'needs_annotation' ? '待标注' : '已停用' }}</em></span>
           </button>
-          <button type="button" class="delete-template" :aria-label="`删除蒙版 ${item.name}`" @click="deleteTemplate(item)"><Trash2 :size="15" /></button>
+          <button type="button" class="delete-template" :aria-label="`删除模板 ${item.name}`" @click="deleteTemplate(item)"><Trash2 :size="15" /></button>
         </article>
       </div>
       <div v-else class="library-empty">
         <Layers3 :size="30" />
-        <strong>{{ hasFilters ? '没有找到符合条件的蒙版' : '素材库还没有蒙版' }}</strong>
-        <span>{{ hasFilters ? '可以清除筛选，或换一个关键词继续查找。' : '导入第一批蒙版后，就可以开始制作大字报。' }}</span>
-        <button type="button" class="secondary" @click="hasFilters ? clearFilters() : (showImport = true)">{{ hasFilters ? '清除全部筛选' : '立即导入蒙版' }}</button>
+        <strong>{{ hasFilters ? '没有找到符合条件的模板' : '素材库还没有封面模板' }}</strong>
+        <span>{{ hasFilters ? '可以清除筛选，或换一个关键词继续查找。' : '导入第一批透明 PNG 模板后，就可以开始制作大字报。' }}</span>
+        <button type="button" class="secondary" @click="hasFilters ? clearFilters() : (showImport = true)">{{ hasFilters ? '清除全部筛选' : '立即导入模板' }}</button>
       </div>
       <div v-if="store.posterTemplateTotal > 24" class="pagination"><button type="button" :disabled="page <= 1" @click="page--; loadTemplates()">上一页</button><span>第 {{ page }} / {{ totalPages }} 页</span><button type="button" :disabled="page >= totalPages" @click="page++; loadTemplates()">下一页</button></div>
     </section>
 
     <div v-if="selectedTemplate" class="selected-template-bar">
       <img :src="selectedTemplate.thumbnail_url" :alt="`${selectedTemplate.name} 缩略图`" />
-      <div><small>当前蒙版</small><strong>{{ selectedTemplate.name }}</strong><span>{{ selectedTemplate.category_name }} · {{ templateReady ? '可以直接使用' : '需要先标注产品区域' }}</span></div>
-      <button type="button" class="text-button" @click="showManagement = !showManagement">管理蒙版<ChevronUp v-if="showManagement" :size="15" /><ChevronDown v-else :size="15" /></button>
+      <div><small>当前封面模板</small><strong>{{ selectedTemplate.name }}</strong><span>{{ selectedTemplate.category_name }} · {{ templateReady ? '可以直接使用' : '需要先标注底图区域' }}</span></div>
+      <button type="button" class="text-button" @click="showManagement = !showManagement">管理模板<ChevronUp v-if="showManagement" :size="15" /><ChevronDown v-else :size="15" /></button>
     </div>
 
     <section v-if="selectedTemplate && showManagement" class="poster-section template-management">
-      <div class="section-head"><div><strong>蒙版信息</strong><small>只影响素材库中的名称、分类和状态，不会改变画面内容</small></div></div>
+      <div class="section-head"><div><strong>模板信息</strong><small>只影响素材库中的名称、分类和状态，不会改变画面内容</small></div></div>
       <div class="management-grid">
         <label><span>名称</span><input v-model="templateForm.name" maxlength="255" /></label>
         <label><span>分类</span><select v-model="templateForm.category"><option value="" disabled>请选择分类</option><option v-for="item in categoryOptions" :key="item.code" :value="item.code">{{ item.name }}</option></select></label>
         <label><span>状态</span><select v-model="templateForm.status"><option v-if="selectedTemplate.product_box" value="ready">可使用</option><option value="disabled">已停用</option><option v-if="!selectedTemplate.product_box" value="needs_annotation">待标注</option></select></label>
       </div>
-      <button type="button" class="secondary management-save" @click="saveTemplateMetadata">保存蒙版信息</button>
+      <button type="button" class="secondary management-save" @click="saveTemplateMetadata">保存模板信息</button>
     </section>
 
     <section v-if="selectedTemplate && selectedTemplate.status === 'needs_annotation'" class="poster-section annotation-editor">
-      <div class="section-head"><div class="section-title"><span class="section-number warning">!</span><div><strong>标注产品替换区域</strong><small>在画布上确认产品图出现的位置，保存后即可使用该蒙版</small></div></div></div>
+      <div class="section-head"><div class="section-title"><span class="section-number warning">!</span><div><strong>标注底图展示区域</strong><small>在画布上确认素材库图片出现的位置，保存后即可使用该模板</small></div></div></div>
       <div class="annotation-layout">
-        <div class="annotation-stage"><img :src="selectedTemplate.thumbnail_url" alt="待标注蒙版" /><span class="annotation-box" :style="{ left: `${annotation.x * 100}%`, top: `${annotation.y * 100}%`, width: `${annotation.width * 100}%`, height: `${annotation.height * 100}%` }"><b>产品区域</b></span></div>
+        <div class="annotation-stage"><img :src="selectedTemplate.thumbnail_url" alt="待标注模板" /><span class="annotation-box" :style="{ left: `${annotation.x * 100}%`, top: `${annotation.y * 100}%`, width: `${annotation.width * 100}%`, height: `${annotation.height * 100}%` }"><b>底图区域</b></span></div>
         <div class="annotation-controls">
           <label><span>左侧 <b>{{ Math.round(annotation.x * 100) }}%</b></span><input v-model.number="annotation.x" type="range" min="0" max="0.9" step="0.01" /></label>
           <label><span>顶部 <b>{{ Math.round(annotation.y * 100) }}%</b></span><input v-model.number="annotation.y" type="range" min="0" max="0.9" step="0.01" /></label>
@@ -493,22 +495,40 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-if="!selectedTemplate" class="next-step-placeholder">
-      <span class="section-number muted">2</span><div><strong>选择蒙版后继续上传产品图</strong><small v-if="productAsset">你已上传的产品图会继续保留，不需要重新上传。</small><small v-else>下方的排版、文案和生成设置会根据所选蒙版自动展开。</small></div>
+      <span class="section-number muted">2</span><div><strong>选择模板后继续选择素材库底图</strong><small v-if="productAsset">你已选择的底图会继续保留，不需要重新选择。</small><small v-else>下方的画布、排版和生成设置会根据所选模板自动展开。</small></div>
     </section>
 
     <template v-else-if="templateReady">
       <section class="poster-section product-editor">
         <div class="section-head">
-          <div class="section-title"><span class="section-number">2</span><div><strong>上传产品图并调整位置</strong><small>产品主体会被锁定，智能美化不会替换或重画产品</small></div></div>
+          <div class="section-title"><span class="section-number">2</span><div><strong>选择素材库底图并调整构图</strong><small>底图与透明模板会在画布中实时叠加，拖动参数即可查看构图变化</small></div></div>
           <button v-if="productAsset" type="button" class="text-button" @click="resetTransform"><RotateCcw :size="14" />恢复默认</button>
         </div>
         <div class="product-layout">
-          <label v-if="!productAsset" class="dropzone product-dropzone" :class="{ dragging: dragging === 'product' }" @dragover="onDragOver('product', $event)" @dragleave="onDragLeave('product', $event)" @drop="onDrop('product', $event)">
-            <ImagePlus :size="28" /><strong>拖拽产品图片到这里</strong><span>或点击上传 PNG / JPG / WebP</span><input type="file" accept="image/png,image/jpeg,image/webp" @change="onProductInput" />
-          </label>
-          <div v-else class="product-preview"><img :src="productAsset.previewUrl" :alt="productAsset.localName" /><button type="button" aria-label="删除产品图" @click="removeProduct"><X :size="16" /></button><span>{{ productAsset.localName }}</span></div>
+          <div class="canvas-column">
+            <PosterCanvasPreview
+              :template-url="selectedTemplate.thumbnail_url"
+              :background-url="productAsset?.previewUrl || ''"
+              :precise-preview-url="previewDataUrl"
+              :template-type="selectedTemplate.template_type || 'alpha_overlay'"
+              :product-box="selectedTemplate.product_box"
+              :transform="transformPayload()"
+              :canvas-width="selectedTemplate.canvas_width || 1080"
+              :canvas-height="selectedTemplate.canvas_height || 1440"
+            />
+            <button v-if="!productAsset" type="button" class="image-library-empty" :disabled="store.isRunning" @click="imagePickerOpen = true">
+              <ImagePlus :size="22" />
+              <span><strong>从素材库选择底图</strong><small>选择图库中的一张图片进行合成</small></span>
+            </button>
+            <div v-else class="selected-library-image">
+              <div><small>当前素材库底图</small><strong :title="productAsset.localName">{{ productAsset.localName }}</strong><span>{{ productAsset.categoryName || (productAsset.source === 'history' ? '来自历史任务' : '素材库') }}<template v-if="productAsset.width && productAsset.height"> · {{ productAsset.width }} × {{ productAsset.height }}</template></span></div>
+              <button type="button" class="text-button" :disabled="store.isRunning" @click="imagePickerOpen = true">更换</button>
+              <button type="button" class="text-button danger" :disabled="store.isRunning" @click="removeProduct">清除</button>
+            </div>
+          </div>
           <div class="transform-controls" :class="{ disabled: !productAsset }">
-            <label class="fit-control"><span>显示方式</span><select v-model="form.fit" :disabled="!productAsset" @change="previewDataUrl = ''"><option value="cover">填满产品区域</option><option value="contain">完整显示产品</option></select></label>
+            <div class="transform-heading"><strong>底图构图</strong><small>实时画布显示位置与裁切参考；更新精确预览后可确认最终像素效果。</small></div>
+            <label class="fit-control"><span>显示方式</span><select v-model="form.fit" :disabled="!productAsset" @change="previewDataUrl = ''"><option value="cover">填满底图区域</option><option value="contain">完整显示底图</option></select></label>
             <label><span>缩放 <b>{{ Number(form.scale).toFixed(2) }}×</b></span><input v-model.number="form.scale" :disabled="!productAsset" type="range" min="0.5" max="2" step="0.01" @input="previewDataUrl = ''" /></label>
             <label><span>水平焦点 <b>{{ Math.round(form.focalX * 100) }}%</b></span><input v-model.number="form.focalX" :disabled="!productAsset" type="range" min="0" max="1" step="0.01" @input="previewDataUrl = ''" /></label>
             <label><span>垂直焦点 <b>{{ Math.round(form.focalY * 100) }}%</b></span><input v-model.number="form.focalY" :disabled="!productAsset" type="range" min="0" max="1" step="0.01" @input="previewDataUrl = ''" /></label>
@@ -525,12 +545,12 @@ onBeforeUnmount(() => {
           <div v-if="editableSlots.length" class="slot-grid">
             <label v-for="slot in editableSlots" :key="slot.id"><span>{{ slot.role }} <small>最多 {{ slot.max_chars }} 字</small></span><input v-model="form.copyOverrides[slot.id]" :maxlength="slot.max_chars" :placeholder="slot.source_text" @input="previewDataUrl = ''" /></label>
           </div>
-          <p v-else class="slot-empty">当前蒙版没有识别到可编辑文字槽，固定文字、Logo 和装饰会原样保留。</p>
+          <p v-else class="slot-empty">当前模板没有识别到可编辑文字槽，固定文字、Logo 和装饰会原样保留。</p>
           <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced"><span><WandSparkles :size="16" />智能美化（可选）</span><small>使用 image2 优化背景、光影与边缘融合</small><ChevronUp v-if="showAdvanced" :size="16" /><ChevronDown v-else :size="16" /></button>
           <div v-if="showAdvanced" class="advanced-panel">
             <label class="switch-row"><input v-model="form.enhance" type="checkbox" /><span>开启 image2 智能美化</span></label>
             <p v-if="form.enhance && !image2Ready" class="warning-text">请先在页面右上角完成 image2 全局配置。</p>
-            <p v-if="form.enhance && selectedTemplate.template_type !== 'alpha_overlay'" class="warning-text">当前是不透明蒙版，不能使用 image2；请改用透明蒙版或关闭智能美化。</p>
+            <p v-if="form.enhance && selectedTemplate.template_type !== 'alpha_overlay'" class="warning-text">当前是不透明模板，不能使用 image2；请改用透明 PNG 模板或关闭智能美化。</p>
             <template v-if="form.enhance">
               <label><span>美化要求</span><textarea v-model="form.enhancementPrompt" rows="2" placeholder="例如：增加柔和自然光与产品周围的轻微投影" /></label>
               <label><span>不希望出现</span><input v-model="form.negativePrompt" placeholder="例如：产品变形、过度锐化、杂乱背景" /></label>
@@ -538,20 +558,28 @@ onBeforeUnmount(() => {
             </template>
           </div>
         </fieldset>
-        <div v-if="!productAsset" class="section-lock-note">上传产品图后即可调整文字和美化效果</div>
+        <div v-if="!productAsset" class="section-lock-note">选择素材库底图后即可调整文字和美化效果</div>
       </section>
 
       <section class="poster-section output-section">
-        <div class="section-head"><div class="section-title"><span class="section-number">4</span><div><strong>预览并生成</strong><small>先确认文字与产品位置，再输出高清成品</small></div></div></div>
-        <div v-if="previewDataUrl" class="exact-preview"><img :src="previewDataUrl" alt="大字报确定性预览" /><div><strong>排版预览已更新</strong><small>正式输出会保持相同的文字、装饰与图层顺序。</small></div></div>
-        <div v-else class="preview-placeholder"><Eye :size="24" /><span>{{ productAsset ? '点击“更新预览”查看最终排版效果' : '上传产品图后可预览最终排版' }}</span></div>
+        <div class="section-head"><div class="section-title"><span class="section-number">4</span><div><strong>精确预览并生成</strong><small>后端会按正式合成规则生成精确预览，并替换上方实时画布内容</small></div></div></div>
+        <div v-if="previewDataUrl" class="preview-confirmation"><Check :size="20" /><div><strong>后端精确预览已应用</strong><small>上方画布现在显示最终文字、装饰、底图裁切和图层顺序。</small></div></div>
+        <div v-else class="preview-placeholder"><Eye :size="24" /><span>{{ productAsset ? '点击“生成精确预览”确认最终合成效果' : '选择素材库底图后可生成精确预览' }}</span></div>
         <div class="output-actions">
-          <div class="readiness"><span :class="{ ready: selectedTemplate }"><Check :size="13" />蒙版</span><span :class="{ ready: productAsset }"><Check :size="13" />产品图</span><span :class="{ ready: previewDataUrl }"><Check :size="13" />预览</span><small>{{ generateHint }}</small></div>
-          <button type="button" class="secondary preview-button" :disabled="!canPreview" @click="preview"><Eye :size="16" />{{ store.loading.posterPreview ? '正在生成预览…' : previewDataUrl ? '更新预览' : '生成预览' }}</button>
+          <div class="readiness"><span :class="{ ready: selectedTemplate }"><Check :size="13" />封面模板</span><span :class="{ ready: productAsset }"><Check :size="13" />素材库底图</span><span :class="{ ready: previewDataUrl }"><Check :size="13" />精确预览</span><small>{{ generateHint }}</small></div>
+          <button type="button" class="secondary preview-button" :disabled="!canPreview" @click="preview"><Eye :size="16" />{{ store.loading.posterPreview ? '正在生成预览…' : previewDataUrl ? '更新精确预览' : '生成精确预览' }}</button>
           <button type="button" class="primary generate-button" :disabled="!canGenerate" @click="generate"><WandSparkles :size="18" />{{ store.loading.submit ? '正在提交…' : '生成高清大字报' }}</button>
         </div>
       </section>
     </template>
+
+    <MaterialImagePickerModal
+      v-model:open="imagePickerOpen"
+      :selected-item-id="productAsset?.materialItemId || ''"
+      :selected-gallery-id="productAsset?.galleryId || ''"
+      :disabled="store.isRunning"
+      @select="selectLibraryImage"
+    />
   </div>
 </template>
 
@@ -586,13 +614,15 @@ input:disabled, select:disabled, textarea:disabled { cursor: not-allowed; color:
 .management-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }.management-grid label, .annotation-controls label, .transform-controls label, .slot-grid label, .wide, .advanced-panel > label { display: grid; gap: 5px; color: var(--color-text-secondary); font-size: 12px; }.management-save { margin-top: 10px; }
 .annotation-layout { display: grid; grid-template-columns: minmax(180px, 280px) 1fr; gap: 20px; margin-top: 14px; }.annotation-stage { position: relative; overflow: hidden; border-radius: 7px; background: var(--gray-50); }.annotation-stage img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: contain; }.annotation-box { position: absolute; border: 2px dashed var(--main-600); background: var(--main-50); opacity: .82; }.annotation-box b { position: absolute; top: 4px; left: 4px; padding: 2px 5px; color: var(--main-0); background: var(--main-700); font-size: 10px; }.annotation-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-content: center; }.annotation-controls b, .transform-controls b { float: right; color: var(--main-700); }.annotation-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
 .next-step-placeholder { min-height: 74px; padding: 16px 18px; border: 1px dashed var(--gray-200); border-radius: 10px; display: flex; align-items: center; gap: 12px; color: var(--color-text-secondary); background: var(--gray-25); }.next-step-placeholder > div { display: grid; gap: 3px; }.next-step-placeholder strong { color: var(--color-text); }.next-step-placeholder small { font-size: 12px; }
-.product-layout { display: grid; grid-template-columns: minmax(210px, 260px) 1fr; gap: 18px; margin-top: 14px; }.product-preview { position: relative; min-height: 300px; border-radius: 8px; overflow: hidden; background: var(--gray-50); }.product-preview img { width: 100%; height: calc(100% - 34px); position: absolute; object-fit: contain; }.product-preview > button { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border: 0; border-radius: 50%; display: grid; place-items: center; color: var(--gray-0); background: var(--dark-70); cursor: pointer; }.product-preview > span { position: absolute; right: 0; bottom: 0; left: 0; padding: 8px; overflow: hidden; color: var(--color-text-secondary); background: var(--gray-25); text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.transform-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; align-content: start; }.transform-controls.disabled { opacity: .55; }.fit-control { grid-column: 1 / -1; }
+.product-layout { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 22px; margin-top: 14px; }.canvas-column { min-width: 0; display: grid; gap: 10px; align-content: start; }
+.image-library-empty { width: 100%; padding: 12px; border: 1px dashed var(--main-300); border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--main-700); background: var(--main-30); cursor: pointer; }.image-library-empty > span { display: grid; gap: 2px; text-align: left; }.image-library-empty small { color: var(--color-text-secondary); font-size: 11px; }.image-library-empty:hover { border-color: var(--main-500); background: var(--main-50); }.image-library-empty:disabled { opacity: .45; cursor: not-allowed; }
+.selected-library-image { padding: 10px 11px; border: 1px solid var(--main-100); border-radius: 8px; display: flex; align-items: center; gap: 5px; background: var(--main-30); }.selected-library-image > div { min-width: 0; flex: 1; display: grid; gap: 2px; }.selected-library-image small, .selected-library-image span { color: var(--color-text-secondary); font-size: 11px; }.selected-library-image strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }.text-button.danger { color: var(--color-error-700); }
+.transform-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; align-content: start; }.transform-controls.disabled { opacity: .55; }.transform-heading, .fit-control { grid-column: 1 / -1; }.transform-heading { padding-bottom: 10px; border-bottom: 1px solid var(--gray-150); display: grid; gap: 3px; }.transform-heading small { color: var(--color-text-secondary); font-size: 11px; line-height: 1.6; }
 .content-editor { position: relative; }.content-editor fieldset { min-width: 0; margin: 14px 0 0; padding: 0; border: 0; }.content-editor.locked fieldset { opacity: .45; }.slot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }.wide > span { display: flex; justify-content: space-between; gap: 8px; }.wide small, .slot-grid small { color: var(--gray-500); }.slot-empty { margin: 12px 0; color: var(--color-text-secondary); font-size: 12px; }
 .advanced-toggle { width: 100%; margin-top: 12px; padding: 11px 12px; border: 1px solid var(--gray-150); border-radius: 7px; justify-content: space-between; gap: 10px; color: var(--color-text); background: var(--gray-25); text-align: left; cursor: pointer; }.advanced-toggle > span { display: flex; align-items: center; gap: 7px; font-weight: 600; }.advanced-toggle small { margin-left: auto; color: var(--color-text-secondary); }.advanced-panel { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--gray-150); border-top: 0; border-radius: 0 0 7px 7px; }.switch-row { grid-template-columns: auto 1fr !important; justify-content: start; align-items: center; }.switch-row input { width: auto; }.warning-text { margin: 0; color: var(--color-warning-900); font-size: 12px; }.section-lock-note { margin-top: 10px; color: var(--color-text-secondary); font-size: 12px; }
-.preview-placeholder { min-height: 108px; margin-top: 14px; border: 1px dashed var(--gray-200); border-radius: 8px; display: grid; place-content: center; justify-items: center; gap: 7px; color: var(--color-text-secondary); background: var(--gray-25); font-size: 12px; }.exact-preview { margin-top: 14px; display: grid; grid-template-columns: minmax(150px, 220px) 1fr; align-items: center; gap: 16px; padding: 12px; border-radius: 8px; background: var(--gray-25); }.exact-preview img { width: 100%; max-height: 300px; object-fit: contain; border-radius: 6px; }.exact-preview > div { display: grid; gap: 4px; }.exact-preview small { color: var(--color-text-secondary); }
+.preview-placeholder { min-height: 108px; margin-top: 14px; border: 1px dashed var(--gray-200); border-radius: 8px; display: grid; place-content: center; justify-items: center; gap: 7px; color: var(--color-text-secondary); background: var(--gray-25); font-size: 12px; }.preview-confirmation { margin-top: 14px; padding: 14px; border: 1px solid var(--color-success-100); border-radius: 8px; display: flex; align-items: center; gap: 10px; color: var(--color-success-700); background: var(--color-success-50); }.preview-confirmation > div { display: grid; gap: 3px; }.preview-confirmation small { color: var(--color-text-secondary); }
 .output-actions { display: grid; grid-template-columns: auto auto; justify-content: end; gap: 9px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--gray-150); }.readiness { grid-column: 1 / -1; width: 100%; flex-wrap: wrap; gap: 6px; }.readiness > span { padding: 3px 7px; border-radius: 999px; display: inline-flex; align-items: center; gap: 3px; color: var(--gray-500); background: var(--gray-100); font-size: 11px; }.readiness > span svg { opacity: .35; }.readiness > span.ready { color: var(--color-success-700); background: var(--color-success-50); }.readiness > span.ready svg { opacity: 1; }.readiness small { flex-basis: 100%; color: var(--color-text-secondary); }
-.primary, .secondary, .text-button { min-height: 38px; box-sizing: border-box; border-radius: 7px; padding: 8px 12px; display: inline-flex; justify-content: center; align-items: center; gap: 6px; cursor: pointer; }.primary { border: 1px solid var(--main-700); color: var(--main-0); background: var(--main-700); font-weight: 650; }.primary.inline { justify-self: auto; }.secondary { border: 1px solid var(--gray-150); color: var(--color-text); background: var(--gray-25); }.secondary:hover { border-color: var(--main-300); color: var(--main-700); }.text-button { min-height: 34px; border: 0; padding: 5px 7px; color: var(--main-700); background: transparent; }.text-button:hover { background: var(--main-50); }.primary:disabled, .secondary:disabled { opacity: .45; cursor: not-allowed; }.generate-button { min-width: 150px; }
+.primary, .secondary, .text-button { min-height: 38px; box-sizing: border-box; border-radius: 7px; padding: 8px 12px; display: inline-flex; justify-content: center; align-items: center; gap: 6px; cursor: pointer; }.primary { border: 1px solid var(--main-700); color: var(--main-0); background: var(--main-700); font-weight: 650; }.primary.inline { justify-self: auto; }.secondary { border: 1px solid var(--gray-150); color: var(--color-text); background: var(--gray-25); }.secondary:hover { border-color: var(--main-300); color: var(--main-700); }.text-button { min-height: 34px; border: 0; padding: 5px 7px; color: var(--main-700); background: transparent; }.text-button:hover { background: var(--main-50); }.primary:disabled, .secondary:disabled, .text-button:disabled { opacity: .45; cursor: not-allowed; }.generate-button { min-width: 150px; }
 .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 980px) { .poster-library { grid-template-columns: repeat(3, 1fr); }.library-toolbar { grid-template-columns: 1fr 1fr 120px auto; }.library-toolbar .text-button { grid-column: 1 / -1; justify-self: start; }.management-grid { grid-template-columns: 1fr 1fr; } }

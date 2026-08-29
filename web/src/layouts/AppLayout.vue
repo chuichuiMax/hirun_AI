@@ -16,6 +16,7 @@ import {
   Users,
   IdCard,
   SlidersHorizontal,
+  Tags,
   UserRoundPen,
   ShieldCheck,
   Layers,
@@ -144,6 +145,14 @@ const mainList = computed(() => {
     path: '/content/covers',
     icon: Images,
     activeIcon: Images
+  })
+
+  items.push({
+    name: '图片打标',
+    path: 'http://47.111.188.85:18081/',
+    external: true,
+    icon: Tags,
+    activeIcon: Tags
   })
 
   items.push({
@@ -441,6 +450,21 @@ provide('settingsModal', {
               size="14"
             />
           </button>
+          <a
+            v-else-if="item.external"
+            :href="item.path"
+            v-show="!item.hidden"
+            class="nav-item"
+            @click.stop
+          >
+            <span class="nav-icon">
+              <a-tooltip placement="right" :open="sidebarCollapsed ? undefined : false">
+                <template #title>{{ item.name }}</template>
+                <component class="icon" :is="item.icon" size="16" />
+              </a-tooltip>
+            </span>
+            <span class="nav-text">{{ item.name }}</span>
+          </a>
           <RouterLink
             v-else
             :to="item.path"

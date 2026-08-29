@@ -9,6 +9,7 @@ import {
   CircleAlert,
   Clock3,
   FileClock,
+  Folder,
   FolderOpen,
   History,
   Image,
@@ -68,8 +69,12 @@ const coverCandidatesLoading = ref(false)
 const materialGalleries = ref([])
 const activeGalleryId = ref('')
 const galleryImages = ref([])
+const galleryModalOpen = ref(false)
+const pendingImageItemId = ref('')
 const posterTemplates = ref([])
 const selectedImageItemId = ref('')
+const selectedImageGalleryId = ref('')
+const selectedImageSummary = ref(null)
 const selectedPosterTemplateId = ref('')
 const materialImageUrls = ref({})
 const posterTemplateUrls = ref({})
@@ -271,6 +276,11 @@ const loadGalleryImages = async () => {
     })
     if (generation !== materialPreviewGeneration) return
     galleryImages.value = response.items || []
+    const selectedItem = galleryImages.value.find((item) => item.id === selectedImageItemId.value)
+    if (selectedItem) {
+      selectedImageGalleryId.value = activeGalleryId.value
+      selectedImageSummary.value = selectedItem
+    }
     const nextUrls = {}
     await Promise.all(
       galleryImages.value.map(async (item) => {
@@ -296,10 +306,30 @@ const loadGalleryImages = async () => {
   }
 }
 
-const selectGallery = async (galleryId) => {
-  if (activeGalleryId.value === galleryId) return
+const openGallery = async (galleryId) => {
   activeGalleryId.value = galleryId
+  pendingImageItemId.value = selectedImageItemId.value
+  galleryModalOpen.value = true
   await loadGalleryImages()
+}
+
+const confirmGalleryImage = () => {
+  selectedImageItemId.value = pendingImageItemId.value
+  const selectedItem = galleryImages.value.find((item) => item.id === pendingImageItemId.value)
+  if (selectedItem) {
+    selectedImageGalleryId.value = activeGalleryId.value
+    selectedImageSummary.value = selectedItem
+  } else if (!pendingImageItemId.value) {
+    selectedImageGalleryId.value = ''
+    selectedImageSummary.value = null
+  }
+  galleryModalOpen.value = false
+}
+
+const clearSelectedGalleryImage = () => {
+  selectedImageItemId.value = ''
+  selectedImageGalleryId.value = ''
+  selectedImageSummary.value = null
 }
 
 const listAllMaterialPosterTemplates = async () => {
@@ -417,7 +447,8 @@ const loadVisualMaterials = async () => {
       (savedCategoryId && materialGalleries.value.some((item) => item.id === savedCategoryId)
         ? savedCategoryId
         : activeGalleryId.value) || materialGalleries.value[0]?.id || ''
-    await loadGalleryImages()
+    selectedImageGalleryId.value = selectedImageItemId.value ? savedCategoryId || '' : ''
+    if (selectedImageItemId.value && activeGalleryId.value) await loadGalleryImages()
   } catch (error) {
     message.warning(error.message || '视觉素材加载失败')
   } finally {
@@ -915,44 +946,42 @@ const openVersions = async () => {
                   <div><Image :size="18" /><strong>选择图库图片</strong><em>可选 · 单选</em></div>
                   <small>可从当前账号的图库中选择一张已启用图片；不选择也可以进入内容生产。</small>
                 </div>
-                <div v-if="materialGalleries.length" class="gallery-tabs" role="tablist" aria-label="素材图库">
+                <div v-if="materialGalleries.length" class="gallery-folder-grid" aria-label="素材图库">
                   <button
                     v-for="gallery in materialGalleries"
                     :key="gallery.id"
                     type="button"
-                    class="gallery-tab"
-                    :class="{ active: activeGalleryId === gallery.id }"
-                    @click="selectGallery(gallery.id)"
+                    class="gallery-folder-card"
+                    :class="{ selected: selectedImageItemId && selectedImageGalleryId === gallery.id }"
+                    @click="openGallery(gallery.id)"
                   >
-                    <FolderOpen :size="16" />
-                    <span>{{ gallery.name }}</span>
-                    <small>{{ gallery.count }} 张</small>
+                    <span class="gallery-folder-icon"><Folder :size="30" /></span>
+                    <span class="gallery-folder-copy">
+                      <strong>{{ gallery.name }}</strong>
+                      <small>{{ gallery.count }} 张图片素材</small>
+                    </span>
+                    <span v-if="selectedImageItemId && selectedImageGalleryId === gallery.id" class="gallery-selected-badge">
+                      已选择
+                    </span>
                   </button>
                 </div>
                 <a-empty v-else description="素材库中还没有图库" />
-
-                <div v-if="galleryImagesLoading" class="material-loading-row">
-                  <LoaderCircle class="spin" :size="20" />正在加载图库图片
-                </div>
-                <div v-else-if="galleryImages.length" class="image-choice-grid">
-                  <button
-                    v-for="item in galleryImages"
-                    :key="item.id"
-                    type="button"
-                    class="image-choice"
-                    :class="{ selected: selectedImageItemId === item.id }"
-                    :aria-pressed="selectedImageItemId === item.id"
-                    @click="selectedImageItemId = item.id"
+                <div v-if="selectedImageItemId" class="selected-gallery-image">
+                  <span><CheckCircle2 :size="18" /></span>
+                  <div>
+                    <small>当前已选图片</small>
+                    <strong>{{ selectedImageSummary?.name || '已选择 1 张图库图片' }}</strong>
+                    <em>{{ materialGalleries.find((item) => item.id === selectedImageGalleryId)?.name || '素材图库' }}</em>
+                  </div>
+                  <a-button
+                    v-if="selectedImageGalleryId"
+                    type="link"
+                    @click="openGallery(selectedImageGalleryId)"
                   >
-                    <span class="choice-preview">
-                      <img v-if="materialImageUrls[item.id]" :src="materialImageUrls[item.id]" :alt="item.name" />
-                      <Image v-else :size="22" />
-                      <CheckCircle2 v-if="selectedImageItemId === item.id" class="choice-check" :size="20" />
-                    </span>
-                    <strong>{{ item.name }}</strong>
-                  </button>
+                    更换
+                  </a-button>
+                  <a-button type="link" danger @click="clearSelectedGalleryImage">清除</a-button>
                 </div>
-                <a-empty v-else-if="activeGalleryId" description="当前图库暂无可用图片" />
               </div>
 
               <div class="material-selector-block template-selector-block">
@@ -1350,6 +1379,51 @@ const openVersions = async () => {
         </a-timeline-item>
       </a-timeline>
     </a-drawer>
+    <a-modal
+      v-model:open="galleryModalOpen"
+      :title="`选择图片 · ${materialGalleries.find((item) => item.id === activeGalleryId)?.name || '图库'}`"
+      width="920px"
+      :footer="null"
+    >
+      <div class="gallery-modal-content">
+        <div class="gallery-modal-heading">
+          <p>从当前文件夹中选择一张图片；选择将在点击“确认选择”后保存到业务简报。</p>
+          <span>{{ galleryImages.length }} 张图片</span>
+        </div>
+        <div v-if="galleryImagesLoading" class="material-loading-row">
+          <LoaderCircle class="spin" :size="20" />正在加载当前图库
+        </div>
+        <div v-else-if="galleryImages.length" class="gallery-modal-grid">
+          <button
+            v-for="item in galleryImages"
+            :key="item.id"
+            type="button"
+            class="image-choice"
+            :class="{ selected: pendingImageItemId === item.id }"
+            :aria-pressed="pendingImageItemId === item.id"
+            @click="pendingImageItemId = item.id"
+          >
+            <span class="choice-preview">
+              <img v-if="materialImageUrls[item.id]" :src="materialImageUrls[item.id]" :alt="item.name" />
+              <Image v-else :size="22" />
+              <CheckCircle2 v-if="pendingImageItemId === item.id" class="choice-check" :size="20" />
+            </span>
+            <strong :title="item.name">{{ item.name }}</strong>
+          </button>
+        </div>
+        <a-empty v-else description="当前文件夹暂无可用图片" />
+        <div class="gallery-modal-actions">
+          <a-button v-if="pendingImageItemId" type="link" danger @click="pendingImageItemId = ''">
+            清除选择
+          </a-button>
+          <span />
+          <a-button @click="galleryModalOpen = false">取消</a-button>
+          <a-button type="primary" :loading="galleryImagesLoading" @click="confirmGalleryImage">
+            确认选择
+          </a-button>
+        </div>
+      </div>
+    </a-modal>
     <ContentOcrDrawer v-if="store.task" v-model:open="ocrModalOpen" :task-id="store.task.id" />
   </div>
 </template>
@@ -1426,13 +1500,28 @@ const openVersions = async () => {
 .material-selector-title em { padding: 2px 7px; border-radius: 999px; color: var(--main-700); background: var(--main-30); font-size: 11px; font-style: normal; }
 .material-selector-title small { color: var(--color-text-tertiary); text-align: right; }
 .template-sync-status { display: inline-flex; align-items: center; gap: 4px; color: var(--color-success-700); font-size: 11px; white-space: nowrap; }
-.gallery-tabs { display: flex; gap: 8px; margin-bottom: 14px; padding-bottom: 4px; overflow-x: auto; }
-.gallery-tab { flex: 0 0 auto; min-width: 126px; padding: 9px 11px; display: flex; align-items: center; gap: 7px; border: 1px solid var(--gray-150); border-radius: 7px; color: var(--color-text); background: var(--gray-0); cursor: pointer; }
-.gallery-tab:hover { border-color: var(--main-300); }
-.gallery-tab.active { border-color: var(--main-color); color: var(--main-700); background: var(--main-30); }
-.gallery-tab span { font-weight: 600; }
-.gallery-tab small { margin-left: auto; color: var(--color-text-tertiary); }
-.image-choice-grid, .poster-choice-grid { display: grid; grid-auto-flow: column; grid-auto-columns: 142px; gap: 12px; padding: 2px 2px 8px; overflow-x: auto; }
+.gallery-folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.gallery-folder-card { position: relative; min-height: 92px; padding: 15px; display: flex; align-items: center; gap: 12px; border: 1px solid var(--gray-150); border-radius: 9px; color: var(--color-text); background: var(--gray-0); text-align: left; cursor: pointer; }
+.gallery-folder-card:hover { border-color: var(--main-300); background: var(--main-10); transform: translateY(-1px); }
+.gallery-folder-card.selected { border-color: var(--main-color); background: var(--main-30); box-shadow: 0 0 0 2px var(--main-10); }
+.gallery-folder-icon { flex: 0 0 auto; display: grid; place-items: center; width: 52px; height: 46px; border-radius: 8px; color: var(--main-700); background: var(--main-30); }
+.gallery-folder-copy { min-width: 0; display: grid; gap: 5px; }
+.gallery-folder-copy strong, .gallery-folder-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gallery-folder-copy strong { font-size: 14px; }
+.gallery-folder-copy small { color: var(--color-text-tertiary); font-size: 12px; }
+.gallery-selected-badge { position: absolute; top: 7px; right: 8px; padding: 2px 7px; border-radius: 999px; color: var(--main-700); background: var(--main-50); font-size: 10px; }
+.selected-gallery-image { margin-top: 14px; padding: 11px 13px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--main-100); border-radius: 8px; background: var(--main-10); }
+.selected-gallery-image > span { color: var(--main-700); }
+.selected-gallery-image > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.selected-gallery-image small, .selected-gallery-image em { color: var(--color-text-tertiary); font-size: 11px; font-style: normal; }
+.selected-gallery-image strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.poster-choice-grid { display: grid; grid-auto-flow: column; grid-auto-columns: 142px; gap: 12px; padding: 2px 2px 8px; overflow-x: auto; }
+.gallery-modal-content { display: grid; gap: 16px; padding-top: 4px; }
+.gallery-modal-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.gallery-modal-heading p { margin: 0; color: var(--color-text-secondary); }
+.gallery-modal-heading span { flex: 0 0 auto; color: var(--color-text-tertiary); font-size: 12px; }
+.gallery-modal-grid { max-height: min(58vh, 620px); padding: 2px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; overflow-y: auto; }
+.gallery-modal-actions { padding-top: 14px; display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; border-top: 1px solid var(--gray-150); }
 .image-choice, .poster-choice { position: relative; min-width: 0; padding: 7px; border: 1px solid var(--gray-150); border-radius: 8px; color: var(--color-text); background: var(--gray-0); text-align: left; cursor: pointer; }
 .image-choice:hover, .poster-choice:hover { border-color: var(--main-300); transform: translateY(-1px); }
 .image-choice.selected, .poster-choice.selected { border-color: var(--main-color); box-shadow: 0 0 0 2px var(--main-30); }
@@ -1595,7 +1684,11 @@ const openVersions = async () => {
   .header-actions, .stage-actions, .stage-actions.split, .editor-actions { width: 100%; flex-direction: column; }
   .visual-material-heading, .material-selector-title { flex-direction: column; }
   .material-selector-title small { text-align: left; }
-  .image-choice-grid, .poster-choice-grid { grid-auto-columns: 124px; }
+  .gallery-folder-grid { grid-template-columns: 1fr 1fr; }
+  .gallery-modal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gallery-modal-actions { grid-template-columns: 1fr 1fr; }
+  .gallery-modal-actions > span { display: none; }
+  .poster-choice-grid { grid-auto-columns: 124px; }
   .workflow-groups { padding: 12px; }
   .workflow-group summary { grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; padding: 11px; }
   .workflow-group-progress { display: none; }
