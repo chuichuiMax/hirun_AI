@@ -10,6 +10,7 @@ from typing import Any
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from yuxi.content_cover import COVER_PROCESSING_VERSION
+from yuxi.content_cover.editor_renderer import CoverEditorRenderError, render_editor_scene
 from yuxi.content_cover.image2_client import Image2Client, Image2Error
 from yuxi.content_cover.image2_settings import resolve_image2_config
 from yuxi.content_cover.poster_billboard import (
@@ -25,7 +26,7 @@ from yuxi.content_cover.renderer import (
     finalize_template_transfer,
     render_cover,
 )
-from yuxi.content_cover.schemas import Image2Input, Image2Request, Image2Submission, TemplateAnalysis
+from yuxi.content_cover.schemas import CoverEditorScene, Image2Input, Image2Request, Image2Submission, TemplateAnalysis
 from yuxi.content_cover.template_replication import (
     TemplateQualityError,
     TemplateReplicationError,
@@ -177,6 +178,7 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
     title = str((job.request_json or {}).get("title") or "").strip()
     template_replicate = bool((job.request_json or {}).get("template_replicate"))
     poster_billboard = job.mode == "poster_billboard"
+    editor_render = job.mode == "editor_render"
     try:
         async with pg_manager.get_async_session_context() as db:
             repo = ContentCoverRepository(db)
@@ -214,11 +216,18 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
                         "mode": job.mode,
                         "template_replicate": template_replicate,
                         "poster_billboard": poster_billboard,
+                        "editor_render": editor_render,
+                        "editor_project_id": (job.request_json or {}).get("project_id") if editor_render else None,
+                        "derived_from_asset_id": (
+                            (job.request_json or {}).get("source_asset_id") if editor_render else None
+                        ),
                         "generation_strategy": (
                             "image2_masked_edit_deterministic_layers_v2"
                             if template_replicate
                             else "poster_deterministic_layers_v1"
                             if poster_billboard
+                            else "editor_scene_v1"
+                            if editor_render
                             else "default"
                         ),
                         "quality_report": (
@@ -267,6 +276,28 @@ async def _load_job_assets(
             if mask is None:
                 raise RuntimeError("封面任务引用的蒙版图已不存在")
         return sources, template, mask
+
+
+async def _run_editor_render(job: ContentCoverJob) -> list[bytes]:
+    request = job.request_json or {}
+    base_asset_id = str(request.get("base_asset_id") or "")
+    if not base_asset_id:
+        raise CoverEditorRenderError("编辑任务缺少画板底图")
+    async with pg_manager.get_async_session_context() as db:
+        asset = await ContentCoverRepository(db).get_asset_for_user(base_asset_id, job.owner_uid)
+    if asset is None:
+        raise CoverEditorRenderError("画板底图已不存在")
+    scene = CoverEditorScene.model_validate(request.get("scene") or {}).model_dump(mode="json")
+    if scene["canvas"]["background_asset_id"] != asset.id:
+        raise CoverEditorRenderError("画板场景与底图不一致")
+    background_data = await _download_asset(asset)
+    try:
+        background = Image.open(io.BytesIO(background_data))
+        background.load()
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise CoverEditorRenderError("画板底图不是有效图片") from exc
+    output = await asyncio.to_thread(render_editor_scene, background, scene)
+    return [output]
 
 
 async def _run_compose(job: ContentCoverJob) -> list[bytes]:
@@ -579,7 +610,7 @@ async def _run_poster_billboard(job: ContentCoverJob) -> list[bytes]:
         repo = ContentCoverRepository(db)
         product_asset = await repo.get_asset_for_user(product_asset_id, job.owner_uid)
         template_asset = await repo.get_asset_for_user(template_asset_id, job.owner_uid)
-    if product_asset is None or product_asset.role != "source":
+    if product_asset is None or product_asset.role not in {"source", "library_image"}:
         raise PosterBillboardError("大字报任务引用的产品图已不存在")
     if template_asset is None or template_asset.role != "poster_template":
         raise PosterBillboardError("大字报任务引用的蒙版已不存在")
@@ -630,9 +661,7 @@ async def _run_poster_billboard(job: ContentCoverJob) -> list[bytes]:
         ).strip("，"),
         size="1080x1440",
         n=1,
-        source_images=[
-            Image2Input(data=preview_data, content_type="image/png", file_name="poster-preview.png")
-        ],
+        source_images=[Image2Input(data=preview_data, content_type="image/png", file_name="poster-preview.png")],
         mask_image=Image2Input(
             data=protection_mask,
             content_type="image/png",
@@ -733,6 +762,8 @@ async def process_content_cover_job(ctx: dict, job_id: str) -> None:
     try:
         if job.mode == "compose":
             outputs = await _run_compose(job)
+        elif job.mode == "editor_render":
+            outputs = await _run_editor_render(job)
         elif job.mode == "poster_billboard":
             if (job.request_json or {}).get("enhance_with_image2"):
                 async with IMAGE2_SEMAPHORE:
@@ -760,7 +791,13 @@ async def process_content_cover_job(ctx: dict, job_id: str) -> None:
         await _emit(job_id, "end", {"status": "succeeded", "progress": 100})
     except CoverJobCancelled:
         await _finish_cancelled(job_id)
-    except (Image2Error, CoverRenderError, TemplateReplicationError, PosterBillboardError) as exc:
+    except (
+        Image2Error,
+        CoverRenderError,
+        CoverEditorRenderError,
+        TemplateReplicationError,
+        PosterBillboardError,
+    ) as exc:
         code = (
             exc.code
             if isinstance(exc, Image2Error)

@@ -50,6 +50,8 @@ export const contentApi = {
     apiDelete(`/api/content/covers/poster-templates/${templateId}`),
   analyzeCoverPosterTemplate: (templateId) =>
     apiPost(`/api/content/covers/poster-templates/${templateId}/analyze`),
+  reviewCoverPosterTemplate: (templateId, payload) =>
+    apiPut(`/api/content/covers/poster-templates/${templateId}/review`, payload),
   previewCoverPosterBillboard: (payload) =>
     apiPost('/api/content/covers/poster-billboard/preview', payload),
   generateCoverPosterBillboard: (payload) =>
@@ -64,6 +66,14 @@ export const contentApi = {
   deleteCoverAsset: (assetId) => apiDelete(`/api/content/covers/assets/${assetId}`),
   getCoverAssetFile: (assetId) =>
     apiGet(`/api/content/covers/assets/${assetId}/file`, {}, true, 'blob'),
+  createCoverEditorProject: (payload) =>
+    apiPost('/api/content/covers/editor-projects', payload),
+  getCoverEditorProject: (projectId) =>
+    apiGet(`/api/content/covers/editor-projects/${projectId}`),
+  updateCoverEditorProject: (projectId, payload) =>
+    apiPatch(`/api/content/covers/editor-projects/${projectId}`, payload),
+  renderCoverEditorProject: (projectId, payload) =>
+    apiPost(`/api/content/covers/editor-projects/${projectId}/render`, payload),
   composeCover: (payload) => apiPost('/api/content/covers/compose', payload),
   generateCover: (payload) => apiPost('/api/content/covers/generate', payload),
   listCoverJobs: (params = {}) => apiGet(`/api/content/covers/jobs${encodeQuery(params)}`),

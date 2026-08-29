@@ -706,6 +706,97 @@ async def test_save_artifact_allows_content_version_without_cover(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_save_artifact_binds_selected_reviewed_cover(monkeypatch):
+    task = SimpleNamespace(id="task-1", tenant_id=None, rule_version_id="rules-v3")
+    saved = {}
+
+    class FakeDB:
+        def add(self, artifact):
+            saved["artifact"] = artifact
+
+        async def flush(self):
+            return None
+
+    class FakeRepository:
+        def __init__(self, db):
+            del db
+
+        async def get_task(self, task_id, for_update=False):
+            del for_update
+            return task if task_id == task.id else None
+
+        async def get_artifact_for_task(self, task_id):
+            assert task_id == task.id
+            return None
+
+        async def save_artifact_version(self, *, artifact, **kwargs):
+            del kwargs
+            return SimpleNamespace(
+                id="artifact-version-1",
+                version=1,
+                cover_asset_id=artifact.cover_asset_id,
+                cover_job_id=artifact.cover_job_id,
+            )
+
+        async def add_review_record(self, **kwargs):
+            del kwargs
+
+        async def track(self, *args, **kwargs):
+            del args, kwargs
+
+    class FakeCoverRepository:
+        def __init__(self, db):
+            del db
+
+        async def get_job(self, job_id):
+            assert job_id == "cover-job-1"
+            return SimpleNamespace(
+                status="succeeded",
+                content_task_id=task.id,
+                result_json={"asset_ids": ["cover-asset-1"]},
+            )
+
+        async def get_asset(self, asset_id):
+            assert asset_id == "cover-asset-1"
+            return SimpleNamespace(id=asset_id, owner_uid="user-1", role="output")
+
+    @asynccontextmanager
+    async def fake_session_context():
+        yield FakeDB()
+
+    monkeypatch.setattr(content_workflow_graph_module, "ContentRepository", FakeRepository)
+    monkeypatch.setattr(content_workflow_graph_module, "ContentCoverRepository", FakeCoverRepository)
+    monkeypatch.setattr(
+        content_workflow_graph_module.pg_manager,
+        "get_async_session_context",
+        fake_session_context,
+    )
+
+    result = await ContentWorkflowAgent()._save_artifact(
+        {
+            "task_id": task.id,
+            "uid": "user-1",
+            "run_id": "run-1",
+            "content_draft": {"body": "已审核正文", "topics": ["装修"]},
+            "selected_title": {"id": "title-1", "text": "最终标题"},
+            "strategy_snapshot": {"snapshot_hash": "s" * 64, "title_formula": {}, "body_formula": {}},
+            "evidence_bundle": {"bundle_hash": "e" * 64, "items": []},
+            "review_report": {"status": "passed", "checks": []},
+            "approval_result": {"status": "approved", "reviewer_uid": "user-1"},
+            "artifact_version": {"id": "artifact-version-1", "content_hash": "c" * 64},
+            "selected_cover": {"asset_id": "cover-asset-1", "cover_job_id": "cover-job-1"},
+            "visual_review": {"assets": [{"asset_id": "cover-asset-1", "status": "passed"}]},
+            "runtime_config_snapshot": {},
+        }
+    )
+
+    assert result["artifact_version"]["cover_asset_id"] == "cover-asset-1"
+    assert result["artifact_version"]["cover_job_id"] == "cover-job-1"
+    assert saved["artifact"].cover_asset_id == "cover-asset-1"
+    assert saved["artifact"].cover_job_id == "cover-job-1"
+
+
+@pytest.mark.asyncio
 async def test_deterministic_block_pauses_for_human_before_targeted_agent_revision():
     agent = ContentWorkflowAgent()
     graph = StateGraph(ContentWorkflowState)

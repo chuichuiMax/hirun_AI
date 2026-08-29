@@ -67,6 +67,27 @@ class MaterialLibraryRepository:
             query = query.with_for_update()
         return (await self.db.execute(query)).scalar_one_or_none()
 
+    async def list_child_categories(
+        self,
+        owner_uid: str,
+        material_type: str,
+        parent_id: str,
+    ) -> list[ContentMaterialCategory]:
+        return list(
+            (
+                await self.db.execute(
+                    select(ContentMaterialCategory)
+                    .where(
+                        ContentMaterialCategory.owner_uid == owner_uid,
+                        ContentMaterialCategory.material_type == material_type,
+                        ContentMaterialCategory.parent_id == parent_id,
+                        ContentMaterialCategory.deleted_at.is_(None),
+                    )
+                    .order_by(ContentMaterialCategory.sort_order, ContentMaterialCategory.created_at)
+                )
+            ).scalars()
+        )
+
     async def get_item_for_user(
         self, item_id: str, owner_uid: str, *, for_update: bool = False
     ) -> ContentMaterialLibraryItem | None:

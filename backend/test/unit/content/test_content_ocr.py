@@ -6,8 +6,12 @@ from yuxi.storage.postgres.models_content import ContentOCRResult
 
 
 class FakeRapidOCR:
-    def __call__(self, image):
+    def __init__(self):
+        self.runtime_params = None
+
+    def __call__(self, image, **runtime_params):
         assert image == b"image-bytes"
+        self.runtime_params = runtime_params
         return SimpleNamespace(
             txts=("作品拍摄申请单", "面积 600 平方米"),
             scores=(0.987654321, 0.876543219),
@@ -40,6 +44,18 @@ def test_rapid_ocr_parser_returns_text_blocks_coordinates_and_confidence():
         },
     ]
     assert result["processing_ms"] >= 0
+
+
+def test_rapid_ocr_parser_forwards_bounded_runtime_detection_profile():
+    parser = RapidOCRParser()
+    parser.ocr = FakeRapidOCR()
+
+    parser.process_image_result(
+        b"image-bytes",
+        params={"text_score": 0.32, "box_thresh": 0.3, "unclip_ratio": 1.8, "ignored": "value"},
+    )
+
+    assert parser.ocr.runtime_params == {"text_score": 0.32, "box_thresh": 0.3, "unclip_ratio": 1.8}
 
 
 def test_ocr_result_keeps_raw_text_and_prefers_saved_correction():

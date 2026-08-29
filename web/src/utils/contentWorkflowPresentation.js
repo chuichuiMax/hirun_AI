@@ -32,6 +32,11 @@ export const CONTENT_WORKFLOW_NODE_LABELS = {
   semantic_review: '审核 Agent 复核内容',
   revise_if_needed: '按失败原因定点回修',
   human_content_approval: '人工批准最终文案',
+  plan_visuals: '视觉 Agent 规划封面',
+  submit_cover_job: '提交封面生成任务',
+  wait_cover_job: '等待封面生成',
+  visual_review: '视觉 Agent 审核封面',
+  select_cover: '选择最终封面',
   save_artifact_snapshot: '保存统一内容版本'
 }
 
@@ -128,6 +133,11 @@ const NODE_PROGRESS_NARRATIVES = {
   semantic_review: '正在复核内容是否准确、有价值，并排查夸大或含糊表达。',
   revise_if_needed: '正在根据审核发现的问题定点修改内容。',
   human_content_approval: '内容已完成自动审核，正在等待最终确认。',
+  plan_visuals: '正在根据最终文案、渠道规格和可用素材规划封面。',
+  submit_cover_job: '正在提交已锁定的视觉方案并启动封面生成。',
+  wait_cover_job: '封面正在生成，完成后会自动进入视觉审核。',
+  visual_review: '正在检查封面文案、安全区、素材来源和视觉风险。',
+  select_cover: '候选封面已通过审核，正在等待选择最终版本。',
   save_artifact_snapshot: '正在保存最终内容和本次生成记录。',
   analyze_content_value: '正在从业务事实中识别最值得用户关注的价值点。',
   select_content_direction: '正在比较候选方向与目标受众、内容目标的匹配程度。',
@@ -365,13 +375,25 @@ export const CONTENT_WORKFLOW_GROUPS = [
   },
   {
     id: 'review',
-    label: '质量校验与保存',
-    description: '执行硬性校验、语义审核、人工审批并保存内容版本',
+    label: '质量校验',
+    description: '执行硬性校验、语义审核与人工审批',
     nodes: [
       'deterministic_validate',
       'semantic_review',
       'revise_if_needed',
-      'human_content_approval',
+      'human_content_approval'
+    ]
+  },
+  {
+    id: 'cover',
+    label: '生成并保存封面',
+    description: '规划、生成并审核封面，确认后绑定到最终内容版本',
+    nodes: [
+      'plan_visuals',
+      'submit_cover_job',
+      'wait_cover_job',
+      'visual_review',
+      'select_cover',
       'save_artifact_snapshot'
     ]
   }

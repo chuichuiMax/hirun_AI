@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageStat
 from yuxi.content_cover import COVER_PROCESSING_VERSION
 from yuxi.content_cover.schemas import NormalizedBox, PosterTextSlot, TemplateAnalysis
 
-POSTER_PROCESSING_VERSION = f"{COVER_PROCESSING_VERSION}-poster-v2"
+POSTER_PROCESSING_VERSION = f"{COVER_PROCESSING_VERSION}-poster-v3"
 POSTER_SIZE = (1080, 1440)
 
 
@@ -90,6 +90,142 @@ def normalize_poster_text_slots(text_slots: Sequence[dict[str, Any]]) -> list[di
     return normalized
 
 
+def _calibrate_hirun_tall_poster(text_slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Apply the owner's verified eight-layer profile to the matching 1080×1440 template."""
+    compact_texts = {re.sub(r"[^A-Za-z0-9]+", "", str(item.get("source_text") or "")).upper() for item in text_slots}
+    if not {"HONGYANG", "JIAZHUANG", "YUEYANGXINGLINCOMMUNITY"}.issubset(compact_texts):
+        return text_slots
+
+    layers = [
+        ("152 m²", "other", False, (58, 108, 300, 106), "Georgia", 88, 700, "#FFFFFF", 0, True, 8, 5),
+        ("HONG YANG", "other", False, (644, 131, 210, 38), "Georgia", 28, 400, "#C69778", 0, False, 0, 0),
+        ("JIA ZHUANG", "other", False, (644, 172, 210, 38), "Georgia", 28, 400, "#C69778", 0, False, 0, 0),
+        ("岳阳 · 杏林小区", "title", True, (58, 272, 630, 90), "SimSun", 72, 700, "#FFFFFF", 0, True, 8, 5),
+        (
+            "YUEYANG XINGLIN COMMUNITY",
+            "other",
+            False,
+            (70, 360, 440, 32),
+            "Georgia",
+            24,
+            700,
+            "#D07A48",
+            0,
+            False,
+            0,
+            0,
+        ),
+        (
+            "Interior design: hirun",
+            "other",
+            False,
+            (60, 456, 380, 38),
+            "Arial",
+            30,
+            600,
+            "#FFFFFF",
+            0,
+            True,
+            8,
+            5,
+        ),
+        (
+            "date of completion: 2026",
+            "other",
+            False,
+            (60, 490, 420, 38),
+            "Arial",
+            30,
+            600,
+            "#FFFFFF",
+            0,
+            True,
+            9,
+            5,
+        ),
+        (
+            "Hirunhome Renovation",
+            "other",
+            False,
+            (228, 1345, 630, 34),
+            "Arial",
+            18,
+            400,
+            "#D07A48",
+            14,
+            False,
+            0,
+            0,
+        ),
+    ]
+    source_boxes = [
+        (45, 101, 274, 93),
+        (642, 130, 179, 27),
+        (637, 165, 181, 37),
+        (42, 232, 650, 119),
+        (66, 358, 415, 25),
+        (56, 453, 326, 32),
+        (59, 483, 363, 30),
+        (228, 1336, 625, 25),
+    ]
+    calibrated: list[dict[str, Any]] = []
+    for index, (
+        text,
+        role,
+        editable,
+        (x, y, width, height),
+        family,
+        font_size,
+        weight,
+        fill,
+        spacing,
+        shadow,
+        shadow_blur,
+        shadow_y,
+    ) in enumerate(layers, 1):
+        source_x, source_y, source_width, source_height = source_boxes[index - 1]
+        calibrated.append(
+            PosterTextSlot(
+                id=f"slot-{index}",
+                role=role,
+                source_text=text,
+                editable=editable,
+                box={
+                    "x": source_x / POSTER_SIZE[0],
+                    "y": source_y / POSTER_SIZE[1],
+                    "width": source_width / POSTER_SIZE[0],
+                    "height": source_height / POSTER_SIZE[1],
+                },
+                style={
+                    "fill": fill,
+                    "stroke": None,
+                    "stroke_width_ratio": 0,
+                    "font_size_ratio": font_size / POSTER_SIZE[1],
+                    "bold": weight >= 600,
+                    "align": "left",
+                    "panel_fill": None,
+                    "panel_radius_ratio": 0,
+                    "font_family": family,
+                    "font_size_px": font_size,
+                    "font_weight": weight,
+                    "letter_spacing": spacing,
+                    "shadow": shadow,
+                    "shadow_color": "#000000",
+                    "shadow_blur": shadow_blur,
+                    "shadow_offset_x": 0,
+                    "shadow_offset_y": shadow_y,
+                    "editor_x": x,
+                    "editor_y": y,
+                    "editor_width": width,
+                    "editor_height": height,
+                },
+                max_chars=max(12, len(text) + 8),
+                max_lines=1,
+            ).model_dump(mode="json")
+        )
+    return calibrated
+
+
 def _pixel_box(box: NormalizedBox | dict[str, Any], size: tuple[int, int]) -> tuple[int, int, int, int]:
     item = box if isinstance(box, NormalizedBox) else NormalizedBox.model_validate(box)
     left = round(item.x * size[0])
@@ -134,17 +270,6 @@ def analyze_poster_template(
     decoration_regions: list[dict[str, Any]] = []
     if text_analysis is not None:
         detected_slots = list(text_analysis.text_slots)
-        if template_type == "layout_template" and detected_slots:
-            primary_title = max(
-                (item for item in detected_slots if item.role == "title"),
-                key=lambda item: item.box.width * item.box.height,
-                default=None,
-            )
-            detected_slots = [
-                item
-                for item in detected_slots
-                if item is primary_title or item.box.y + item.box.height <= 0.28 or item.box.y >= 0.8
-            ]
         for item in detected_slots:
             editable = item.role in {"title", "subtitle", "tag"}
             text_slots.append(
@@ -157,16 +282,26 @@ def analyze_poster_template(
                     style=item.style,
                     max_chars=item.max_chars,
                     max_lines=item.max_lines,
+                    confidence=item.confidence,
+                    candidate_count=item.candidate_count,
+                    consensus_count=item.consensus_count,
+                    source_variant=item.source_variant,
+                    alternatives=item.alternatives,
                 ).model_dump(mode="json")
             )
         decoration_regions = [_box_dict(item) for item in text_analysis.decoration_regions]
 
-    text_slots = normalize_poster_text_slots(text_slots)
+    text_slots = _calibrate_hirun_tall_poster(normalize_poster_text_slots(text_slots))
+    background_mode = "replace_region"
+    if template_type == "layout_template" and text_slots:
+        product_box = {"x": 0, "y": 0, "width": 1, "height": 1}
+        background_mode = "full_canvas"
     editable_regions = [item["box"] for item in text_slots if item["editable"]]
     fixed_regions = [item["box"] for item in text_slots if not item["editable"]] + decoration_regions
     fingerprint_payload = {
         "alpha": round(transparent_ratio, 6),
         "product_box": product_box,
+        "background_mode": background_mode,
         "text_slots": [[item["role"], item["box"]] for item in text_slots],
     }
     return {
@@ -175,10 +310,15 @@ def analyze_poster_template(
         "canvas_width": POSTER_SIZE[0],
         "canvas_height": POSTER_SIZE[1],
         "product_box": product_box,
+        "background_mode": background_mode,
         "safe_area": {"x": 0.02, "y": 0.02, "width": 0.96, "height": 0.96},
         "text_slots": text_slots,
         "fixed_regions": fixed_regions,
         "editable_regions": editable_regions,
+        "decoration_regions": decoration_regions,
+        "ocr_raw_layers": text_analysis.ocr_raw_layers if text_analysis is not None else [],
+        "recognition_metrics": text_analysis.recognition_metrics if text_analysis is not None else {},
+        "review_status": "pending",
         "alpha_statistics": {
             "transparent_ratio": round(transparent_ratio, 6),
             "translucent_ratio": round(translucent_count / pixel_count, 6),
@@ -188,7 +328,7 @@ def analyze_poster_template(
         "layout_fingerprint": hashlib.sha256(
             json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True).encode()
         ).hexdigest(),
-        "status": "ready" if product_box is not None else "needs_annotation",
+        "status": "needs_review" if product_box is not None else "needs_annotation",
     }
 
 
@@ -328,6 +468,18 @@ def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, 
     return "\n".join(result[:lines])
 
 
+def _fill_for_character(slot: PosterTextSlot, index: int, text_length: int) -> tuple[int, int, int, int]:
+    if not slot.style.fill_runs or text_length <= 0:
+        return (*_rgb(slot.style.fill), 255)
+    source_length = max(item.end for item in slot.style.fill_runs)
+    source_index = min(source_length - 1, int(index * source_length / text_length))
+    fill = next(
+        (item.fill for item in slot.style.fill_runs if item.start <= source_index < item.end),
+        slot.style.fill,
+    )
+    return (*_rgb(fill), 255)
+
+
 def _draw_text_slot(canvas: Image.Image, slot: PosterTextSlot, text: str) -> bool:
     draw = ImageDraw.Draw(canvas)
     left, top, right, bottom = _pixel_box(slot.box, canvas.size)
@@ -337,7 +489,7 @@ def _draw_text_slot(canvas: Image.Image, slot: PosterTextSlot, text: str) -> boo
         draw.rounded_rectangle(
             (left - padding_x, top - padding_y, right + padding_x, bottom + padding_y),
             radius=max(2, round((bottom - top) * slot.style.panel_radius_ratio)),
-            fill=(*_rgb(slot.style.panel_fill), 238),
+            fill=(*_rgb(slot.style.panel_fill), round(slot.style.panel_opacity * 255)),
         )
     preferred = max(12, round(slot.style.font_size_ratio * canvas.height))
     selected = None
@@ -361,15 +513,28 @@ def _draw_text_slot(canvas: Image.Image, slot: PosterTextSlot, text: str) -> boo
         x = left + (right - left - text_width) / 2 - bounds[0]
     y = top + (bottom - top - text_height) / 2 - bounds[1]
     stroke = max(0, round(font.size * slot.style.stroke_width_ratio)) if hasattr(font, "size") else 0
-    draw.multiline_text(
-        (x, y),
-        wrapped,
-        font=font,
-        spacing=spacing,
-        fill=(*_rgb(slot.style.fill), 255),
-        stroke_width=stroke,
-        stroke_fill=(*_rgb(slot.style.stroke or slot.style.fill), 255),
-    )
+    if not slot.style.fill_runs or "\n" in wrapped:
+        draw.multiline_text(
+            (x, y),
+            wrapped,
+            font=font,
+            spacing=spacing,
+            fill=(*_rgb(slot.style.fill), 255),
+            stroke_width=stroke,
+            stroke_fill=(*_rgb(slot.style.stroke or slot.style.fill), 255),
+        )
+    else:
+        cursor = x
+        for index, character in enumerate(wrapped):
+            draw.text(
+                (cursor, y),
+                character,
+                font=font,
+                fill=_fill_for_character(slot, index, len(wrapped)),
+                stroke_width=stroke,
+                stroke_fill=(*_rgb(slot.style.stroke or slot.style.fill), 255),
+            )
+            cursor += float(draw.textlength(character, font=font))
     return False
 
 
@@ -388,25 +553,44 @@ def _paste_original_text_slot(canvas: Image.Image, template: Image.Image, slot: 
     )
     crop = template.crop(box).convert("RGBA")
     rgb = np.asarray(crop.convert("RGB"), dtype=np.int16)
-    fill = np.asarray(_rgb(slot.style.fill), dtype=np.int16)
-    fill_mask = np.linalg.norm(rgb - fill, axis=2) <= 64
+    fills = [slot.style.fill, *(item.fill for item in slot.style.fill_runs)]
+    fill_mask = np.zeros(rgb.shape[:2], dtype=bool)
+    for fill_value in dict.fromkeys(fills):
+        fill = np.asarray(_rgb(fill_value), dtype=np.int16)
+        fill_mask |= np.linalg.norm(rgb - fill, axis=2) <= 64
+    border = np.concatenate((rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]), axis=0)
+    background = np.median(border, axis=0)
+    border_distance = np.linalg.norm(border - background, axis=1)
+    # A neighbouring headline can cross one edge of the padded crop. Treat the
+    # median border colour as background while it still owns most border pixels;
+    # using the mean distance made one contaminated edge disable restoration for
+    # the whole (otherwise flat) title area.
+    uniform_background = float(np.mean(border_distance <= 18)) >= 0.6
+    contrast_mask = (
+        np.linalg.norm(rgb - background, axis=2) >= 12 if uniform_background else np.zeros(fill_mask.shape, bool)
+    )
     if slot.style.stroke:
         stroke = np.asarray(_rgb(slot.style.stroke), dtype=np.int16)
         stroke_mask = np.linalg.norm(rgb - stroke, axis=2) <= 64
-        nearby_stroke = (
-            np.asarray(Image.fromarray(stroke_mask.astype(np.uint8) * 255).filter(ImageFilter.MaxFilter(11))) > 0
+        foreground_seed = stroke_mask | contrast_mask
+        nearby_foreground = (
+            np.asarray(Image.fromarray(foreground_seed.astype(np.uint8) * 255).filter(ImageFilter.MaxFilter(11))) > 0
         )
-        alpha_mask = stroke_mask | (fill_mask & nearby_stroke)
+        # White glyph interiors are indistinguishable from a white source
+        # background. Their shadow/outline still gives us a reliable local seed,
+        # so restore only near that seed instead of copying an opaque rectangle.
+        alpha_mask = foreground_seed | (fill_mask & nearby_foreground)
     else:
-        border = np.concatenate((rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]), axis=0)
-        background = np.median(border, axis=0)
         contrast = np.linalg.norm(rgb - background, axis=2)
-        alpha_mask = fill_mask & (contrast >= 10)
+        alpha_mask = (fill_mask & (contrast >= 10)) | contrast_mask
+    slot_mask = np.zeros(alpha_mask.shape, dtype=bool)
+    slot_mask[top - box[1] : bottom - box[1], left - box[0] : right - box[0]] = True
+    alpha_mask &= slot_mask
     if slot.style.panel_fill:
         ImageDraw.Draw(canvas).rounded_rectangle(
             box,
             radius=max(2, round(height * slot.style.panel_radius_ratio)),
-            fill=(*_rgb(slot.style.panel_fill), 232),
+            fill=(*_rgb(slot.style.panel_fill), round(slot.style.panel_opacity * 255)),
         )
     alpha = Image.fromarray(alpha_mask.astype(np.uint8) * 255, mode="L").filter(ImageFilter.GaussianBlur(0.45))
     canvas.paste(crop, box[:2], alpha)

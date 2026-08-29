@@ -85,8 +85,12 @@ class RapidOCRParser(BaseDocumentProcessor):
         Returns:
             dict: 文本、文字块和处理耗时
         """
-        del params
         self._load_model()
+        runtime_params = {
+            key: value
+            for key, value in (params or {}).items()
+            if key in {"text_score", "box_thresh", "unclip_ratio"} and value is not None
+        }
 
         try:
             if isinstance(image, (str, bytes, Path)):
@@ -98,7 +102,7 @@ class RapidOCRParser(BaseDocumentProcessor):
 
             try:
                 start_time = time.time()
-                result = self.ocr(image_input)
+                result = self.ocr(image_input, **runtime_params)
                 processing_time = time.time() - start_time
                 texts = list(result.txts or [])
                 scores = list(result.scores or [])

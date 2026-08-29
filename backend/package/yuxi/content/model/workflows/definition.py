@@ -10,6 +10,7 @@ V3_AGENT_NODE_TYPES = {"agent"}
 V3_HUMAN_GATE_IDS = {
     "confirm_high_risk_facts",
     "human_content_approval",
+    "select_cover",
 }
 KNOWLEDGE_POLICIES = {"none", "agent_scope", "frozen_evidence_only"}
 DEFAULT_CONTRACTS = {
@@ -117,8 +118,8 @@ class WorkflowDefinitionPolicy:
 
     @classmethod
     def _validate_v3_nodes(cls, node_by_id: dict[str, dict[str, Any]], catalog: WorkflowCatalog | None) -> None:
-        if len(node_by_id) != 15:
-            raise ValueError("V3 简化内容工作流必须声明 15 个节点")
+        if len(node_by_id) != 20:
+            raise ValueError("V3 内容与封面工作流必须声明 20 个节点")
         missing_gates = sorted(V3_HUMAN_GATE_IDS - set(node_by_id))
         if missing_gates:
             raise ValueError(f"V3 工作流缺少必选人工关口: {', '.join(missing_gates)}")

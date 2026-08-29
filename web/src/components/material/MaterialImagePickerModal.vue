@@ -31,7 +31,16 @@ const pendingItem = ref(null)
 let loadVersion = 0
 
 const activeGallery = computed(() => galleries.value.find((item) => item.id === activeGalleryId.value))
+const rootGalleries = computed(() => galleries.value.filter((item) => !item.parent_id))
+const orderedGalleries = computed(() => {
+  const roots = rootGalleries.value
+  return roots.flatMap((root) => [root, ...galleryChildren(root.id)])
+})
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+
+function galleryChildren(parentId) {
+  return galleries.value.filter((item) => item.parent_id === parentId)
+}
 
 function releaseItemUrls(urls = itemUrls.value) {
   Object.values(urls).forEach((url) => {
@@ -91,7 +100,9 @@ async function loadGalleries() {
       props.selectedGalleryId
       && galleries.value.some((item) => item.id === props.selectedGalleryId)
         ? props.selectedGalleryId
-        : galleries.value[0]?.id || ''
+        : orderedGalleries.value.find((item) => (item.parent_id ? item.count : item.direct_count) > 0)?.id
+          || orderedGalleries.value[0]?.id
+          || ''
     )
     await loadItems()
   } catch (error) {
@@ -163,20 +174,35 @@ onBeforeUnmount(() => {
   >
     <div class="material-picker">
       <aside class="gallery-sidebar">
-        <div class="sidebar-heading"><strong>图库</strong><span>{{ galleries.length }}</span></div>
+        <div class="sidebar-heading"><strong>图库</strong><span>{{ rootGalleries.length }}</span></div>
         <div v-if="loadingGalleries" class="sidebar-state">正在加载…</div>
         <template v-else>
-          <button
-            v-for="gallery in galleries"
-            :key="gallery.id"
-            type="button"
-            :class="{ active: activeGalleryId === gallery.id }"
-            @click="chooseGallery(gallery.id)"
-          >
-            <FolderOpen :size="16" />
-            <span>{{ gallery.name }}</span>
-            <small>{{ gallery.count || 0 }}</small>
-          </button>
+          <div v-for="gallery in rootGalleries" :key="gallery.id" class="gallery-tree-group">
+            <button
+              type="button"
+              class="gallery-button"
+              :class="{ active: activeGalleryId === gallery.id }"
+              @click="chooseGallery(gallery.id)"
+            >
+              <FolderOpen :size="16" />
+              <span>{{ gallery.name }}</span>
+              <small>{{ gallery.direct_count || 0 }}</small>
+            </button>
+            <div v-if="galleryChildren(gallery.id).length" class="gallery-tree-children">
+              <button
+                v-for="child in galleryChildren(gallery.id)"
+                :key="child.id"
+                type="button"
+                class="gallery-button child"
+                :class="{ active: activeGalleryId === child.id }"
+                @click="chooseGallery(child.id)"
+              >
+                <FolderOpen :size="14" />
+                <span>{{ child.name }}</span>
+                <small>{{ child.count || 0 }}</small>
+              </button>
+            </div>
+          </div>
         </template>
       </aside>
 
@@ -241,11 +267,14 @@ onBeforeUnmount(() => {
 .gallery-sidebar { padding: 14px 10px; border-right: 1px solid var(--gray-150); background: var(--gray-25); }
 .sidebar-heading { padding: 0 8px 10px; display: flex; align-items: center; justify-content: space-between; color: var(--color-text); }
 .sidebar-heading span { color: var(--color-text-tertiary); font-size: 11px; }
-.gallery-sidebar > button { width: 100%; margin-bottom: 4px; padding: 9px 8px; border: 0; border-radius: 7px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; color: var(--color-text-secondary); background: transparent; text-align: left; cursor: pointer; }
-.gallery-sidebar > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gallery-sidebar > button small { color: var(--color-text-tertiary); }
-.gallery-sidebar > button:hover { color: var(--main-700); background: var(--main-30); }
-.gallery-sidebar > button.active { color: var(--main-700); background: var(--main-50); font-weight: 650; }
+.gallery-tree-group { margin-bottom: 4px; }
+.gallery-button { width: 100%; padding: 9px 8px; border: 0; border-radius: 7px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; color: var(--color-text-secondary); background: transparent; text-align: left; cursor: pointer; }
+.gallery-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gallery-button small { color: var(--color-text-tertiary); }
+.gallery-button:hover { color: var(--main-700); background: var(--main-30); }
+.gallery-button.active { color: var(--main-700); background: var(--main-50); font-weight: 650; }
+.gallery-tree-children { margin: 2px 0 5px 17px; padding-left: 7px; border-left: 1px solid var(--main-100); }
+.gallery-button.child { padding: 7px 7px; font-size: 12px; }
 .sidebar-state { padding: 12px 8px; color: var(--color-text-secondary); font-size: 12px; }
 .picker-content { min-width: 0; padding: 16px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 14px; }
 .picker-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -270,5 +299,5 @@ onBeforeUnmount(() => {
 .picker-footer { padding-top: 13px; border-top: 1px solid var(--gray-150); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pagination, .footer-actions { display: flex; align-items: center; gap: 8px; }
 .pagination span { color: var(--color-text-tertiary); font-size: 11px; }
-@media (max-width: 760px) { .material-picker { min-height: 620px; grid-template-columns: 1fr; grid-template-rows: auto 1fr; }.gallery-sidebar { border-right: 0; border-bottom: 1px solid var(--gray-150); display: flex; gap: 6px; overflow-x: auto; }.sidebar-heading { display: none; }.gallery-sidebar > button { width: auto; min-width: 130px; margin: 0; }.picker-toolbar, .picker-footer { align-items: stretch; flex-direction: column; }.picker-search { width: 100%; }.image-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.footer-actions { justify-content: flex-end; } }
+@media (max-width: 760px) { .material-picker { min-height: 620px; grid-template-columns: 1fr; grid-template-rows: auto 1fr; }.gallery-sidebar { border-right: 0; border-bottom: 1px solid var(--gray-150); display: flex; gap: 6px; overflow-x: auto; }.sidebar-heading { display: none; }.gallery-tree-group { min-width: 150px; margin: 0; }.picker-toolbar, .picker-footer { align-items: stretch; flex-direction: column; }.picker-search { width: 100%; }.image-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.footer-actions { justify-content: flex-end; } }
 </style>

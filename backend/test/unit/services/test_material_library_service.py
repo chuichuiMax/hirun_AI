@@ -55,6 +55,27 @@ def test_material_categories_normalize_legacy_values_and_reject_free_form():
         validate_material_category("image", "custom")
 
 
+def test_material_category_exposes_gallery_level():
+    parent = ContentMaterialCategory(
+        owner_uid="owner-1",
+        material_type="image",
+        id="gallery-1",
+        name="案例",
+    )
+    child = ContentMaterialCategory(
+        owner_uid="owner-1",
+        material_type="image",
+        id="gallery-2",
+        parent_id=parent.id,
+        name="客厅",
+    )
+
+    assert parent.to_dict()["level"] == 1
+    assert parent.to_dict()["parent_id"] is None
+    assert child.to_dict()["level"] == 2
+    assert child.to_dict()["parent_id"] == parent.id
+
+
 def test_cover_template_item_exposes_linked_generation_status():
     asset = ContentCoverAsset(
         id="asset-1",

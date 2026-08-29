@@ -9,10 +9,11 @@ LEGACY_PLATFORM_WORKFLOW_V3_IDS = frozenset(
         "content-workflow-enterprise-v3.2",
         "content-workflow-enterprise-v3.3",
         "content-workflow-enterprise-v3.4",
+        "content-workflow-enterprise-v3.5",
     }
 )
-LEGACY_PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.4"
-PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.5"
+LEGACY_PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.5"
+PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.6"
 
 
 def _fixed(node_id: str) -> dict[str, Any]:
@@ -153,12 +154,60 @@ WORKFLOW_V3_NODES = [
     ),
     {"id": "revise_if_needed", "type": "revision_router", "handler": "revise_if_needed"},
     _human("human_content_approval", "content_approval"),
+    _agent(
+        "plan_visuals",
+        "content-visual-agent",
+        "content-visual-planner",
+        "PlanVisualsInputV1",
+        "VisualPlanResultV1",
+        state_inputs=(
+            "selected_title",
+            "content_draft",
+            "strategy_snapshot",
+            "evidence_bundle",
+            "media_evidence_items",
+            "artifact_version",
+            "channel_profile",
+        ),
+    ),
+    _agent(
+        "submit_cover_job",
+        "content-visual-agent",
+        "content-cover-generator",
+        "SubmitCoverJobInputV1",
+        "CoverJobSubmissionResultV1",
+        state_inputs=("visual_plan", "artifact_version", "media_evidence_items"),
+        max_tool_calls=2,
+    ),
+    {
+        "id": "wait_cover_job",
+        "type": "external_wait",
+        "external_job_type": "content_cover",
+        "timeout_seconds": 900,
+        "state_version_required": True,
+    },
+    _agent(
+        "visual_review",
+        "content-visual-agent",
+        "content-visual-reviewer",
+        "VisualReviewInputV1",
+        "VisualReviewResultV1",
+        state_inputs=(
+            "selected_title",
+            "content_draft",
+            "visual_plan",
+            "cover_job",
+            "cover_assets",
+            "evidence_bundle",
+        ),
+    ),
+    _human("select_cover", "cover_selection"),
     _fixed("save_artifact_snapshot"),
 ]
 
 WORKFLOW_V3 = {
     "schema_version": 3,
-    "runtime_limits": {"max_steps": 40, "max_revision_attempts": 3},
+    "runtime_limits": {"max_steps": 60, "max_revision_attempts": 3},
     "nodes": WORKFLOW_V3_NODES,
     "edges": [
         [WORKFLOW_V3_NODES[index]["id"], WORKFLOW_V3_NODES[index + 1]["id"]]
@@ -181,6 +230,7 @@ WORKFLOW_V3 = {
         {
             "confirm_high_risk_facts",
             "human_content_approval",
+            "select_cover",
         }
     ),
 }

@@ -129,7 +129,9 @@ async def test_poster_template_library_preview_and_owner_isolation(
     assert imported.status_code == 201, imported.text
     assert imported.json()["summary"] == {"total": 1, "created": 1, "duplicate": 0, "failed": 0}
     template = imported.json()["items"][0]["template"]
-    assert template["status"] == "ready"
+    assert template["status"] == "needs_review"
+    assert template["review_status"] == "pending"
+    assert template["requires_review"] is True
     assert template["template_type"] == "alpha_overlay"
     assert template["category_name"] == "产品推广"
     assert "tags" not in template
@@ -141,8 +143,41 @@ async def test_poster_template_library_preview_and_owner_isolation(
     assert material_library.status_code == 200, material_library.text
     library_item = next(item for item in material_library.json()["items"] if item["asset_id"] == template["asset_id"])
     assert library_item["poster_template_id"] == template["id"]
-    assert library_item["template_status"] == "ready"
-    assert library_item["selectable"] is True
+    assert library_item["template_status"] == "needs_review"
+    assert library_item["review_status"] == "pending"
+    assert library_item["selectable"] is False
+
+    blocked_product = await test_client.post(
+        "/api/content/covers/assets",
+        headers=admin_headers,
+        data={"role": "source"},
+        files={"file": ("blocked-product.png", _png(), "image/png")},
+    )
+    assert blocked_product.status_code == 201, blocked_product.text
+    blocked_product_id = blocked_product.json()["asset"]["id"]
+    blocked_preview = await test_client.post(
+        "/api/content/covers/poster-billboard/preview",
+        headers=admin_headers,
+        json={"poster_template_id": template["id"], "product_asset_id": blocked_product_id},
+    )
+    assert blocked_preview.status_code == 409
+    assert blocked_preview.json()["detail"]["error"]["code"] == "POSTER_TEMPLATE_NOT_READY"
+
+    reviewed = await test_client.put(
+        f"/api/content/covers/poster-templates/{template['id']}/review",
+        headers=admin_headers,
+        json={
+            "version": template["version"],
+            "product_box": template["product_box"],
+            "text_slots": template["text_slots"],
+            "confirm": True,
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    template = reviewed.json()["template"]
+    assert template["status"] == "ready"
+    assert template["review_status"] == "confirmed"
+    await test_client.delete(f"/api/content/covers/assets/{blocked_product_id}", headers=admin_headers)
 
     duplicate = await test_client.post(
         "/api/content/covers/poster-templates/import",
@@ -180,6 +215,20 @@ async def test_poster_template_library_preview_and_owner_isolation(
     )
     assert analyzed.status_code == 200, analyzed.text
     template = analyzed.json()["template"]
+    assert template["status"] == "needs_review"
+    assert template["review_status"] == "pending"
+    reviewed = await test_client.put(
+        f"/api/content/covers/poster-templates/{template['id']}/review",
+        headers=admin_headers,
+        json={
+            "version": template["version"],
+            "product_box": template["product_box"],
+            "text_slots": template["text_slots"],
+            "confirm": True,
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    template = reviewed.json()["template"]
     assert template["status"] == "ready"
 
     private = await test_client.get(

@@ -16,10 +16,18 @@ import {
 assert.deepEqual(buildContentNarrativeCodeLabels(null), {})
 
 const groupedNodeIds = CONTENT_WORKFLOW_GROUPS.flatMap((group) => group.nodes)
-assert.equal(CONTENT_WORKFLOW_GROUPS.length, 4)
-assert.equal(groupedNodeIds.length, 15)
-assert.equal(new Set(groupedNodeIds).size, 15)
+assert.equal(CONTENT_WORKFLOW_GROUPS.length, 5)
+assert.equal(groupedNodeIds.length, 20)
+assert.equal(new Set(groupedNodeIds).size, 20)
 assert.ok(groupedNodeIds.every((nodeId) => CONTENT_WORKFLOW_NODE_LABELS[nodeId]))
+assert.deepEqual(CONTENT_WORKFLOW_GROUPS.at(-1).nodes, [
+  'plan_visuals',
+  'submit_cover_job',
+  'wait_cover_job',
+  'visual_review',
+  'select_cover',
+  'save_artifact_snapshot'
+])
 
 const groups = buildContentWorkflowGroups([
   { node_id: 'compile_runtime_snapshot', status: 'completed' },

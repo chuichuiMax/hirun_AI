@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from yuxi.content_cover.poster_billboard import (
     POSTER_SIZE,
     PosterBillboardError,
+    _draw_text_slot,
     analyze_poster_template,
     build_image2_protection_mask,
     build_poster_copy_plan,
@@ -18,7 +19,7 @@ from yuxi.content_cover.poster_billboard import (
     normalize_poster_text_slots,
     render_poster_billboard,
 )
-from yuxi.content_cover.schemas import PosterGenerateCreate, TemplateAnalysis
+from yuxi.content_cover.schemas import PosterGenerateCreate, PosterTextSlot, TemplateAnalysis
 from yuxi.content_cover.schemas import Image2Output, Image2Submission
 from yuxi.services import content_cover_worker
 from yuxi.services.content_cover_service import serialize_poster_template
@@ -59,6 +60,35 @@ def _record(*, template_type: str = "alpha_overlay", text_slots: list[dict] | No
     }
 
 
+def test_poster_renderer_uses_detected_fill_runs_and_opaque_panel_color():
+    canvas = Image.new("RGBA", (720, 360), "#FFFFFF")
+    slot = PosterTextSlot.model_validate(
+        {
+            **_slot(source_text="4大产品服务"),
+            "box": {"x": 0.08, "y": 0.12, "width": 0.84, "height": 0.28},
+            "style": {
+                **_slot()["style"],
+                "fill": "#E4E4E4",
+                "fill_runs": [
+                    {"start": 0, "end": 2, "fill": "#F4DC28"},
+                    {"start": 2, "end": 6, "fill": "#E4E4E4"},
+                ],
+                "panel_fill": "#E7D6C9",
+                "panel_opacity": 1,
+                "stroke": None,
+                "stroke_width_ratio": 0,
+            },
+        }
+    )
+
+    assert _draw_text_slot(canvas, slot, slot.source_text) is False
+
+    colors = canvas.get_flattened_data()
+    assert sum(pixel[:3] == (244, 220, 40) for pixel in colors) > 20
+    assert sum(pixel[:3] == (228, 228, 228) for pixel in colors) > 20
+    assert sum(pixel[:3] == (231, 214, 201) for pixel in colors) > 500
+
+
 def test_analyze_transparent_overlay_is_ready_and_keeps_alpha_statistics():
     template = Image.new("RGBA", POSTER_SIZE, (0, 0, 0, 0))
     ImageDraw.Draw(template).rectangle((0, 0, 1079, 1439), outline=(255, 80, 20, 255), width=24)
@@ -66,7 +96,8 @@ def test_analyze_transparent_overlay_is_ready_and_keeps_alpha_statistics():
     result = analyze_poster_template(template)
 
     assert result["template_type"] == "alpha_overlay"
-    assert result["status"] == "ready"
+    assert result["status"] == "needs_review"
+    assert result["review_status"] == "pending"
     assert result["product_box"]["x"] == pytest.approx(24 / 1080)
     assert result["product_box"]["y"] == pytest.approx(24 / 1440)
     assert result["product_box"]["width"] == pytest.approx((1080 - 48) / 1080)
@@ -82,7 +113,7 @@ def test_analyze_opaque_layout_requires_explicit_product_annotation():
     assert result["product_box"] is None
 
 
-def test_opaque_analysis_ignores_background_document_text():
+def test_opaque_analysis_retains_every_detected_text_slot():
     style = {
         "fill": "#111111",
         "font_size_ratio": 0.04,
@@ -121,8 +152,80 @@ def test_opaque_analysis_ignores_background_document_text():
     assert [slot["id"] for slot in result["text_slots"]] == [
         "eyebrow",
         "hero",
+        "background-form",
         "bottom-slogan",
     ]
+    assert result["status"] == "needs_review"
+    assert result["review_status"] == "pending"
+    assert result["product_box"] == {"x": 0, "y": 0, "width": 1, "height": 1}
+    assert result["background_mode"] == "full_canvas"
+
+
+def test_hirun_tall_poster_is_calibrated_to_eight_exact_logical_layers():
+    style = {
+        "fill": "#FFFFFF",
+        "font_size_ratio": 0.03,
+        "bold": False,
+        "align": "left",
+    }
+    raw = [
+        ("152 m", 45, 101, 274, 93),
+        ("HONG YANG", 642, 130, 179, 27),
+        ("JIA ZHUANG", 637, 165, 181, 37),
+        ("岳阳・杏林小区", 42, 232, 650, 119),
+        ("YUEYANG XINGLIN COMMUNITY", 66, 360, 412, 20),
+        ("Interior design:hirun", 56, 453, 326, 32),
+        ("date of compltion:2026", 59, 483, 363, 29),
+        ("HunOme", 228, 1338, 266, 19),
+        ("Ren0Va0n", 564, 1338, 288, 19),
+        ("t", 751, 1340, 12, 16),
+        ("h", 377, 1341, 19, 16),
+    ]
+    analysis = TemplateAnalysis.model_validate(
+        {
+            "processing_version": "test",
+            "canvas_width": 1080,
+            "canvas_height": 1440,
+            "text_slots": [
+                {
+                    "id": f"slot-{index}",
+                    "role": "other",
+                    "source_text": text,
+                    "box": {
+                        "x": x / 1080,
+                        "y": y / 1440,
+                        "width": width / 1080,
+                        "height": height / 1440,
+                    },
+                    "style": style,
+                    "max_chars": max(4, len(text)),
+                    "max_lines": 1,
+                }
+                for index, (text, x, y, width, height) in enumerate(raw, 1)
+            ],
+            "layout_fingerprint": "fixture",
+        }
+    )
+
+    result = analyze_poster_template(Image.new("RGB", POSTER_SIZE, "white"), text_analysis=analysis)
+
+    assert [slot["source_text"] for slot in result["text_slots"]] == [
+        "152 m²",
+        "HONG YANG",
+        "JIA ZHUANG",
+        "岳阳 · 杏林小区",
+        "YUEYANG XINGLIN COMMUNITY",
+        "Interior design: hirun",
+        "date of completion: 2026",
+        "Hirunhome Renovation",
+    ]
+    assert len(result["text_slots"]) == 8
+    assert result["text_slots"][0]["style"]["font_family"] == "Georgia"
+    assert result["text_slots"][0]["style"]["font_size_px"] == 88
+    assert result["text_slots"][3]["style"]["font_family"] == "SimSun"
+    assert result["text_slots"][3]["style"]["editor_x"] == 58
+    assert result["text_slots"][3]["style"]["editor_y"] == 272
+    assert result["text_slots"][7]["style"]["letter_spacing"] == 14
 
 
 def test_copy_plan_changes_only_editable_slots():
@@ -263,6 +366,63 @@ def test_opaque_layout_restores_template_text_over_product_area():
         assert red[0] > 180 and red[1] < 100 and red[2] < 100
 
 
+def test_full_canvas_layout_places_product_below_template_text() -> None:
+    template = Image.new("RGB", POSTER_SIZE, "white")
+    draw = ImageDraw.Draw(template)
+    draw.rectangle((180, 120, 900, 250), fill=(224, 70, 36))
+    product = Image.new("RGB", (900, 1200), (20, 130, 90))
+    slot = _slot(editable=False, source_text="LOCKED")
+    slot["box"] = {"x": 0.16, "y": 0.08, "width": 0.68, "height": 0.1}
+    slot["style"] = {**slot["style"], "fill": "#E04624", "stroke": None, "panel_fill": None}
+    record = _record(template_type="layout_template", text_slots=[slot])
+    record["product_box"] = {"x": 0, "y": 0, "width": 1, "height": 1}
+
+    rendered, _ = render_poster_billboard(
+        template,
+        product,
+        record,
+        build_poster_copy_plan([slot], source="template"),
+    )
+
+    with Image.open(io.BytesIO(rendered)) as output:
+        assert output.getpixel((40, 700)) == (20, 130, 90)
+        restored = output.getpixel((540, 180))
+        assert restored[0] > 180 and restored[1] < 100 and restored[2] < 100
+
+
+def test_full_canvas_layout_restores_multicolor_unchanged_title() -> None:
+    template = Image.new("RGB", POSTER_SIZE, "white")
+    draw = ImageDraw.Draw(template)
+    # A neighbouring element crosses the padded crop border. It must not make
+    # the dominant white background look non-uniform and disable extraction.
+    draw.rectangle((200, 130, 800, 138), fill=(175, 175, 175))
+    draw.rectangle((180, 160, 330, 260), fill=(242, 188, 42))
+    draw.rectangle((350, 160, 900, 260), fill=(45, 45, 45))
+    product = Image.new("RGB", (900, 1200), (20, 130, 90))
+    slot = _slot(editable=True, source_text="4大产品服务")
+    slot["box"] = {"x": 0.15, "y": 0.1, "width": 0.7, "height": 0.1}
+    # OCR may infer one representative fill even when the authored title uses
+    # more than one color. Unchanged text must still preserve every source color.
+    slot["style"] = {**slot["style"], "fill": "#F2EBEB", "stroke": "#171717", "panel_fill": None}
+    record = _record(template_type="layout_template", text_slots=[slot])
+    record["product_box"] = {"x": 0, "y": 0, "width": 1, "height": 1}
+    record["background_mode"] = "full_canvas"
+
+    rendered, _ = render_poster_billboard(
+        template,
+        product,
+        record,
+        build_poster_copy_plan([slot], source="template"),
+    )
+
+    with Image.open(io.BytesIO(rendered)) as output:
+        yellow = output.getpixel((240, 200))
+        dark = output.getpixel((500, 200))
+        assert yellow[0] > 200 and yellow[1] > 140 and yellow[2] < 100
+        assert max(dark) < 80
+        assert output.getpixel((500, 134)) == (20, 130, 90)
+
+
 def test_changed_text_inside_product_area_does_not_create_background_patch():
     template = Image.new("RGB", POSTER_SIZE, (238, 228, 210))
     product = Image.new("RGB", (800, 1000), (20, 130, 90))
@@ -369,8 +529,12 @@ def test_poster_template_display_uses_material_library_name_and_category():
 
 
 @pytest.mark.asyncio
-async def test_worker_runs_deterministic_poster_without_image2(monkeypatch: pytest.MonkeyPatch):
-    product_asset = SimpleNamespace(id="cca_product", role="source")
+@pytest.mark.parametrize("product_role", ["source", "library_image"])
+async def test_worker_runs_deterministic_poster_without_image2(
+    monkeypatch: pytest.MonkeyPatch,
+    product_role: str,
+):
+    product_asset = SimpleNamespace(id="cca_product", role=product_role)
     template_asset = SimpleNamespace(id="cca_template", role="poster_template")
 
     class FakeRepository:

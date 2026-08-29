@@ -11,7 +11,13 @@ from yuxi.content.v3.seed import _upgrade_system_workflow_v3
 from yuxi.content.v3.workflow import WORKFLOW_V3
 
 
-AGENTS = {"content-strategy-agent", "content-research-agent", "content-generation-agent", "content-review-agent"}
+AGENTS = {
+    "content-strategy-agent",
+    "content-research-agent",
+    "content-generation-agent",
+    "content-review-agent",
+    "content-visual-agent",
+}
 SKILLS = {
     "content-value-analyzer",
     "content-strategy-planner",
@@ -20,6 +26,9 @@ SKILLS = {
     "content-outline-builder",
     "content-body-generator",
     "content-reviewer",
+    "content-visual-planner",
+    "content-cover-generator",
+    "content-visual-reviewer",
 }
 CATALOG = WorkflowCatalog(
     agents=frozenset(AGENTS),
@@ -34,10 +43,10 @@ def _node(definition: dict, node_id: str) -> dict:
 
 
 @pytest.mark.unit
-def test_v3_has_exactly_15_nodes_and_passes_full_catalog_validation():
+def test_v3_has_exactly_20_nodes_and_passes_full_catalog_validation():
     WorkflowDefinitionPolicy.validate(WORKFLOW_V3, catalog=CATALOG)
-    assert len(WORKFLOW_V3["nodes"]) == 15
-    assert len(WORKFLOW_V3["edges"]) == 13
+    assert len(WORKFLOW_V3["nodes"]) == 20
+    assert len(WORKFLOW_V3["edges"]) == 18
 
 
 @pytest.mark.unit
@@ -53,6 +62,9 @@ def test_simplified_agent_nodes_receive_required_upstream_state():
         ),
         "generate_content": ("GenerateContentInputV1", {"strategy_snapshot", "content_brief", "evidence_bundle"}),
         "semantic_review": ("SemanticReviewInputV1", {"content_draft", "validation_report", "strategy_snapshot"}),
+        "plan_visuals": ("PlanVisualsInputV1", {"content_draft", "artifact_version", "channel_profile"}),
+        "submit_cover_job": ("SubmitCoverJobInputV1", {"visual_plan", "artifact_version"}),
+        "visual_review": ("VisualReviewInputV1", {"visual_plan", "cover_job", "cover_assets"}),
     }
     nodes = {item["id"]: item for item in WORKFLOW_V3["nodes"] if item["type"] == "agent"}
     assert set(nodes) == set(expected)
@@ -97,7 +109,7 @@ def test_strategy_and_generation_are_single_agent_calls():
 
 
 @pytest.mark.unit
-def test_system_seed_upgrades_to_simplified_version_10():
+def test_system_seed_upgrades_to_content_and_cover_version_11():
     stale = SimpleNamespace(
         created_by="system",
         schema_version=3,
@@ -107,7 +119,7 @@ def test_system_seed_upgrades_to_simplified_version_10():
         output_schema={},
     )
     assert _upgrade_system_workflow_v3(stale) is True
-    assert stale.version == 10
+    assert stale.version == 11
     assert stale.definition_json == WORKFLOW_V3
 
 
@@ -143,8 +155,23 @@ def test_fixed_strategy_lock_and_human_gates_are_required():
     missing_gate = deepcopy(WORKFLOW_V3)
     missing_gate["nodes"] = [item for item in missing_gate["nodes"] if item["id"] != "human_content_approval"]
     missing_gate["edges"] = [edge for edge in missing_gate["edges"] if "human_content_approval" not in edge]
-    with pytest.raises(ValueError, match="15 个节点|人工关口"):
+    with pytest.raises(ValueError, match="20 个节点|人工关口"):
         WorkflowDefinitionPolicy.validate(missing_gate)
+
+
+@pytest.mark.unit
+def test_cover_generation_runs_after_content_approval_and_before_snapshot():
+    node_ids = [item["id"] for item in WORKFLOW_V3["nodes"]]
+    assert node_ids[node_ids.index("human_content_approval") :] == [
+        "human_content_approval",
+        "plan_visuals",
+        "submit_cover_job",
+        "wait_cover_job",
+        "visual_review",
+        "select_cover",
+        "save_artifact_snapshot",
+    ]
+    assert "select_cover" in WORKFLOW_V3["required_human_gates"]
 
 
 @pytest.mark.unit

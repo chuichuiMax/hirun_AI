@@ -37,12 +37,17 @@ from yuxi.content_cover.poster_billboard import (
 )
 from yuxi.content_cover.schemas import (
     CoverComposeCreate,
+    CoverEditorProjectCreate,
+    CoverEditorRenderCreate,
+    CoverEditorScene,
+    CoverEditorSceneUpdate,
     CoverGenerateCreate,
     CoverRetryCreate,
     Image2ConfigTestRequest,
     Image2GlobalConfigUpdate,
     PosterGenerateCreate,
     PosterPreviewCreate,
+    PosterTemplateReviewUpdate,
     PosterTemplateUpdate,
     TemplateReplicatePlanCreate,
 )
@@ -75,6 +80,7 @@ from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import (
     ContentArtifact,
     ContentCoverAsset,
+    ContentCoverEditProject,
     ContentCoverJob,
     ContentCoverPosterTemplate,
     ContentMaterialLibraryItem,
@@ -175,6 +181,295 @@ def serialize_job(item: ContentCoverJob) -> dict[str, Any]:
     return data
 
 
+def serialize_editor_project(item: ContentCoverEditProject) -> dict[str, Any]:
+    data = item.to_dict()
+    data["background_file_url"] = f"/api/content/covers/assets/{item.base_asset_id}/file"
+    data["warnings"] = (
+        []
+        if item.editability == "structured"
+        else ["原封面没有可恢复的图层数据，原图文字已合并；你仍可新增文字和调整样式。"]
+    )
+    return data
+
+
+def _editor_color(value: Any, default: str | None) -> str | None:
+    candidate = str(value or "")
+    return candidate if re.fullmatch(r"#[0-9A-Fa-f]{6}", candidate) else default
+
+
+def _editor_color_metrics(value: str | None) -> tuple[float, int]:
+    color = _editor_color(value, "#FFFFFF") or "#FFFFFF"
+    red, green, blue = (int(color[index : index + 2], 16) for index in (1, 3, 5))
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue, max(red, green, blue) - min(red, green, blue)
+
+
+def _editor_font_family(value: Any) -> str:
+    family = str(value or "").lower()
+    is_serif = any(token in family for token in ("serif", "宋", "simsun", "georgia"))
+    return "Noto Serif CJK SC" if is_serif else "Noto Sans CJK SC"
+
+
+def resolve_cover_editor_font(font_key: str) -> Path:
+    paths = {
+        "noto-sans-cjk-regular": Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        "noto-sans-cjk-bold": Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+        "noto-serif-cjk-regular": Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"),
+        "noto-serif-cjk-bold": Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"),
+    }
+    path = paths.get(font_key)
+    if path is None:
+        raise _error(404, "COVER_EDITOR_FONT_NOT_FOUND", "画板字体不存在")
+    if not path.is_file():
+        raise _error(503, "COVER_EDITOR_FONT_UNAVAILABLE", "画板字体尚未安装", retryable=True)
+    return path
+
+
+def _poster_editor_scene(
+    job: ContentCoverJob,
+    base_asset_id: str,
+    *,
+    snapshot_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    request = job.request_json or {}
+    snapshot = snapshot_override or request.get("poster_template_snapshot") or {}
+    current_slots = {
+        str(item.get("slot_id") or ""): item for item in (request.get("copy_plan") or {}).get("slots") or []
+    }
+    layers: list[dict[str, Any]] = []
+    for order, slot in enumerate(snapshot.get("text_slots") or []):
+        box = slot.get("box") or {}
+        style = slot.get("style") or {}
+        plan = current_slots.get(str(slot.get("id") or "")) or {}
+        layer_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(slot.get("id") or order)).strip("_") or str(order)
+        font_size = min(512, max(12, round(float(style.get("font_size_ratio") or 0.05) * 1440)))
+        fill = _editor_color(style.get("fill"), "#FFFFFF")
+        bright_fill = _editor_color_metrics(fill)[0] >= 220
+        has_stroke = bool(style.get("stroke")) and float(style.get("stroke_width_ratio") or 0) > 0
+        layer_text = str(plan.get("text") if plan.get("changed") else slot.get("source_text") or "")
+        shadow = bool(style.get("shadow")) if style.get("shadow") is not None else bright_fill and not has_stroke
+        layers.append(
+            {
+                "id": f"text_{layer_id}_{order}",
+                "layer_type": "text",
+                "name": layer_text[:80] or "文字",
+                "text": layer_text,
+                "x": float(style.get("editor_x") or round(float(box.get("x") or 0) * 1080, 3)),
+                "y": float(style.get("editor_y") or round(float(box.get("y") or 0) * 1440, 3)),
+                "width": float(style.get("editor_width") or round(float(box.get("width") or 0.3) * 1080, 3)),
+                "height": float(style.get("editor_height") or round(float(box.get("height") or 0.08) * 1440, 3)),
+                "rotation": 0,
+                "opacity": 1,
+                "visible": True,
+                "locked": False,
+                "order": order,
+                "font_family": _editor_font_family(style.get("font_family")),
+                "font_size": float(style.get("font_size_px") or font_size),
+                "font_weight": int(style.get("font_weight") or (700 if style.get("bold") else 400)),
+                "font_style": "normal",
+                "fill": fill,
+                "fill_runs": style.get("fill_runs") or [],
+                "align": str(style.get("align") or "center"),
+                "line_height": 1.2,
+                "letter_spacing": float(style.get("letter_spacing") or 0),
+                "stroke": has_stroke,
+                "stroke_color": _editor_color(style.get("stroke"), "#000000"),
+                "stroke_width": min(
+                    40,
+                    round(float(style.get("stroke_width_ratio") or 0) * font_size, 3),
+                ),
+                "shadow": shadow,
+                "shadow_color": _editor_color(style.get("shadow_color"), "#000000"),
+                "shadow_blur": (
+                    float(style.get("shadow_blur") or 0)
+                    if style.get("shadow") is not None
+                    else min(24, max(4, round(font_size * 0.12)))
+                    if shadow
+                    else 0
+                ),
+                "shadow_offset_x": float(style.get("shadow_offset_x") or 0),
+                "shadow_offset_y": (
+                    float(style.get("shadow_offset_y") or 0)
+                    if style.get("shadow") is not None
+                    else min(12, max(2, round(font_size * 0.08)))
+                ),
+                "background_fill": _editor_color(style.get("panel_fill"), None),
+                "background_opacity": float(
+                    style.get("panel_opacity") if style.get("panel_opacity") is not None else 1
+                ),
+                "background_radius": min(
+                    200,
+                    round(
+                        float(style.get("panel_radius_ratio") or 0) * float(box.get("height") or 0.08) * 1440,
+                        3,
+                    ),
+                ),
+                "background_padding": (
+                    min(80, round(float(box.get("height") or 0.08) * 1440 * 0.12, 3)) if style.get("panel_fill") else 0
+                ),
+            }
+        )
+    return CoverEditorScene.model_validate(
+        {
+            "version": 1,
+            "canvas": {
+                "width": 1080,
+                "height": 1440,
+                "background_asset_id": base_asset_id,
+                "safe_area": snapshot.get("safe_area") or {},
+            },
+            "layers": layers,
+        }
+    ).model_dump(mode="json")
+
+
+def _build_editor_background_copy_plan(snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build a text-free background without changing the saved template scene."""
+    background_snapshot = deepcopy(snapshot)
+    clean_slots: list[dict[str, Any]] = []
+    for slot in background_snapshot.get("text_slots") or []:
+        slot.setdefault("style", {})["panel_fill"] = None
+        clean_slots.append(
+            {
+                "slot_id": slot.get("id"),
+                "role": slot.get("role") or "other",
+                "source_text": slot.get("source_text") or "",
+                "text": "",
+                "max_chars": slot.get("max_chars") or 120,
+                "max_lines": slot.get("max_lines") or 4,
+                "changed": True,
+            }
+        )
+    return background_snapshot, {
+        "processing_version": POSTER_PROCESSING_VERSION,
+        "source": "editor",
+        "slots": clean_slots,
+    }
+
+
+def _flattened_editor_scene(asset: ContentCoverAsset) -> dict[str, Any]:
+    return CoverEditorScene.model_validate(
+        {
+            "version": 1,
+            "canvas": {
+                "width": asset.image_width,
+                "height": asset.image_height,
+                "background_asset_id": asset.id,
+                "safe_area": {"x": 0.05, "y": 0.05, "width": 0.9, "height": 0.9},
+            },
+            "layers": [],
+        }
+    ).model_dump(mode="json")
+
+
+def _editor_layer_key(layer: dict[str, Any]) -> str:
+    layer_id = str(layer.get("id") or "")
+    generated = re.fullmatch(r"(text_.+)_\d+", layer_id)
+    return generated.group(1) if generated else layer_id
+
+
+def _merge_editor_scenes(
+    base_scene: dict[str, Any],
+    current_scene: dict[str, Any],
+    *,
+    replace_generated: bool = False,
+) -> dict[str, Any]:
+    """Add newly recoverable mask layers without overwriting existing edits."""
+    base = CoverEditorScene.model_validate(base_scene).model_dump(mode="json")
+    current = CoverEditorScene.model_validate(current_scene).model_dump(mode="json")
+    current_by_key = {_editor_layer_key(item): item for item in current["layers"]}
+    base_keys = {_editor_layer_key(item) for item in base["layers"]}
+    if not replace_generated:
+        base["layers"] = [current_by_key.get(_editor_layer_key(item), item) for item in base["layers"]]
+    base["layers"].extend(
+        item
+        for item in current["layers"]
+        if _editor_layer_key(item) not in base_keys
+        and not (replace_generated and re.fullmatch(r"text_slot-\d+(?:_\d+)?", str(item.get("id") or "")))
+    )
+    return CoverEditorScene.model_validate(base).model_dump(mode="json")
+
+
+async def _find_poster_ancestor(
+    repo: ContentCoverRepository,
+    source_job: ContentCoverJob | None,
+    owner_uid: str,
+) -> ContentCoverJob | None:
+    current = source_job
+    visited: set[str] = set()
+    while current is not None and current.id not in visited:
+        visited.add(current.id)
+        if current.mode == "poster_billboard":
+            return current
+        if not current.parent_job_id:
+            return None
+        current = await repo.get_job_for_user(current.parent_job_id, owner_uid)
+    return None
+
+
+async def _create_poster_editor_background(
+    db: AsyncSession,
+    user: User,
+    source_asset: ContentCoverAsset,
+    source_job: ContentCoverJob,
+) -> tuple[ContentCoverAsset, dict[str, Any]]:
+    request = source_job.request_json or {}
+    snapshot = deepcopy(request.get("poster_template_snapshot") or {})
+    template_asset_id = str(snapshot.get("asset_id") or "")
+    product_asset_id = str(request.get("product_asset_id") or "")
+    repo = ContentCoverRepository(db)
+    template_asset = await repo.get_asset_for_user(template_asset_id, _owner_uid(user))
+    product_asset = await repo.get_asset_for_user(product_asset_id, _owner_uid(user))
+    if template_asset is None or product_asset is None:
+        raise _error(409, "COVER_EDITOR_SOURCE_MISSING", "结构化封面的模板或产品素材已不存在")
+
+    try:
+        template_data, product_data = await asyncio.gather(
+            get_minio_client().adownload_file(template_asset.bucket_name, template_asset.object_name),
+            get_minio_client().adownload_file(product_asset.bucket_name, product_asset.object_name),
+        )
+        template_image = _open_cover_image(template_data, error_message="画板模板不是有效图片")
+        background_snapshot, clean_plan = _build_editor_background_copy_plan(snapshot)
+        rendered, _ = await asyncio.to_thread(
+            render_poster_billboard,
+            template_image,
+            _open_cover_image(product_data, error_message="画板产品素材不是有效图片"),
+            background_snapshot,
+            clean_plan,
+            transform=request.get("transform") or {},
+        )
+        background_id = f"cca_{uuid.uuid4().hex}"
+        object_name = f"content-covers/{_owner_uid(user)}/editor-backgrounds/{background_id}.png"
+        uploaded = await get_minio_client().aupload_file(
+            bucket_name=COVER_BUCKET,
+            object_name=object_name,
+            data=rendered,
+            content_type="image/png",
+        )
+    except (StorageError, PosterBillboardError, TemplateReplicationError) as exc:
+        raise _error(500, "COVER_EDITOR_BACKGROUND_FAILED", "无法准备可编辑封面底图", retryable=True) from exc
+    try:
+        background_asset = await repo.create_asset(
+            id=background_id,
+            owner_uid=_owner_uid(user),
+            tenant_id=_tenant_id(user),
+            content_task_id=source_asset.content_task_id,
+            role="editor_background",
+            original_file_name="editor-background.png",
+            content_type="image/png",
+            file_size=len(rendered),
+            image_width=1080,
+            image_height=1440,
+            sha256=hashlib.sha256(rendered).hexdigest(),
+            bucket_name=uploaded.bucket_name,
+            object_name=uploaded.object_name,
+            metadata_json={"source_asset_id": source_asset.id, "source_job_id": source_job.id},
+        )
+    except Exception:
+        await get_minio_client().adelete_file(uploaded.bucket_name, uploaded.object_name)
+        raise
+    return background_asset, snapshot
+
+
 def serialize_poster_template(
     item: ContentCoverPosterTemplate,
     category_name: str | None = None,
@@ -186,6 +481,15 @@ def serialize_poster_template(
     data["category"] = library_item.category if library_item is not None else item.category
     data["category_name"] = category_name or "未分类"
     data["text_slots"] = normalize_poster_text_slots(data.get("text_slots") or [])
+    analysis = data.get("analysis") or {}
+    item_status = getattr(item, "status", "ready")
+    review_status = analysis.get("review_status") or (
+        "confirmed" if item_status == "ready" else "pending" if item_status == "needs_review" else "not_applicable"
+    )
+    data["review_status"] = review_status
+    data["requires_review"] = item_status == "needs_review" or review_status == "pending"
+    data["ocr_raw_layers"] = analysis.get("ocr_raw_layers") or []
+    data["recognition_metrics"] = analysis.get("recognition_metrics") or {}
     data["file_url"] = f"/api/content/covers/assets/{item.asset_id}/file"
     data["thumbnail_url"] = data["file_url"]
     return data
@@ -680,6 +984,8 @@ async def update_poster_template(
     if "status" in changes:
         if changes["status"] == "ready" and not item.product_box_json:
             raise _error(422, "POSTER_TEMPLATE_PRODUCT_BOX_REQUIRED", "标注产品替换区域后才能启用蒙版")
+        if changes["status"] == "ready" and item.status == "needs_review":
+            raise _error(409, "POSTER_TEMPLATE_REVIEW_REQUIRED", "请先校对并确认 OCR 文字图层")
         item.status = changes["status"]
     elif "product_box" in changes and item.status == "needs_annotation":
         item.status = "ready"
@@ -713,10 +1019,13 @@ async def reanalyze_poster_template(
     template_id: str,
 ) -> dict[str, Any]:
     repo = ContentCoverRepository(db)
-    item = await repo.get_poster_template_for_user(template_id, _owner_uid(user), for_update=True)
+    owner_uid = _owner_uid(user)
+    item = await repo.get_poster_template_for_user(template_id, owner_uid, for_update=True)
     if item is None:
         raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
-    asset = await repo.get_asset_for_user(item.asset_id, _owner_uid(user))
+    if await repo.poster_template_is_selected_by_task(template_id, owner_uid, locked_only=True):
+        raise _error(409, "POSTER_TEMPLATE_IN_USE", "模板已被内容任务锁定，不能重新识别")
+    asset = await repo.get_asset_for_user(item.asset_id, owner_uid)
     if asset is None:
         raise _error(409, "POSTER_TEMPLATE_ASSET_MISSING", "大字报蒙版原始文件不存在")
     try:
@@ -749,6 +1058,90 @@ async def reanalyze_poster_template(
     )
     await db.commit()
     return {"template": serialize_poster_template(item, category.name)}
+
+
+async def review_poster_template(
+    db: AsyncSession,
+    user: User,
+    template_id: str,
+    payload: PosterTemplateReviewUpdate,
+) -> dict[str, Any]:
+    repo = ContentCoverRepository(db)
+    owner_uid = _owner_uid(user)
+    item = await repo.get_poster_template_for_user(template_id, owner_uid, for_update=True)
+    if item is None:
+        raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
+    if item.version != payload.version:
+        raise _error(409, "POSTER_TEMPLATE_VERSION_CONFLICT", "识别结果已更新，请刷新后重新校对")
+    if await repo.poster_template_is_selected_by_task(template_id, owner_uid, locked_only=True):
+        raise _error(409, "POSTER_TEMPLATE_IN_USE", "模板已被内容任务锁定，不能修改")
+
+    previous_by_id = {slot.get("id"): slot for slot in item.text_slots_json or []}
+    reviewed_slots = []
+    for slot in payload.text_slots:
+        data = slot.model_dump(mode="json")
+        previous = previous_by_id.get(slot.id)
+        if slot.review_state == "user_added" or previous is None:
+            data["review_state"] = "user_added"
+            data["confidence"] = None
+            data["candidate_count"] = 0
+            data["consensus_count"] = 0
+            data["source_variant"] = "manual"
+            data["alternatives"] = []
+        elif data["source_text"] != previous.get("source_text") or data["box"] != previous.get("box"):
+            data["review_state"] = "user_edited"
+        reviewed_slots.append(data)
+
+    analysis = dict(item.analysis_json or {})
+    decoration_regions = list(analysis.get("decoration_regions") or [])
+    item.product_box_json = payload.product_box.model_dump(mode="json")
+    item.text_slots_json = reviewed_slots
+    item.fixed_regions_json = [slot["box"] for slot in reviewed_slots if not slot["editable"]] + decoration_regions
+    item.editable_regions_json = [slot["box"] for slot in reviewed_slots if slot["editable"]]
+    item.status = "ready" if payload.confirm else "needs_review"
+    item.error_message = None
+    item.version += 1
+    item.updated_at = utc_now_naive()
+    metrics = dict(analysis.get("recognition_metrics") or {})
+    metrics.update(
+        {
+            "final_layer_count": len(reviewed_slots),
+            "user_added_count": sum(slot["review_state"] == "user_added" for slot in reviewed_slots),
+            "user_edited_count": sum(slot["review_state"] == "user_edited" for slot in reviewed_slots),
+            "low_confidence_count": sum(
+                slot.get("review_state") == "recognized"
+                and (float(slot.get("confidence") or 0) < 0.85 or int(slot.get("consensus_count") or 0) < 2)
+                for slot in reviewed_slots
+            ),
+        }
+    )
+    analysis.update(
+        {
+            "product_box": item.product_box_json,
+            "text_slots": reviewed_slots,
+            "fixed_regions": item.fixed_regions_json,
+            "editable_regions": item.editable_regions_json,
+            "recognition_metrics": metrics,
+            "review_status": "confirmed" if payload.confirm else "pending",
+            "reviewed_at": utc_now_naive().isoformat() if payload.confirm else None,
+            "confirmed_layers": reviewed_slots if payload.confirm else analysis.get("confirmed_layers") or [],
+            "status": item.status,
+        }
+    )
+    item.analysis_json = analysis
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(item.asset_id)
+    if library_item is not None:
+        library_item.status = "enabled" if payload.confirm else "disabled"
+        library_item.updated_at = utc_now_naive()
+    category = await resolve_material_category(
+        db,
+        owner_uid=owner_uid,
+        tenant_id=_tenant_id(user),
+        material_type="cover_template",
+        category_id=item.category,
+    )
+    await db.commit()
+    return {"template": serialize_poster_template(item, category.name, library_item)}
 
 
 async def delete_poster_template(db: AsyncSession, user: User, template_id: str) -> dict[str, bool]:
@@ -892,6 +1285,163 @@ async def _create_job(
         raise
 
 
+async def create_cover_editor_project(
+    db: AsyncSession,
+    user: User,
+    payload: CoverEditorProjectCreate,
+) -> dict[str, Any]:
+    repo = ContentCoverRepository(db)
+    owner_uid = _owner_uid(user)
+    source_asset = await repo.get_asset_for_user(payload.asset_id, owner_uid)
+    if source_asset is None or source_asset.role != "output":
+        raise _error(404, "COVER_EDITOR_SOURCE_NOT_FOUND", "当前封面不存在或不可编辑")
+
+    artifact = None
+    if payload.artifact_id:
+        artifact = await ContentRepository(db).get_artifact_for_user(payload.artifact_id, user)
+        if artifact is None:
+            raise _error(404, "CONTENT_ARTIFACT_NOT_FOUND", "内容资产不存在")
+        if artifact.cover_asset_id != source_asset.id:
+            raise _error(409, "COVER_EDITOR_SOURCE_CHANGED", "当前内容封面已经发生变化，请刷新后重新编辑")
+
+    source_job_id = str((source_asset.metadata_json or {}).get("job_id") or "") or (
+        str(artifact.cover_job_id) if artifact and artifact.cover_job_id else ""
+    )
+    source_job = await repo.get_job_for_user(source_job_id, owner_uid) if source_job_id else None
+    existing = await repo.get_edit_project_for_source(payload.asset_id, owner_uid)
+    if existing is not None and artifact and existing.artifact_id not in {None, artifact.id}:
+        raise _error(409, "COVER_EDITOR_PROJECT_CONFLICT", "该封面已有其他内容资产的编辑草稿")
+    if existing is not None:
+        CoverEditorScene.model_validate(existing.scene_json or {})
+        if artifact:
+            if existing.artifact_id is None:
+                existing.artifact_id = artifact.id
+                existing.content_task_id = artifact.task_id
+                existing.updated_at = utc_now_naive()
+                await db.commit()
+        return {"project": serialize_editor_project(existing), "restored": True}
+
+    base_asset = source_asset
+    created_background = False
+    editability = "flattened"
+    scene = _flattened_editor_scene(source_asset)
+    if source_job is not None and source_job.mode == "editor_render":
+        request = source_job.request_json or {}
+        inherited_base_id = str(request.get("base_asset_id") or "")
+        inherited_base = await repo.get_asset_for_user(inherited_base_id, owner_uid) if inherited_base_id else None
+        if inherited_base is None:
+            raise _error(409, "COVER_EDITOR_BACKGROUND_MISSING", "封面编辑底图已不存在，无法恢复文字图层")
+        base_asset = inherited_base
+        scene = CoverEditorScene.model_validate(request.get("scene") or {}).model_dump(mode="json")
+        scene["canvas"]["background_asset_id"] = base_asset.id
+        parent_project_id = str(request.get("project_id") or "")
+        parent_project = (
+            await repo.get_edit_project_for_user(parent_project_id, owner_uid) if parent_project_id else None
+        )
+        editability = parent_project.editability if parent_project is not None else "structured"
+    else:
+        poster_job = await _find_poster_ancestor(repo, source_job, owner_uid)
+        if poster_job is not None:
+            base_asset, snapshot = await _create_poster_editor_background(db, user, source_asset, poster_job)
+            created_background = True
+            scene = _poster_editor_scene(poster_job, base_asset.id, snapshot_override=snapshot)
+            editability = "structured"
+    try:
+        project = await repo.create_edit_project(
+            id=f"ccep_{uuid.uuid4().hex}",
+            owner_uid=owner_uid,
+            tenant_id=_tenant_id(user),
+            content_task_id=source_asset.content_task_id,
+            artifact_id=artifact.id if artifact else None,
+            source_asset_id=source_asset.id,
+            source_job_id=source_job.id if source_job else None,
+            base_asset_id=base_asset.id,
+            scene_json=scene,
+            revision=1,
+            editability=editability,
+            status="active",
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        if created_background:
+            await get_minio_client().adelete_file(base_asset.bucket_name, base_asset.object_name)
+        raise
+    return {"project": serialize_editor_project(project), "restored": existing is not None}
+
+
+async def get_cover_editor_project(db: AsyncSession, user: User, project_id: str) -> dict[str, Any]:
+    project = await ContentCoverRepository(db).get_edit_project_for_user(project_id, _owner_uid(user))
+    if project is None:
+        raise _error(404, "COVER_EDITOR_PROJECT_NOT_FOUND", "封面编辑草稿不存在")
+    return {"project": serialize_editor_project(project)}
+
+
+async def update_cover_editor_project(
+    db: AsyncSession,
+    user: User,
+    project_id: str,
+    payload: CoverEditorSceneUpdate,
+) -> dict[str, Any]:
+    project = await ContentCoverRepository(db).get_edit_project_for_user(
+        project_id,
+        _owner_uid(user),
+        for_update=True,
+    )
+    if project is None:
+        raise _error(404, "COVER_EDITOR_PROJECT_NOT_FOUND", "封面编辑草稿不存在")
+    if project.revision != payload.expected_revision:
+        raise _error(409, "COVER_EDITOR_REVISION_CONFLICT", "草稿已在其他页面更新，请刷新后继续")
+    if payload.scene.canvas.background_asset_id != project.base_asset_id:
+        raise _error(422, "COVER_EDITOR_BACKGROUND_INVALID", "画板底图不能被替换")
+    project.scene_json = payload.scene.model_dump(mode="json")
+    project.revision += 1
+    project.updated_at = utc_now_naive()
+    await db.commit()
+    return {"project": serialize_editor_project(project)}
+
+
+async def render_cover_editor_project(
+    db: AsyncSession,
+    user: User,
+    project_id: str,
+    payload: CoverEditorRenderCreate,
+) -> dict[str, Any]:
+    repo = ContentCoverRepository(db)
+    project = await repo.get_edit_project_for_user(project_id, _owner_uid(user), for_update=True)
+    if project is None:
+        raise _error(404, "COVER_EDITOR_PROJECT_NOT_FOUND", "封面编辑草稿不存在")
+    if project.revision != payload.expected_revision:
+        raise _error(409, "COVER_EDITOR_REVISION_CONFLICT", "最新编辑尚未保存，请等待自动保存后重试")
+    if project.artifact_id:
+        artifact = await ContentRepository(db).get_artifact_for_user(project.artifact_id, user, for_update=True)
+        if artifact is None:
+            raise _error(404, "CONTENT_ARTIFACT_NOT_FOUND", "内容资产不存在")
+        if artifact.cover_asset_id != project.source_asset_id:
+            raise _error(409, "COVER_EDITOR_SOURCE_CHANGED", "当前封面已经发生变化，请返回结果页后重新编辑")
+    scene = CoverEditorScene.model_validate(project.scene_json).model_dump(mode="json")
+    canvas = scene["canvas"]
+    job, deduplicated = await _create_job(
+        db,
+        user,
+        mode="editor_render",
+        content_task_id=project.content_task_id,
+        artifact_id=project.artifact_id,
+        parent_job_id=project.source_job_id,
+        idempotency_key=payload.idempotency_key,
+        model="deterministic-canvas-v1",
+        request={
+            "project_id": project.id,
+            "source_asset_id": project.source_asset_id,
+            "base_asset_id": project.base_asset_id,
+            "scene": scene,
+            "size": f"{canvas['width']}x{canvas['height']}",
+            "processing_version": "cover-editor-v1",
+        },
+    )
+    return {"project": serialize_editor_project(project), "job": serialize_job(job), "deduplicated": deduplicated}
+
+
 async def create_cover_compose_job(db: AsyncSession, user: User, payload: CoverComposeCreate) -> dict[str, Any]:
     template = COVER_TEMPLATES.get(payload.template_id)
     if template is None:
@@ -969,6 +1519,8 @@ async def _resolve_poster_context(
     template_record = await repo.get_poster_template_for_user(poster_template_id, owner_uid, for_update=for_update)
     if template_record is None:
         raise _error(404, "POSTER_TEMPLATE_NOT_FOUND", "大字报蒙版不存在")
+    if template_record.status == "needs_review":
+        raise _error(409, "POSTER_TEMPLATE_REVIEW_REQUIRED", "请先校对并确认 OCR 文字图层")
     if template_record.status != "ready" or not template_record.product_box_json:
         raise _error(422, "POSTER_TEMPLATE_NOT_READY", "该蒙版尚未标注产品替换区域或已被停用")
     template_asset = await repo.get_asset_for_user(template_record.asset_id, owner_uid, for_update=for_update)
@@ -990,6 +1542,7 @@ def _poster_template_snapshot(item: ContentCoverPosterTemplate) -> dict[str, Any
         "canvas_width": item.canvas_width,
         "canvas_height": item.canvas_height,
         "product_box": item.product_box_json,
+        "background_mode": (item.analysis_json or {}).get("background_mode", "replace_region"),
         "safe_area": item.safe_area_json or {},
         "text_slots": normalize_poster_text_slots(item.text_slots_json or []),
         "fixed_regions": item.fixed_regions_json or [],

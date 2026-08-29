@@ -12,6 +12,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  ScanText,
   Search,
   Settings2,
   Trash2,
@@ -21,6 +22,7 @@ import {
 import { contentApi } from '@/apis/content_api'
 import { materialLibraryApi } from '@/apis/material_library_api'
 import PageHeader from '@/components/shared/PageHeader.vue'
+import PosterOcrReviewModal from '@/components/content/PosterOcrReviewModal.vue'
 
 const route = useRoute()
 const tabs = [
@@ -47,6 +49,9 @@ const uploadCategory = ref('')
 const fileInput = ref(null)
 const uploadDragging = ref(false)
 const previewItem = ref(null)
+const ocrReviewOpen = ref(false)
+const ocrReviewItem = ref(null)
+const pendingReviewTemplates = ref([])
 const editOpen = ref(false)
 const editingItem = ref(null)
 const editForm = reactive({ name: '', category: '' })
@@ -54,6 +59,7 @@ const categoryEditorOpen = ref(false)
 const categorySaving = ref(false)
 const categoryEditorMode = ref('create')
 const editingCategory = ref(null)
+const categoryParentId = ref('')
 const categoryForm = reactive({ name: '', description: '' })
 const categoryManagerOpen = ref(false)
 const deleteCategoryOpen = ref(false)
@@ -66,13 +72,30 @@ const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp'])
 
 const categoryMap = computed(() => Object.fromEntries(categories.value.map((item) => [item.code, item])))
 const currentGallery = computed(() => categoryMap.value[activeGallery.value])
-const uploadCategories = computed(() => categories.value)
+const parentGallery = computed(() => categoryMap.value[currentGallery.value?.parent_id] || null)
+const isTopLevelGallery = computed(() => Boolean(currentGallery.value && !currentGallery.value.parent_id))
+const orderedCategories = computed(() => {
+  const roots = categories.value.filter((item) => !item.parent_id)
+  return roots.flatMap((root) => [root, ...categories.value.filter((item) => item.parent_id === root.id)])
+})
+const uploadCategories = computed(() => orderedCategories.value)
 const uploadFileLimit = computed(() => materialType.value === 'image' ? 50 : 100)
 const deleteTargetOptions = computed(() => categories.value.filter((item) => item.id !== deletingCategory.value?.id))
 const filteredGalleries = computed(() => {
   const term = queryInput.value.trim().toLowerCase()
-  if (!term) return galleries.value
-  return galleries.value.filter((item) => `${item.name}${item.description}`.toLowerCase().includes(term))
+  const scoped = isGalleryRoot.value
+    ? galleries.value.filter((item) => !item.parent_id)
+    : (isTopLevelGallery.value ? galleries.value.filter((item) => item.parent_id === activeGallery.value) : [])
+  if (!term) return scoped
+  return scoped.filter((item) => `${item.name}${item.description}`.toLowerCase().includes(term))
+})
+const createCategoryTitle = computed(() => {
+  if (categoryEditorMode.value === 'edit') {
+    if (materialType.value !== 'image') return '编辑分类'
+    return editingCategory.value?.parent_id ? '编辑二级图库' : '编辑图库'
+  }
+  if (materialType.value !== 'image') return '新增分类'
+  return categoryParentId.value ? '新建二级图库' : '新建图库'
 })
 
 function releasePreviews() {
@@ -93,9 +116,10 @@ async function loadCategories() {
   if (materialType.value === requestedType) categories.value = response.categories || []
 }
 
-function openCreateCategory() {
+function openCreateCategory(parentId = '') {
   categoryEditorMode.value = 'create'
   editingCategory.value = null
+  categoryParentId.value = typeof parentId === 'string' ? parentId : ''
   Object.assign(categoryForm, { name: '', description: '' })
   categoryEditorOpen.value = true
 }
@@ -103,6 +127,7 @@ function openCreateCategory() {
 function openEditCategory(category) {
   categoryEditorMode.value = 'edit'
   editingCategory.value = category
+  categoryParentId.value = category.parent_id || ''
   Object.assign(categoryForm, { name: category.name, description: category.description || '' })
   categoryEditorOpen.value = true
 }
@@ -116,8 +141,12 @@ async function saveCategory() {
   categorySaving.value = true
   try {
     if (categoryEditorMode.value === 'create') {
-      await materialLibraryApi.createCategory({ material_type: materialType.value, ...payload })
-      message.success(materialType.value === 'image' ? '图库已创建' : '分类已创建')
+      await materialLibraryApi.createCategory({
+        material_type: materialType.value,
+        parent_id: categoryParentId.value || null,
+        ...payload
+      })
+      message.success(categoryParentId.value ? '二级图库已创建' : (materialType.value === 'image' ? '图库已创建' : '分类已创建'))
     } else {
       await materialLibraryApi.updateCategory(materialType.value, editingCategory.value.id, payload)
       message.success(materialType.value === 'image' ? '图库信息已更新' : '分类已更新')
@@ -133,8 +162,11 @@ async function saveCategory() {
 }
 
 function askDeleteCategory(category) {
+  if (materialType.value === 'image' && category.child_count > 0) {
+    return message.warning('该一级图库仍有二级图库，请先移动或删除二级图库')
+  }
   deletingCategory.value = category
-  deleteTargetCategory.value = categories.value.find((item) => item.is_system)?.id || ''
+  deleteTargetCategory.value = category.parent_id || categories.value.find((item) => item.is_system)?.id || ''
   deleteCategoryOpen.value = true
 }
 
@@ -220,11 +252,18 @@ function enterGallery(gallery) {
 }
 
 function leaveGallery() {
-  activeGallery.value = ''
+  const targetGallery = currentGallery.value?.parent_id || ''
+  activeGallery.value = targetGallery
   items.value = []
   query.value = ''
   queryInput.value = ''
-  void loadGalleries()
+  if (targetGallery) void loadItems()
+  else void loadGalleries()
+}
+
+function categoryOptionLabel(category) {
+  if (!category.parent_id) return category.name
+  return `${categoryMap.value[category.parent_id]?.name || '一级图库'} / ${category.name}`
 }
 
 function openUpload() {
@@ -314,25 +353,83 @@ async function uploadFiles() {
   if (!uploadCategory.value) return message.warning('请选择素材分类')
   uploading.value = true
   try {
+    let response
     if (materialType.value === 'image') {
-      await materialLibraryApi.importImages(selectedFiles.value, uploadCategory.value)
+      response = await materialLibraryApi.importImages(selectedFiles.value, uploadCategory.value)
     } else {
-      await contentApi.importCoverPosterTemplates(selectedFiles.value, uploadCategory.value)
+      response = await contentApi.importCoverPosterTemplates(selectedFiles.value, uploadCategory.value)
+      pendingReviewTemplates.value = (response.items || [])
+        .map((result) => result.template)
+        .filter((item) => item?.requires_review)
     }
-    message.success('素材上传成功')
+    message.success(materialType.value === 'cover_template' && pendingReviewTemplates.value.length
+      ? '模板上传成功，请校对 OCR 识别结果后启用'
+      : '素材上传成功')
     uploadOpen.value = false
     const uploadedTo = uploadCategory.value
     resetUpload()
     page.value = 1
-    if (materialType.value === 'image' && !activeGallery.value) {
+    if (materialType.value === 'image' && activeGallery.value !== uploadedTo) {
       activeGallery.value = uploadedTo
     }
     await loadItems()
+    if (materialType.value === 'cover_template' && pendingReviewTemplates.value.length) {
+      await openNextPendingReview()
+    }
   } catch (error) {
     message.error(error.message || '素材上传失败')
   } finally {
     uploading.value = false
   }
+}
+
+async function reviewItemForTemplate(posterTemplate) {
+  const listed = items.value.find((item) => item.poster_template_id === posterTemplate.id)
+  if (listed) return listed
+  const response = await contentApi.getCoverAssetFile(posterTemplate.asset_id)
+  const previewUrl = URL.createObjectURL(await response.blob())
+  previewUrls.set(`ocr-${posterTemplate.id}`, previewUrl)
+  return {
+    id: posterTemplate.asset_id,
+    name: posterTemplate.name,
+    poster_template_id: posterTemplate.id,
+    previewUrl
+  }
+}
+
+async function openNextPendingReview() {
+  const next = pendingReviewTemplates.value[0]
+  if (!next) return
+  ocrReviewItem.value = await reviewItemForTemplate(next)
+  ocrReviewOpen.value = true
+}
+
+async function openOcrReview(item) {
+  if (!item.poster_template_id) return message.error('模板识别记录不存在')
+  ocrReviewItem.value = item
+  ocrReviewOpen.value = true
+}
+
+async function onReviewConfirmed(reviewedTemplate) {
+  pendingReviewTemplates.value = pendingReviewTemplates.value.filter((item) => item.id !== reviewedTemplate.id)
+  await loadItems()
+  if (pendingReviewTemplates.value.length) setTimeout(openNextPendingReview, 0)
+}
+
+function onReviewSaved(reviewedTemplate) {
+  const item = items.value.find((entry) => entry.poster_template_id === reviewedTemplate.id)
+  if (item) {
+    item.template_status = reviewedTemplate.status
+    item.template_version = reviewedTemplate.version
+    item.review_status = reviewedTemplate.review_status
+  }
+}
+
+function templateStatusLabel(item) {
+  if (item.template_status === 'needs_review') return '待校对'
+  if (item.template_status === 'needs_annotation') return '待标注'
+  if (item.template_status === 'ready' && item.status === 'enabled') return '已启用'
+  return '已停用'
 }
 
 function showEdit(item) {
@@ -404,9 +501,11 @@ onBeforeUnmount(releasePreviews)
   <div class="material-library-view layout-container">
     <PageHeader title="素材库" :tabs="tabs" :active-key="materialType" :loading="loading" show-border>
       <template #actions>
-        <a-button v-if="materialType === 'image'" class="lucide-icon-btn" @click="openCreateCategory">
-          <FolderPlus :size="15" />新建图库
-        </a-button>
+        <template v-if="materialType === 'image'">
+          <a-button v-if="isGalleryRoot || (isTopLevelGallery && !currentGallery?.is_system)" class="lucide-icon-btn" @click="openCreateCategory(isTopLevelGallery ? activeGallery : '')">
+            <FolderPlus :size="15" />{{ isTopLevelGallery ? '新建二级图库' : '新建图库' }}
+          </a-button>
+        </template>
         <a-button v-else class="lucide-icon-btn" @click="categoryManagerOpen = true">
           <Settings2 :size="15" />分类管理
         </a-button>
@@ -418,9 +517,10 @@ onBeforeUnmount(releasePreviews)
 
     <main class="material-content">
       <div v-if="materialType === 'image'" class="context-head">
-        <button v-if="activeGallery" type="button" class="back-button" @click="leaveGallery"><ArrowLeft :size="16" />返回图库</button>
+        <button v-if="activeGallery" type="button" class="back-button" @click="leaveGallery"><ArrowLeft :size="16" />{{ parentGallery ? `返回${parentGallery.name}` : '返回图库' }}</button>
         <div>
           <h2>{{ activeGallery ? currentGallery?.name : '我的图库' }}</h2>
+          <p v-if="parentGallery" class="gallery-path">{{ parentGallery.name }} / {{ currentGallery?.name }}</p>
           <p>{{ activeGallery ? (currentGallery?.description || '这个图库还没有填写说明。') : '创建专属图库管理图片，也可以随时重命名、移动或整理素材。' }}</p>
         </div>
       </div>
@@ -445,13 +545,15 @@ onBeforeUnmount(releasePreviews)
       </div>
 
       <a-spin :spinning="loading">
-        <div v-if="isGalleryRoot && filteredGalleries.length" class="gallery-grid">
+        <div v-if="filteredGalleries.length" class="gallery-section">
+          <h3 v-if="isTopLevelGallery">二级图库</h3>
+          <div class="gallery-grid">
           <article v-for="gallery in filteredGalleries" :key="gallery.id" class="gallery-card">
             <button type="button" class="gallery-open" @click="enterGallery(gallery)">
               <span class="gallery-cover">
                 <img v-if="gallery.coverUrl" :src="gallery.coverUrl" alt="" />
                 <span v-else class="folder-art"><Folder :size="44" /><i></i></span>
-                <em>{{ gallery.count }} 张</em>
+                <em>{{ gallery.count }} 张<span v-if="gallery.child_count"> · {{ gallery.child_count }} 个子图库</span></em>
               </span>
               <span class="gallery-copy"><strong>{{ gallery.name }}</strong><small>{{ gallery.description || '暂未填写图库说明' }}</small></span>
             </button>
@@ -460,13 +562,17 @@ onBeforeUnmount(releasePreviews)
               <button v-if="!gallery.is_system" type="button" class="danger" :aria-label="`删除图库 ${gallery.name}`" title="删除图库" @click="askDeleteCategory(gallery)"><Trash2 :size="15" /></button>
             </div>
           </article>
+          </div>
         </div>
 
-        <div v-else-if="items.length" :class="materialType === 'image' ? 'image-grid' : 'poster-wall'">
+        <div v-if="!isGalleryRoot && items.length" class="material-section">
+          <h3 v-if="isTopLevelGallery && filteredGalleries.length">当前图库图片</h3>
+          <div :class="materialType === 'image' ? 'image-grid' : 'poster-wall'">
           <article v-for="item in items" :key="item.id" class="material-card" :class="{ poster: materialType === 'cover_template' }">
             <button type="button" class="preview-button" @click="previewItem = item">
               <img :src="item.previewUrl" :alt="item.name" />
               <span v-if="materialType === 'cover_template'" class="poster-overlay"><b>{{ item.name }}</b><small>{{ item.category_name }}</small></span>
+              <em v-if="materialType === 'cover_template'" class="template-status" :data-status="item.template_status">{{ templateStatusLabel(item) }}</em>
             </button>
             <div class="material-info">
               <strong v-if="materialType === 'image'" :title="item.name">{{ item.name }}</strong>
@@ -474,15 +580,18 @@ onBeforeUnmount(releasePreviews)
             </div>
             <div class="card-actions">
               <button type="button" title="预览" @click="previewItem = item"><Eye :size="15" /></button>
+              <button v-if="materialType === 'cover_template'" type="button" title="校对 OCR 识别结果" @click="openOcrReview(item)"><ScanText :size="15" /></button>
               <button type="button" title="下载" @click="downloadItem(item)"><Download :size="15" /></button>
               <button type="button" title="编辑名称和分类" @click="showEdit(item)"><Pencil :size="15" /></button>
               <button type="button" class="danger" title="删除" @click="removeItem(item)"><Trash2 :size="15" /></button>
             </div>
           </article>
+          </div>
         </div>
 
-        <a-empty v-else-if="!loading" :image="false" :description="isGalleryRoot ? '没有匹配的图库' : (query ? '未找到匹配素材' : '当前分类还没有素材')">
-          <a-button v-if="!query" type="primary" class="lucide-icon-btn" @click="openUpload"><ImagePlus :size="15" />上传第一份素材</a-button>
+        <a-empty v-if="!loading && !filteredGalleries.length && (isGalleryRoot || !items.length)" :image="false" :description="isGalleryRoot ? '没有匹配的图库' : (query ? '未找到匹配素材' : (isTopLevelGallery ? '当前图库还没有图片或二级图库' : '当前图库还没有图片'))">
+          <a-button v-if="!query && isGalleryRoot" type="primary" class="lucide-icon-btn" @click="openCreateCategory('')"><FolderPlus :size="15" />新建第一个图库</a-button>
+          <a-button v-else-if="!query" type="primary" class="lucide-icon-btn" @click="openUpload"><ImagePlus :size="15" />上传第一份素材</a-button>
         </a-empty>
       </a-spin>
       <a-pagination v-if="!isGalleryRoot && total > 24" v-model:current="page" :total="total" :page-size="24" show-less-items @change="loadItems" />
@@ -506,7 +615,7 @@ onBeforeUnmount(releasePreviews)
           <small>单张不超过 20 MB；素材图片最多 50 张，封面模板最多 100 张</small>
         </button>
         <label><span>分类 <b>*</b></span><a-select v-model:value="uploadCategory" placeholder="请选择一个明确分类">
-          <a-select-option v-for="item in uploadCategories" :key="item.code" :value="item.code"><strong>{{ item.name }}</strong> — {{ item.description }}</a-select-option>
+          <a-select-option v-for="item in uploadCategories" :key="item.code" :value="item.code"><strong>{{ categoryOptionLabel(item) }}</strong> — {{ item.description }}</a-select-option>
         </a-select></label>
       </div>
     </a-modal>
@@ -519,14 +628,15 @@ onBeforeUnmount(releasePreviews)
       <div class="upload-form">
         <label><span>名称</span><a-input v-model:value="editForm.name" maxlength="255" /></label>
         <label><span>分类</span><a-select v-model:value="editForm.category" placeholder="请选择分类">
-          <a-select-option v-for="item in uploadCategories" :key="item.code" :value="item.code">{{ item.name }} — {{ item.description }}</a-select-option>
+          <a-select-option v-for="item in uploadCategories" :key="item.code" :value="item.code">{{ categoryOptionLabel(item) }} — {{ item.description }}</a-select-option>
         </a-select></label>
       </div>
     </a-modal>
 
-    <a-modal v-model:open="categoryEditorOpen" :title="categoryEditorMode === 'create' ? (materialType === 'image' ? '新建图库' : '新增分类') : (materialType === 'image' ? '编辑图库' : '编辑分类')" :confirm-loading="categorySaving" ok-text="保存" @ok="saveCategory">
+    <a-modal v-model:open="categoryEditorOpen" :title="createCategoryTitle" :confirm-loading="categorySaving" ok-text="保存" @ok="saveCategory">
       <div class="upload-form">
-        <label><span>{{ materialType === 'image' ? '图库名称' : '分类名称' }} <b>*</b></span><a-input v-model:value="categoryForm.name" maxlength="80" :placeholder="materialType === 'image' ? '例如：春季新品素材' : '例如：客户案例'" /></label>
+        <label v-if="categoryEditorMode === 'create' && categoryParentId"><span>所属一级图库</span><a-input :value="categoryMap[categoryParentId]?.name" disabled /></label>
+        <label><span>{{ categoryParentId ? '二级图库名称' : (materialType === 'image' ? '图库名称' : '分类名称') }} <b>*</b></span><a-input v-model:value="categoryForm.name" maxlength="80" :placeholder="categoryParentId ? '例如：客厅案例' : (materialType === 'image' ? '例如：春季新品素材' : '例如：客户案例')" /></label>
         <label><span>说明</span><a-textarea v-model:value="categoryForm.description" :rows="3" maxlength="255" show-count :placeholder="materialType === 'image' ? '说明图库收纳的图片范围，方便团队快速判断' : '说明这个分类适用的封面场景'" /></label>
       </div>
     </a-modal>
@@ -550,11 +660,18 @@ onBeforeUnmount(releasePreviews)
       <div class="delete-category-content">
         <p>删除只会移除分类信息，不会删除 image 桶中的素材文件。</p>
         <label v-if="deletingCategory?.count > 0"><span>将其中 {{ deletingCategory.count }} 个素材移动到</span><a-select v-model:value="deleteTargetCategory" placeholder="请选择迁移目标">
-          <a-select-option v-for="item in deleteTargetOptions" :key="item.id" :value="item.id">{{ item.name }}</a-select-option>
+          <a-select-option v-for="item in deleteTargetOptions" :key="item.id" :value="item.id">{{ categoryOptionLabel(item) }}</a-select-option>
         </a-select></label>
         <a-alert v-else type="info" show-icon message="这是一个空分类，可以直接删除。" />
       </div>
     </a-modal>
+
+    <PosterOcrReviewModal
+      v-model:open="ocrReviewOpen"
+      :item="ocrReviewItem"
+      @confirmed="onReviewConfirmed"
+      @saved="onReviewSaved"
+    />
   </div>
 </template>
 
@@ -564,10 +681,13 @@ onBeforeUnmount(releasePreviews)
 .context-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
 .context-head h2 { margin: 0; font-size: 20px; color: var(--color-text); }
 .context-head p { margin: 5px 0 0; color: var(--color-text-secondary); }
+.context-head .gallery-path { margin-bottom: -2px; color: var(--color-text-tertiary); font-size: 12px; }
 .back-button { display: flex; align-items: center; gap: 5px; min-height: 32px; border: 0; background: transparent; color: var(--color-primary); cursor: pointer; }
 .toolbar { display: flex; gap: 8px; max-width: 920px; margin-bottom: 20px; }
 .toolbar :deep(.ant-input-affix-wrapper) { max-width: 380px; }
 .category-filter { width: 170px; }.sort-filter { width: 130px; }
+.gallery-section, .material-section { margin-bottom: 22px; }
+.gallery-section h3, .material-section h3 { margin: 0 0 12px; color: var(--color-text); font-size: 15px; }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
 .gallery-card { position: relative; overflow: hidden; min-height: 250px; border: 1px solid var(--gray-150); border-radius: 14px; background: var(--gray-0); transition: transform .18s, box-shadow .18s, border-color .18s; }
 .gallery-card:hover { transform: translateY(-2px); border-color: var(--color-primary); box-shadow: 0 8px 24px rgb(20 35 70 / 10%); }
@@ -592,6 +712,8 @@ onBeforeUnmount(releasePreviews)
 .poster .preview-button img { object-fit: cover; }
 .poster-overlay { position: absolute; inset: auto 0 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 54px 16px 16px; text-align: left; background: linear-gradient(transparent, rgb(0 0 0 / 82%)); color: white; }
 .poster-overlay b { font-size: 18px; line-height: 1.3; }.poster-overlay small { color: rgb(255 255 255 / 78%); }
+.template-status { position: absolute; z-index: 2; top: 10px; right: 10px; padding: 4px 8px; border-radius: 999px; color: var(--gray-700); background: rgb(255 255 255 / 90%); box-shadow: 0 2px 8px rgb(20 35 70 / 10%); font-size: 11px; font-style: normal; backdrop-filter: blur(4px); }
+.template-status[data-status='needs_review'] { color: var(--color-warning-900); background: color-mix(in srgb, var(--color-warning-50) 92%, transparent); }.template-status[data-status='ready'] { color: var(--color-success-700); background: color-mix(in srgb, var(--color-success-50) 92%, transparent); }
 .material-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 11px 12px 8px; }
 .material-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text); }
 .material-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); }

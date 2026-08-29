@@ -158,15 +158,42 @@ class NormalizedBox(BaseModel):
         return self
 
 
+class TemplateTextFillRun(BaseModel):
+    start: int = Field(ge=0, le=120)
+    end: int = Field(gt=0, le=120)
+    fill: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @model_validator(mode="after")
+    def has_positive_range(self):
+        if self.end <= self.start:
+            raise ValueError("文字颜色分段结束位置必须大于开始位置")
+        return self
+
+
 class TemplateTextStyle(BaseModel):
     fill: str = "#FFFFFF"
+    fill_runs: list[TemplateTextFillRun] = Field(default_factory=list, max_length=24)
     stroke: str | None = None
     stroke_width_ratio: float = Field(default=0, ge=0, le=0.1)
     font_size_ratio: float = Field(gt=0, le=0.5)
     bold: bool = False
     align: Literal["left", "center", "right"] = "center"
     panel_fill: str | None = None
+    panel_opacity: float = Field(default=1, ge=0, le=1)
     panel_radius_ratio: float = Field(default=0, ge=0, le=0.5)
+    font_family: str | None = Field(default=None, max_length=120)
+    font_size_px: float | None = Field(default=None, ge=8, le=512)
+    font_weight: Literal[400, 500, 600, 700, 800, 900] | None = None
+    letter_spacing: float | None = Field(default=None, ge=-20, le=80)
+    shadow: bool | None = None
+    shadow_color: str | None = None
+    shadow_blur: float | None = Field(default=None, ge=0, le=80)
+    shadow_offset_x: float | None = Field(default=None, ge=-100, le=100)
+    shadow_offset_y: float | None = Field(default=None, ge=-100, le=100)
+    editor_x: float | None = Field(default=None, ge=-4096, le=8192)
+    editor_y: float | None = Field(default=None, ge=-4096, le=8192)
+    editor_width: float | None = Field(default=None, gt=0, le=8192)
+    editor_height: float | None = Field(default=None, gt=0, le=8192)
 
 
 class TemplateTextSlot(BaseModel):
@@ -177,6 +204,11 @@ class TemplateTextSlot(BaseModel):
     style: TemplateTextStyle
     max_chars: int = Field(ge=1, le=120)
     max_lines: int = Field(ge=1, le=4)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    candidate_count: int = Field(default=0, ge=0)
+    consensus_count: int = Field(default=0, ge=0)
+    source_variant: str | None = Field(default=None, max_length=240)
+    alternatives: list[str] = Field(default_factory=list, max_length=5)
 
 
 class TemplateAnalysis(BaseModel):
@@ -186,6 +218,8 @@ class TemplateAnalysis(BaseModel):
     text_slots: list[TemplateTextSlot] = Field(default_factory=list)
     decoration_regions: list[NormalizedBox] = Field(default_factory=list)
     editable_regions: list[NormalizedBox] = Field(default_factory=list)
+    ocr_raw_layers: list[dict[str, Any]] = Field(default_factory=list)
+    recognition_metrics: dict[str, Any] = Field(default_factory=dict)
     layout_fingerprint: str
 
 
@@ -256,6 +290,12 @@ class PosterTextSlot(BaseModel):
     style: TemplateTextStyle
     max_chars: int = Field(default=24, ge=1, le=120)
     max_lines: int = Field(default=2, ge=1, le=4)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    candidate_count: int = Field(default=0, ge=0)
+    consensus_count: int = Field(default=0, ge=0)
+    source_variant: str | None = Field(default=None, max_length=240)
+    alternatives: list[str] = Field(default_factory=list, max_length=5)
+    review_state: Literal["recognized", "user_edited", "user_added"] = "recognized"
 
 
 class PosterProductTransform(BaseModel):
@@ -276,6 +316,20 @@ class PosterTemplateUpdate(BaseModel):
     fixed_regions: list[NormalizedBox] | None = Field(default=None, max_length=40)
     editable_regions: list[NormalizedBox] | None = Field(default=None, max_length=40)
     status: Literal["ready", "disabled"] | None = None
+
+
+class PosterTemplateReviewUpdate(BaseModel):
+    version: int = Field(ge=1)
+    text_slots: list[PosterTextSlot] = Field(default_factory=list, max_length=60)
+    product_box: NormalizedBox
+    confirm: bool = False
+
+    @model_validator(mode="after")
+    def unique_layer_ids(self):
+        layer_ids = [item.id for item in self.text_slots]
+        if len(layer_ids) != len(set(layer_ids)):
+            raise ValueError("文字图层 ID 不能重复")
+        return self
 
 
 class PosterPreviewCreate(BaseModel):
@@ -300,6 +354,82 @@ class PosterGenerateCreate(PosterPreviewCreate):
         if not self.enhance_with_image2 and self.n != 1:
             raise ValueError("关闭 image2 美化时确定性大字报仅生成 1 张")
         return self
+
+
+HexColor = str
+
+
+class CoverEditorCanvas(BaseModel):
+    width: int = Field(ge=320, le=4096)
+    height: int = Field(ge=320, le=4096)
+    background_asset_id: str = Field(min_length=1, max_length=64)
+    safe_area: dict[str, float] = Field(default_factory=dict)
+
+
+class CoverEditorTextLayer(BaseModel):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    layer_type: Literal["text"] = "text"
+    name: str = Field(default="文字", min_length=1, max_length=80)
+    text: str = Field(default="", max_length=500)
+    x: float = Field(ge=-4096, le=8192)
+    y: float = Field(ge=-4096, le=8192)
+    width: float = Field(gt=0, le=8192)
+    height: float = Field(gt=0, le=8192)
+    rotation: float = Field(default=0, ge=-180, le=180)
+    opacity: float = Field(default=1, ge=0, le=1)
+    visible: bool = True
+    locked: bool = False
+    order: int = Field(default=0, ge=0, le=1000)
+    font_family: str = Field(default="Noto Sans CJK SC", min_length=1, max_length=120)
+    font_size: float = Field(default=64, ge=8, le=512)
+    font_weight: Literal[400, 500, 600, 700, 800, 900] = 700
+    font_style: Literal["normal", "italic"] = "normal"
+    fill: HexColor = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    fill_runs: list[TemplateTextFillRun] = Field(default_factory=list, max_length=24)
+    align: Literal["left", "center", "right"] = "center"
+    line_height: float = Field(default=1.2, ge=0.8, le=3)
+    letter_spacing: float = Field(default=0, ge=-20, le=80)
+    stroke: bool = False
+    stroke_color: HexColor = Field(default="#000000", pattern=r"^#[0-9A-Fa-f]{6}$")
+    stroke_width: float = Field(default=0, ge=0, le=40)
+    shadow: bool = False
+    shadow_color: HexColor = Field(default="#000000", pattern=r"^#[0-9A-Fa-f]{6}$")
+    shadow_blur: float = Field(default=0, ge=0, le=80)
+    shadow_offset_x: float = Field(default=0, ge=-100, le=100)
+    shadow_offset_y: float = Field(default=8, ge=-100, le=100)
+    background_fill: HexColor | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    background_opacity: float = Field(default=1, ge=0, le=1)
+    background_radius: float = Field(default=0, ge=0, le=200)
+    background_padding: float = Field(default=0, ge=0, le=200)
+
+
+class CoverEditorScene(BaseModel):
+    version: Literal[1] = 1
+    recovery_version: Literal["all-text-v2", "precise-text-v3", "template-scene-v1"] = "template-scene-v1"
+    canvas: CoverEditorCanvas
+    layers: list[CoverEditorTextLayer] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_layer_ids(self):
+        layer_ids = [item.id for item in self.layers]
+        if len(layer_ids) != len(set(layer_ids)):
+            raise ValueError("文字图层 ID 不能重复")
+        return self
+
+
+class CoverEditorProjectCreate(BaseModel):
+    asset_id: str = Field(min_length=1, max_length=64)
+    artifact_id: str | None = Field(default=None, max_length=64)
+
+
+class CoverEditorSceneUpdate(BaseModel):
+    expected_revision: int = Field(ge=1)
+    scene: CoverEditorScene
+
+
+class CoverEditorRenderCreate(BaseModel):
+    expected_revision: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=8, max_length=128)
 
 
 class CoverRetryCreate(BaseModel):

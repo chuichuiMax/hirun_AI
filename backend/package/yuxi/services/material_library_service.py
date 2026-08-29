@@ -52,6 +52,7 @@ class MaterialCategoryCreate(BaseModel):
     material_type: Literal["image", "cover_template"]
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=255)
+    parent_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("name")
     @classmethod
@@ -135,11 +136,22 @@ def serialize_item(
         }
     )
     if item.material_type == "cover_template":
+        analysis = (poster_template.analysis_json or {}) if poster_template else {}
+        review_status = analysis.get("review_status") or (
+            "confirmed"
+            if poster_template and poster_template.status == "ready"
+            else "pending"
+            if poster_template and poster_template.status == "needs_review"
+            else "not_applicable"
+        )
         result.update(
             {
                 "poster_template_id": poster_template.id if poster_template else None,
                 "template_status": poster_template.status if poster_template else "unavailable",
                 "template_version": poster_template.version if poster_template else None,
+                "review_status": review_status,
+                "requires_review": review_status == "pending",
+                "recognition_metrics": analysis.get("recognition_metrics") or {},
                 "selectable": bool(
                     item.status == "enabled"
                     and poster_template
@@ -423,6 +435,8 @@ async def update_material_item(
         poster.name = item.display_name
         poster.category = item.category
         if "status" in changes:
+            if item.status == "enabled" and (poster.analysis_json or {}).get("review_status") == "pending":
+                raise _error(409, "POSTER_TEMPLATE_REVIEW_REQUIRED", "请先校对并确认 OCR 文字图层")
             poster.status = "ready" if item.status == "enabled" and poster.product_box_json else "disabled"
     await db.commit()
     return {"item": serialize_item(item, asset, item_category, poster)}
@@ -440,10 +454,12 @@ async def get_material_categories(db: AsyncSession, user: User, material_type: s
     )
     result = []
     for category in categories:
+        children = await repo.list_child_categories(_owner_uid(user), material_type, category.id)
         result.append(
             {
                 **category.to_dict(),
                 "count": await repo.category_item_count(_owner_uid(user), material_type, category.id),
+                "child_count": len(children),
             }
         )
     await db.commit()
@@ -462,12 +478,22 @@ async def create_material_category(
         tenant_id=_tenant_id(user),
         material_type=payload.material_type,
     )
+    parent = None
+    if payload.parent_id:
+        if payload.material_type != "image":
+            raise _error(422, "MATERIAL_CATEGORY_DEPTH_INVALID", "只有素材图片图库支持二级图库")
+        parent = await repo.get_category(_owner_uid(user), payload.material_type, payload.parent_id)
+        if parent is None:
+            raise _error(422, "MATERIAL_CATEGORY_PARENT_INVALID", "所属一级图库不存在")
+        if parent.parent_id or parent.is_system:
+            raise _error(422, "MATERIAL_CATEGORY_DEPTH_INVALID", "二级图库只能创建在普通一级图库下")
     try:
         category = await repo.create_category(
             owner_uid=_owner_uid(user),
             id=f"mlc_{uuid.uuid4().hex}",
             tenant_id=_tenant_id(user),
             material_type=payload.material_type,
+            parent_id=parent.id if parent else None,
             name=payload.name.strip(),
             description=payload.description.strip(),
             sort_order=(max(item.sort_order for item in categories) + 10),
@@ -537,6 +563,9 @@ async def delete_material_category(
         raise _error(404, "MATERIAL_CATEGORY_NOT_FOUND", "图库或分类不存在")
     if category.is_system:
         raise _error(409, "MATERIAL_CATEGORY_SYSTEM_REQUIRED", "未分类是系统兜底项，不能删除")
+    children = await repo.list_child_categories(_owner_uid(user), material_type, category.id)
+    if children:
+        raise _error(409, "MATERIAL_CATEGORY_HAS_CHILDREN", "一级图库仍有二级图库，请先移动或删除二级图库")
     fallback = next(item for item in categories if item.is_system)
     target_id = payload.target_category_id or fallback.id
     if target_id == category.id:
@@ -562,11 +591,23 @@ async def list_image_galleries(db: AsyncSession, user: User) -> dict[str, Any]:
     raw = await MaterialLibraryRepository(db).category_summaries(_owner_uid(user), material_type="image")
     galleries = []
     for category in categories:
-        count, latest = raw.get(category.id, (0, None))
+        direct_count, latest = raw.get(category.id, (0, None))
+        children = [item for item in categories if item.parent_id == category.id]
+        count = direct_count
+        if category.parent_id is None:
+            for child in children:
+                child_count, child_latest = raw.get(child.id, (0, None))
+                count += child_count
+                child_updated_at = child_latest.updated_at or child_latest.created_at if child_latest else None
+                latest_updated_at = latest.updated_at or latest.created_at if latest else None
+                if child_latest is not None and (latest is None or child_updated_at > latest_updated_at):
+                    latest = child_latest
         galleries.append(
             {
                 **category.to_dict(),
                 "count": count,
+                "direct_count": direct_count,
+                "child_count": len(children),
                 "cover_item_id": latest.id if latest is not None else None,
                 "updated_at": latest.to_dict()["updated_at"] if latest is not None else None,
             }

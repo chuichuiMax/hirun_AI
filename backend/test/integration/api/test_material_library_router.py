@@ -252,6 +252,103 @@ async def test_image_gallery_crud_and_safe_item_reassignment(test_client, materi
         await test_client.delete(f"/api/material-library/items/{item['id']}", headers=headers)
 
 
+async def test_image_gallery_supports_exactly_one_nested_level(test_client, material_users):
+    headers = material_users["owner"]
+    parent_response = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "项目案例"},
+    )
+    assert parent_response.status_code == 201, parent_response.text
+    parent = parent_response.json()["category"]
+    child_response = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={
+            "material_type": "image",
+            "name": "客厅案例",
+            "description": "项目案例中的客厅图片",
+            "parent_id": parent["id"],
+        },
+    )
+    assert child_response.status_code == 201, child_response.text
+    child = child_response.json()["category"]
+    assert child["parent_id"] == parent["id"]
+    assert child["level"] == 2
+
+    grandchild = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "第三级", "parent_id": child["id"]},
+    )
+    assert grandchild.status_code == 422, grandchild.text
+    assert grandchild.json()["detail"]["error"]["code"] == "MATERIAL_CATEGORY_DEPTH_INVALID"
+
+    system_child = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "兜底子图库", "parent_id": "uncategorized"},
+    )
+    assert system_child.status_code == 422, system_child.text
+
+    cover_child = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "cover_template", "name": "模板子分类", "parent_id": parent["id"]},
+    )
+    assert cover_child.status_code == 422, cover_child.text
+
+    uploaded = await test_client.post(
+        "/api/material-library/images/import",
+        headers=headers,
+        data={"category": child["id"]},
+        files=[("files", ("living-room.png", _png(), "image/png"))],
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    item = uploaded.json()["items"][0]
+    try:
+        galleries_response = await test_client.get("/api/material-library/galleries", headers=headers)
+        assert galleries_response.status_code == 200, galleries_response.text
+        galleries = {entry["id"]: entry for entry in galleries_response.json()["galleries"]}
+        assert galleries[parent["id"]]["count"] == 1
+        assert galleries[parent["id"]]["direct_count"] == 0
+        assert galleries[parent["id"]]["child_count"] == 1
+        assert galleries[child["id"]]["count"] == 1
+
+        blocked = await test_client.request(
+            "DELETE",
+            f"/api/material-library/categories/{parent['id']}?material_type=image",
+            headers=headers,
+            json={"target_category_id": "uncategorized"},
+        )
+        assert blocked.status_code == 409, blocked.text
+        assert blocked.json()["detail"]["error"]["code"] == "MATERIAL_CATEGORY_HAS_CHILDREN"
+
+        removed_child = await test_client.request(
+            "DELETE",
+            f"/api/material-library/categories/{child['id']}?material_type=image",
+            headers=headers,
+            json={"target_category_id": parent["id"]},
+        )
+        assert removed_child.status_code == 200, removed_child.text
+        assert removed_child.json()["moved"] == 1
+        listed = await test_client.get(
+            f"/api/material-library/items?material_type=image&category={parent['id']}",
+            headers=headers,
+        )
+        assert item["id"] in {entry["id"] for entry in listed.json()["items"]}
+
+        removed_parent = await test_client.request(
+            "DELETE",
+            f"/api/material-library/categories/{parent['id']}?material_type=image",
+            headers=headers,
+            json={"target_category_id": "uncategorized"},
+        )
+        assert removed_parent.status_code == 200, removed_parent.text
+    finally:
+        await test_client.delete(f"/api/material-library/items/{item['id']}", headers=headers)
+
+
 async def test_cover_mask_is_stored_but_not_listed_as_library_template(test_client, material_users):
     headers = material_users["owner"]
     uploaded = await test_client.post(

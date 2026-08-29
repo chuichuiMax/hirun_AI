@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import re
+import unicodedata
 from collections.abc import Sequence
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -35,6 +38,15 @@ class TemplateQualityError(TemplateReplicationError):
 
 
 _OCR: Any = None
+_OCR_PADDING = 50
+
+
+@dataclass(frozen=True)
+class _OcrCandidate:
+    text: str
+    confidence: float
+    box: tuple[float, float, float, float]
+    variant: str
 
 
 def _font(size: int, *, bold: bool) -> ImageFont.ImageFont:
@@ -99,6 +111,256 @@ def _without_platform_watermark(block: dict[str, Any]) -> dict[str, Any] | None:
     return {"text": cleaned, "box": (left, top, right, bottom)}
 
 
+def _normalize_ocr_text(value: str) -> str:
+    text = re.sub(r"\s+", " ", value or "").strip()
+    text = re.sub(r"(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])", "", text)
+    text = re.sub(r"(?<=\d)\s*[mM]\s*[2²](?!\w)", " m²", text)
+    text = re.sub(r"(?<=\d)\s*:\s*(?=\d)", ":", text)
+    text = re.sub(r"(?<=[A-Za-z])\s*:\s*(?=[0-9A-Za-z])", ": ", text)
+    latin_fragments = re.findall(r"[A-Za-z]+", text)
+    if len(latin_fragments) >= 5 and sum(len(item) <= 2 for item in latin_fragments) / len(latin_fragments) >= 0.65:
+        text = re.sub(r"(?<=[A-Za-z])\s+(?=[A-Za-z])", "", text)
+        text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _compact_ocr_text(value: str) -> str:
+    folded = "".join(
+        character for character in unicodedata.normalize("NFKD", value or "") if not unicodedata.combining(character)
+    )
+    return re.sub(r"[^0-9A-Za-z\u3400-\u9fff]", "", folded).lower()
+
+
+def _ocr_iou(left: _OcrCandidate, right: _OcrCandidate) -> float:
+    ax0, ay0, ax1, ay1 = left.box
+    bx0, by0, bx1, by1 = right.box
+    width = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+    height = max(0.0, min(ay1, by1) - max(ay0, by0))
+    intersection = width * height
+    union = max(1.0, (ax1 - ax0) * (ay1 - ay0) + (bx1 - bx0) * (by1 - by0) - intersection)
+    return intersection / union
+
+
+def _ocr_candidates_match(left: _OcrCandidate, right: _OcrCandidate) -> bool:
+    if _ocr_iou(left, right) >= 0.38:
+        return True
+    left_text = _compact_ocr_text(left.text)
+    right_text = _compact_ocr_text(right.text)
+    if not left_text or SequenceMatcher(None, left_text, right_text).ratio() < 0.84:
+        return False
+    ax0, ay0, ax1, ay1 = left.box
+    bx0, by0, bx1, by1 = right.box
+    left_height = max(1.0, ay1 - ay0)
+    right_height = max(1.0, by1 - by0)
+    vertical_overlap = max(0.0, min(ay1, by1) - max(ay0, by0))
+    center_distance = math.hypot((ax0 + ax1 - bx0 - bx1) / 2, (ay0 + ay1 - by0 - by1) / 2)
+    return (
+        vertical_overlap / min(left_height, right_height) >= 0.5
+        and center_distance <= max(ax1 - ax0, bx1 - bx0, left_height * 2, right_height * 2) * 0.34
+    )
+
+
+def _ocr_candidate_quality(candidate: _OcrCandidate) -> float:
+    base_variant = candidate.variant.split("@", 1)[0].split("#", 1)[0]
+    variant_bonus = {"original": 0.018, "local-contrast": 0.006, "solid-edge": -0.008}.get(base_variant, 0.0)
+    if "@" in candidate.variant:
+        variant_bonus -= 0.004
+    if "#recall" in candidate.variant:
+        variant_bonus -= 0.018
+    return candidate.confidence + min(20, len(_compact_ocr_text(candidate.text))) * 0.002 + variant_bonus
+
+
+def _fuse_ocr_candidates(candidates: Sequence[_OcrCandidate]) -> list[dict[str, Any]]:
+    groups: list[list[_OcrCandidate]] = []
+    for candidate in sorted(candidates, key=lambda item: (item.box[1], item.box[0])):
+        group = next(
+            (existing for existing in groups if any(_ocr_candidates_match(candidate, item) for item in existing)),
+            None,
+        )
+        if group is None:
+            groups.append([candidate])
+        else:
+            group.append(candidate)
+
+    lines: list[dict[str, Any]] = []
+    for group in groups:
+        buckets: dict[str, list[_OcrCandidate]] = {}
+        for candidate in group:
+            buckets.setdefault(_compact_ocr_text(candidate.text) or candidate.text, []).append(candidate)
+        maximum_width = max(max(1.0, item.box[2] - item.box[0]) for item in group)
+
+        def bucket_strength(bucket: list[_OcrCandidate]) -> tuple[float, float]:
+            median_width = sorted(max(1.0, item.box[2] - item.box[0]) for item in bucket)[len(bucket) // 2]
+            return (
+                sum(max(0.0, _ocr_candidate_quality(item)) for item in bucket)
+                + len({item.variant for item in bucket}) * 0.045
+                + min(1.0, median_width / maximum_width) * 0.32,
+                max(_ocr_candidate_quality(item) for item in bucket),
+            )
+
+        consensus = max(buckets.values(), key=bucket_strength)
+        consensus_key = _compact_ocr_text(consensus[0].text)
+        consensus_average = sum(item.confidence for item in consensus) / len(consensus)
+        # A common scene-OCR failure drops one character from an otherwise stable
+        # word (for example Hrun/Hirun). Prefer the complete spelling only when at
+        # least two independent passes support it and confidence remains close.
+        for bucket in buckets.values():
+            candidate_key = _compact_ocr_text(bucket[0].text)
+            candidate_average = sum(item.confidence for item in bucket) / len(bucket)
+            if (
+                len(bucket) >= 2
+                and len(consensus_key) < len(candidate_key) <= len(consensus_key) + 2
+                and SequenceMatcher(None, consensus_key, candidate_key).ratio() >= 0.86
+                and candidate_average >= consensus_average - 0.04
+            ):
+                consensus = bucket
+                consensus_key = candidate_key
+                consensus_average = candidate_average
+
+        best = max(consensus, key=_ocr_candidate_quality)
+        weights = [max(0.08, item.confidence) ** 2 for item in consensus]
+        total_weight = sum(weights)
+        averaged = tuple(
+            round(sum(item.box[index] * weight for item, weight in zip(consensus, weights, strict=True)) / total_weight)
+            for index in range(4)
+        )
+        alternatives = []
+        for bucket in sorted(buckets.values(), key=bucket_strength, reverse=True):
+            text = max(bucket, key=_ocr_candidate_quality).text
+            if _compact_ocr_text(text) == consensus_key or text in alternatives:
+                continue
+            alternatives.append(text)
+            if len(alternatives) >= 3:
+                break
+        lines.append(
+            {
+                "text": best.text,
+                "box": averaged,
+                "confidence": round(best.confidence, 6),
+                "source_variant": best.variant,
+                "candidate_count": len(group),
+                "consensus_count": len(consensus),
+                "alternatives": alternatives,
+            }
+        )
+    return sorted(lines, key=lambda item: (item["box"][1], item["box"][0]))
+
+
+def _suppress_ocr_artifacts(lines: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    credible = []
+    for line in lines:
+        compact = _compact_ocr_text(str(line.get("text") or ""))
+        recovery_only = "#recall" in str(line.get("source_variant") or "") or "@detail-" in str(
+            line.get("source_variant") or ""
+        )
+        weak_isolated_glyph = (
+            len(compact) <= 1
+            and recovery_only
+            and int(line.get("consensus_count") or 0) < 2
+            and float(line.get("confidence") or 0) < 0.82
+        )
+        if not weak_isolated_glyph:
+            credible.append(line)
+
+    kept = []
+    for index, line in enumerate(credible):
+        box = line["box"]
+        text = _compact_ocr_text(line["text"])
+        child_width = max(1.0, box[2] - box[0])
+        child_height = max(1.0, box[3] - box[1])
+        nested = False
+        for parent_index, parent in enumerate(credible):
+            if index == parent_index:
+                continue
+            parent_box = parent["box"]
+            parent_text = _compact_ocr_text(parent["text"])
+            parent_width = max(1.0, parent_box[2] - parent_box[0])
+            vertical_overlap = max(0.0, min(box[3], parent_box[3]) - max(box[1], parent_box[1]))
+            center_x = (box[0] + box[2]) / 2
+            center_y = (box[1] + box[3]) / 2
+            if (
+                parent_width >= child_width * 1.35
+                and parent_box[0] <= center_x <= parent_box[2]
+                and parent_box[1] <= center_y <= parent_box[3]
+                and vertical_overlap / child_height >= 0.72
+                and len(text) >= 2
+                and text in parent_text
+            ):
+                nested = True
+                break
+        if not nested:
+            kept.append(line)
+    return kept
+
+
+def _prefer_document_consistent_alternatives(lines: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = [dict(item) for item in lines]
+    evidence = [
+        _compact_ocr_text(item["text"])
+        for item in normalized
+        if float(item.get("confidence") or 0) >= 0.95
+        and int(item.get("consensus_count") or 0) >= 2
+        and len(_compact_ocr_text(item["text"])) >= 3
+    ]
+    for line in normalized:
+        current = str(line.get("text") or "")
+
+        def consistency_score(text: str) -> int:
+            compact = _compact_ocr_text(text)
+            return max(
+                (len(item) for item in evidence if item != _compact_ocr_text(current) and item in compact), default=0
+            )
+
+        current_score = consistency_score(current)
+        alternatives = list(line.get("alternatives") or [])
+        preferred = max(alternatives, key=consistency_score, default=None)
+        if preferred is None or consistency_score(preferred) <= current_score:
+            continue
+        line["text"] = preferred
+        line["alternatives"] = [current, *(item for item in alternatives if item != preferred)]
+    return normalized
+
+
+def _ocr_image_variants(image: Image.Image) -> list[tuple[str, Image.Image, float]]:
+    import cv2
+    import numpy as np
+
+    source = np.asarray(image.convert("RGB"))
+    variants: list[tuple[str, Image.Image, float]] = [("original", Image.fromarray(source), 1.0)]
+    lab = cv2.cvtColor(source, cv2.COLOR_RGB2LAB)
+    luminance, a_channel, b_channel = cv2.split(lab)
+    enhanced_luminance = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8)).apply(luminance)
+    enhanced = cv2.cvtColor(cv2.merge((enhanced_luminance, a_channel, b_channel)), cv2.COLOR_LAB2RGB)
+    enhanced = cv2.addWeighted(enhanced, 1.35, cv2.GaussianBlur(enhanced, (0, 0), 1.1), -0.35, 0)
+    variants.append(("local-contrast", Image.fromarray(enhanced), 1.0))
+
+    height, width = source.shape[:2]
+    border_size = max(3, min(width, height) // 80)
+    border = np.concatenate(
+        (
+            source[:border_size].reshape(-1, 3),
+            source[-border_size:].reshape(-1, 3),
+            source[:, :border_size].reshape(-1, 3),
+            source[:, -border_size:].reshape(-1, 3),
+        ),
+        axis=0,
+    ).astype(np.float32)
+    background = np.median(border, axis=0)
+    if float(np.mean(np.linalg.norm(border - background, axis=1))) <= 14:
+        difference = np.max(np.abs(source.astype(np.float32) - background), axis=2)
+        ink = (difference > 2.5).astype(np.uint8) * 255
+        ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+        variants.append(("solid-edge", Image.fromarray(255 - ink).convert("RGB"), 1.0))
+
+    detail_scale = math.floor(min(2.0, 2400.0 / max(width, height)) * 100) / 100
+    if detail_scale >= 1.2:
+        for name, variant in (("original", source), ("local-contrast", enhanced)):
+            upscaled = cv2.resize(variant, None, fx=detail_scale, fy=detail_scale, interpolation=cv2.INTER_CUBIC)
+            upscaled = cv2.addWeighted(upscaled, 1.2, cv2.GaussianBlur(upscaled, (0, 0), 0.75), -0.2, 0)
+            variants.append((f"{name}@detail-{detail_scale:g}x", Image.fromarray(upscaled), detail_scale))
+    return variants
+
+
 def _ocr_blocks(image: Image.Image) -> list[dict[str, Any]]:
     global _OCR
     try:
@@ -106,26 +368,45 @@ def _ocr_blocks(image: Image.Image) -> list[dict[str, Any]]:
             from yuxi.knowledge.parser.rapid_ocr import RapidOCRParser
 
             _OCR = RapidOCRParser()
-        raw = _OCR.process_image_result(image.convert("RGB"))
+        candidates: list[_OcrCandidate] = []
+        width, height = image.size
+        for variant_name, variant_image, scale in _ocr_image_variants(image):
+            padded = ImageOps.expand(variant_image, border=_OCR_PADDING, fill="white")
+            profiles = [("precision", 0.42, 0.45, 1.6)]
+            if variant_name.startswith(("original", "local-contrast")):
+                profiles.append(("recall", 0.32, 0.30, 1.8))
+            for profile_name, text_score, box_thresh, unclip_ratio in profiles:
+                raw = _OCR.process_image_result(
+                    padded,
+                    params={"text_score": text_score, "box_thresh": box_thresh, "unclip_ratio": unclip_ratio},
+                )
+                for block in raw.get("blocks") or []:
+                    text = _normalize_ocr_text(str(block.get("text") or ""))
+                    points = block.get("box") or []
+                    if not text or len(points) < 4:
+                        continue
+                    try:
+                        left = max(0.0, min(float(point[0]) for point in points) - _OCR_PADDING) / scale
+                        top = max(0.0, min(float(point[1]) for point in points) - _OCR_PADDING) / scale
+                        right = min(float(width), (max(float(point[0]) for point in points) - _OCR_PADDING) / scale)
+                        bottom = min(float(height), (max(float(point[1]) for point in points) - _OCR_PADDING) / scale)
+                    except (IndexError, TypeError, ValueError):
+                        continue
+                    if right <= left or bottom <= top:
+                        continue
+                    variant = variant_name if profile_name == "precision" else f"{variant_name}#{profile_name}"
+                    candidates.append(
+                        _OcrCandidate(
+                            text=text,
+                            confidence=float(block.get("confidence") or 0),
+                            box=(left, top, right, bottom),
+                            variant=variant,
+                        )
+                    )
     except Exception as exc:
         raise TemplateReplicationError("模板文字识别失败，请确认 OCR 服务可用") from exc
-
-    width, height = image.size
-    blocks: list[dict[str, Any]] = []
-    for block in raw.get("blocks") or []:
-        text = str(block.get("text") or "").strip()
-        points = block.get("box") or []
-        if not text or len(points) < 4:
-            continue
-        try:
-            left = max(0, min(width - 1, round(min(point[0] for point in points))))
-            top = max(0, min(height - 1, round(min(point[1] for point in points))))
-            right = max(left + 1, min(width, round(max(point[0] for point in points))))
-            bottom = max(top + 1, min(height, round(max(point[1] for point in points))))
-        except (IndexError, TypeError, ValueError):
-            continue
-        blocks.append({"text": text, "box": (left, top, right, bottom)})
-    return blocks
+    fused = _prefer_document_consistent_alternatives(_suppress_ocr_artifacts(_fuse_ocr_candidates(candidates)))
+    return fused
 
 
 def _merge_rows(blocks: Sequence[dict[str, Any]], width: int) -> list[dict[str, Any]]:
@@ -140,7 +421,9 @@ def _merge_rows(blocks: Sequence[dict[str, Any]], width: int) -> list[dict[str, 
             row_bottom = max(item["box"][3] for item in row)
             overlap = min(bottom, row_bottom) - max(top, row_top)
             gap = max(0, left - row_right, row_left - right)
-            if overlap >= min(block_height, row_bottom - row_top) * 0.45 and gap <= width * 0.08:
+            row_height = max(1, row_bottom - row_top)
+            height_ratio = min(block_height, row_height) / max(block_height, row_height)
+            if height_ratio >= 0.52 and overlap >= min(block_height, row_height) * 0.45 and gap <= width * 0.08:
                 row.append(block)
                 break
         else:
@@ -148,24 +431,45 @@ def _merge_rows(blocks: Sequence[dict[str, Any]], width: int) -> list[dict[str, 
     merged = []
     for row in rows:
         ordered = sorted(row, key=lambda item: item["box"][0])
+        text = ""
+        for item in ordered:
+            fragment = str(item["text"])
+            separator = ""
+            if text and not (re.search(r"[\u3400-\u9fff]$", text) or re.match(r"^[\u3400-\u9fff]", fragment)):
+                separator = " "
+            text += separator + fragment
+        confidences = [float(item.get("confidence") or 0) for item in ordered]
+        alternatives = []
+        for item in ordered:
+            for alternative in item.get("alternatives") or []:
+                if alternative not in alternatives:
+                    alternatives.append(alternative)
         merged.append(
             {
-                "text": "".join(str(item["text"]) for item in ordered),
+                "text": text,
                 "box": (
                     min(item["box"][0] for item in ordered),
                     min(item["box"][1] for item in ordered),
                     max(item["box"][2] for item in ordered),
                     max(item["box"][3] for item in ordered),
                 ),
+                "confidence": round(sum(confidences) / len(confidences), 6),
+                "candidate_count": sum(int(item.get("candidate_count") or 0) for item in ordered),
+                "consensus_count": min(int(item.get("consensus_count") or 0) for item in ordered),
+                "source_variant": ",".join(
+                    dict.fromkeys(str(item.get("source_variant") or "unknown") for item in ordered)
+                ),
+                "alternatives": alternatives[:5],
             }
         )
     return merged
 
 
-def _foreground_and_panel(
+def _text_palette(
     image: Image.Image,
     box: tuple[int, int, int, int],
-) -> tuple[str, str | None, str | None]:
+    panel: str | None,
+) -> tuple[tuple[int, int, int], list[tuple[int, int, int]]]:
     import numpy as np
 
     rgb = np.asarray(image.convert("RGB"))
@@ -176,17 +480,67 @@ def _foreground_and_panel(
     x2, y2 = min(image.width, right + pad_x), min(image.height, bottom + pad_y)
     crop = rgb[y1:y2, x1:x2]
     if not crop.size:
-        return "#FFFFFF", "#111111", None
-    border = np.concatenate((crop[0], crop[-1], crop[:, 0], crop[:, -1]), axis=0)
-    background = np.median(border, axis=0)
+        return (255, 255, 255), [(255, 255, 255)]
+    quantized_crop = np.clip(((crop.reshape(-1, 3).astype(np.uint16) + 4) // 8) * 8, 0, 255).astype(np.uint8)
+    crop_colors, crop_counts = np.unique(quantized_crop, axis=0, return_counts=True)
+    background = (
+        np.asarray(_rgb(panel), dtype=float) if panel else crop_colors[int(np.argmax(crop_counts))].astype(float)
+    )
     region = rgb[top:bottom, left:right].reshape(-1, 3)
-    distance = np.linalg.norm(region.astype(float) - background.astype(float), axis=1)
-    candidates = region[distance >= np.percentile(distance, 72)] if region.size else region
-    foreground = np.median(candidates, axis=0) if candidates.size else (255, 255, 255)
-    foreground_luma = float(foreground @ np.array([0.2126, 0.7152, 0.0722]))
+    if not region.size:
+        return tuple(int(value) for value in background), [tuple(int(value) for value in background)]
+    quantized = np.clip(((region.astype(np.uint16) + 4) // 8) * 8, 0, 255).astype(np.uint8)
+    colors, counts = np.unique(quantized, axis=0, return_counts=True)
+    minimum_support = max(8, round(len(region) * 0.0012))
+    entries = []
+    for color, count in zip(colors, counts, strict=True):
+        distance = float(np.linalg.norm(color.astype(float) - background))
+        if int(count) < minimum_support or distance < 8:
+            continue
+        entries.append({"color": color.astype(float), "count": int(count), "distance": distance})
+    entries.sort(key=lambda item: item["count"], reverse=True)
+    clusters: list[dict[str, Any]] = []
+    for entry in entries:
+        match = next(
+            (cluster for cluster in clusters if float(np.linalg.norm(entry["color"] - cluster["color"])) <= 18),
+            None,
+        )
+        if match is None:
+            clusters.append(dict(entry))
+            continue
+        total = match["count"] + entry["count"]
+        match["color"] = (match["color"] * match["count"] + entry["color"] * entry["count"]) / total
+        match["count"] = total
+        match["distance"] = float(np.linalg.norm(match["color"] - background))
+    if not clusters:
+        return tuple(int(value) for value in background), [tuple(int(value) for value in background)]
+    for cluster in clusters:
+        cluster["score"] = cluster["count"] * (0.7 + min(cluster["distance"] / 80, 1.5))
+    primary = max(clusters, key=lambda item: item["score"])
+    palette = [primary]
+    for cluster in sorted(clusters, key=lambda item: item["score"], reverse=True):
+        if cluster is primary or cluster["count"] < max(minimum_support * 2, round(len(region) * 0.003)):
+            continue
+        if all(float(np.linalg.norm(cluster["color"] - item["color"])) >= 34 for item in palette):
+            palette.append(cluster)
+        if len(palette) >= 4:
+            break
+    normalized_palette = [tuple(int(round(value)) for value in item["color"]) for item in palette]
+    return tuple(int(round(value)) for value in background), normalized_palette
+
+
+def _foreground_and_panel(
+    image: Image.Image,
+    box: tuple[int, int, int, int],
+) -> tuple[str, str | None, str | None]:
+    import numpy as np
+
+    panel = _infer_panel_fill(image, box)
+    _, palette = _text_palette(image, box, panel)
+    foreground = palette[0]
+    height = max(1, box[3] - box[1])
+    foreground_luma = float(np.asarray(foreground) @ np.array([0.2126, 0.7152, 0.0722]))
     stroke = "#171717" if foreground_luma > 190 and height >= image.height * 0.045 else None
-    variance = float(np.mean(np.std(border.astype(float), axis=0)))
-    panel = _hex(background) if variance < 24 and (x2 - x1) > (right - left) * 1.05 else None
     return _hex(foreground), stroke, panel
 
 
@@ -210,20 +564,90 @@ def _infer_panel_fill(image: Image.Image, box: tuple[int, int, int, int]) -> str
     near = np.median(near_pixels, axis=0)
     mean_deviation = float(np.mean(np.abs(near_pixels - near)))
     distance = max(12, round(height * 0.55))
-    if bottom + distance >= image.height and mean_deviation <= 58:
-        return _hex(near)
     if mean_deviation > 32:
         return None
-    outside_points = [
-        rgb[max(0, top - distance), max(0, left - distance)],
-        rgb[max(0, top - distance), min(image.width - 1, right + distance)],
-        rgb[min(image.height - 1, bottom + distance), max(0, left - distance)],
-        rgb[min(image.height - 1, bottom + distance), min(image.width - 1, right + distance)],
+    outside_parts = [
+        rgb[max(0, top - distance - band) : max(0, top - distance), left:right],
+        rgb[min(image.height, bottom + distance) : min(image.height, bottom + distance + band), left:right],
+        rgb[top:bottom, max(0, left - distance - band) : max(0, left - distance)],
+        rgb[top:bottom, min(image.width, right + distance) : min(image.width, right + distance + band)],
     ]
-    outside = np.median(np.asarray(outside_points, dtype=float), axis=0)
-    if float(np.linalg.norm(near - outside)) < 18:
+    outside_parts = [part.reshape(-1, 3) for part in outside_parts if part.size]
+    if not outside_parts:
+        return None
+    outside_distances = [float(np.linalg.norm(near - np.median(part.astype(float), axis=0))) for part in outside_parts]
+    if max(outside_distances) < 18:
         return None
     return _hex(near)
+
+
+def _infer_fill_runs(
+    image: Image.Image,
+    box: tuple[int, int, int, int],
+    text: str,
+    panel: str | None,
+) -> tuple[str, list[dict[str, Any]]]:
+    import numpy as np
+
+    compact_text = text.replace("\n", "")
+    if len(compact_text) < 2 or len(compact_text) > 40:
+        fill, _, _ = _foreground_and_panel(image, box)
+        return fill, []
+    background, palette = _text_palette(image, box, panel)
+    background_array = np.asarray(background, dtype=float)
+    primary_distance = float(np.linalg.norm(np.asarray(palette[0], dtype=float) - background_array))
+    palette = [
+        palette[0],
+        *[
+            color
+            for color in palette[1:]
+            if float(np.linalg.norm(np.asarray(color, dtype=float) - background_array))
+            >= max(34, primary_distance * 0.45)
+        ],
+    ]
+    if len(palette) < 2:
+        return _hex(palette[0]), []
+    rgb = np.asarray(image.convert("RGB"))
+    left, top, right, bottom = box
+    region = rgb[top:bottom, left:right].astype(float)
+    palette_array = np.asarray(palette, dtype=float)
+    assignments: list[int] = []
+    for index in range(len(compact_text)):
+        x1 = round(index * region.shape[1] / len(compact_text))
+        x2 = max(x1 + 1, round((index + 1) * region.shape[1] / len(compact_text)))
+        pixels = region[:, x1:x2].reshape(-1, 3)
+        foreground_pixels = pixels[np.linalg.norm(pixels - background_array, axis=1) >= 7]
+        if not foreground_pixels.size:
+            assignments.append(assignments[-1] if assignments else 0)
+            continue
+        distances = np.linalg.norm(foreground_pixels[:, None, :] - palette_array[None, :, :], axis=2)
+        nearest = np.argmin(distances, axis=1)
+        support = np.bincount(nearest, minlength=len(palette))
+        assignments.append(int(np.argmax(support)))
+    for index in range(1, len(assignments) - 1):
+        if assignments[index - 1] == assignments[index + 1] != assignments[index]:
+            assignments[index] = assignments[index - 1]
+    if len(set(assignments)) < 2:
+        return _hex(palette[assignments[0]]), []
+    used_colors = [np.asarray(palette[index], dtype=float) for index in sorted(set(assignments))]
+    if (
+        max(
+            float(np.linalg.norm(left - right))
+            for color_index, left in enumerate(used_colors)
+            for right in used_colors[color_index + 1 :]
+        )
+        < 38
+    ):
+        return _hex(palette[assignments[0]]), []
+    runs: list[dict[str, Any]] = []
+    start = 0
+    for index in range(1, len(assignments) + 1):
+        if index < len(assignments) and assignments[index] == assignments[start]:
+            continue
+        runs.append({"start": start, "end": index, "fill": _hex(palette[assignments[start]])})
+        start = index
+    dominant = max(runs, key=lambda item: item["end"] - item["start"])["fill"]
+    return dominant, runs
 
 
 def _box_model(box: tuple[int, int, int, int], size: tuple[int, int]) -> NormalizedBox:
@@ -284,13 +708,7 @@ def analyze_template(
         else:
             role = "other"
         fill, stroke, panel = _foreground_and_panel(normalized, item["box"])
-        if panel is None and role in {"subtitle", "tag", "slogan"}:
-            panel = _infer_panel_fill(normalized, item["box"])
-        if panel and role in {"subtitle", "slogan"}:
-            panel_rgb = _rgb(panel)
-            if max(panel_rgb) - min(panel_rgb) <= 72:
-                neutral = round(sum(panel_rgb) / 3)
-                panel = _hex((neutral, neutral, neutral))
+        fill, fill_runs = _infer_fill_runs(normalized, item["box"], text, panel)
         center = (left + right) / 2 / normalized.width
         align = "center" if abs(center - 0.5) <= 0.12 else ("left" if center < 0.5 else "right")
         max_lines = 2 if role == "title" and box.height >= 0.1 else 1
@@ -304,16 +722,23 @@ def analyze_template(
                 box=box,
                 style=TemplateTextStyle(
                     fill=fill,
+                    fill_runs=fill_runs,
                     stroke=stroke,
                     stroke_width_ratio=0.026 if stroke else 0,
                     font_size_ratio=max(0.012, min(0.24, box.height * 0.84)),
                     bold=role in {"title", "slogan", "eyebrow"},
                     align=align,
-                    panel_fill=panel if role in {"subtitle", "tag", "slogan"} else None,
+                    panel_fill=panel,
+                    panel_opacity=1,
                     panel_radius_ratio=0.22 if panel else 0,
                 ),
                 max_chars=max_chars,
                 max_lines=max_lines,
+                confidence=float(item.get("confidence") or 0),
+                candidate_count=int(item.get("candidate_count") or 0),
+                consensus_count=int(item.get("consensus_count") or 0),
+                source_variant=str(item.get("source_variant") or "unknown"),
+                alternatives=list(item.get("alternatives") or [])[:5],
             )
         )
 
@@ -356,6 +781,8 @@ def analyze_template(
     fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, ensure_ascii=False, separators=(",", ":")).encode()
     ).hexdigest()
+    average_confidence = sum((slot.confidence or 0) for slot in slots) / len(slots)
+    low_confidence_count = sum(1 for slot in slots if (slot.confidence or 0) < 0.85 or slot.consensus_count < 2)
     return TemplateAnalysis(
         processing_version=COVER_PROCESSING_VERSION,
         canvas_width=target_size[0],
@@ -363,6 +790,25 @@ def analyze_template(
         text_slots=slots,
         decoration_regions=decoration_regions,
         editable_regions=editable,
+        ocr_raw_layers=[
+            {
+                "id": f"raw-{index + 1}",
+                "text": str(item.get("text") or ""),
+                "box": _box_model(item["box"], normalized.size).model_dump(mode="json"),
+                "confidence": float(item.get("confidence") or 0),
+                "candidate_count": int(item.get("candidate_count") or 0),
+                "consensus_count": int(item.get("consensus_count") or 0),
+                "source_variant": str(item.get("source_variant") or "unknown"),
+                "alternatives": list(item.get("alternatives") or [])[:5],
+            }
+            for index, item in enumerate(raw_blocks)
+        ],
+        recognition_metrics={
+            "raw_layer_count": len(raw_blocks),
+            "final_layer_count": len(slots),
+            "low_confidence_count": low_confidence_count,
+            "average_confidence": round(average_confidence, 6),
+        },
         layout_fingerprint=fingerprint,
     )
 
@@ -521,6 +967,49 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, width
     return "\n".join(result[:lines])
 
 
+def _fill_for_character(style: TemplateTextStyle, index: int, text_length: int) -> tuple[int, int, int, int]:
+    if not style.fill_runs or text_length <= 0:
+        return (*_rgb(style.fill), 255)
+    source_length = max(item.end for item in style.fill_runs)
+    source_index = min(source_length - 1, int(index * source_length / text_length))
+    fill = next((item.fill for item in style.fill_runs if item.start <= source_index < item.end), style.fill)
+    return (*_rgb(fill), 255)
+
+
+def _draw_colored_text(
+    draw: ImageDraw.ImageDraw,
+    position: tuple[float, float],
+    text: str,
+    *,
+    style: TemplateTextStyle,
+    font: ImageFont.ImageFont,
+    spacing: int,
+    stroke_width: int,
+) -> None:
+    if not style.fill_runs or "\n" in text:
+        draw.multiline_text(
+            position,
+            text,
+            font=font,
+            spacing=spacing,
+            fill=(*_rgb(style.fill), 255),
+            stroke_width=stroke_width,
+            stroke_fill=(*_rgb(style.stroke or style.fill), 255),
+        )
+        return
+    cursor = position[0]
+    for index, character in enumerate(text):
+        draw.text(
+            (cursor, position[1]),
+            character,
+            font=font,
+            fill=_fill_for_character(style, index, len(text)),
+            stroke_width=stroke_width,
+            stroke_fill=(*_rgb(style.stroke or style.fill), 255),
+        )
+        cursor += float(draw.textlength(character, font=font))
+
+
 def _render_slot(
     canvas: Image.Image,
     slot: TemplateTextSlot,
@@ -537,7 +1026,7 @@ def _render_slot(
         draw.rounded_rectangle(
             (left - padding_x, top - padding_y, right + padding_x, bottom + padding_y),
             radius=max(2, round((bottom - top) * slot.style.panel_radius_ratio)),
-            fill=(*_rgb(slot.style.panel_fill), 232),
+            fill=(*_rgb(slot.style.panel_fill), round(slot.style.panel_opacity * 255)),
         )
     max_width, max_height = max(12, right - left), max(10, bottom - top)
     preferred = max(12, round(slot.style.font_size_ratio * canvas.height))
@@ -573,14 +1062,14 @@ def _render_slot(
             stroke_width=stroke_width,
             stroke_fill=(15, 15, 15, 220),
         )
-    draw.multiline_text(
+    _draw_colored_text(
+        draw,
         (x, y),
         wrapped,
+        style=slot.style,
         font=font,
         spacing=spacing,
-        fill=(*_rgb(slot.style.fill), 255),
         stroke_width=stroke_width,
-        stroke_fill=(*_rgb(slot.style.stroke or slot.style.fill), 255),
     )
     return False
 
@@ -608,8 +1097,11 @@ def _paste_original_slot(
     )
     crop = template.crop(box).convert("RGBA")
     rgb = np.asarray(crop.convert("RGB"), dtype=np.int16)
-    fill = np.asarray(_rgb(slot.style.fill), dtype=np.int16)
-    fill_mask = np.linalg.norm(rgb - fill, axis=2) <= 62
+    fills = [slot.style.fill, *(item.fill for item in slot.style.fill_runs)]
+    fill_mask = np.zeros(rgb.shape[:2], dtype=bool)
+    for fill_value in dict.fromkeys(fills):
+        fill = np.asarray(_rgb(fill_value), dtype=np.int16)
+        fill_mask |= np.linalg.norm(rgb - fill, axis=2) <= 62
     alpha_mask = fill_mask.copy()
 
     if slot.style.stroke:
@@ -622,7 +1114,7 @@ def _paste_original_slot(
         ImageDraw.Draw(canvas).rounded_rectangle(
             box,
             radius=max(2, round(height * slot.style.panel_radius_ratio)),
-            fill=(*_rgb(slot.style.panel_fill), 220),
+            fill=(*_rgb(slot.style.panel_fill), round(slot.style.panel_opacity * 255)),
         )
 
     alpha = Image.fromarray(alpha_mask.astype(np.uint8) * 255, mode="L").filter(ImageFilter.GaussianBlur(0.45))

@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
+  ArrowLeft,
   BookOpenCheck,
   CheckCircle2,
   CircleAlert,
@@ -16,6 +17,7 @@ import {
   Image,
   LayoutTemplate,
   LoaderCircle,
+  PencilLine,
   Play,
   RefreshCw,
   Save,
@@ -104,6 +106,30 @@ let coverCandidateLoadGeneration = 0
 let materialPreviewGeneration = 0
 let posterPreviewGeneration = 0
 let posterTemplateSignature = ''
+
+const materialGalleryMap = computed(() => new Map(materialGalleries.value.map((item) => [item.id, item])))
+const rootMaterialGalleries = computed(() => materialGalleries.value.filter((item) => !item.parent_id))
+const activeMaterialGallery = computed(() => materialGalleryMap.value.get(activeGalleryId.value) || null)
+const activeMaterialGalleryParent = computed(() => (
+  materialGalleryMap.value.get(activeMaterialGallery.value?.parent_id) || null
+))
+const activeMaterialGalleryChildren = computed(() => (
+  materialGalleries.value.filter((item) => item.parent_id === activeGalleryId.value)
+))
+const activeMaterialGalleryPath = computed(() => (
+  activeMaterialGalleryParent.value
+    ? `${activeMaterialGalleryParent.value.name} / ${activeMaterialGallery.value?.name || ''}`
+    : activeMaterialGallery.value?.name || '图库'
+))
+const selectedImageGallery = computed(() => materialGalleryMap.value.get(selectedImageGalleryId.value) || null)
+const selectedImageRootGalleryId = computed(() => (
+  selectedImageGallery.value?.parent_id || selectedImageGallery.value?.id || ''
+))
+const selectedImageGalleryPath = computed(() => {
+  if (!selectedImageGallery.value) return '素材图库'
+  const parent = materialGalleryMap.value.get(selectedImageGallery.value.parent_id)
+  return parent ? `${parent.name} / ${selectedImageGallery.value.name}` : selectedImageGallery.value.name
+})
 
 const testFormDefaults = {
   decoration: {
@@ -566,7 +592,7 @@ const loadVisualMaterials = async () => {
     activeGalleryId.value =
       (savedCategoryId && materialGalleries.value.some((item) => item.id === savedCategoryId)
         ? savedCategoryId
-        : activeGalleryId.value) || materialGalleries.value[0]?.id || ''
+        : activeGalleryId.value) || rootMaterialGalleries.value[0]?.id || ''
     selectedImageGalleryId.value = selectedImageItemId.value ? savedCategoryId || '' : ''
     if (selectedImageItemId.value && activeGalleryId.value) await loadGalleryImages()
   } catch (error) {
@@ -756,6 +782,7 @@ onMounted(async () => {
       initializeFormValues()
       initializeVisualSelection()
       syncEditor()
+      if (route.query.resultDetail === '1' && store.artifact) resultDetailOpen.value = true
       if (stage.value === 1) await loadVisualMaterials()
       if (
         store.task?.latest_run_id &&
@@ -1001,6 +1028,23 @@ const copyResultText = async (value, label) => {
   }
 }
 
+const openCoverEditor = async () => {
+  const assetId = store.artifact?.cover_asset_id
+  if (!assetId) {
+    message.warning('当前内容还没有可编辑封面')
+    return
+  }
+  resultDetailOpen.value = false
+  await router.push({
+    name: 'ContentCoverEditor',
+    params: { assetId },
+    query: {
+      taskId: store.task?.id || '',
+      artifactId: store.artifact?.id || ''
+    }
+  })
+}
+
 const reviewArtifact = async () => {
   try {
     await store.reviewArtifact(modelSpec.value)
@@ -1156,13 +1200,13 @@ const openVersions = async () => {
                   <div><Image :size="18" /><strong>选择图库图片</strong><em>可选 · 单选</em></div>
                   <small>可从当前账号的图库中选择一张已启用图片；不选择也可以进入内容生产。</small>
                 </div>
-                <div v-if="materialGalleries.length" class="gallery-folder-grid" aria-label="素材图库">
+                <div v-if="rootMaterialGalleries.length" class="gallery-folder-grid" aria-label="素材图库">
                   <button
-                    v-for="gallery in materialGalleries"
+                    v-for="gallery in rootMaterialGalleries"
                     :key="gallery.id"
                     type="button"
                     class="gallery-folder-card"
-                    :class="{ selected: selectedImageItemId && selectedImageGalleryId === gallery.id }"
+                    :class="{ selected: selectedImageItemId && selectedImageRootGalleryId === gallery.id }"
                     @click="openGallery(gallery.id)"
                   >
                     <span class="gallery-folder-icon"><Folder :size="30" /></span>
@@ -1170,7 +1214,7 @@ const openVersions = async () => {
                       <strong>{{ gallery.name }}</strong>
                       <small>{{ gallery.count }} 张图片素材</small>
                     </span>
-                    <span v-if="selectedImageItemId && selectedImageGalleryId === gallery.id" class="gallery-selected-badge">
+                    <span v-if="selectedImageItemId && selectedImageRootGalleryId === gallery.id" class="gallery-selected-badge">
                       已选择
                     </span>
                   </button>
@@ -1181,7 +1225,7 @@ const openVersions = async () => {
                   <div>
                     <small>当前已选图片</small>
                     <strong>{{ selectedImageSummary?.name || '已选择 1 张图库图片' }}</strong>
-                    <em>{{ materialGalleries.find((item) => item.id === selectedImageGalleryId)?.name || '素材图库' }}</em>
+                    <em>{{ selectedImageGalleryPath }}</em>
                   </div>
                   <a-button
                     v-if="selectedImageGalleryId"
@@ -1239,7 +1283,7 @@ const openVersions = async () => {
                     <small>
                       {{ item.category_name || '未分类' }}
                       <template v-if="!item.selectable">
-                        · {{ item.status === 'disabled' ? '已停用' : item.template_status === 'needs_annotation' ? '待标注' : '不可用' }}
+                        · {{ item.status === 'disabled' && item.template_status === 'needs_review' ? '待校对' : item.status === 'disabled' ? '已停用' : item.template_status === 'needs_annotation' ? '待标注' : '不可用' }}
                       </template>
                     </small>
                     <CheckCircle2
@@ -1660,7 +1704,20 @@ const openVersions = async () => {
       <div v-if="store.artifact" class="result-detail-layout">
         <section class="result-detail-cover" aria-label="内容封面">
           <div class="result-detail-section-heading">
-            <div><Image :size="18" /><strong>封面</strong></div>
+            <div class="result-detail-cover-tabs" role="tablist" aria-label="封面操作">
+              <button type="button" class="active" role="tab" aria-selected="true">
+                <Image :size="17" />封面
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected="false"
+                :disabled="!store.artifact.cover_asset_id"
+                @click="openCoverEditor"
+              >
+                <PencilLine :size="16" />编辑
+              </button>
+            </div>
           </div>
           <div class="result-detail-cover-frame">
             <div v-if="coverLoading" class="result-detail-cover-state">
@@ -1759,13 +1816,44 @@ const openVersions = async () => {
     </a-drawer>
     <a-modal
       v-model:open="galleryModalOpen"
-      :title="`选择图片 · ${materialGalleries.find((item) => item.id === activeGalleryId)?.name || '图库'}`"
+      :title="`选择图片 · ${activeMaterialGalleryPath}`"
       width="920px"
       :footer="null"
     >
       <div class="gallery-modal-content">
+        <button
+          v-if="activeMaterialGalleryParent"
+          type="button"
+          class="gallery-modal-back"
+          @click="openGallery(activeMaterialGalleryParent.id)"
+        >
+          <ArrowLeft :size="15" />返回 {{ activeMaterialGalleryParent.name }}
+        </button>
+        <section v-if="activeMaterialGalleryChildren.length" class="gallery-modal-folders">
+          <div class="gallery-modal-section-title">
+            <strong>二级图库</strong>
+            <small>选择所属图库后查看其中的图片</small>
+          </div>
+          <div class="gallery-folder-grid">
+            <button
+              v-for="gallery in activeMaterialGalleryChildren"
+              :key="gallery.id"
+              type="button"
+              class="gallery-folder-card compact"
+              :class="{ selected: selectedImageItemId && selectedImageGalleryId === gallery.id }"
+              @click="openGallery(gallery.id)"
+            >
+              <span class="gallery-folder-icon"><Folder :size="26" /></span>
+              <span class="gallery-folder-copy">
+                <strong>{{ gallery.name }}</strong>
+                <small>{{ gallery.count }} 张图片素材</small>
+              </span>
+              <span v-if="selectedImageItemId && selectedImageGalleryId === gallery.id" class="gallery-selected-badge">已选择</span>
+            </button>
+          </div>
+        </section>
         <div class="gallery-modal-heading">
-          <p>从当前文件夹中选择一张图片；选择将在点击“确认选择”后保存到业务简报。</p>
+          <p>{{ activeMaterialGalleryChildren.length ? '当前一级图库中的图片' : '从当前图库中选择一张图片；选择将在点击“确认选择”后保存到业务简报。' }}</p>
           <span>{{ galleryImages.length }} 张图片</span>
         </div>
         <div v-if="galleryImagesLoading" class="material-loading-row">
@@ -1900,6 +1988,12 @@ const openVersions = async () => {
 .selected-gallery-image strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .poster-choice-grid { display: grid; grid-auto-flow: column; grid-auto-columns: 142px; gap: 12px; padding: 2px 2px 8px; overflow-x: auto; }
 .gallery-modal-content { display: grid; gap: 16px; padding-top: 4px; }
+.gallery-modal-back { width: fit-content; padding: 0; display: inline-flex; align-items: center; gap: 5px; border: 0; color: var(--main-700); background: transparent; cursor: pointer; }
+.gallery-modal-folders { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-25); }
+.gallery-modal-section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.gallery-modal-section-title small { color: var(--color-text-tertiary); }
+.gallery-folder-card.compact { min-height: 76px; padding: 11px; background: var(--gray-0); }
+.gallery-folder-card.compact .gallery-folder-icon { width: 46px; height: 40px; }
 .gallery-modal-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .gallery-modal-heading p { margin: 0; color: var(--color-text-secondary); }
 .gallery-modal-heading span { flex: 0 0 auto; color: var(--color-text-tertiary); font-size: 12px; }
@@ -1978,6 +2072,11 @@ const openVersions = async () => {
 .result-detail-section-heading svg { flex: 0 0 auto; color: var(--main-700); }
 .result-detail-section-heading strong { font-size: 14px; }
 .result-detail-section-heading :deep(.ant-btn) { display: inline-flex; align-items: center; gap: 5px; color: var(--main-700); }
+.result-detail-cover-tabs { padding: 3px; border-radius: 8px; background: var(--gray-100); }
+.result-detail-cover-tabs button { min-width: 74px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--color-text-secondary); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; transition: 0.18s ease; }
+.result-detail-cover-tabs button.active { background: var(--color-bg-container); color: var(--main-700); box-shadow: 0 1px 4px var(--shadow-1); font-weight: 600; }
+.result-detail-cover-tabs button:not(.active):hover:not(:disabled) { color: var(--main-700); background: var(--main-50); }
+.result-detail-cover-tabs button:disabled { cursor: not-allowed; opacity: 0.42; }
 .result-detail-cover-frame { min-height: 0; flex: 1; display: flex; align-items: center; justify-content: center; margin-top: 12px; overflow: hidden; }
 .result-detail-cover-frame img { display: block; width: min(100%, 400px); max-height: 100%; aspect-ratio: 3 / 4; border-radius: 6px; object-fit: contain; background: var(--gray-100); }
 .result-detail-cover-state { min-height: 240px; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-secondary); text-align: center; }

@@ -3,12 +3,15 @@ from __future__ import annotations
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile, status
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.utils.auth_middleware import get_db, get_required_user
 from yuxi.content_cover.schemas import (
     CoverComposeCreate,
+    CoverEditorProjectCreate,
+    CoverEditorRenderCreate,
+    CoverEditorSceneUpdate,
     CoverGenerateCreate,
     CoverRetryCreate,
     CoverSetCurrentCreate,
@@ -16,6 +19,7 @@ from yuxi.content_cover.schemas import (
     Image2GlobalConfigUpdate,
     PosterGenerateCreate,
     PosterPreviewCreate,
+    PosterTemplateReviewUpdate,
     PosterTemplateUpdate,
     TemplateReplicatePlanCreate,
 )
@@ -23,12 +27,14 @@ from yuxi.services.content_cover_service import (
     cancel_cover_job,
     create_cover_asset,
     create_cover_compose_job,
+    create_cover_editor_project,
     create_cover_generate_job,
     create_poster_billboard_job,
     delete_cover_asset,
     delete_poster_template,
     get_cover_asset_file,
     get_cover_bootstrap,
+    get_cover_editor_project,
     get_cover_job,
     get_poster_template,
     import_poster_templates,
@@ -37,11 +43,15 @@ from yuxi.services.content_cover_service import (
     preview_poster_billboard,
     preview_template_replication_plan,
     reanalyze_poster_template,
+    resolve_cover_editor_font,
+    review_poster_template,
     retry_cover_job,
+    render_cover_editor_project,
     set_current_cover,
     stream_cover_job_events,
     test_image2_global_config,
     update_image2_global_config,
+    update_cover_editor_project,
     update_poster_template,
 )
 from yuxi.storage.postgres.models_business import User
@@ -159,6 +169,16 @@ async def analyze_cover_poster_template(
     return await reanalyze_poster_template(db, current_user, template_id)
 
 
+@content_covers.put("/poster-templates/{template_id}/review")
+async def review_cover_poster_template(
+    template_id: str,
+    payload: PosterTemplateReviewUpdate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await review_poster_template(db, current_user, template_id, payload)
+
+
 @content_covers.post("/poster-billboard/preview")
 async def preview_cover_poster_billboard(
     payload: PosterPreviewCreate,
@@ -185,6 +205,55 @@ async def preview_cover_template_replication(
 ):
     """Return OCR slots and editable copy before a paid image2 request."""
     return await preview_template_replication_plan(db, current_user, payload)
+
+
+@content_covers.post("/editor-projects", status_code=status.HTTP_201_CREATED)
+async def create_editor_project(
+    payload: CoverEditorProjectCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_cover_editor_project(db, current_user, payload)
+
+
+@content_covers.get("/editor-fonts/{font_key}")
+async def editor_font(font_key: str):
+    path = resolve_cover_editor_font(font_key)
+    return FileResponse(
+        path,
+        media_type="font/collection",
+        filename=path.name,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@content_covers.get("/editor-projects/{project_id}")
+async def editor_project(
+    project_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_cover_editor_project(db, current_user, project_id)
+
+
+@content_covers.patch("/editor-projects/{project_id}")
+async def save_editor_project(
+    project_id: str,
+    payload: CoverEditorSceneUpdate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await update_cover_editor_project(db, current_user, project_id, payload)
+
+
+@content_covers.post("/editor-projects/{project_id}/render", status_code=status.HTTP_202_ACCEPTED)
+async def render_editor_project(
+    project_id: str,
+    payload: CoverEditorRenderCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await render_cover_editor_project(db, current_user, project_id, payload)
 
 
 @content_covers.get("/assets/{asset_id}/file")

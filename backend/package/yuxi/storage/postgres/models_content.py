@@ -1076,6 +1076,7 @@ class ContentMaterialCategory(Base):
     material_type = Column(String(32), primary_key=True, index=True)
     id = Column(String(64), primary_key=True)
     tenant_id = Column(String(64), nullable=True, index=True)
+    parent_id = Column(String(64), nullable=True, index=True)
     name = Column(String(80), nullable=False)
     description = Column(String(255), nullable=False, default="")
     sort_order = Column(Integer, nullable=False, default=0)
@@ -1104,6 +1105,12 @@ class ContentMaterialCategory(Base):
             "material_type",
             "sort_order",
         ),
+        Index(
+            "idx_content_material_category_owner_type_parent",
+            "owner_uid",
+            "material_type",
+            "parent_id",
+        ),
     )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1111,6 +1118,8 @@ class ContentMaterialCategory(Base):
             "id": self.id,
             "code": self.id,
             "material_type": self.material_type,
+            "parent_id": self.parent_id,
+            "level": 2 if self.parent_id else 1,
             "name": self.name,
             "description": self.description or "",
             "sort_order": self.sort_order,
@@ -1236,6 +1245,55 @@ class ContentCoverJob(Base):
             "created_at": format_utc_datetime(self.created_at),
             "started_at": format_utc_datetime(self.started_at),
             "completed_at": format_utc_datetime(self.completed_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentCoverEditProject(Base):
+    """A recoverable, non-destructive editing draft for one source cover."""
+
+    __tablename__ = "content_cover_edit_projects"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    content_task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    artifact_id = Column(String(64), ForeignKey("content_artifacts.id", ondelete="SET NULL"), nullable=True, index=True)
+    source_asset_id = Column(
+        String(64), ForeignKey("content_cover_assets.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    source_job_id = Column(
+        String(64), ForeignKey("content_cover_jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    base_asset_id = Column(
+        String(64), ForeignKey("content_cover_assets.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    scene_json = Column(JSON, nullable=False, default=dict)
+    revision = Column(Integer, nullable=False, default=1)
+    editability = Column(String(32), nullable=False, default="flattened")
+    status = Column(String(32), nullable=False, default="active", index=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_uid", "source_asset_id", name="uq_content_cover_edit_project_source"),
+        CheckConstraint("revision >= 1", name="ck_content_cover_edit_project_revision"),
+        CheckConstraint("status IN ('active', 'archived')", name="ck_content_cover_edit_project_status"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "content_task_id": self.content_task_id,
+            "artifact_id": self.artifact_id,
+            "source_asset_id": self.source_asset_id,
+            "source_job_id": self.source_job_id,
+            "base_asset_id": self.base_asset_id,
+            "scene": self.scene_json or {},
+            "revision": self.revision,
+            "editability": self.editability,
+            "status": self.status,
+            "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
         }
 

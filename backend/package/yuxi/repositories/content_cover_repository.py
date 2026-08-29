@@ -10,6 +10,7 @@ from yuxi.storage.postgres.models_content import (
     ContentArtifact,
     ContentArtifactVersion,
     ContentCoverAsset,
+    ContentCoverEditProject,
     ContentCoverImage2Setting,
     ContentCoverJob,
     ContentCoverPosterTemplate,
@@ -249,6 +250,44 @@ class ContentCoverRepository:
         self.db.add(item)
         await self.db.flush()
         return item
+
+    async def create_edit_project(self, **values: Any) -> ContentCoverEditProject:
+        item = ContentCoverEditProject(**values)
+        self.db.add(item)
+        await self.db.flush()
+        return item
+
+    async def get_edit_project_for_source(
+        self,
+        source_asset_id: str,
+        owner_uid: str,
+        *,
+        for_update: bool = False,
+    ) -> ContentCoverEditProject | None:
+        query = select(ContentCoverEditProject).where(
+            ContentCoverEditProject.source_asset_id == source_asset_id,
+            ContentCoverEditProject.owner_uid == owner_uid,
+            ContentCoverEditProject.status == "active",
+        )
+        if for_update:
+            query = query.with_for_update()
+        return (await self.db.execute(query)).scalar_one_or_none()
+
+    async def get_edit_project_for_user(
+        self,
+        project_id: str,
+        owner_uid: str,
+        *,
+        for_update: bool = False,
+    ) -> ContentCoverEditProject | None:
+        query = select(ContentCoverEditProject).where(
+            ContentCoverEditProject.id == project_id,
+            ContentCoverEditProject.owner_uid == owner_uid,
+            ContentCoverEditProject.status == "active",
+        )
+        if for_update:
+            query = query.with_for_update()
+        return (await self.db.execute(query)).scalar_one_or_none()
 
     async def get_job(self, job_id: str, *, for_update: bool = False) -> ContentCoverJob | None:
         query = select(ContentCoverJob).where(ContentCoverJob.id == job_id)
