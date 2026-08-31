@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from yuxi.services.mp_service import (
     REGION_TREE,
     REGIONS,
+    _compact_run,
     _cover_asset_ids,
     build_mp_brief_payload,
     expand_quote_range,
@@ -39,6 +40,7 @@ def test_resolve_content_goal_prefers_acquire_except_incompatible_types():
     assert resolve_content_goal("装修家居", "CT05") == "acquire"
     assert resolve_content_goal("装修家居", "CT04") == "educate"
     assert resolve_content_goal("好评笔记", "CT07") == "brand"
+    assert resolve_content_goal("好评笔记", "CT05") == "brand"
 
 
 def test_expand_quote_range_uses_half_step_then_integers():
@@ -153,7 +155,11 @@ def test_build_mp_brief_payload_attaches_up_to_three_photos():
     )
     assert [item["asset_id"] for item in brief.attachments] == ["cover-1", "cover-2", "cover-3"]
     assert brief.form_values["cover_asset_ids"] == ["cover-1", "cover-2", "cover-3"]
-    assert brief.audience == ["装修业主"]
+    assert brief.audience == ["业主"]
+    assert brief.form_values["project_type"] == "业主好评笔记"
+    assert "好评知识库" in brief.form_values["writing_instruction"]
+    assert "不要写成获客" in brief.form_values["writing_instruction"]
+    assert brief.form_values["voice"] == "业主第一人称"
 
 
 def test_build_mp_brief_payload_review_notes_region_is_optional():
@@ -173,7 +179,48 @@ def test_build_mp_brief_payload_review_notes_region_is_optional():
         cover_template_id=None,
         content_code="NR20260828003",
     )
-    assert with_region.audience == ["株洲市 荷塘区"]
+    assert with_region.audience == ["业主"]
     assert with_region.form_values["所在区域"] == "株洲市 荷塘区"
-    assert without_region.audience == ["装修业主"]
+    assert with_region.form_values["location"] == "株洲市 荷塘区"
+    assert without_region.audience == ["业主"]
     assert not str(without_region.form_values.get("所在区域") or "").strip()
+
+
+def test_build_mp_brief_payload_accepts_city_only_region():
+    brief = build_mp_brief_payload(
+        service_entry="装修家居",
+        form_values={
+            "楼盘信息": "星河湾",
+            "外框面积": "50-70㎡",
+            "基础": "4万",
+            "木制品": "2万",
+            "主材": "2万",
+            "设计风格": "北欧",
+            "所在区域": "长沙市",
+        },
+        content_type_name="工艺施工展示",
+        cover_asset_id="cca_demo",
+        cover_template_id=None,
+        content_code="NR20260831006",
+    )
+    assert brief.form_values["所在区域"] == "长沙市"
+    assert brief.audience == ["长沙市"]
+
+
+def test_compact_run_exposes_error_message_for_failed_runs():
+    result = _compact_run(
+        {
+            "run": {
+                "id": "run-1",
+                "thread_id": "task-1",
+                "status": "failed",
+                "request_id": "req-1",
+                "error_message": "Agent 节点执行超时（120s）",
+            }
+        },
+        None,
+    )
+    assert result["run_id"] == "run-1"
+    assert result["status"] == "failed"
+    assert result["error_message"] == "Agent 节点执行超时（120s）"
+    assert result["interrupt"] is None

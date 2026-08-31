@@ -1105,12 +1105,6 @@ class ContentMaterialCategory(Base):
             "material_type",
             "sort_order",
         ),
-        Index(
-            "idx_content_material_category_owner_type_parent",
-            "owner_uid",
-            "material_type",
-            "parent_id",
-        ),
     )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1250,8 +1244,6 @@ class ContentCoverJob(Base):
 
 
 class ContentCoverEditProject(Base):
-    """A recoverable, non-destructive editing draft for one source cover."""
-
     __tablename__ = "content_cover_edit_projects"
 
     id = Column(String(64), primary_key=True)
@@ -1260,7 +1252,7 @@ class ContentCoverEditProject(Base):
     content_task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     artifact_id = Column(String(64), ForeignKey("content_artifacts.id", ondelete="SET NULL"), nullable=True, index=True)
     source_asset_id = Column(
-        String(64), ForeignKey("content_cover_assets.id", ondelete="RESTRICT"), nullable=False, index=True
+        String(64), ForeignKey("content_cover_assets.id", ondelete="CASCADE"), nullable=False, index=True
     )
     source_job_id = Column(
         String(64), ForeignKey("content_cover_jobs.id", ondelete="SET NULL"), nullable=True, index=True
@@ -1272,13 +1264,12 @@ class ContentCoverEditProject(Base):
     revision = Column(Integer, nullable=False, default=1)
     editability = Column(String(32), nullable=False, default="flattened")
     status = Column(String(32), nullable=False, default="active", index=True)
-    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
-    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     __table_args__ = (
-        UniqueConstraint("owner_uid", "source_asset_id", name="uq_content_cover_edit_project_source"),
-        CheckConstraint("revision >= 1", name="ck_content_cover_edit_project_revision"),
-        CheckConstraint("status IN ('active', 'archived')", name="ck_content_cover_edit_project_status"),
+        Index("idx_content_cover_edit_projects_owner_source", "owner_uid", "source_asset_id"),
+        Index("idx_content_cover_edit_projects_owner_updated", "owner_uid", "updated_at"),
     )
 
     def to_dict(self) -> dict[str, Any]:

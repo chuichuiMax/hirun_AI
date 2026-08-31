@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content.control.workflow.content_node_input import ContentNodeInputAssembler
+from yuxi.content.control.workflow.external_wait import COVER_SKIP_REASON, skip_cover_pipeline
 from yuxi.content.model.contracts import ContractDomainContext
 from yuxi.services.agent_delegation_service import AgentDelegationRequest, AgentDelegationService
 from yuxi.storage.postgres.models_business import User
@@ -181,6 +182,20 @@ class AgentNodeHandler:
         state: dict[str, Any],
         node_run_id: str,
     ) -> dict[str, Any]:
+        if skip_cover_pipeline(state):
+            if node["id"] == "plan_visuals":
+                return {"visual_plan": {"skipped": True, "skip_reason": COVER_SKIP_REASON}}
+            if node["id"] == "submit_cover_job":
+                return {"cover_job": {"skipped": True, "skip_reason": COVER_SKIP_REASON}}
+            if node["id"] == "visual_review":
+                return {
+                    "visual_review": {
+                        "skipped": True,
+                        "skip_reason": COVER_SKIP_REASON,
+                        "assets": [],
+                    }
+                }
+
         node_run = await db.get(ContentNodeRun, node_run_id)
         task = await db.get(ContentTask, state["task_id"])
         user = (

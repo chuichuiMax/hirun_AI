@@ -32,6 +32,7 @@ from yuxi.services.content_service import (
     get_content_task,
     get_task_artifact,
     resume_content_run,
+    retry_content_node,
     save_content_brief,
 )
 from yuxi.services.content_type_service import ensure_default_content_types, list_content_types
@@ -256,6 +257,11 @@ class MpRunResumePayload(BaseModel):
     resume: dict[str, Any]
 
 
+class MpRunRetryPayload(BaseModel):
+    request_id: str | None = None
+    node_id: str | None = None
+
+
 @dataclass
 class MpContext:
     employee: ContentEmployee
@@ -308,11 +314,12 @@ def map_nrlx_to_ct_code(type_code: str | None, name: str | None) -> str:
 
 def resolve_content_goal(service_entry: str, ct_code: str) -> str:
     supported = next((item["supported_goals"] for item in CONTENT_TYPES if item["code"] == ct_code), ["acquire"])
-    preferred = ("brand", "acquire", "educate") if service_entry == "好评笔记" else ("acquire", "educate", "brand")
+    # 好评笔记是业主评价项目成员的口碑记录，禁止落入获客转化目标。
+    preferred = ("brand", "educate") if service_entry == "好评笔记" else ("acquire", "educate", "brand")
     for goal in preferred:
         if goal in supported:
             return goal
-    return supported[0]
+    return next((item for item in supported if item != "acquire"), supported[0])
 
 
 def _format_wan(value: float) -> str:
@@ -423,12 +430,19 @@ def build_mp_brief_payload(
         audience = [region] if region else ["装修业主"]
         result = " ".join(part for part in (community, frame_area, style) if part)
     else:
-        product = persona_text or "服务人设"
-        process = persona_text or "好评服务"
-        pain = "业主想找对的服务人"
-        advantage = persona_text or "鸿扬交付团队"
-        audience = [region] if region else ["装修业主"]
+        product = "业主好评笔记"
+        process = persona_text or "项目成员服务"
+        pain = "业主记录装修交付中项目成员的真实服务体验"
+        advantage = persona_text or "项目成员服务"
+        audience = ["业主"]
         result = persona_text
+        values["voice"] = "业主第一人称"
+        values["location"] = region
+        values["writing_instruction"] = (
+            "以业主第一人称评价设计师、预算师、项目经理、客户经理等项目成员；"
+            "检索并模仿「好评知识库」中已有文章的语气、结构和用词；"
+            "写内部可归档的真实好评，不要写成获客种草、员工自荐或销售转化文案。"
+        )
 
     mapped = {
         **values,
@@ -473,6 +487,7 @@ def _compact_run(run_result: dict[str, Any], interrupt: dict[str, Any] | None) -
         "task_id": run["thread_id"],
         "status": run["status"],
         "request_id": run["request_id"],
+        "error_message": run.get("error_message"),
         "interrupt": interrupt,
         "stream_url": f"/api/mp/content/runs/{run['id']}/events",
     }
@@ -904,13 +919,18 @@ async def compile_brief(db: AsyncSession, ctx: MpContext, payload: MpCompileBrie
         content_code=content_code,
     )
     saved = await save_content_brief(db, ctx.user, task_id, brief, compile_now=True)
-    return {
+    result = {
         "task_id": task_id,
         "status": "strategy_evidence_locked",
         "task_status": saved["task"]["status"],
         "content_code": content_code,
         "task": saved["task"],
     }
+    if payload.service_entry == "好评笔记":
+        run = await start_run(db, ctx, task_id, MpRunCreatePayload())
+        result["run_id"] = run["run_id"]
+        result["run_status"] = run["status"]
+    return result
 
 
 async def get_task(db: AsyncSession, ctx: MpContext, task_id: str) -> dict[str, Any]:
@@ -948,6 +968,18 @@ async def resume_run(db: AsyncSession, ctx: MpContext, run_id: str, payload: MpR
     request_id = payload.request_id or str(uuid.uuid4())
     return await resume_content_run(
         db, ctx.user, run_id, ContentRunResume(request_id=request_id, resume=payload.resume)
+    )
+
+
+async def retry_run(db: AsyncSession, ctx: MpContext, run_id: str, payload: MpRunRetryPayload) -> dict[str, Any]:
+    request_id = payload.request_id or str(uuid.uuid4())
+    return await retry_content_node(
+        db,
+        ctx.user,
+        run_id,
+        request_id=request_id,
+        node_id=payload.node_id,
+        model_spec=None,
     )
 
 

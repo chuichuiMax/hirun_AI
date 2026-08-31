@@ -6,10 +6,16 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import yuxi.agents.buildin.content_workflow.graph as content_workflow_graph_module
 import yuxi.agents.toolkits.content.tools as content_tools
 import yuxi.content.control.workflow.agent_node as agent_node_module
+from yuxi.agents.buildin.content_workflow.graph import ContentWorkflowAgent
 from yuxi.content.control.workflow.agent_node import AgentNodeHandler, AgentNodeResultMapper
-from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
+from yuxi.content.control.workflow.external_wait import (
+    COVER_SKIP_REASON,
+    ExternalWaitNodeHandler,
+    skip_cover_pipeline,
+)
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.storage.postgres.models_content import ContentCoverAsset, ContentCoverJob, ContentNodeRun, ContentTask
 
@@ -465,3 +471,136 @@ async def test_cover_tool_rejects_assets_outside_locked_visual_plan():
 
 def test_cover_tool_only_accepts_task_id_from_agent():
     assert set(content_tools.CreateContentCoverJobInput.model_fields) == {"task_id"}
+
+
+def test_skip_cover_pipeline_only_for_review_notes():
+    assert skip_cover_pipeline({"content_brief": {"form_values": {"mp_service_entry": "好评笔记"}}})
+    assert not skip_cover_pipeline({"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}})
+    assert not skip_cover_pipeline({"content_brief": {}})
+    assert not skip_cover_pipeline({})
+
+
+def _review_notes_state(**extra) -> dict:
+    return {
+        "task_id": "task-1",
+        "uid": "user-1",
+        "run_id": "run-1",
+        "state_version": 2,
+        "content_brief": {"form_values": {"mp_service_entry": "好评笔记"}},
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("node_id", "state_key"),
+    [
+        ("plan_visuals", "visual_plan"),
+        ("submit_cover_job", "cover_job"),
+        ("visual_review", "visual_review"),
+    ],
+)
+async def test_review_notes_skip_cover_agent_nodes_without_delegation(node_id: str, state_key: str):
+    class ForbiddenDB:
+        async def get(self, *args, **kwargs):
+            raise AssertionError("好评笔记不应查询封面 Agent 节点依赖")
+
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("好评笔记不应查询封面 Agent 节点依赖")
+
+    result = await AgentNodeHandler().execute(
+        db=ForbiddenDB(),
+        node={"id": node_id},
+        state=_review_notes_state(),
+        node_run_id="node-run-1",
+    )
+
+    assert result[state_key]["skipped"] is True
+    assert result[state_key]["skip_reason"] == COVER_SKIP_REASON
+    if node_id == "visual_review":
+        assert result[state_key]["assets"] == []
+
+
+@pytest.mark.asyncio
+async def test_external_wait_skips_cover_wait_for_review_notes(monkeypatch):
+    monkeypatch.setattr(
+        "yuxi.content.control.workflow.external_wait.interrupt",
+        lambda _payload: pytest.fail("好评笔记不应进入封面等待"),
+    )
+
+    result = await ExternalWaitNodeHandler().execute(
+        db=object(),
+        node={
+            "id": "wait_cover_job",
+            "external_job_type": "content_cover",
+            "timeout_seconds": 900,
+        },
+        state=_review_notes_state(cover_job={}),
+    )
+
+    assert result["cover_job"]["skipped"] is True
+    assert result["cover_job"]["skip_reason"] == COVER_SKIP_REASON
+    assert result["cover_assets"] == []
+    assert result["resume_parent_run_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_external_wait_still_requires_cover_job_id_for_home_furnishing():
+    with pytest.raises(ValueError, match="外部等待节点缺少 cover_job_id"):
+        await ExternalWaitNodeHandler().execute(
+            db=object(),
+            node={
+                "id": "wait_cover_job",
+                "external_job_type": "content_cover",
+                "timeout_seconds": 900,
+            },
+            state={
+                "task_id": "task-1",
+                "uid": "user-1",
+                "run_id": "run-1",
+                "content_brief": {"form_values": {"mp_service_entry": "装修家居"}},
+                "cover_job": {},
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_cover_selection_does_not_interrupt_for_review_notes(monkeypatch):
+    monkeypatch.setattr(
+        content_workflow_graph_module,
+        "interrupt",
+        lambda _payload: pytest.fail("好评笔记不应触发人工选封面"),
+    )
+
+    result = await ContentWorkflowAgent()._v3_human_review(
+        {"id": "select_cover", "interrupt_type": "cover_selection"},
+        _review_notes_state(),
+    )
+
+    assert result["selected_cover"] == {}
+    assert result["state_version"] == 3
+    assert result["resume_parent_run_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_content_approval_does_not_interrupt_for_review_notes(monkeypatch):
+    monkeypatch.setattr(
+        content_workflow_graph_module,
+        "interrupt",
+        lambda _payload: pytest.fail("好评笔记不应触发最终人工审批"),
+    )
+
+    result = await ContentWorkflowAgent()._v3_human_review(
+        {"id": "human_content_approval", "interrupt_type": "content_approval"},
+        _review_notes_state(
+            uid="user-1",
+            validation_report={"status": "passed", "checks": []},
+            review_report={"status": "passed", "checks": []},
+            selected_title={"text": "标题"},
+            content_draft={"body": "正文"},
+            evidence_bundle={"bundle_hash": "h1"},
+        ),
+    )
+
+    assert result["approval_result"]["status"] == "approved"
+    assert result["artifact_version"]["status"] == "approved_content"

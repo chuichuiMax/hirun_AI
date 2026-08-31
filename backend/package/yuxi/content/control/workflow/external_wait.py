@@ -10,6 +10,17 @@ from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.services.run_queue_service import append_run_stream_event
 from yuxi.utils.datetime_utils import utc_now_naive
 
+COVER_SKIP_REASON = "好评笔记跳过封面生成"
+REVIEW_NOTES_SERVICE_ENTRY = "好评笔记"
+
+
+def skip_cover_pipeline(state: dict[str, Any]) -> bool:
+    brief = state.get("content_brief") or {}
+    values = brief.get("form_values") if isinstance(brief, dict) else {}
+    if not isinstance(values, dict):
+        values = {}
+    return str(values.get("mp_service_entry") or "") == REVIEW_NOTES_SERVICE_ENTRY
+
 
 class ExternalWaitNodeHandler:
     """把外部 CoverJob 转成可恢复的工作流等待，不在 Agent 节点轮询。"""
@@ -23,6 +34,17 @@ class ExternalWaitNodeHandler:
     ) -> dict[str, Any]:
         if node.get("external_job_type") != "content_cover":
             raise ValueError(f"不支持的外部任务类型: {node.get('external_job_type')}")
+        if skip_cover_pipeline(state):
+            return {
+                "cover_job": {
+                    **(state.get("cover_job") or {}),
+                    "status": "skipped",
+                    "skipped": True,
+                    "skip_reason": COVER_SKIP_REASON,
+                },
+                "cover_assets": [],
+                "resume_parent_run_id": None,
+            }
         job_id = str((state.get("cover_job") or {}).get("cover_job_id") or "")
         if not job_id:
             raise ValueError("外部等待节点缺少 cover_job_id")
@@ -111,4 +133,4 @@ class ExternalWaitNodeHandler:
         }
 
 
-__all__ = ["ExternalWaitNodeHandler"]
+__all__ = ["COVER_SKIP_REASON", "ExternalWaitNodeHandler", "skip_cover_pipeline"]

@@ -15,7 +15,7 @@ from yuxi.agents import BaseAgent
 from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.control.workflow.agent_node import AgentNodeHandler
 from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
-from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
+from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler, skip_cover_pipeline
 from yuxi.content.control.workflow.revision import RevisionRouteController, resolve_revision_reason
 from yuxi.content.generation import SKILL_VERSIONS
 from yuxi.content.execution_trace import build_execution_preview
@@ -322,6 +322,15 @@ class ContentWorkflowAgent(BaseAgent):
                 }
             state_version = int(state.get("state_version") or 0)
             expected_run_id = state.get("resume_parent_run_id") or state["run_id"]
+            if skip_cover_pipeline(state):
+                return {
+                    "revision_reason_code": reason_code,
+                    "revision_target": decision.target_node_id,
+                    "revision_status": decision.status,
+                    "retry_counts": decision.retry_counts,
+                    "state_version": state_version + 1,
+                    "resume_parent_run_id": None,
+                }
             answer = interrupt(
                 {
                     "interrupt_type": "content_correction",
@@ -579,13 +588,16 @@ class ContentWorkflowAgent(BaseAgent):
                     message=f"最终审批前仍有阻断报告: {', '.join(invalid_reports)}",
                     kind="conflict",
                 )
-            answer = require_resume(
-                {
-                    "validation_report": validation_report,
-                    "review_report": review_report,
-                    "approval_allowed": True,
-                }
-            )
+            if skip_cover_pipeline(state):
+                answer = {"decision": "approved", "note": "好评笔记自动审批"}
+            else:
+                answer = require_resume(
+                    {
+                        "validation_report": validation_report,
+                        "review_report": review_report,
+                        "approval_allowed": True,
+                    }
+                )
             if answer.get("decision") != "approved":
                 raise ValueError("最终内容未获批准")
             artifact_payload = {
@@ -620,6 +632,12 @@ class ContentWorkflowAgent(BaseAgent):
             }
 
         if interrupt_type == "cover_selection":
+            if skip_cover_pipeline(state):
+                return {
+                    "selected_cover": {},
+                    "state_version": state_version + 1,
+                    "resume_parent_run_id": None,
+                }
             review = state.get("visual_review") or {}
             passed_ids = {
                 item["asset_id"] for item in review.get("assets") or [] if item.get("status") in {"passed", "warning"}

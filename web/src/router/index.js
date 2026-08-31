@@ -122,12 +122,6 @@ const router = createRouter({
           meta: { keepAlive: false, requiresAuth: true }
         },
         {
-          path: 'covers/:assetId/edit',
-          name: 'ContentCoverEditor',
-          component: () => import('../views/CoverEditorView.vue'),
-          meta: { keepAlive: false, requiresAuth: true }
-        },
-        {
           path: 'results/:taskId',
           name: 'ContentResult',
           component: () => import('../views/ContentResultView.vue'),

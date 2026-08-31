@@ -13,6 +13,7 @@ from yuxi.services.mp_service import (
     MpContext,
     MpRunCreatePayload,
     MpRunResumePayload,
+    MpRunRetryPayload,
     SmsLoginPayload,
     SmsSendPayload,
     WechatCodePayload,
@@ -39,6 +40,7 @@ from yuxi.services.mp_service import (
     read_cover_template_file,
     remove_favorite,
     resume_run,
+    retry_run,
     send_sms_code,
     start_run,
     stream_run_events,
@@ -212,6 +214,16 @@ async def mp_resume_run(
     db: AsyncSession = Depends(get_db),
 ):
     return await resume_run(db, ctx, run_id, payload)
+
+
+@mp.post("/content/runs/{run_id}/retry")
+async def mp_retry_run(
+    run_id: str,
+    payload: MpRunRetryPayload,
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await retry_run(db, ctx, run_id, payload)
 
 
 @mp.get("/content/tasks/{task_id}/artifact")
