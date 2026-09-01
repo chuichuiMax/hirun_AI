@@ -430,6 +430,14 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS cover_job_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS cover_asset_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS cover_job_id VARCHAR(64)",
+            (
+                "ALTER TABLE IF EXISTS content_artifacts ADD COLUMN IF NOT EXISTS "
+                "hycanvas_design_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions ADD COLUMN IF NOT EXISTS "
+                "hycanvas_design_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
             "ALTER TABLE IF EXISTS content_distribution_jobs ADD COLUMN IF NOT EXISTS confirmed_by VARCHAR(255)",
             "ALTER TABLE IF EXISTS content_distribution_jobs ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP",
             (

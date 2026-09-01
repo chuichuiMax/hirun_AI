@@ -389,8 +389,45 @@ async def create_content_cover_job(
         locked_image_asset_id = visual_material.get("image_asset_id")
         if locked_image_asset_id and source_asset_ids != [locked_image_asset_id]:
             raise ValueError("视觉方案未使用任务锁定的唯一图库图片")
+        hycanvas_template_id = visual_material.get("hycanvas_template_id")
         poster_template_id = visual_material.get("poster_template_id")
-        if poster_template_id:
+        if hycanvas_template_id:
+            from yuxi.services.content_cover_service import create_hycanvas_cover_job
+
+            fillable_fields = visual_material.get("hycanvas_fillable_fields") or []
+            fields = {}
+            image_field_label = None
+            for field in fillable_fields:
+                if not field.get("label"):
+                    continue
+                label = str(field["label"])
+                if field.get("kind") == "image":
+                    image_field_label = label
+                    continue
+                if field.get("kind") != "text":
+                    continue
+                if "副标题" in label:
+                    fields[label] = text[1] if len(text) > 1 else ""
+                elif "标题" in label or "语录" in label:
+                    fields[label] = text[0]
+                else:
+                    fields[label] = text[1] if len(text) > 1 else text[0]
+            result = await create_hycanvas_cover_job(
+                db,
+                user,
+                content_task_id=task_id,
+                source_asset_id=locked_image_asset_id,
+                template_id=hycanvas_template_id,
+                title=text[0],
+                fields=fields,
+                image_field_label=image_field_label,
+                idempotency_key=idempotency_key,
+                parameters={
+                    "visual_plan_hash": plan_hash,
+                    "workflow_resume": workflow_resume,
+                },
+            )
+        elif poster_template_id:
             from yuxi.repositories.content_cover_repository import ContentCoverRepository
 
             poster = await ContentCoverRepository(db).get_poster_template_for_user(poster_template_id, str(user.uid))
@@ -438,9 +475,7 @@ async def create_content_cover_job(
                 ),
             )
         else:
-            if mode == "mixed":
-                resolved_provider_mode = "multi_reference"
-            elif not source_asset_ids:
+            if not source_asset_ids:
                 resolved_provider_mode = "text_to_image"
             elif len(source_asset_ids) == 1:
                 resolved_provider_mode = "image_to_image"

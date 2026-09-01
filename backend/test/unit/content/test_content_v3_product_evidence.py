@@ -126,8 +126,13 @@ def test_product_research_contract_enforces_price_and_viral_example_governance()
         "unresolved_questions": [],
     }
 
-    with pytest.raises(ContractDomainValidationError, match="effective_at"):
+    result = validate_content_node_result("ProductEvidenceCollectionResultV1", payload, context)
+    assert result.evidence_items[0].metadata == {"material_type": "price"}
+
+    payload["evidence_items"][0]["risk_level"] = "normal"
+    with pytest.raises(ContractDomainValidationError, match="high_risk"):
         validate_content_node_result("ProductEvidenceCollectionResultV1", payload, context)
+    payload["evidence_items"][0]["risk_level"] = "high_risk"
 
     viral = {
         **base_item,
@@ -485,6 +490,166 @@ async def test_title_and_body_validation_require_mapped_product_evidence(monkeyp
     )
     assert body_result["validation_report"]["status"] == "blocked"
     assert body_result["validation_report"]["checks"][-1]["code"] == "BODY_PRODUCT_EVIDENCE_NOT_USED"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_body_validation_requires_available_business_knowledge_evidence(monkeypatch):
+    monkeypatch.setattr(
+        "yuxi.content.control.workflow.deterministic_node.validate_content",
+        lambda **kwargs: {"status": "passed", "checks": []},
+    )
+    result = await V3DeterministicNodeHandler().execute(
+        db=object(),
+        node={"id": "deterministic_validate"},
+        state={
+            "selected_title": {"text": "标题"},
+            "content_brief": {"brand": {"name": "测试品牌"}},
+            "strategy_snapshot": _strategy_snapshot(),
+            "evidence_bundle": {
+                "items": [
+                    {
+                        "id": "ev-kb-craft",
+                        "source_type": "knowledge_base",
+                        "allowed_usage": ["body"],
+                        "metadata": {"material_type": "craft"},
+                    }
+                ]
+            },
+            "product_evidence_pack": {},
+            "content_draft": {"body": "这是一段足够长的正文。" * 20, "topics": [], "paragraph_evidence": []},
+        },
+        node_run_id="node-body-kb",
+    )
+
+    assert result["validation_report"]["status"] == "blocked"
+    assert result["validation_report"]["checks"][-1]["code"] == "KNOWLEDGE_EVIDENCE_UNUSED"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_body_validation_blocks_mechanical_outline_narration(monkeypatch):
+    monkeypatch.setattr(
+        "yuxi.content.control.workflow.deterministic_node.validate_content",
+        lambda **kwargs: {"status": "passed", "checks": []},
+    )
+    result = await V3DeterministicNodeHandler().execute(
+        db=object(),
+        node={"id": "deterministic_validate"},
+        state={
+            "selected_title": {"text": "标题"},
+            "content_brief": {"brand": {"name": "测试品牌"}},
+            "strategy_snapshot": _strategy_snapshot(),
+            "evidence_bundle": {"items": []},
+            "product_evidence_pack": {},
+            "content_draft": {
+                "body": "旧况很典型：这段正文用具体内容补足长度。" * 12,
+                "topics": [],
+                "paragraph_evidence": [],
+            },
+        },
+        node_run_id="node-body-mechanical",
+    )
+
+    assert result["validation_report"]["status"] == "blocked"
+    assert result["validation_report"]["checks"][-1]["code"] == "MECHANICAL_META_EXPRESSION"
+    assert result["validation_report"]["checks"][-1]["matched_terms"] == ["旧况很典型"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_body_validation_requires_concrete_value_when_price_evidence_is_cited(monkeypatch):
+    monkeypatch.setattr(
+        "yuxi.content.control.workflow.deterministic_node.validate_content",
+        lambda **kwargs: {"status": "passed", "checks": []},
+    )
+    state = {
+        "selected_title": {"text": "标题"},
+        "content_brief": {"brand": {"name": "测试品牌"}},
+        "strategy_snapshot": _strategy_snapshot(),
+        "evidence_bundle": {
+            "items": [
+                {
+                    "id": "ev-kb-price",
+                    "source_type": "knowledge_base",
+                    "allowed_usage": ["body"],
+                    "metadata": {"material_type": "price"},
+                    "value": {
+                        "items": [
+                            {"sku": "基础定制设计", "price": 42.8, "unit": "元/平方米"},
+                            {"sku": "设计上门服务", "price": 400, "unit": "元/项"},
+                        ]
+                    },
+                }
+            ]
+        },
+        "product_evidence_pack": {},
+        "content_draft": {
+            "body": "知识库价格按平方米或按项计算，具体仍要结合方案范围。" * 10,
+            "topics": [],
+            "paragraph_evidence": [{"paragraph_id": "p1", "evidence_ids": ["ev-kb-price"]}],
+        },
+    }
+
+    vague_result = await V3DeterministicNodeHandler().execute(
+        db=object(),
+        node={"id": "deterministic_validate"},
+        state=state,
+        node_run_id="node-body-price-vague",
+    )
+    assert vague_result["validation_report"]["status"] == "blocked"
+    assert vague_result["validation_report"]["checks"][-1]["code"] == "KNOWLEDGE_PRICE_DETAIL_UNUSED"
+
+    state["content_draft"]["body"] = "基础定制设计为42.8元/平方米，适用范围仍需结合具体方案确认。" * 10
+    concrete_result = await V3DeterministicNodeHandler().execute(
+        db=object(),
+        node={"id": "deterministic_validate"},
+        state=state,
+        node_run_id="node-body-price-concrete",
+    )
+    assert concrete_result["validation_report"] == {"status": "passed", "checks": []}
+
+    state["evidence_bundle"]["items"][0]["value"] = "基础定制设计42.8元/平方米"
+    text_value_result = await V3DeterministicNodeHandler().execute(
+        db=object(),
+        node={"id": "deterministic_validate"},
+        state=state,
+        node_run_id="node-body-price-text-value",
+    )
+    assert text_value_result["validation_report"] == {"status": "passed", "checks": []}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_body_validation_does_not_require_platform_rules_as_article_evidence(monkeypatch):
+    monkeypatch.setattr(
+        "yuxi.content.control.workflow.deterministic_node.validate_content",
+        lambda **kwargs: {"status": "passed", "checks": []},
+    )
+    result = await V3DeterministicNodeHandler().execute(
+        db=object(),
+        node={"id": "deterministic_validate"},
+        state={
+            "selected_title": {"text": "标题"},
+            "content_brief": {"brand": {"name": "测试品牌"}},
+            "strategy_snapshot": _strategy_snapshot(),
+            "evidence_bundle": {
+                "items": [
+                    {
+                        "id": "ev-kb-platform-rule",
+                        "source_type": "knowledge_base",
+                        "allowed_usage": ["body"],
+                        "metadata": {"material_type": "platform_rule"},
+                    }
+                ]
+            },
+            "product_evidence_pack": {},
+            "content_draft": {"body": "这是一段足够长的正文。" * 20, "topics": [], "paragraph_evidence": []},
+        },
+        node_run_id="node-body-platform-rule",
+    )
+
+    assert result["validation_report"] == {"status": "passed", "checks": []}
 
 
 @pytest.mark.unit

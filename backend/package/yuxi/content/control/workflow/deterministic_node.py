@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -29,8 +30,12 @@ from yuxi.content.model.rules.engine import CombinationMatcher, MatchRequest
 from yuxi.content.rules import brief_variable_map
 from yuxi.content.validation import ComplianceEngine, validate_numeric_evidence_coverage
 from yuxi.content.validators import validate_content
+from yuxi.content.v3.body_calling import SOURCE_METADATA as BODY_CALLING_SOURCE
+from yuxi.content.v3.body_calling import get_decoration_body_calling
+from yuxi.content.v3.formula_lexicons import get_formula_lexicon_requirements
 from yuxi.services.run_queue_service import append_run_stream_event
 from yuxi.storage.postgres.models_content import ContentFormula, ContentTask, CreationMethod, TitleFormula
+from yuxi.storage.postgres.models_knowledge import KnowledgeBase, KnowledgeChunk, KnowledgeFile
 
 _SLOT_REQUIRED_VARIABLES = {
     "product_profile": {"product", "advantages", "pain_points"},
@@ -192,6 +197,7 @@ class V3DeterministicNodeHandler:
             "ingest_real_materials": self._ingest_real_materials,
             "normalize_evidence": self._normalize_evidence,
             "lock_creation_strategy": self._lock_creation_strategy,
+            "load_formula_lexicons": self._load_formula_lexicons,
             "match_combination_group": self._match_combination_group,
             "resolve_formula_requirements": self._resolve_formula_requirements,
             "freeze_evidence_bundle": self._freeze_evidence_bundle,
@@ -333,6 +339,17 @@ class V3DeterministicNodeHandler:
             delegated_agent_run_id=(state.get("delegated_agent_runs") or {}).get("select_creation_strategy"),
         )
         method_by_code = {item.code: item for item in methods}
+        body_calling = get_decoration_body_calling(body_formula.code) if context.industry_slug == "decoration" else None
+        formula_lexicons = (
+            get_formula_lexicon_requirements(title_formula.code, body_formula.code)
+            if context.industry_slug == "decoration"
+            else None
+        )
+        body_structure = (
+            [section["name"] for section in body_calling["sections"]]
+            if body_calling is not None
+            else body_formula.structure_schema or []
+        )
         strategy_payload = {
             "content_direction": direction,
             "selected_group_id": group.code,
@@ -358,16 +375,27 @@ class V3DeterministicNodeHandler:
                 "variable_schema": title_formula.variable_schema or [],
                 "compatible_methods": title_formula.compatible_methods or [],
                 "risk_rules": title_formula.risk_rules or [],
+                "lexicon_codes": (
+                    [item["code"] for item in formula_lexicons["title"]]
+                    if formula_lexicons is not None
+                    else []
+                ),
             },
             "body_formula": {
                 "code": body_formula.code,
                 "name": body_formula.name,
-                "structure_schema": body_formula.structure_schema or [],
-                "reference_examples": body_formula.reference_examples or [],
+                "structure_schema": body_structure,
+                "reference_examples": (
+                    body_calling["reference_examples"]
+                    if body_calling is not None
+                    else body_formula.reference_examples or []
+                ),
                 "required_variables": body_formula.required_variables or [],
                 "output_schema": body_formula.output_schema or {},
                 "compatible_methods": body_formula.compatible_methods or [],
                 "risk_rules": body_formula.risk_rules or [],
+                "body_calling": body_calling,
+                "body_calling_source": BODY_CALLING_SOURCE if body_calling is not None else None,
             },
             "rule_version_id": context.rule_version_id,
             "match_snapshot_id": match_snapshot.id,
@@ -376,6 +404,16 @@ class V3DeterministicNodeHandler:
         canonical = json.dumps(strategy_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         strategy_payload["snapshot_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
         strategy_snapshot = StrategySnapshotV1.model_validate(strategy_payload).model_dump(mode="json")
+        await append_run_stream_event(
+            state["run_id"],
+            "content.strategy.locked",
+            {
+                "task_id": state["task_id"],
+                "node_id": "lock_creation_strategy",
+                "strategy_snapshot": strategy_snapshot,
+            },
+            thread_id=state["task_id"],
+        )
         missing = sorted(required_variables - _available_variable_codes(state))
         match_payload = match.to_dict()
         match_payload.update(
@@ -406,13 +444,116 @@ class V3DeterministicNodeHandler:
         }
 
     @staticmethod
+    async def _load_formula_lexicons(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
+        del node_run_id
+        strategy = state.get("strategy_snapshot") or {}
+        title_formula_code = str((strategy.get("title_formula") or {}).get("code") or "")
+        body_formula_code = str((strategy.get("body_formula") or {}).get("code") or "")
+        industry_pack_id = str(
+            state.get("industry_pack_version_id")
+            or (state.get("runtime_config_snapshot") or {}).get("industry_pack_version_id")
+            or (state.get("industry_pack") or {}).get("id")
+            or ""
+        )
+        if industry_pack_id != "industry-pack-decoration-v3":
+            return {
+                "formula_lexicon_bundle": {
+                    "required": False,
+                    "title_formula_code": title_formula_code,
+                    "body_formula_code": body_formula_code,
+                    "title": [],
+                    "body": [],
+                }
+            }
+
+        requirements = get_formula_lexicon_requirements(title_formula_code, body_formula_code)
+        loaded: dict[str, list[dict[str, Any]]] = {"title": [], "body": []}
+        for scope in ("title", "body"):
+            for requirement in requirements[scope]:
+                rows = list(
+                    (
+                        await db.execute(
+                            select(KnowledgeBase, KnowledgeFile, KnowledgeChunk)
+                            .join(KnowledgeFile, KnowledgeFile.kb_id == KnowledgeBase.kb_id)
+                            .join(KnowledgeChunk, KnowledgeChunk.file_id == KnowledgeFile.file_id)
+                            .where(
+                                KnowledgeBase.name == requirement["knowledge_base_name"],
+                                KnowledgeFile.filename == requirement["filename"],
+                                KnowledgeFile.status == "indexed",
+                            )
+                            .order_by(KnowledgeChunk.chunk_index)
+                        )
+                    ).all()
+                )
+                if not rows:
+                    raise ValueError(
+                        f"锁定公式 {title_formula_code}/{body_formula_code} 的必需词库不可用: "
+                        f"{requirement['knowledge_base_name']}/{requirement['filename']}"
+                    )
+                knowledge_base, knowledge_file, _ = rows[0]
+                loaded[scope].append(
+                    {
+                        **requirement,
+                        "knowledge_base_id": knowledge_base.kb_id,
+                        "file_id": knowledge_file.file_id,
+                        "chunks": [row[2].content for row in rows if row[2].content.strip()],
+                    }
+                )
+
+        payload = {
+            "required": True,
+            "title_formula_code": title_formula_code,
+            "body_formula_code": body_formula_code,
+            "title": loaded["title"],
+            "body": loaded["body"],
+        }
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        payload["bundle_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        await append_run_stream_event(
+            state["run_id"],
+            "content.formula_lexicons.loaded",
+            {
+                "task_id": state["task_id"],
+                "node_id": "load_formula_lexicons",
+                "title_formula_code": title_formula_code,
+                "body_formula_code": body_formula_code,
+                "title_lexicons": [item["filename"] for item in loaded["title"]],
+                "body_lexicons": [item["filename"] for item in loaded["body"]],
+                "bundle_hash": payload["bundle_hash"],
+            },
+            thread_id=state["task_id"],
+        )
+        return {"formula_lexicon_bundle": payload}
+
+    @staticmethod
     async def _compile_runtime_snapshot(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
         del node_run_id
+        from yuxi.repositories.content_repository import ContentRepository
+
         task = await db.get(ContentTask, state["task_id"])
         if task is None:
             raise ValueError("内容任务不存在")
         if not task.workflow_definition_hash:
             raise ValueError("V3 任务未锁定工作流定义 hash")
+        repo = ContentRepository(db)
+        template = await repo.get_template(task.industry_template_version_id)
+        industry_slug = template.slug if template else None
+        industry_pack = next(
+            (item for item in await repo.list_industry_packs() if item["id"] == task.industry_pack_version_id),
+            {},
+        )
+        channel_profile = next(
+            (item for item in await repo.list_channel_profiles() if item["id"] == task.channel_profile_version_id),
+            {},
+        )
+        policies = [
+            item
+            for item in await repo.list_compliance_policies()
+            if item["scope_type"] == "platform"
+            or (item["scope_type"] == "channel" and item["scope_id"] == channel_profile.get("code"))
+            or (item["scope_type"] == "industry" and item["scope_id"] == industry_slug)
+            or (item["scope_type"] == "enterprise" and item["tenant_id"] == task.tenant_id)
+        ]
         runtime = {
             **(state.get("runtime_config_snapshot") or {}),
             "schema_version": 3,
@@ -422,11 +563,15 @@ class V3DeterministicNodeHandler:
             "industry_pack_version_id": task.industry_pack_version_id,
             "persona_profile_version_id": task.persona_profile_version_id,
             "channel_profile_version_id": task.channel_profile_version_id,
+            "compliance_policy_version_ids": [item["id"] for item in policies],
         }
         task.runtime_config_snapshot_json = runtime
         return {
             "schema_version": 3,
             "runtime_config_snapshot": runtime,
+            "industry_pack": industry_pack,
+            "channel_profile": channel_profile,
+            "compliance_policies": policies,
             "state_version": int(state.get("state_version") or 0) + 1,
             "task_mode": task.mode,
         }
@@ -1045,11 +1190,85 @@ class V3DeterministicNodeHandler:
                 }
             )
             report["status"] = "blocked"
+        mechanical_markers = (
+            "旧况很典型",
+            "关键数据先摊开",
+            "先说背景",
+            "再看过程",
+            "最后看结果",
+            "下面来说",
+            "接下来看看",
+        )
+        matched_mechanical_markers = [marker for marker in mechanical_markers if marker in body]
+        if matched_mechanical_markers:
+            report["checks"].append(
+                {
+                    "code": "MECHANICAL_META_EXPRESSION",
+                    "level": "error",
+                    "location": "body",
+                    "message": "正文包含暴露写作步骤的报幕式元话术",
+                    "evidence_ids": [],
+                    "matched_terms": matched_mechanical_markers,
+                }
+            )
+            report["status"] = "blocked"
         used_body_evidence = {
             evidence_id
             for paragraph in draft.get("paragraph_evidence") or []
             for evidence_id in paragraph.get("evidence_ids") or []
         }
+        knowledge_body_evidence = {
+            str(item["id"])
+            for item in (state.get("evidence_bundle") or {}).get("items") or []
+            if item.get("source_type") == "knowledge_base"
+            and "body" in (item.get("allowed_usage") or [])
+            and item.get("metadata", {}).get("material_type")
+            not in {"viral_example", "platform_rule", "compliance_rule", "forbidden_terms"}
+        }
+        if knowledge_body_evidence and not used_body_evidence.intersection(knowledge_body_evidence):
+            report["checks"].append(
+                {
+                    "code": "KNOWLEDGE_EVIDENCE_UNUSED",
+                    "level": "error",
+                    "location": "body",
+                    "message": "已取得可用于正文的业务知识证据，但正文未引用",
+                    "evidence_ids": sorted(knowledge_body_evidence),
+                }
+            )
+            report["status"] = "blocked"
+        used_price_evidence = [
+            item
+            for item in (state.get("evidence_bundle") or {}).get("items") or []
+            if str(item.get("id") or "") in used_body_evidence
+            and item.get("source_type") == "knowledge_base"
+            and item.get("metadata", {}).get("material_type") == "price"
+        ]
+        concrete_price_values: set[str] = set()
+        for evidence in used_price_evidence:
+            value = evidence.get("value")
+            if isinstance(value, dict):
+                price_items = value.get("items") or []
+                if isinstance(price_items, list):
+                    concrete_price_values.update(
+                        str(price_item["price"])
+                        for price_item in price_items
+                        if isinstance(price_item, dict) and price_item.get("price") is not None
+                    )
+            elif isinstance(value, str):
+                concrete_price_values.update(re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", value))
+        if used_price_evidence and concrete_price_values and not any(
+            price_value in body for price_value in concrete_price_values
+        ):
+            report["checks"].append(
+                {
+                    "code": "KNOWLEDGE_PRICE_DETAIL_UNUSED",
+                    "level": "error",
+                    "location": "body",
+                    "message": "正文引用了知识库价格证据，但没有写出其中任何具体项目价格",
+                    "evidence_ids": sorted(str(item["id"]) for item in used_price_evidence),
+                }
+            )
+            report["status"] = "blocked"
         missing_product_slots = [
             mapping["slot"]
             for mapping in (state.get("product_evidence_pack") or {}).get("slot_mappings") or []

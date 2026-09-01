@@ -56,14 +56,14 @@ async def _set_content_run_status(
             )
 
 
-async def _retry_failed_cover_job(run, state: dict[str, Any]) -> dict[str, Any]:
+async def _retry_failed_cover_job(run, state: dict[str, Any]) -> dict[str, Any] | None:
     cover_job_id = str((state.get("cover_job") or {}).get("cover_job_id") or "")
     if not cover_job_id:
         raise RuntimeError("封面等待节点缺少可重试的 CoverJob")
     async with pg_manager.get_async_session_context() as db:
         cover_job = await ContentCoverRepository(db).get_job_for_user(cover_job_id, run.uid)
         if cover_job is None or cover_job.content_task_id != run.thread_id:
-            raise RuntimeError("待重试的 CoverJob 不存在或不属于当前内容任务")
+            return None
         if cover_job.status not in {"failed", "cancelled"}:
             return cover_job.to_dict()
         user = (await db.execute(select(User).where(User.uid == run.uid, User.is_deleted == 0))).scalar_one_or_none()
@@ -180,17 +180,22 @@ async def process_content_run(ctx, run_id: str):
                 "model_spec": payload.get("model_spec"),
                 "resume_parent_run_id": None,
             }
+            retry_from_node = None
             if requested_node == "wait_cover_job":
                 retried_cover = await _retry_failed_cover_job(run, state_values)
-                state_update["cover_job"] = {
-                    **(state_values.get("cover_job") or {}),
-                    "cover_job_id": retried_cover["id"],
-                    "status": retried_cover["status"],
-                }
-            await graph.aupdate_state(
-                config,
-                state_update,
-            )
+                if retried_cover is None:
+                    state_update["cover_job"] = None
+                    retry_from_node = "plan_visuals"
+                else:
+                    state_update["cover_job"] = {
+                        **(state_values.get("cover_job") or {}),
+                        "cover_job_id": retried_cover["id"],
+                        "status": retried_cover["status"],
+                    }
+            if retry_from_node:
+                await graph.aupdate_state(config, state_update, as_node=retry_from_node)
+            else:
+                await graph.aupdate_state(config, state_update)
             graph_input = None
         else:
             visual_material = (task.runtime_config_snapshot_json or {}).get("visual_material") or {}
@@ -200,7 +205,6 @@ async def process_content_run(ctx, run_id: str):
                     {
                         "id": visual_material["image_asset_id"],
                         "attachment_id": visual_material.get("image_item_id"),
-                        "display_name": visual_material.get("image_name"),
                         "verified_status": "user_confirmed",
                         "privacy_status": "approved",
                         "allowed_usage": ["visual"],
@@ -301,6 +305,41 @@ async def process_content_run(ctx, run_id: str):
             thread_id=task.id,
         )
     except (asyncio.CancelledError, InterruptedError):
+        explicitly_cancelled = await has_cancel_signal(run_id)
+        if not explicitly_cancelled:
+            async with pg_manager.get_async_session_context() as db:
+                persisted_task = await ContentRepository(db).get_task(task.id, for_update=True)
+                persisted_task.status = "failed"
+                persisted_task.error_json = {
+                    "code": "CONTENT_RUN_WORKER_INTERRUPTED",
+                    "message": "执行进程发生重载或重启，请从当前节点重试",
+                    "retryable": True,
+                }
+                await ContentRepository(db).track(
+                    "content_run_interrupted_unexpectedly",
+                    uid=run.uid,
+                    task_id=task.id,
+                    run_id=run.id,
+                    properties={"retryable": True},
+                )
+            await _set_content_run_status(
+                run_id,
+                status="failed",
+                error_type="worker_interrupted",
+                error_message="执行进程发生重载或重启，请从当前节点重试",
+            )
+            await append_run_stream_event(
+                run_id,
+                "error",
+                {
+                    "status": "failed",
+                    "message": "执行进程发生重载或重启，请从当前节点重试",
+                    "retryable": True,
+                },
+                thread_id=task.id,
+            )
+            await append_run_stream_event(run_id, "end", {"status": "failed"}, thread_id=task.id)
+            return
         async with pg_manager.get_async_session_context() as db:
             persisted_task = await ContentRepository(db).get_task(task.id, for_update=True)
             persisted_task.status = "cancelled"

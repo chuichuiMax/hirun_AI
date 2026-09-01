@@ -40,6 +40,8 @@ class Image2Config:
     timeout_seconds: float = 120
     send_response_format: bool = False
     trusted_output_origins: tuple[str, ...] = ()
+    edit_model: str | None = None
+    edit_request_format: str = "openai_multipart"
 
     @classmethod
     def from_values(cls, *, base_url: str, api_key: str, model: str) -> Image2Config:
@@ -97,6 +99,15 @@ class Image2Config:
                     "IMAGE2_CONFIG_INVALID",
                     "IMAGE2_TRUSTED_OUTPUT_ORIGINS 端口无效",
                 ) from exc
+        edit_model = (os.getenv("IMAGE2_EDIT_MODEL") or "").strip() or None
+        edit_request_format = (os.getenv("IMAGE2_EDIT_REQUEST_FORMAT") or "openai_multipart").strip()
+        if edit_request_format not in {"openai_multipart", "siliconflow_json"}:
+            raise Image2Error(
+                "IMAGE2_CONFIG_INVALID",
+                "IMAGE2_EDIT_REQUEST_FORMAT 仅支持 openai_multipart 或 siliconflow_json",
+            )
+        if edit_request_format == "siliconflow_json" and not edit_model:
+            raise Image2Error("IMAGE2_CONFIG_INVALID", "SiliconFlow 图片编辑必须配置 IMAGE2_EDIT_MODEL")
         return cls(
             base_url=base_url,
             api_key=api_key,
@@ -107,6 +118,8 @@ class Image2Config:
             timeout_seconds=timeout_seconds,
             send_response_format=os.getenv("IMAGE2_SEND_RESPONSE_FORMAT", "false").lower() in {"1", "true", "yes"},
             trusted_output_origins=trusted_output_origins,
+            edit_model=edit_model,
+            edit_request_format=edit_request_format,
         )
 
     @classmethod
@@ -382,6 +395,29 @@ class Image2Client:
             references = [*request.source_images]
             if request.template_image:
                 references.append(request.template_image)
+            if self.config.edit_request_format == "siliconflow_json":
+                if request.mask_image:
+                    raise Image2Error("IMAGE2_MODE_UNSUPPORTED", "SiliconFlow JSON 图片编辑不支持蒙版模式")
+                if len(references) > 3:
+                    raise Image2Error("IMAGE2_INPUT_LIMIT", "SiliconFlow 图片编辑最多支持三张参考图")
+                payload = {
+                    "model": self.config.edit_model,
+                    "prompt": request.prompt,
+                    **{("image" if index == 1 else f"image{index}"): self._data_url(item)
+                       for index, item in enumerate(references, start=1)},
+                }
+                if request.negative_prompt:
+                    payload["negative_prompt"] = request.negative_prompt
+                body = await self._request_json(
+                    "POST",
+                    self._url(self.config.edit_path),
+                    json=payload,
+                    headers=headers,
+                )
+                result = self._normalize(body)
+                if result.status == "failed":
+                    raise Image2Error("IMAGE2_GENERATION_FAILED", result.error_message or "image2 生成失败")
+                return result
             field_name = "image[]" if len(references) > 1 else "image"
             files = [(field_name, (item.file_name, item.data, item.content_type)) for item in references]
             if request.mask_image:

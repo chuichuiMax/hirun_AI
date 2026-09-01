@@ -383,3 +383,56 @@ class ContentCoverRepository:
         self.db.add(version)
         await self.db.flush()
         return version
+
+    async def bind_hycanvas_design(
+        self,
+        *,
+        artifact: ContentArtifact,
+        asset: ContentCoverAsset,
+        snapshot: dict[str, Any],
+        owner_uid: str,
+    ) -> ContentArtifactVersion:
+        previous = (
+            await self.db.execute(
+                select(ContentArtifactVersion).where(
+                    ContentArtifactVersion.artifact_id == artifact.id,
+                    ContentArtifactVersion.version == artifact.current_version,
+                )
+            )
+        ).scalar_one_or_none()
+        if previous is None:
+            raise ValueError("内容产物当前版本不存在")
+        artifact.current_version += 1
+        artifact.cover_asset_id = asset.id
+        artifact.cover_job_id = None
+        artifact.hycanvas_design_snapshot = snapshot
+        artifact.updated_at = utc_now_naive()
+        version = ContentArtifactVersion(
+            id=f"cav_{uuid.uuid4().hex}",
+            artifact_id=artifact.id,
+            version=artifact.current_version,
+            title=artifact.title,
+            body=artifact.body,
+            topics=artifact.topics or [],
+            source_type="hycanvas_design",
+            model_spec=previous.model_spec,
+            skill_versions=previous.skill_versions or {},
+            rule_version_id=previous.rule_version_id,
+            knowledge_snapshot=previous.knowledge_snapshot or {},
+            review_snapshot=previous.review_snapshot or {},
+            cover_asset_id=asset.id,
+            cover_job_id=None,
+            hycanvas_design_snapshot=snapshot,
+            content_type_snapshot=artifact.content_type_snapshot or {},
+            angle_snapshot=artifact.angle_snapshot or {},
+            pattern_slot_snapshot=artifact.pattern_slot_snapshot or {},
+            persona_snapshot=artifact.persona_snapshot or {},
+            channel_snapshot=artifact.channel_snapshot or {},
+            compliance_snapshot=artifact.compliance_snapshot or {},
+            runtime_config_snapshot=artifact.runtime_config_snapshot or {},
+            edit_diff_snapshot=artifact.edit_diff_snapshot or [],
+            created_by=owner_uid,
+        )
+        self.db.add(version)
+        await self.db.flush()
+        return version

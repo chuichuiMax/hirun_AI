@@ -118,8 +118,8 @@ class WorkflowDefinitionPolicy:
 
     @classmethod
     def _validate_v3_nodes(cls, node_by_id: dict[str, dict[str, Any]], catalog: WorkflowCatalog | None) -> None:
-        if len(node_by_id) != 20:
-            raise ValueError("V3 内容与封面工作流必须声明 20 个节点")
+        if len(node_by_id) != 21:
+            raise ValueError("V3 内容与封面工作流必须声明 21 个节点")
         missing_gates = sorted(V3_HUMAN_GATE_IDS - set(node_by_id))
         if missing_gates:
             raise ValueError(f"V3 工作流缺少必选人工关口: {', '.join(missing_gates)}")
@@ -128,6 +128,8 @@ class WorkflowDefinitionPolicy:
                 raise ValueError(f"必选人工关口 {node_id} 必须使用 human_review 类型")
         if node_by_id.get("lock_creation_strategy", {}).get("type") != "deterministic":
             raise ValueError("lock_creation_strategy 必须用固定规则校验并锁定 Agent 选择")
+        if node_by_id.get("load_formula_lexicons", {}).get("type") != "deterministic":
+            raise ValueError("load_formula_lexicons 必须用固定规则加载锁定公式对应词库")
         input_contracts = [node.get("input_contract") for node in node_by_id.values() if node.get("type") == "agent"]
         if len(input_contracts) != len(set(input_contracts)):
             raise ValueError("每个 V3 Agent 节点必须声明独立输入契约，禁止共用通用输入")
@@ -152,7 +154,8 @@ class WorkflowDefinitionPolicy:
             ("deterministic_validate", "revise_if_needed"),
             ("semantic_review", "revise_if_needed"),
             ("select_creation_strategy", "lock_creation_strategy"),
-            ("lock_creation_strategy", "collect_missing_evidence"),
+            ("lock_creation_strategy", "load_formula_lexicons"),
+            ("load_formula_lexicons", "collect_missing_evidence"),
             ("freeze_evidence_bundle", "generate_content"),
         }
         if not required <= edge_set:

@@ -9,7 +9,6 @@ import {
   Box,
   FolderKanban,
   FilePenLine,
-  Images,
   PanelLeftClose,
   PanelLeftOpen,
   MessageCirclePlus,
@@ -20,6 +19,7 @@ import {
   UserRoundPen,
   ShieldCheck,
   Layers,
+  PanelsTopLeft,
   Braces,
   ChevronRight,
   ChevronDown
@@ -141,10 +141,11 @@ const mainList = computed(() => {
   })
 
   items.push({
-    name: '封面生成',
-    path: '/content/covers',
-    icon: Images,
-    activeIcon: Images
+    name: '视觉创作',
+    path: '/hycanvas',
+    activePaths: ['/hycanvas', '/materials'],
+    icon: PanelsTopLeft,
+    activeIcon: PanelsTopLeft
   })
 
   items.push({
@@ -153,14 +154,6 @@ const mainList = computed(() => {
     external: true,
     icon: Tags,
     activeIcon: Tags
-  })
-
-  items.push({
-    name: '素材库',
-    path: '/materials/images',
-    activePaths: ['/materials'],
-    icon: LibraryBig,
-    activeIcon: LibraryBig
   })
 
   items.push({

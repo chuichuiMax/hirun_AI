@@ -163,6 +163,32 @@ func TestFillImageFieldsRejectsUndeclaredLabel(t *testing.T) {
 	}
 }
 
+func TestApplyBackgroundImageKeepsTemplateLayersAboveSelectedMaterial(t *testing.T) {
+	file := map[string]any{
+		"pages": []any{map[string]any{
+			"width": 1080.0, "height": 1440.0,
+			"background": map[string]any{"type": "solid"},
+			"children": []any{map[string]any{"id": "title", "type": "text"}},
+		}},
+	}
+	err := applyBackgroundImage(file, InstantiateImage{ContentType: "image/png", DataBase64: "cG5n"})
+	if err != nil {
+		t.Fatalf("applyBackgroundImage: %v", err)
+	}
+	page := asObj(asArr(file["pages"])[0])
+	if _, ok := page["background"]; ok {
+		t.Fatal("template page color must not cover the selected material")
+	}
+	children := asArr(page["children"])
+	if len(children) != 2 || asStr(asObj(children[0])["type"]) != "image" || asStr(asObj(children[1])["id"]) != "title" {
+		t.Fatalf("layers = %+v", children)
+	}
+	background := asObj(children[0])
+	if asStr(background["src"]) != "data:image/png;base64,cG5n" || !background["locked"].(bool) {
+		t.Fatalf("background = %+v", background)
+	}
+}
+
 type tPersist struct{ p *persistence.Service }
 
 func (a tPersist) CreateDesign(ctx context.Context, ws, title string, from map[string]any, author *string) (string, error) {

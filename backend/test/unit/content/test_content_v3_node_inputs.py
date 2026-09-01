@@ -9,6 +9,7 @@ import pytest
 from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.control.workflow.content_node_input import ContentNodeInputAssembler
 from yuxi.content.model.contracts import INPUT_CONTRACT_REGISTRY
+from yuxi.content.model.contracts.content_nodes import PlanVisualsInputV1
 from yuxi.content.v3.workflow import WORKFLOW_V3
 
 
@@ -34,9 +35,37 @@ STRATEGY = {
     "match_snapshot_id": "match-1",
     "formula_snapshot_id": "formula-1",
 }
+
+
 STRATEGY["snapshot_hash"] = hashlib.sha256(
     json.dumps(STRATEGY, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
+
+
+@pytest.mark.unit
+def test_visual_plan_input_does_not_expose_material_names_as_image_evidence():
+    payload = PlanVisualsInputV1.model_validate(
+        {
+            "selected_title": {"text": "杭州装修案例"},
+            "content_draft": {"body": "杭州装修案例正文"},
+            "strategy_snapshot": STRATEGY,
+            "evidence_bundle": {"items": []},
+            "media_evidence_items": [
+                {
+                    "id": "asset-1",
+                    "display_name": "长沙旧房原图",
+                    "file_name": "长沙案例.png",
+                    "original_file_name": "长沙案例原图.png",
+                    "selected_for_cover": True,
+                }
+            ],
+            "artifact_version": {"id": "artifact-version-1"},
+            "channel_profile": {},
+        }
+    )
+
+    media = payload.media_evidence_items[0]
+    assert media == {"id": "asset-1", "selected_for_cover": True}
 
 EVIDENCE_BUNDLE = {
     "id": "bundle-1",
@@ -61,6 +90,26 @@ def _state() -> dict:
     return {
         "content_brief": {"brand": {"name": "ContentFlow"}},
         "strategy_snapshot": deepcopy(STRATEGY),
+        "formula_lexicon_bundle": {
+            "required": True,
+            "title_formula_code": "T03",
+            "body_formula_code": "C03",
+            "title": [
+                {
+                    "knowledge_base_id": "kb-title",
+                    "file_id": "file-title",
+                    "chunks": ["标题词库"],
+                }
+            ],
+            "body": [
+                {
+                    "knowledge_base_id": "kb-body",
+                    "file_id": "file-body",
+                    "chunks": ["正文词库"],
+                }
+            ],
+            "bundle_hash": "lexicon-bundle-hash",
+        },
         "selected_title": {"id": "title-1", "text": "锁定标题"},
         "content_outline": {"body_formula_code": "C03", "sections": [{"section_id": "s1"}]},
         "content_draft": {"body": "正文", "topics": [], "body_formula_code": "C03"},
@@ -176,6 +225,25 @@ def test_node_input_missing_fails_before_agent_delegation():
 
     assert exc_info.value.code == "node_input_missing"
     assert "content_draft" in exc_info.value.message
+
+
+@pytest.mark.unit
+def test_decoration_generation_rejects_optional_formula_lexicon_bundle():
+    node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "generate_content")
+    state = {**_state(), "channel_profile": {}, "persona_profile": {}}
+    state["formula_lexicon_bundle"] = {
+        "required": False,
+        "title_formula_code": "T03",
+        "body_formula_code": "C03",
+        "title": [],
+        "body": [],
+    }
+
+    with pytest.raises(ContentApplicationError) as exc_info:
+        ContentNodeInputAssembler.build(node=node, state=state)
+
+    assert exc_info.value.code == "node_input_invalid"
+    assert "必须经过必选词库加载路径" in exc_info.value.message
 
 
 @pytest.mark.unit

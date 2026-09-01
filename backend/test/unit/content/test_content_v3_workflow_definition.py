@@ -25,6 +25,7 @@ SKILLS = {
     "content-title-generator",
     "content-outline-builder",
     "content-body-generator",
+    "content-human-expression",
     "content-reviewer",
     "content-visual-planner",
     "content-cover-generator",
@@ -43,10 +44,10 @@ def _node(definition: dict, node_id: str) -> dict:
 
 
 @pytest.mark.unit
-def test_v3_has_exactly_20_nodes_and_passes_full_catalog_validation():
+def test_v3_has_exactly_21_nodes_and_passes_full_catalog_validation():
     WorkflowDefinitionPolicy.validate(WORKFLOW_V3, catalog=CATALOG)
-    assert len(WORKFLOW_V3["nodes"]) == 20
-    assert len(WORKFLOW_V3["edges"]) == 18
+    assert len(WORKFLOW_V3["nodes"]) == 21
+    assert len(WORKFLOW_V3["edges"]) == 19
 
 
 @pytest.mark.unit
@@ -58,9 +59,12 @@ def test_simplified_agent_nodes_receive_required_upstream_state():
         ),
         "collect_missing_evidence": (
             "CollectSelectedStrategyEvidenceInputV1",
-            {"strategy_selection", "evidence_gap_analysis", "evidence_bundle"},
+            {"strategy_selection", "strategy_snapshot", "evidence_gap_analysis", "evidence_bundle"},
         ),
-        "generate_content": ("GenerateContentInputV1", {"strategy_snapshot", "content_brief", "evidence_bundle"}),
+        "generate_content": (
+            "GenerateContentInputV1",
+            {"strategy_snapshot", "formula_lexicon_bundle", "content_brief", "evidence_bundle"},
+        ),
         "semantic_review": ("SemanticReviewInputV1", {"content_draft", "validation_report", "strategy_snapshot"}),
         "plan_visuals": ("PlanVisualsInputV1", {"content_draft", "artifact_version", "channel_profile"}),
         "submit_cover_job": ("SubmitCoverJobInputV1", {"visual_plan", "artifact_version"}),
@@ -83,6 +87,18 @@ def test_only_one_node_can_query_knowledge_base():
 
 
 @pytest.mark.unit
+def test_creation_research_runs_with_business_and_viral_retrieval_budget():
+    research = _node(WORKFLOW_V3, "collect_missing_evidence")
+
+    assert research["max_retrieval_rounds"] == 4
+    assert research["max_knowledge_bases"] == 5
+    assert research["max_chunks_per_knowledge_base"] == 6
+    assert research["max_tool_calls"] == 6
+    assert research["max_execution_steps"] == 12
+    assert research["timeout_seconds"] == 120
+
+
+@pytest.mark.unit
 def test_strategy_and_generation_are_single_agent_calls():
     strategy = _node(WORKFLOW_V3, "select_creation_strategy")
     generation = _node(WORKFLOW_V3, "generate_content")
@@ -92,6 +108,7 @@ def test_strategy_and_generation_are_single_agent_calls():
         "content-title-generator",
         "content-outline-builder",
         "content-body-generator",
+        "content-human-expression",
     ]
     assert node_ids.index("select_creation_strategy") < node_ids.index("lock_creation_strategy")
     assert node_ids.index("freeze_evidence_bundle") < node_ids.index("generate_content")
@@ -155,7 +172,7 @@ def test_fixed_strategy_lock_and_human_gates_are_required():
     missing_gate = deepcopy(WORKFLOW_V3)
     missing_gate["nodes"] = [item for item in missing_gate["nodes"] if item["id"] != "human_content_approval"]
     missing_gate["edges"] = [edge for edge in missing_gate["edges"] if "human_content_approval" not in edge]
-    with pytest.raises(ValueError, match="20 个节点|人工关口"):
+    with pytest.raises(ValueError, match="21 个节点|人工关口"):
         WorkflowDefinitionPolicy.validate(missing_gate)
 
 
@@ -196,6 +213,9 @@ def test_revision_controller_routes_generation_failures_to_unified_agent():
     assert first.target_node_id == "generate_content"
     assert second.retry_counts == {"generate_content": 2}
     assert stopped.status == "limit_reached"
+
+    persona = controller.decide(definition=WORKFLOW_V3, reason_code="PERSONA_STYLE_FAILED", retry_counts={})
+    assert persona.target_node_id == "generate_content"
 
 
 @pytest.mark.unit

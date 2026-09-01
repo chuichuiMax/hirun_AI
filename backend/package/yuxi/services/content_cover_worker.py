@@ -316,6 +316,38 @@ async def _run_compose(job: ContentCoverJob) -> list[bytes]:
     return [rendered]
 
 
+async def _run_hycanvas(job: ContentCoverJob) -> tuple[list[bytes], dict[str, Any]]:
+    from yuxi.content_cover.schemas import HyCanvasDesignCreate
+    from yuxi.services.hycanvas_service import HyCanvasClient
+
+    sources, _, _ = await _load_job_assets(job)
+    if len(sources) != 1:
+        raise RuntimeError("HyCanvas 封面任务需要且仅需要一张图库主图")
+    source = sources[0]
+    request = job.request_json or {}
+    client = HyCanvasClient.from_env()
+    image = (await _download_asset(source), source.content_type, source.original_file_name)
+    design = await client.create_design(
+        HyCanvasDesignCreate(
+            artifact_id=job.content_task_id or job.id,
+            template_id=request["template_id"],
+            title=request["title"],
+            fields=request.get("fields") or {},
+            image_asset_id=source.id,
+        ),
+        image=image,
+        image_field_label=request.get("image_field_label"),
+    )
+    png, _ = await client.render_png(design["design_id"])
+    return [png], {
+        **design,
+        "template_id": request["template_id"],
+        "title": request["title"],
+        "fields": request.get("fields") or {},
+        "source_image_asset_id": source.id,
+    }
+
+
 async def _as_image2_input(asset: ContentCoverAsset) -> Image2Input:
     return Image2Input(
         data=await _download_asset(asset),
@@ -760,8 +792,11 @@ async def process_content_cover_job(ctx: dict, job_id: str) -> None:
     await _emit(job_id, "metadata", {"job_id": job_id, "mode": job.mode})
     await _emit(job_id, "progress", {"status": "running", "progress": 5})
     try:
+        hycanvas_snapshot = None
         if job.mode == "compose":
             outputs = await _run_compose(job)
+        elif job.mode == "hycanvas":
+            outputs, hycanvas_snapshot = await _run_hycanvas(job)
         elif job.mode == "editor_render":
             outputs = await _run_editor_render(job)
         elif job.mode == "poster_billboard":
@@ -782,7 +817,12 @@ async def process_content_cover_job(ctx: dict, job_id: str) -> None:
             job_id,
             status="succeeded",
             progress=100,
-            result_json={**(job.result_json or {}), "asset_ids": asset_ids},
+            result_json={
+                **(job.result_json or {}),
+                "asset_ids": asset_ids,
+                **({"hycanvas_design_snapshot": {**hycanvas_snapshot, "cover_asset_id": asset_ids[0]}}
+                   if hycanvas_snapshot else {}),
+            },
             completed_at=utc_now_naive(),
         )
         if updated is not None and updated.status in {"cancel_requested", "cancelled"}:

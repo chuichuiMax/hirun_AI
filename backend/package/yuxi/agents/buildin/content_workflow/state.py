@@ -53,6 +53,7 @@ class ContentWorkflowState(TypedDict, total=False):
     formula_rankings: dict[str, Any]
     formula_selection_snapshot: dict[str, Any]
     strategy_snapshot: dict[str, Any]
+    formula_lexicon_bundle: dict[str, Any]
     delegated_agent_runs: dict[str, str]
     visual_plan: dict[str, Any]
     cover_job: dict[str, Any]

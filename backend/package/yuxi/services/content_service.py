@@ -783,9 +783,12 @@ async def save_content_brief(
     selection = brief.visual_material
     requested_image_item_id = selection.image_item_id if selection else None
     requested_poster_template_id = selection.poster_template_id if selection else None
+    requested_hycanvas_template_id = selection.hycanvas_template_id if selection else None
+    current_visual_material = (getattr(task, "brief_json", None) or {}).get("visual_material") or {}
     if task.current_stage != "brief" and (
         task.selected_image_item_id != requested_image_item_id
         or task.selected_poster_template_id != requested_poster_template_id
+        or current_visual_material.get("hycanvas_template_id") != requested_hycanvas_template_id
     ):
         raise _content_error(
             409,
@@ -816,6 +819,31 @@ async def save_content_brief(
             "image_width": image_asset.image_width,
             "image_height": image_asset.image_height,
         }
+        if compile_now:
+            from yuxi.services.hycanvas_service import HyCanvasClient
+
+            template_catalog = await HyCanvasClient.from_env().list_xiaohongshu_templates()
+            hycanvas_template = next(
+                (
+                    item
+                    for item in template_catalog["templates"]
+                    if item["id"] == requested_hycanvas_template_id
+                ),
+                None,
+            )
+            if hycanvas_template is None:
+                raise _content_error(
+                    422,
+                    "CONTENT_HYCANVAS_TEMPLATE_INVALID",
+                    "所选 HyCanvas 小红书模板不存在或不可用",
+                )
+            visual_snapshot.update(
+                {
+                    "hycanvas_template_id": hycanvas_template["id"],
+                    "hycanvas_template_title": hycanvas_template["title"],
+                    "hycanvas_fillable_fields": hycanvas_template["fillable_fields"],
+                }
+            )
         if requested_poster_template_id:
             poster = await ContentCoverRepository(db).get_poster_template_for_user(
                 requested_poster_template_id, owner_uid, for_update=True
@@ -856,6 +884,8 @@ async def save_content_brief(
             "image_category_id": visual_snapshot["image_category_id"],
             "poster_template_id": visual_snapshot.get("poster_template_id"),
             "poster_template_name": visual_snapshot.get("poster_template_name"),
+            "hycanvas_template_id": requested_hycanvas_template_id,
+            "hycanvas_template_title": visual_snapshot.get("hycanvas_template_title"),
         }
         if visual_snapshot
         else None

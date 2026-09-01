@@ -24,6 +24,7 @@ DOMAIN_CONTEXT = ContractDomainContext(
     body_formula_pool=frozenset({"B1", "B2"}),
     locked_title_formula_code="T1",
     locked_body_formula_code="B1",
+    locked_body_formula_sections=frozenset({"事实与数据", "落地结果"}),
     allowed_evidence_by_usage={
         "any": frozenset({"e-any", "e-title", "e-body", "e-visual"}),
         "title": frozenset({"e-title"}),
@@ -78,6 +79,13 @@ VALID_PAYLOADS = {
                 "allowed_usage": ["body"],
                 "risk_level": "normal",
                 "source_hash": "hash",
+                "metadata": {
+                    "writing_ready": True,
+                    "body_formula_code": "B1",
+                    "formula_section": "事实与数据",
+                    "integration_instruction": "在事实段说明该项业务资料",
+                    "relevance_reason": "直接补充当前主题所需事实",
+                },
             }
         ],
         "citations": ["source-1"],
@@ -177,6 +185,78 @@ def _make_unknown(contract_name: str, payload: dict) -> dict:
 def test_each_contract_accepts_valid_payload(contract_name):
     result = validate_content_node_result(contract_name, VALID_PAYLOADS[contract_name], DOMAIN_CONTEXT)
     assert result.__class__.__name__ == contract_name
+
+
+def test_creation_research_viral_example_is_style_reference_only():
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+    payload["evidence_items"][0].update(
+        {
+            "allowed_usage": ["body"],
+            "metadata": {
+                "material_type": "viral_example",
+                "usage_mode": "structure_reference_only",
+            },
+        }
+    )
+
+    with pytest.raises(ContractDomainValidationError, match="样式参考"):
+        validate_content_node_result("EvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
+
+
+def test_creation_research_price_accepts_knowledge_price_without_effective_date():
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+    payload["evidence_items"][0]["metadata"] = {
+        **payload["evidence_items"][0]["metadata"],
+        "material_type": "price",
+    }
+    payload["evidence_items"][0]["risk_level"] = "high_risk"
+
+    result = validate_content_node_result("EvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
+    assert result.evidence_items[0].metadata["material_type"] == "price"
+
+    payload["evidence_items"][0]["risk_level"] = "normal"
+    with pytest.raises(ContractDomainValidationError, match="high_risk"):
+        validate_content_node_result("EvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
+
+
+def test_creation_research_rejects_business_fact_without_formula_section_mapping():
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+    payload["evidence_items"][0]["metadata"].pop("formula_section")
+
+    with pytest.raises(ContractDomainValidationError, match="具体段落"):
+        validate_content_node_result("EvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
+
+
+def test_creation_research_rejects_business_fact_mapped_to_wrong_formula_section():
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+    payload["evidence_items"][0]["metadata"]["formula_section"] = "不存在的段落"
+
+    with pytest.raises(ContractDomainValidationError, match="锁定候选范围"):
+        validate_content_node_result("EvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
+
+
+def test_content_review_can_cite_frozen_style_reference():
+    context = replace(
+        DOMAIN_CONTEXT,
+        allowed_evidence_by_usage={
+            **DOMAIN_CONTEXT.allowed_evidence_by_usage,
+            "any": DOMAIN_CONTEXT.allowed_evidence_by_usage["any"] | {"e-style"},
+            "style_reference": frozenset({"e-style"}),
+        },
+    )
+    payload = deepcopy(VALID_PAYLOADS["ContentReviewResultV1"])
+    payload["checks"] = [
+        {
+            "code": "VIRAL_STRUCTURE_REFERENCE",
+            "status": "passed",
+            "message": "只参考了爆款结构与表情符号模式",
+            "evidence_ids": ["e-style"],
+        }
+    ]
+
+    result = validate_content_node_result("ContentReviewResultV1", payload, context)
+
+    assert result.checks[0].evidence_ids == ["e-style"]
 
 
 def test_visual_plan_must_use_exactly_the_task_locked_gallery_image():
@@ -443,6 +523,50 @@ async def test_result_collector_requires_activation_exactly_one_submission_and_n
     empty = ContentNodeResultCollector("ContentReviewResultV1", DOMAIN_CONTEXT, runtime)
     with pytest.raises(ContractDomainValidationError, match="未通过"):
         empty.finalize()
+
+
+@pytest.mark.asyncio
+async def test_cover_result_collector_requires_exact_created_job_submission():
+    runtime = type("Runtime", (), {})()
+    runtime._required_skill_closure = []
+    runtime._activated_required_skills = []
+    payload = VALID_PAYLOADS["CoverJobSubmissionResultV1"]
+    collector = ContentNodeResultCollector("CoverJobSubmissionResultV1", DOMAIN_CONTEXT, runtime)
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        await collector.submit(**payload)
+    assert exc_info.value.code == "cover_job_not_created"
+
+    runtime._content_cover_job_submission = payload
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        await collector.submit(**{**payload, "cover_job_id": "invented-job"})
+    assert exc_info.value.code == "cover_job_submission_mismatch"
+
+    await collector.submit(**payload)
+    assert collector.finalize() == payload
+
+
+@pytest.mark.asyncio
+async def test_creation_research_must_query_available_business_and_viral_libraries():
+    runtime = type("Runtime", (), {})()
+    runtime._required_skill_closure = ["content-evidence-researcher"]
+    runtime._activated_required_skills = ["content-evidence-researcher"]
+    runtime._visible_knowledge_bases = [
+        {"kb_id": "kb-price", "name": "价格库"},
+        {"kb_id": "kb-brand", "name": "品牌知识库"},
+        {"kb_id": "kb-rules", "name": "平台规则"},
+        {"kb_id": "kb-viral", "name": "爆款库"},
+    ]
+    runtime._content_queried_knowledge_bases = {"kb-viral"}
+    collector = ContentNodeResultCollector("EvidenceCollectionResultV1", DOMAIN_CONTEXT, runtime)
+
+    with pytest.raises(ContractDomainValidationError, match="必需知识库"):
+        await collector.submit(**VALID_PAYLOADS["EvidenceCollectionResultV1"])
+
+    runtime._content_queried_knowledge_bases = {"kb-price", "kb-brand", "kb-rules", "kb-viral"}
+    await collector.submit(**VALID_PAYLOADS["EvidenceCollectionResultV1"])
+
+    assert collector.submission_count == 1
 
 
 @pytest.mark.asyncio

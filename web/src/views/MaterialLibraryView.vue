@@ -1,6 +1,5 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import {
   ArrowLeft,
@@ -23,13 +22,12 @@ import { contentApi } from '@/apis/content_api'
 import { materialLibraryApi } from '@/apis/material_library_api'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import PosterOcrReviewModal from '@/components/content/PosterOcrReviewModal.vue'
+import VisualWorkspaceHeader from '@/components/content/VisualWorkspaceHeader.vue'
 
-const route = useRoute()
 const tabs = [
-  { key: 'image', label: '素材图片', path: '/materials/images' },
-  { key: 'cover_template', label: '封面模板', path: '/materials/cover-templates' }
+  { key: 'image', label: '素材图片', path: '/materials/images' }
 ]
-const materialType = computed(() => route.path.endsWith('/cover-templates') ? 'cover_template' : 'image')
+const materialType = ref('image')
 const isGalleryRoot = computed(() => materialType.value === 'image' && !activeGallery.value)
 const loading = ref(false)
 const uploading = ref(false)
@@ -499,6 +497,7 @@ onBeforeUnmount(releasePreviews)
 
 <template>
   <div class="material-library-view layout-container">
+    <VisualWorkspaceHeader subtitle="集中管理设计可直接使用的图片和封面模板" />
     <PageHeader title="素材库" :tabs="tabs" :active-key="materialType" :loading="loading" show-border>
       <template #actions>
         <template v-if="materialType === 'image'">
