@@ -134,6 +134,7 @@ func TestStaticServing(t *testing.T) {
 	must("editor/index.html", "<html>editor</html>") // trailingSlash export
 	must("404.html", "<html>notfound</html>")
 	must("_next/static/app.js", "console.log(1)")
+	must("_next/static/chunks/editor.js", "console.log(2)")
 
 	r := chi.NewRouter()
 	// A real API route so the guard's namespace check is meaningful.
@@ -168,9 +169,13 @@ func TestStaticServing(t *testing.T) {
 	if code, body, _ := get("/editor"); code != 200 || body != "<html>editor</html>" {
 		t.Fatalf("/editor: %d %q", code, body)
 	}
-	// Hashed asset served with immutable caching.
-	if code, _, cc := get("/_next/static/app.js"); code != 200 || cc == "" {
+	// Build-scoped assets remain immutable, while Turbopack chunks must
+	// revalidate because their names can survive builds.
+	if code, _, cc := get("/_next/static/app.js"); code != 200 || !strings.Contains(cc, "immutable") {
 		t.Fatalf("/_next asset: %d cache=%q", code, cc)
+	}
+	if code, _, cc := get("/_next/static/chunks/editor.js"); code != 200 || cc != "no-cache" {
+		t.Fatalf("/_next chunk: %d cache=%q", code, cc)
 	}
 	// Pretty editor URL: /editor/<id> serves the editor page (the id is
 	// client-resolved; the export cannot emit per-design HTML).
