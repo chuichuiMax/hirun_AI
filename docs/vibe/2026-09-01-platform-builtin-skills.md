@@ -17,4 +17,4 @@
 - [x] 同名远程记录能够升级为内置记录。
 - [x] 启动同步后页面中这些 Skill 归入“内置”。
 - [x] 后端 Skill 单元测试通过。
-- [ ] 代码提交并推送到 `contentSwarm/main`。
+- [x] 代码提交并推送到 `contentSwarm/main`。
