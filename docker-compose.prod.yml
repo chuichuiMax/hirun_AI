@@ -214,7 +214,7 @@ services:
       POSTGRES_PASSWORD: ${HYCANVAS_DB_PASSWORD:?HYCANVAS_DB_PASSWORD must be set}
       POSTGRES_DB: ${HYCANVAS_DB_NAME:-hycanvas}
     volumes:
-      - ./docker/volumes/hycanvas-postgresql:/var/lib/postgresql/data
+      - hycanvas-postgresql:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${HYCANVAS_DB_USER:-hycanvas} -d ${HYCANVAS_DB_NAME:-hycanvas}"]
       interval: 5s
@@ -464,3 +464,6 @@ services:
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  hycanvas-postgresql:
