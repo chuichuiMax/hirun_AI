@@ -174,7 +174,7 @@ func TestStaticServing(t *testing.T) {
 	if code, _, cc := get("/_next/static/app.js"); code != 200 || !strings.Contains(cc, "immutable") {
 		t.Fatalf("/_next asset: %d cache=%q", code, cc)
 	}
-	if code, _, cc := get("/_next/static/chunks/editor.js"); code != 200 || cc != "no-cache" {
+	if code, _, cc := get("/_next/static/chunks/editor.js"); code != 200 || cc != "no-store" {
 		t.Fatalf("/_next chunk: %d cache=%q", code, cc)
 	}
 	// Pretty editor URL: /editor/<id> serves the editor page (the id is

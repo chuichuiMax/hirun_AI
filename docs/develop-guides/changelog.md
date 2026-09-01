@@ -6,7 +6,7 @@
 
 ## v0.7.1 (current)
 
-- 修复 HyCanvas 生产发布后首页可用但编辑器持续加载的问题：Turbopack 代码块文件名不保证跨构建变化，服务端不再对 `/_next/static/chunks/` 返回长期 `immutable` 缓存，避免新旧运行时与懒加载编辑器混用。
+- 修复 HyCanvas 生产发布后首页可用但编辑器持续加载的问题：Turbopack 代码块文件名不保证跨构建变化，服务端对 `/_next/static/chunks/` 禁止存储并忽略旧的条件缓存请求，避免新旧运行时与懒加载编辑器混用。
 
 - 开发与生产 Docker Compose 均纳入 ContentSwarm 托管模式的 HyCanvas 应用、独立 PostgreSQL 与幂等初始化任务；本地启动会自动创建集成用户、固定工作区和具备生成/读取/导出权限的 API Key，并向 API/Worker 注入服务地址、浏览器地址、Key 与工作区配置，使新环境拉取代码后无需手工配置即可使用视觉创作。生产环境强制显式配置独立数据库密码、JWT 密钥、API Key、工作区及公开访问地址。
 
