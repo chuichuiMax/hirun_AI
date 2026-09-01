@@ -208,7 +208,7 @@ services:
     restart: unless-stopped
 
   hycanvas-db:
-    image: postgres:16-alpine
+    image: postgres:16
     environment:
       POSTGRES_USER: ${HYCANVAS_DB_USER:-hycanvas}
       POSTGRES_PASSWORD: ${HYCANVAS_DB_PASSWORD:?HYCANVAS_DB_PASSWORD must be set}
@@ -263,7 +263,7 @@ services:
     restart: unless-stopped
 
   hycanvas-init:
-    image: postgres:16-alpine
+    image: postgres:16
     depends_on:
       hycanvas-app:
         condition: service_healthy
