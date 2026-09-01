@@ -154,9 +154,9 @@
                   <a-form-item
                     label="登录账号"
                     name="loginId"
-                    :rules="[{ required: true, message: '请输入UID或手机号' }]"
+                    :rules="[{ required: true, message: '请输入员工编码或登录账号' }]"
                   >
-                    <a-input v-model:value="loginForm.loginId" placeholder="UID或手机号">
+                    <a-input v-model:value="loginForm.loginId" placeholder="员工编码或登录账号">
                       <template #prefix>
                         <user-icon size="18" />
                       </template>

@@ -679,9 +679,9 @@ class PostgresManager(metaclass=SingletonMeta):
                         schema_version <> 3
                         OR (
                             combination_type IN ('single', 'double', 'triple', 'quadruple')
-                            AND jsonb_array_length(method_members) > 0
-                            AND jsonb_array_length(title_formula_candidate_codes) > 0
-                            AND jsonb_array_length(body_formula_candidate_codes) > 0
+                            AND jsonb_array_length(method_members::jsonb) > 0
+                            AND jsonb_array_length(title_formula_candidate_codes::jsonb) > 0
+                            AND jsonb_array_length(body_formula_candidate_codes::jsonb) > 0
                         )
                     );
                 END IF;
@@ -917,6 +917,14 @@ class PostgresManager(metaclass=SingletonMeta):
                 "ALTER TABLE IF EXISTS content_variables "
                 'ADD COLUMN IF NOT EXISTS editions JSONB NOT NULL DEFAULT \'["quick","pro"]\'::jsonb'
             ),
+            "ALTER TABLE IF EXISTS content_variables DROP CONSTRAINT IF EXISTS content_variables_name_key",
+            "DROP INDEX IF EXISTS content_variables_name_key",
+            "DROP INDEX IF EXISTS ix_content_variables_name",
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_variables_service_entry_name "
+                "ON content_variables (service_entry, name)"
+            ),
+            "CREATE INDEX IF NOT EXISTS ix_content_variables_name ON content_variables (name)",
         ]
         async with self.async_engine.begin() as conn:
             await conn.execute(

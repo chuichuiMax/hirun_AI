@@ -55,6 +55,7 @@ const userStore = useUserStore()
 const stage = ref(1)
 const creation = reactive({
   industry_template_id: '',
+  service_entry: '装修家居',
   mode: window.matchMedia('(max-width: 800px)').matches ? 'quick' : 'quick',
   content_goal: '',
   name: ''
@@ -131,47 +132,71 @@ const selectedImageGalleryPath = computed(() => {
   return parent ? `${parent.name} / ${selectedImageGallery.value.name}` : selectedImageGallery.value.name
 })
 
-const testFormDefaults = {
-  decoration: {
-    brand_name: '杭州栖居空间设计',
-    audience: ['杭州准备改善型装修的三口之家'],
-    pain: ['89㎡空间收纳不足', '厨房动线拥挤', '担心预算失控'],
-    advantage: ['设计施工一体化', '节点验收留档', '主材报价透明'],
-    project_type: '三室两厅一卫',
-    area: '89㎡',
-    budget: '硬装预算18万元',
-    duration: '预计工期90天',
-    craft_and_materials:
-      '全屋定制柜采用ENF级板材，水电管线分色布置，防水完成后进行48小时闭水试验，各节点验收后留存影像记录。',
-    owner_pain:
-      '入户和餐厅缺少集中收纳，厨房操作台不足，儿童房需要同时满足学习与储物。',
-    project_result:
-      '现场复尺后通过玄关柜、餐边柜和儿童房组合柜增加12㎡收纳空间，厨房动线调整为洗、切、炒顺序。'
+const STUDIO_ENTRIES = [
+  {
+    key: '装修家居',
+    name: '装修与家居',
+    description: '报价、工艺、实景案例和装修避坑',
+    default_goal: 'acquire'
+  },
+  {
+    key: '好评笔记',
+    name: '好评笔记',
+    description: '业主第一人称评价项目成员，模仿好评知识库已有文章',
+    default_goal: 'brand'
   }
-}
+]
 
 const taskId = computed(() => route.params.taskId)
+const decorationTemplate = computed(
+  () => store.templates.find((item) => item.slug === 'decoration') || store.templates[0] || null
+)
+const studioEntries = computed(() => {
+  const template = decorationTemplate.value
+  if (!template) return []
+  return STUDIO_ENTRIES.map((entry) => ({ ...entry, id: template.id }))
+})
 const selectedTemplate = computed(() =>
   store.templates.find((item) => item.id === creation.industry_template_id)
 )
-const activeFields = computed(() => {
-  if (!store.task) {
-    if (!selectedTemplate.value) return []
-    return creation.mode === 'quick'
-      ? selectedTemplate.value.quick_form_schema
-      : selectedTemplate.value.pro_form_schema
-  }
-  return store.task.mode === 'quick'
-    ? store.template?.quick_form_schema || []
-    : store.template?.pro_form_schema || []
+const studioEntryTitle = computed(() => {
+  const key = store.task?.brief?.form_values?.mp_service_entry || creation.service_entry
+  return STUDIO_ENTRIES.find((entry) => entry.key === key)?.name || store.template?.name
 })
-const isQuickMode = computed(() => (store.task ? store.task.mode : creation.mode) === 'quick')
+const availableContentGoals = computed(() => {
+  const goals = store.contentGoals
+  if (creation.service_entry === '好评笔记') {
+    return goals.filter((goal) => ['brand', 'educate'].includes(goal.code))
+  }
+  return goals
+})
+const studioServiceEntry = computed(
+  () => store.task?.brief?.form_values?.mp_service_entry || creation.service_entry
+)
+const studioEdition = computed(() => (store.task ? store.task.mode : creation.mode) === 'pro' ? 'pro' : 'quick')
+const activeFields = computed(() =>
+  (store.contentVariables || [])
+    .filter(
+      (item) =>
+        item.enabled &&
+        item.service_entry === studioServiceEntry.value &&
+        (item.ports || []).includes('pc') &&
+        (item.editions || []).includes(studioEdition.value)
+    )
+    .map((item) => ({
+      key: item.name,
+      label: item.name,
+      type: 'textarea',
+      required: true
+    }))
+)
+const isQuickMode = computed(() => studioEdition.value === 'quick')
 const titleOptions = computed(
   () => store.interrupt?.options || store.task?.title_candidates || []
 )
 const evidenceFieldLabels = computed(() =>
   Object.fromEntries(
-    [...(store.template?.quick_form_schema || []), ...(store.template?.pro_form_schema || [])]
+    activeFields.value
       .filter((field) => field.key && field.label)
       .map((field) => [field.key, field.label])
   )
@@ -377,18 +402,17 @@ const stageFromTask = (task) => {
 const initializeFormValues = () => {
   Object.keys(formValues).forEach((key) => delete formValues[key])
   const saved = store.task?.brief?.form_values || {}
-  const hasSavedValues = Object.values(saved).some(
-    (value) => value !== undefined && value !== null && value !== '' && (!Array.isArray(value) || value.length)
-  )
-  const defaults = hasSavedValues
-    ? {}
-    : testFormDefaults[store.template?.slug || selectedTemplate.value?.slug] || {}
   activeFields.value.forEach((field) => {
-    if (hasSavedValues && saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
-    else if (defaults[field.key] !== undefined) formValues[field.key] = defaults[field.key]
-    else if (field.type === 'tags') formValues[field.key] = []
+    if (saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
     else formValues[field.key] = ''
   })
+  const savedEntry = saved.mp_service_entry
+  if (savedEntry) {
+    formValues.mp_service_entry = savedEntry
+    creation.service_entry = savedEntry
+  } else {
+    formValues.mp_service_entry = creation.service_entry || '装修家居'
+  }
 }
 
 const revokePreviewUrls = (urls) => {
@@ -763,7 +787,7 @@ watch(
 )
 
 watch(
-  () => creation.industry_template_id,
+  () => [creation.industry_template_id, creation.mode, creation.service_entry],
   () => {
     const template = selectedTemplate.value
     if (template && !creation.content_goal) creation.content_goal = template.default_goal
@@ -776,7 +800,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', syncPosterTemplatesWhenVisible)
   posterTemplateSyncTimer = window.setInterval(syncPosterTemplatesWhenVisible, posterTemplateSyncIntervalMs)
   try {
-    await store.loadBootstrap()
+    await store.loadBootstrap(true)
     if (taskId.value) {
       await store.loadTask(taskId.value)
       initializeFormValues()
@@ -806,8 +830,10 @@ onMounted(async () => {
       }
     } else {
       store.resetCurrentTask()
-      creation.industry_template_id = store.templates[0]?.id || ''
-      creation.content_goal = selectedTemplate.value?.default_goal || 'acquire'
+      creation.industry_template_id = decorationTemplate.value?.id || ''
+      creation.service_entry = '装修家居'
+      creation.content_goal =
+        STUDIO_ENTRIES.find((entry) => entry.key === creation.service_entry)?.default_goal || 'acquire'
       initializeFormValues()
     }
   } catch (error) {
@@ -815,13 +841,25 @@ onMounted(async () => {
   }
 })
 
+const selectStudioEntry = (entry) => {
+  creation.service_entry = entry.key
+  creation.industry_template_id = decorationTemplate.value?.id || entry.id
+  creation.content_goal = entry.default_goal
+  if (!store.task) initializeFormValues()
+}
+
 const createTask = async () => {
   if (!creation.industry_template_id || !creation.content_goal) {
     message.warning('请选择行业模板和内容目标')
     return
   }
   try {
-    const task = await store.createTask({ ...creation })
+    const task = await store.createTask({
+      industry_template_id: creation.industry_template_id,
+      mode: creation.mode,
+      content_goal: creation.content_goal,
+      name: creation.name
+    })
     await router.replace(`/content/tasks/${task.id}`)
     initializeFormValues()
     initializeVisualSelection()
@@ -882,6 +920,13 @@ onBeforeUnmount(() => {
 })
 
 const compileBrief = async () => {
+  const missing = activeFields.value.find(
+    (field) => field.required && !String(formValues[field.key] || '').trim()
+  )
+  if (missing) {
+    message.warning(`请填写${missing.label}`)
+    return
+  }
   try {
     window.clearTimeout(draftSaveTimer)
     await store.compileBrief(buildBrief())
@@ -1110,7 +1155,7 @@ const openVersions = async () => {
             <label class="field-block">
               <span>内容目标</span>
               <a-select v-model:value="creation.content_goal" placeholder="请选择内容目标">
-                <a-select-option v-for="goal in store.contentGoals" :key="goal.code" :value="goal.code">
+                <a-select-option v-for="goal in availableContentGoals" :key="goal.code" :value="goal.code">
                   {{ goal.name }} · {{ goal.description }}
                 </a-select-option>
               </a-select>
@@ -1119,12 +1164,12 @@ const openVersions = async () => {
 
           <div class="template-grid">
             <button
-              v-for="item in store.templates"
-              :key="item.id"
+              v-for="item in studioEntries"
+              :key="item.key"
               type="button"
               class="template-card"
-              :class="{ selected: creation.industry_template_id === item.id }"
-              @click="creation.industry_template_id = item.id; creation.content_goal = item.default_goal"
+              :class="{ selected: creation.service_entry === item.key }"
+              @click="selectStudioEntry(item)"
             >
               <strong>{{ item.name }}</strong>
               <span>{{ item.description }}</span>
@@ -1144,10 +1189,14 @@ const openVersions = async () => {
             <div class="form-card">
               <div class="mode-row">
                 <span class="mode-badge">{{ isQuickMode ? '简化版' : '专业版' }}</span>
-                <span>{{ store.template?.name }}</span>
+                <span>{{ studioEntryTitle }}</span>
                 <small v-if="saveStatusLabel" :class="{ 'save-error': store.saveStatus === 'error' }">{{ saveStatusLabel }}</small>
               </div>
               <div class="dynamic-form">
+                <a-empty
+                  v-if="!activeFields.length"
+                  description="当前服务入口没有可用于 PC 的变量，请在变量配置中启用对应端口和版本"
+                />
                 <label v-for="field in activeFields" :key="field.key" class="field-block">
                   <span>{{ field.label }}<em v-if="field.required">*</em></span>
                   <a-input
@@ -1935,7 +1984,7 @@ const openVersions = async () => {
 .run-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
 .active-run-layout { width: 100%; max-width: 900px; height: max(560px, calc(100vh - 280px)); margin: 0 auto; display: flex; flex-direction: column; gap: 0; }
 .setup-grid { grid-template-columns: 1fr 1fr; margin-bottom: 20px; }
-.template-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .template-card { min-height: 116px; padding: 16px; display: flex; flex-direction: column; gap: 7px; text-align: left; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); color: var(--color-text); cursor: pointer; }
 .template-card:hover { border-color: var(--main-300); background: var(--main-10); }
 .template-card.selected { border-color: var(--main-color); background: var(--main-30); }

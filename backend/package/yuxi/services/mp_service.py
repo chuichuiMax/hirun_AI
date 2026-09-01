@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content.catalog import CONTENT_TYPES
 from yuxi.content.schemas import ContentBriefPayload, ContentRunCreate, ContentRunResume, ContentTaskCreate
+from yuxi.content.service_entry_form import BRAND_NAME, map_service_entry_form_values
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.cover_repository import CoverRepository
 from yuxi.repositories.employee_repository import EmployeeRepository
@@ -36,16 +37,16 @@ from yuxi.services.content_service import (
     save_content_brief,
 )
 from yuxi.services.content_type_service import ensure_default_content_types, list_content_types
+from yuxi.services.employee_service import ensure_platform_user
 from yuxi.services.run_queue_service import get_redis_client, list_run_stream_events
 from yuxi.services.user_identity_service import is_valid_phone_number, normalize_phone_number
 from yuxi.services.variable_service import SERVICE_ENTRIES, ensure_default_variables, list_variables
 from yuxi.storage.minio.client import StorageError, get_minio_client
-from yuxi.storage.postgres.models_business import Department, User
+from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import ContentArtifact, ContentEmployee, ContentMpFavorite, ContentTask
 from yuxi.utils.auth_utils import AuthUtils
 from yuxi.utils.datetime_utils import format_utc_datetime, shanghai_now, utc_now_naive
 
-BRAND_NAME = "鸿扬家居"
 INDUSTRY_SLUG = "decoration"
 SMS_TTL_SECONDS = 300
 WECHAT_SESSION_TTL_SECONDS = 600
@@ -407,57 +408,9 @@ def build_mp_brief_payload(
     if cover_template_id:
         values["cover_template_id"] = cover_template_id
 
-    community = str(values.get("楼盘信息") or "").strip()
-    frame_area = str(values.get("外框面积") or "").strip()
-    style = str(values.get("设计风格") or "").strip()
-    region = str(values.get("所在区域") or "").strip()
-    budget_text = "；".join(
-        f"{label} {values[label]}".strip()
-        for label in ("基础", "木制品", "主材")
-        if str(values.get(label) or "").strip()
-    )
-    persona_text = "，".join(
-        f"{label} {values[label]}".strip()
-        for label in ("设计师", "预算师", "项目经理", "客户经理", "工匠")
-        if str(values.get(label) or "").strip()
-    )
-
-    if service_entry == "装修家居":
-        product = community or "整装项目"
-        process = budget_text or f"{style} {frame_area}".strip() or "整装交付"
-        pain = f"{community or '业主'}关注{frame_area or '户型'}装修落地"
-        advantage = style or "鸿扬整装标准化交付"
-        audience = [region] if region else ["装修业主"]
-        result = " ".join(part for part in (community, frame_area, style) if part)
-    else:
-        product = "业主好评笔记"
-        process = persona_text or "项目成员服务"
-        pain = "业主记录装修交付中项目成员的真实服务体验"
-        advantage = persona_text or "项目成员服务"
-        audience = ["业主"]
-        result = persona_text
-        values["voice"] = "业主第一人称"
-        values["location"] = region
-        values["writing_instruction"] = (
-            "以业主第一人称评价设计师、预算师、项目经理、客户经理等项目成员；"
-            "检索并模仿「好评知识库」中已有文章的语气、结构和用词；"
-            "写内部可归档的真实好评，不要写成获客种草、员工自荐或销售转化文案。"
-        )
-
-    mapped = {
-        **values,
-        "brand_name": BRAND_NAME,
-        "audience": audience,
-        "pain": pain,
-        "advantage": advantage,
-        "project_type": product,
-        "area": frame_area,
-        "budget": budget_text,
-        "craft_and_materials": process,
-        "owner_pain": pain,
-        "project_result": result,
-        "persona": persona_text,
-    }
+    mapped = map_service_entry_form_values(service_entry, values)
+    persona_text = str(mapped.get("persona") or "")
+    audience = mapped.get("audience") or []
     business_variables = {"persona_fact": persona_text} if persona_text else {}
     return ContentBriefPayload(
         brand={"name": BRAND_NAME},
@@ -517,46 +470,6 @@ async def authenticate_mp_request(
         raise _mp_error(401, "MP_UNAUTHORIZED", "员工账号不可用")
     user = await ensure_platform_user(db, employee)
     return MpContext(employee=employee, user=user)
-
-
-async def ensure_platform_user(db: AsyncSession, employee: ContentEmployee) -> User:
-    phone = employee.login_account
-    result = await db.execute(select(User).where(User.phone_number == phone, User.is_deleted == 0))
-    user = result.scalar_one_or_none()
-    if user is not None:
-        return user
-    uid = f"mp_{employee.id.replace('-', '')[:17]}"
-    existing_uid = await db.execute(select(User).where(User.uid == uid, User.is_deleted == 0))
-    user = existing_uid.scalar_one_or_none()
-    if user is not None:
-        if not user.phone_number:
-            user.phone_number = phone
-            await db.flush()
-        return user
-    creator = await db.execute(select(User).where(User.uid == employee.created_by, User.is_deleted == 0))
-    creator_user = creator.scalar_one_or_none()
-    department_id = creator_user.department_id if creator_user else None
-    if department_id is None:
-        dept = await db.execute(select(Department).order_by(Department.id.asc()).limit(1))
-        department = dept.scalar_one_or_none()
-        if department is None:
-            raise _mp_error(503, "MP_DEPARTMENT_MISSING", "系统尚未初始化部门")
-        department_id = department.id
-    username = (employee.name or "员工")[:20]
-    clash = await db.execute(select(User.id).where(User.username == username))
-    if clash.scalar_one_or_none() is not None:
-        username = f"mp{phone[-8:]}"
-    user = User(
-        username=username,
-        uid=uid,
-        phone_number=phone,
-        password_hash=AuthUtils.hash_password(secrets.token_urlsafe(32)),
-        role=employee.role,
-        department_id=department_id,
-    )
-    db.add(user)
-    await db.flush()
-    return user
 
 
 async def _issue_token(db: AsyncSession, employee: ContentEmployee) -> dict[str, Any]:

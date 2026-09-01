@@ -13,6 +13,12 @@ async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
     assert bootstrap_response.status_code == 200, bootstrap_response.text
     bootstrap = bootstrap_response.json()
     assert len(bootstrap["industry_templates"]) == 6
+    variable_names = {
+        item["name"]
+        for item in bootstrap["content_variables"]
+        if item["service_entry"] == "装修家居" and item["enabled"]
+    }
+    assert {"楼盘信息", "基础", "木制品", "主材"}.issubset(variable_names)
     assert len([item for item in bootstrap["rule_bundle"]["methods"] if item["method_type"] == "core"]) == 4
     assert len(bootstrap["rule_bundle"]["title_formulas"]) == 7
     assert len(bootstrap["rule_bundle"]["content_formulas"]) == 4
@@ -70,6 +76,56 @@ async def test_content_bootstrap_and_v3_task_flow(test_client, admin_headers):
         )
         assert missing_asset_response.status_code == 404
         assert missing_asset_response.json()["detail"]["error"]["code"] == "CONTENT_ARTIFACT_NOT_FOUND"
+    finally:
+        delete_response = await test_client.delete(f"/api/content/tasks/{task_id}", headers=admin_headers)
+        assert delete_response.status_code == 200, delete_response.text
+
+
+async def test_compile_brief_reads_content_variables(test_client, admin_headers):
+    bootstrap = (await test_client.get("/api/content/bootstrap", headers=admin_headers)).json()
+    template = next(item for item in bootstrap["industry_templates"] if item["slug"] == "decoration")
+    field_names = [
+        item["name"]
+        for item in bootstrap["content_variables"]
+        if (
+            item["enabled"]
+            and item["service_entry"] == "装修家居"
+            and "pc" in item["ports"]
+            and "quick" in item["editions"]
+        )
+    ]
+    assert "楼盘信息" in field_names
+    create_response = await test_client.post(
+        "/api/content/tasks",
+        headers=admin_headers,
+        json={
+            "industry_template_id": template["id"],
+            "mode": "quick",
+            "content_goal": "acquire",
+            "name": f"pytest_variables_{uuid.uuid4().hex[:8]}",
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+    task_id = create_response.json()["task"]["id"]
+    try:
+        compile_response = await test_client.post(
+            f"/api/content/tasks/{task_id}/compile-brief",
+            headers=admin_headers,
+            json={
+                "brief": {
+                    "form_values": {
+                        "mp_service_entry": "装修家居",
+                        **{name: "测试值" for name in field_names},
+                    }
+                }
+            },
+        )
+        assert compile_response.status_code == 200, compile_response.text
+        values = compile_response.json()["task"]["brief"]["form_values"]
+        assert values["mp_service_entry"] == "装修家居"
+        assert values["楼盘信息"] == "测试值"
+        assert values["brand_name"] == "鸿扬家居"
+        assert values["project_type"] == "测试值"
     finally:
         delete_response = await test_client.delete(f"/api/content/tasks/{task_id}", headers=admin_headers)
         assert delete_response.status_code == 200, delete_response.text

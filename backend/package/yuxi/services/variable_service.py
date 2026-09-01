@@ -72,7 +72,7 @@ def next_variable_code(existing_codes: list[str]) -> str:
 async def ensure_default_variables(db: AsyncSession) -> None:
     repo = VariableRepository(db)
     for variable_code, name, service_entry, enabled in DEFAULT_VARIABLES:
-        if await repo.get_by_code(variable_code) or await repo.get_by_name(name):
+        if await repo.get_by_code(variable_code) or await repo.get_by_name(name, service_entry=service_entry):
             continue
         await repo.create(
             {
@@ -123,8 +123,8 @@ async def create_variable(db: AsyncSession, user: User, payload: VariableCreate)
         variable_code = _normalize_text(payload.variable_code, field="编码")
     else:
         variable_code = next_variable_code(await repo.list_codes())
-    if await repo.get_by_name(name):
-        raise _variable_error(409, "VARIABLE_NAME_EXISTS", "变量名称已存在")
+    if await repo.get_by_name(name, service_entry=service_entry):
+        raise _variable_error(409, "VARIABLE_NAME_EXISTS", "该服务类型下变量名称已存在")
     if await repo.get_by_code(variable_code):
         raise _variable_error(409, "VARIABLE_CODE_EXISTS", "编码已存在")
     try:
@@ -141,7 +141,7 @@ async def create_variable(db: AsyncSession, user: User, payload: VariableCreate)
             }
         )
     except IntegrityError as exc:
-        raise _variable_error(409, "VARIABLE_DUPLICATE", "变量名称或编码已存在") from exc
+        raise _variable_error(409, "VARIABLE_DUPLICATE", "该服务类型下变量名称或编码已存在") from exc
     return {"variable": item.to_dict()}
 
 
@@ -153,11 +153,15 @@ async def update_variable(db: AsyncSession, variable_pk: str, payload: VariableU
     data = payload.model_dump(exclude_unset=True)
     if "name" in data:
         data["name"] = _normalize_text(data["name"], field="变量")
-        existing = await repo.get_by_name(data["name"])
-        if existing and existing.id != item.id:
-            raise _variable_error(409, "VARIABLE_NAME_EXISTS", "变量名称已存在")
     if "service_entry" in data:
         data["service_entry"] = _require_service_entry(_normalize_text(data["service_entry"], field="服务入口"))
+    if "name" in data or "service_entry" in data:
+        existing = await repo.get_by_name(
+            data.get("name", item.name),
+            service_entry=data.get("service_entry", item.service_entry),
+        )
+        if existing and existing.id != item.id:
+            raise _variable_error(409, "VARIABLE_NAME_EXISTS", "该服务类型下变量名称已存在")
     if "ports" in data:
         data["ports"] = _normalize_ports(data["ports"])
     if "editions" in data:
@@ -165,7 +169,7 @@ async def update_variable(db: AsyncSession, variable_pk: str, payload: VariableU
     try:
         item = await repo.update(item, data)
     except IntegrityError as exc:
-        raise _variable_error(409, "VARIABLE_NAME_EXISTS", "变量名称已存在") from exc
+        raise _variable_error(409, "VARIABLE_NAME_EXISTS", "该服务类型下变量名称已存在") from exc
     return {"variable": item.to_dict()}
 
 

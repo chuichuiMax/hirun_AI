@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from yuxi.services.employee_service import EmployeeCreate, EmployeeUpdate
+from yuxi.services.employee_service import DEFAULT_EMPLOYEE_PASSWORD, EmployeeCreate, EmployeeUpdate
 
 
 def test_employee_create_schema_requires_core_fields():
@@ -45,3 +45,7 @@ def test_employee_create_schema_requires_login_port():
 def test_employee_update_schema_allows_partial_enabled():
     payload = EmployeeUpdate(enabled=False)
     assert payload.model_dump(exclude_unset=True) == {"enabled": False}
+
+
+def test_default_employee_password_is_fixed():
+    assert DEFAULT_EMPLOYEE_PASSWORD == "123456"

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content.generation import SKILL_VERSIONS, refine_generated_content, review_generated_content
 from yuxi.content.rules import CONTENT_GOALS
+from yuxi.content.service_entry_form import configured_form_fields, map_service_entry_form_values
 from yuxi.content.schemas import (
     ContentArtifactAIEdit,
     ContentArtifactUpdate,
@@ -47,6 +48,7 @@ from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
 from yuxi.services.run_queue_service import get_arq_pool, list_run_stream_events
+from yuxi.services.variable_service import SERVICE_ENTRIES, list_variables
 from yuxi.storage.postgres.models_business import AgentRun, User
 from yuxi.storage.postgres.models_content import ContentArtifactVersion, ContentTask
 from yuxi.utils.datetime_utils import format_utc_datetime, utc_now_naive
@@ -273,20 +275,34 @@ def _brief_field_value(brief: dict[str, Any], key: str) -> Any:
 
 
 def compile_content_brief(
-    *, task: ContentTask, template: Any, brief: ContentBriefPayload
+    *,
+    task: ContentTask,
+    template: Any,
+    brief: ContentBriefPayload,
+    form_fields: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     raw = brief.model_dump()
     form_values = dict(raw.get("form_values") or {})
+    service_entry = form_values.get("mp_service_entry")
+    if service_entry in SERVICE_ENTRIES:
+        form_values = map_service_entry_form_values(str(service_entry), form_values)
+        raw["form_values"] = form_values
+        raw["brand"] = {"name": form_values.get("brand_name") or (raw.get("brand") or {}).get("name")}
+        raw["audience"] = form_values.get("audience") or raw.get("audience") or []
+        persona_text = str(form_values.get("persona") or "")
+        if persona_text:
+            raw["persona"] = {**(raw.get("persona") or {}), "description": persona_text}
+            raw["business_variables"] = {**(raw.get("business_variables") or {}), "persona_fact": persona_text}
     business_variables = dict(raw.get("business_variables") or {})
     # knowledge_scope 仅用于忽略旧任务表单遗留值；知识库范围由 Agent 管理配置决定。
     reserved = {"brand_name", "audience", "persona", "required_terms", "forbidden_terms", "knowledge_scope"}
     business_variables.update(
         {key: value for key, value in form_values.items() if key not in reserved and value not in (None, "", [])}
     )
-    fields = template.quick_form_schema if task.mode == "quick" else template.pro_form_schema
+    template_fields = template.quick_form_schema if task.mode == "quick" else template.pro_form_schema
     # 行业表单只负责行业语言，V3 生成协议消费稳定的平台变量。字段映射来自
     # 已发布表单/行业包配置，新增行业无需修改 Skill 或工作流代码。
-    for field in fields or []:
+    for field in template_fields or []:
         variable_code = field.get("variable_code")
         value = form_values.get(field.get("key"))
         if variable_code and value not in (None, "", []):
@@ -327,7 +343,8 @@ def compile_content_brief(
         "visual_material": raw.get("visual_material"),
     }
     missing = []
-    for field in fields or []:
+    required_fields = template_fields if form_fields is None else form_fields
+    for field in required_fields or []:
         if not field.get("required"):
             continue
         value = _brief_field_value(compiled, field["key"])
@@ -346,6 +363,7 @@ async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
         "industry_templates": await repo.list_templates(),
         "content_goals": CONTENT_GOALS,
         "content_types": (rule_bundle or {}).get("content_types") or [],
+        "content_variables": (await list_variables(db))["variables"],
         "industry_packs": await repo.list_industry_packs(),
         "channel_profiles": await repo.list_channel_profiles(),
         "personas": await repo.list_personas(user),
@@ -779,7 +797,17 @@ async def save_content_brief(
     template = await repo.get_template(task.industry_template_version_id)
     if template is None:
         raise _content_error(409, "CONTENT_TEMPLATE_VERSION_MISSING", "任务绑定的行业模板版本不存在")
-    compiled, missing = compile_content_brief(task=task, template=template, brief=brief)
+    form_fields = None
+    service_entry = (brief.form_values or {}).get("mp_service_entry")
+    if service_entry in SERVICE_ENTRIES and not (brief.form_values or {}).get("mp_content_code"):
+        edition = "quick" if task.mode == "quick" else "pro"
+        form_fields = configured_form_fields(
+            (await list_variables(db))["variables"],
+            service_entry=str(service_entry),
+            port="pc",
+            edition=edition,
+        )
+    compiled, missing = compile_content_brief(task=task, template=template, brief=brief, form_fields=form_fields)
     selection = brief.visual_material
     requested_image_item_id = selection.image_item_id if selection else None
     requested_poster_template_id = selection.poster_template_id if selection else None

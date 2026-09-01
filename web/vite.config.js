@@ -29,6 +29,7 @@ export default defineConfig(({ mode }) => {
         ignored: ['**/node_modules/**', '**/dist/**'],
       },
       host: '0.0.0.0',
+      allowedHosts: ['ai.hi-run.net', '172.16.103.17'],
     }
   }
 })

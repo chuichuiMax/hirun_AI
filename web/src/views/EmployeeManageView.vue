@@ -48,6 +48,8 @@ const roleSelectOptions = computed(() => {
 const optionLabel = (options, value) =>
   options.find((item) => item.value === value)?.label || value || '-'
 
+const isSystemAccount = (employee) => employee?.source === 'user'
+
 const loginPortLabel = (ports) => {
   const selected = Array.isArray(ports) ? ports : []
   return LOGIN_PORT_OPTIONS.filter((item) => selected.includes(item.value))
@@ -104,6 +106,7 @@ const openCreate = async () => {
 }
 
 const openEdit = async (employee) => {
+  if (isSystemAccount(employee)) return
   editingId.value = employee.id
   await loadRoles()
   resetForm(employee)
@@ -159,6 +162,7 @@ const saveEmployee = async () => {
 }
 
 const toggleEnabled = async (employee, enabled) => {
+  if (isSystemAccount(employee)) return
   togglingId.value = employee.id
   try {
     await employeeApi.updateEmployee(employee.id, { enabled })
@@ -171,9 +175,10 @@ const toggleEnabled = async (employee, enabled) => {
 }
 
 const removeEmployee = (employee) => {
+  if (isSystemAccount(employee)) return
   Modal.confirm({
     title: `删除员工「${employee.name}」`,
-    content: '删除后不可恢复。',
+    content: '删除后不可恢复，对应平台登录账号将同时注销。',
     okText: '删除',
     okType: 'danger',
     cancelText: '取消',
@@ -208,7 +213,7 @@ onMounted(async () => {
           <a-input
             v-model:value="keywordInput"
             class="search-input"
-            placeholder="员工编码、姓名、登录账号"
+            placeholder="员工编码、姓名、登录账号、UID"
             allow-clear
             @pressEnter="handleSearch"
             @clear="handleSearch"
@@ -249,6 +254,7 @@ onMounted(async () => {
               <a-switch
                 size="small"
                 :checked="record.enabled"
+                :disabled="isSystemAccount(record)"
                 :loading="togglingId === record.id"
                 @change="(checked) => toggleEnabled(record, checked)"
               />
@@ -261,8 +267,13 @@ onMounted(async () => {
         <a-table-column title="操作" key="actions" :width="140">
           <template #default="{ record }">
             <div class="row-actions">
-              <a-button type="link" danger @click="removeEmployee(record)">删除</a-button>
-              <a-button type="link" @click="openEdit(record)">编辑</a-button>
+              <template v-if="isSystemAccount(record)">
+                <span class="system-account-hint">系统账号</span>
+              </template>
+              <template v-else>
+                <a-button type="link" danger @click="removeEmployee(record)">删除</a-button>
+                <a-button type="link" @click="openEdit(record)">编辑</a-button>
+              </template>
             </div>
           </template>
         </a-table-column>
@@ -290,6 +301,9 @@ onMounted(async () => {
         </a-form-item>
         <a-form-item label="登录账号" required>
           <a-input v-model:value="form.login_account" placeholder="请输入手机号码" allow-clear />
+        </a-form-item>
+        <a-form-item v-if="!editingId" label="初始密码">
+          <a-input value="123456" disabled />
         </a-form-item>
         <a-form-item label="性别" required>
           <a-radio-group v-model:value="form.gender">
@@ -413,6 +427,11 @@ onMounted(async () => {
     padding: 0 4px;
     height: auto;
   }
+}
+
+.system-account-hint {
+  color: var(--gray-500);
+  font-size: 12px;
 }
 
 .employee-form {
