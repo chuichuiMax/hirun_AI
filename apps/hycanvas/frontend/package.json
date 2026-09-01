@@ -9,7 +9,7 @@
     "prebuild": "node ../scripts/gen-theme.mjs",
     "build": "cross-env NODE_ENV=production next build",
     "prebuild:dist": "node ../scripts/gen-theme.mjs",
-    "build:dist": "cross-env NODE_ENV=production BUILD_DIST=true next build",
+    "build:dist": "cross-env NODE_ENV=production BUILD_DIST=true next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run"
