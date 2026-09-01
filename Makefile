@@ -1,5 +1,5 @@
 
-.PHONY: up up-lite down logs lint format seed reset
+.PHONY: up up-lite down logs lint format seed reset hycanvas-check hycanvas-build
 
 PYTEST_ARGS ?=
 
@@ -51,3 +51,11 @@ format:
 	cd backend && uv run ruff check --select I package --fix
 	cd web && pnpm run format
 	cd web && pnpm run lint
+
+hycanvas-check:
+	cd apps/hycanvas && npm run lint -w frontend
+	cd apps/hycanvas && docker run --rm -v "$$PWD/backend:/src" -v hycanvas-go-mod-cache:/go/pkg/mod -w /src golang:1.25-bookworm /usr/local/go/bin/go test ./...
+
+hycanvas-build:
+	cd apps/hycanvas && npm run build:packages
+	cd apps/hycanvas && HYCANVAS_AUTH_MODE=contentswarm CONTENTSWARM_URL=http://127.0.0.1:5173 BUILD_DIST=true npm run build:dist -w frontend

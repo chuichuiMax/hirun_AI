@@ -13,6 +13,13 @@ env/
 
 # 忽略 node_modules 文件夹（前端项目）
 web/node_modules/
+apps/hycanvas/node_modules/
+apps/hycanvas/frontend/node_modules/
+apps/hycanvas/frontend/.next/
+apps/hycanvas/frontend/out/
+apps/hycanvas/.data/
+apps/hycanvas/.local-build/
+apps/hycanvas/dist/
 
 # 忽略日志和临时文件
 *.log

@@ -217,6 +217,7 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 
 ```text
 contentSwarm/
+├── apps/hycanvas/                              # 内置视觉创作、模板与画布编辑模块
 ├── backend/
 │   ├── package/yuxi/content/                  # 内容规则、生成、校验与数据结构
 │   ├── package/yuxi/agents/buildin/content_workflow/
@@ -245,6 +246,16 @@ cd web
 pnpm install
 pnpm build
 pnpm lint
+```
+
+视觉创作模块：
+
+```bash
+cd apps/hycanvas
+npm install
+npm run lint -w frontend
+npm run build:packages
+HYCANVAS_AUTH_MODE=contentswarm CONTENTSWARM_URL=http://127.0.0.1:5173 BUILD_DIST=true npm run build:dist -w frontend
 ```
 
 后端测试：
