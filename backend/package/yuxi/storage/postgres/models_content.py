@@ -891,6 +891,7 @@ class ContentArtifact(Base):
     review_snapshot = Column(JSON, nullable=False, default=dict)
     cover_asset_id = Column(String(64), nullable=True, index=True)
     cover_job_id = Column(String(64), nullable=True, index=True)
+    hycanvas_design_snapshot = Column(JSON, nullable=False, default=dict)
     content_type_snapshot = Column(JSON, nullable=False, default=dict)
     angle_snapshot = Column(JSON, nullable=False, default=dict)
     pattern_slot_snapshot = Column(JSON, nullable=False, default=dict)
@@ -918,6 +919,7 @@ class ContentArtifact(Base):
             "review_snapshot": self.review_snapshot or {},
             "cover_asset_id": self.cover_asset_id,
             "cover_job_id": self.cover_job_id,
+            "hycanvas_design_snapshot": self.hycanvas_design_snapshot or {},
             "content_type_snapshot": self.content_type_snapshot or {},
             "angle_snapshot": self.angle_snapshot or {},
             "pattern_slot_snapshot": self.pattern_slot_snapshot or {},
@@ -949,6 +951,7 @@ class ContentArtifactVersion(Base):
     review_snapshot = Column(JSON, nullable=False, default=dict)
     cover_asset_id = Column(String(64), nullable=True, index=True)
     cover_job_id = Column(String(64), nullable=True, index=True)
+    hycanvas_design_snapshot = Column(JSON, nullable=False, default=dict)
     content_type_snapshot = Column(JSON, nullable=False, default=dict)
     angle_snapshot = Column(JSON, nullable=False, default=dict)
     pattern_slot_snapshot = Column(JSON, nullable=False, default=dict)

@@ -855,6 +855,48 @@ async def test_all_image_edit_modes_use_multipart_edit_endpoint(mode: str):
 
 
 @pytest.mark.asyncio
+async def test_siliconflow_image_edit_uses_generation_json_contract():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["content_type"] = request.headers["content-type"]
+        captured["payload"] = json.loads(request.content)
+        encoded = base64.b64encode(_image("#123456")).decode()
+        return httpx.Response(200, json={"images": [{"b64_json": encoded}]})
+
+    source = Image2Input(data=_image("#FFFFFF"), content_type="image/png", file_name="source.png")
+    config = Image2Config(
+        base_url="https://api.siliconflow.cn/v1",
+        api_key="test-key",
+        model="Qwen/Qwen-Image",
+        edit_path="/images/generations",
+        edit_model="Qwen/Qwen-Image-Edit-2509",
+        edit_request_format="siliconflow_json",
+    )
+    client = Image2Client(config, transport=httpx.MockTransport(handler))
+
+    async with client:
+        result = await client.submit(
+            Image2Request(
+                mode="image_to_image",
+                prompt="保留主体并优化构图",
+                negative_prompt="文字和水印",
+                size="1080x1440",
+                source_images=[source],
+            )
+        )
+
+    assert result.status == "completed"
+    assert captured["path"] == "/v1/images/generations"
+    assert captured["content_type"] == "application/json"
+    assert captured["payload"]["model"] == "Qwen/Qwen-Image-Edit-2509"
+    assert captured["payload"]["image"].startswith("data:image/png;base64,")
+    assert captured["payload"]["negative_prompt"] == "文字和水印"
+    assert "size" not in captured["payload"]
+
+
+@pytest.mark.asyncio
 async def test_image2_capability_probe_reports_model_contract_without_paid_generation():
     calls = []
 

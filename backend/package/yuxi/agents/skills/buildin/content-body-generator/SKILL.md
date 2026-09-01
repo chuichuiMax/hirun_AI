@@ -8,12 +8,16 @@ version: 2.0.0
 
 1. 只读取当前节点 `payload`；在简化工作流中与标题、大纲一次生成并保持一致。
 2. 严格沿用 `payload.content_outline`，按 `payload.strategy_snapshot.body_formula` 逐段兑现结构，并让 `creation_methods` 贯穿全文。
-3. 按锁定公式需要，从 `payload.evidence_bundle` 植入产品卖点、适用人群、价格、品牌或案例证明，只使用允许用于正文的证据。
-4. `style_reference` 仅用于结构和节奏参考，禁止复制原句、事实或数字，禁止写入 `paragraph_evidence`。
+   - `payload.formula_lexicon_bundle.required=true` 时，必须读取 `formula_lexicon_bundle.body` 中全部指定词库，并按各段 `lexicon_calls` 只使用对应词库的表达词条；不得跳过、改用标题词库或凭记忆补词。
+   - 当正文公式包含 `body_calling` 时，逐段执行其 `instruction` 和 `fill_rule`，只使用该段声明的 `lexicon_calls`；词库只决定表达，不得提供事实。
+   - 若大纲选择了 `variant_key`，正文的反差段只能使用该维度，禁止混入其他反差逻辑。
+   - 把正文实际采用的词库编码和原样词条写入 `draft.lexicon_usage`；必须覆盖各固定段落词库和所选 `variant_key` 对应词库，未实际使用的词条不得虚报。
+3. 按锁定公式需要，从 `payload.evidence_bundle` 植入产品卖点、适用人群、价格、品牌或案例证明，只使用允许用于正文的证据。引用知识库价格证据时，必须选择与当前内容相关的具体 SKU，并写出该 SKU 的明确价格和单位；不得只写“按元/平方米、元/项或元/间计价”“可参考价格表”“以实际为准”等空泛口径。若证据说明该价格不等同于本案总预算，应同时保留适用范围说明。
+4. `style_reference` 仅用于开头钩子、结构、节奏、互动方式和 emoji/表情符号位置模式参考；可沿用抽象模式，禁止复制原句、事实或数字，禁止写入 `paragraph_evidence`。
 5. 只使用 `payload.evidence_bundle` 中允许用于正文的事实；不得调用业务事实或知识库工具，不得补造客户、价格、参数、统计或效果。
 6. 正文和话题中的每个阿拉伯数字都必须来自运行时提供的数字白名单。不得编造数字示例、对比数字或统计数字，也不得使用阿拉伯数字或数字 emoji 作为段落编号；改用项目符号。
 7. 输出前逐项核对正文和话题里的数字；发现白名单外数字时，删除数字或把句子改为不含数字的事实表达。
-8. 正文控制在 200～650 字；每个事实段落通过 `paragraph_evidence` 关联实际使用的 Evidence ID。
+8. 正文控制在 200～650 字；每个事实段落通过 `paragraph_evidence` 关联实际使用的 Evidence ID。关联价格知识证据的段落必须真实出现该证据中的至少一个具体价格值，不能只挂 Evidence ID。
 9. 简化工作流严格提交 `GeneratedContentResultV1`，正文放入 `draft`；旧工作流仍提交 `ContentDraftResultV1`。
 
 保持平台无关正文；话题提供 3～8 个，不执行发布。

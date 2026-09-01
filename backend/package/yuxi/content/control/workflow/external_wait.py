@@ -99,7 +99,8 @@ class ExternalWaitNodeHandler:
                 },
                 thread_id=state["task_id"],
             )
-            raise RuntimeError(f"CoverJob {job.status}: {job.error_code or 'COVER_JOB_FAILED'}")
+            failure_detail = job.error_message or job.error_code or "COVER_JOB_FAILED"
+            raise RuntimeError(f"CoverJob {job.status}: {failure_detail}")
         asset_ids = list((job.result_json or {}).get("asset_ids") or [])
         if not asset_ids:
             raise RuntimeError("CoverJob 成功但没有返回资产")

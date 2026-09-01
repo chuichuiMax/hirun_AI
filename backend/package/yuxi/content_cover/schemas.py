@@ -9,6 +9,33 @@ COVER_SIZES = {"1080x1440", "1080x1080"}
 AI_MODES = {"text_to_image", "image_to_image", "multi_reference", "mask"}
 
 
+class HyCanvasDesignCreate(BaseModel):
+    artifact_id: str = Field(min_length=1, max_length=64)
+    template_id: str = Field(pattern=r"^xiaohongshu-[a-z0-9-]+$")
+    title: str = Field(min_length=1, max_length=200)
+    fields: dict[str, str]
+    image_asset_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("fields")
+    @classmethod
+    def validate_fields(cls, value: dict[str, str]) -> dict[str, str]:
+        if not value or len(value) > 20:
+            raise ValueError("模板字段数量必须在 1 到 20 之间")
+        if any(not label.strip() or len(text) > 500 for label, text in value.items()):
+            raise ValueError("模板字段名称不能为空，内容不能超过 500 字")
+        return value
+
+
+class HyCanvasDesignSync(BaseModel):
+    artifact_id: str = Field(min_length=1, max_length=64)
+
+
+class HyCanvasEditorSessionCreate(BaseModel):
+    artifact_id: str = Field(min_length=1, max_length=64)
+    return_url: str = Field(min_length=1, max_length=2000)
+    return_label: str = Field(default="返回 ContentFlow", min_length=1, max_length=40)
+
+
 class Image2GlobalConfigUpdate(BaseModel):
     base_url: str = Field(min_length=8, max_length=500)
     api_key: str | None = Field(default=None, max_length=500)

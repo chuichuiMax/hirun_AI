@@ -1476,6 +1476,44 @@ async def create_cover_compose_job(db: AsyncSession, user: User, payload: CoverC
     return {"job": serialize_job(job), "deduplicated": deduplicated}
 
 
+async def create_hycanvas_cover_job(
+    db: AsyncSession,
+    user: User,
+    *,
+    content_task_id: str,
+    source_asset_id: str,
+    template_id: str,
+    title: str,
+    fields: dict[str, str],
+    image_field_label: str | None,
+    idempotency_key: str,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    source = await ContentCoverRepository(db).get_asset_for_user(source_asset_id, _owner_uid(user))
+    if source is None or source.role not in {"source", "library_image"}:
+        raise _error(422, "COVER_SOURCE_ASSET_INVALID", "HyCanvas 主图不存在或角色不正确")
+    job, deduplicated = await _create_job(
+        db,
+        user,
+        mode="hycanvas",
+        content_task_id=content_task_id,
+        artifact_id=None,
+        idempotency_key=idempotency_key,
+        model="hycanvas-deterministic",
+        request={
+            "source_asset_ids": [source_asset_id],
+            "template_id": template_id,
+            "title": title,
+            "fields": fields,
+            "image_field_label": image_field_label,
+            "size": "1080x1440",
+            "parameters": parameters,
+            "processing_version": "hycanvas-v2-background-material",
+        },
+    )
+    return {"job": serialize_job(job), "deduplicated": deduplicated}
+
+
 async def _content_prompt(
     db: AsyncSession,
     user: User,

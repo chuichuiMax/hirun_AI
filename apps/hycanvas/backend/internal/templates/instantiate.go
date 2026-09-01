@@ -20,6 +20,7 @@ type InstantiateInput struct {
 	Title       string
 	Fields      map[string]string
 	Images      map[string]InstantiateImage
+	Background  *InstantiateImage
 }
 
 // Instantiate fills a template's declared text fields and creates a decoupled
@@ -55,12 +56,52 @@ func (s *Service) Instantiate(ctx context.Context, userID, templateID string, in
 	if err := fillImageFields(file, template.FillableFields, in.Images); err != nil {
 		return "", err
 	}
+	if in.Background != nil {
+		if err := applyBackgroundImage(file, *in.Background); err != nil {
+			return "", err
+		}
+	}
 	applied, _ := deepCopyDesign(file)
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		title = template.Title
 	}
 	return s.persist.CreateDesign(ctx, in.WorkspaceID, title, applied, &userID)
+}
+
+// applyBackgroundImage installs the caller-selected material as the immutable
+// bottom layer of every page. Template text and decoration stay above it and
+// remain editable, so a template contributes visual styling rather than
+// replacing the selected photo with its own page color.
+func applyBackgroundImage(file map[string]any, image InstantiateImage) error {
+	if image.DataBase64 == "" || !strings.HasPrefix(image.ContentType, "image/") {
+		return ErrBadRequest
+	}
+	src := fmt.Sprintf("data:%s;base64,%s", image.ContentType, image.DataBase64)
+	for pageIndex, pageRaw := range asArr(file["pages"]) {
+		page := asObj(pageRaw)
+		width, height := asNum(page["width"]), asNum(page["height"])
+		if width <= 0 || height <= 0 {
+			return ErrBadRequest
+		}
+		background := map[string]any{
+			"id":        fmt.Sprintf("contentswarm-background-%d", pageIndex),
+			"name":      "ContentSwarm 素材背景",
+			"type":      "image",
+			"transform": map[string]any{"x": 0.0, "y": 0.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.0},
+			"size":      map[string]any{"width": width, "height": height},
+			"opacity":   1.0,
+			"blendMode": "normal",
+			"locked":    true,
+			"fit":       "cover",
+			"source":    map[string]any{"assetId": "", "naturalWidth": 0.0, "naturalHeight": 0.0},
+			"src":       src,
+			"data":      map[string]any{"background": true, "source": "contentswarm-material-library"},
+		}
+		page["children"] = append([]any{background}, asArr(page["children"])...)
+		delete(page, "background")
+	}
+	return nil
 }
 
 func fillImageFields(file map[string]any, declarations []any, values map[string]InstantiateImage) error {

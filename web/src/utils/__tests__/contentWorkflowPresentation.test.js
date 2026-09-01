@@ -17,9 +17,10 @@ assert.deepEqual(buildContentNarrativeCodeLabels(null), {})
 
 const groupedNodeIds = CONTENT_WORKFLOW_GROUPS.flatMap((group) => group.nodes)
 assert.equal(CONTENT_WORKFLOW_GROUPS.length, 5)
-assert.equal(groupedNodeIds.length, 20)
-assert.equal(new Set(groupedNodeIds).size, 20)
+assert.equal(groupedNodeIds.length, 21)
+assert.equal(new Set(groupedNodeIds).size, 21)
 assert.ok(groupedNodeIds.every((nodeId) => CONTENT_WORKFLOW_NODE_LABELS[nodeId]))
+assert.equal(CONTENT_WORKFLOW_NODE_LABELS.load_formula_lexicons, '加载公式必选词库')
 assert.deepEqual(CONTENT_WORKFLOW_GROUPS.at(-1).nodes, [
   'plan_visuals',
   'submit_cover_job',
@@ -44,7 +45,7 @@ assert.equal(groups[1].isOpen, true)
 assert.equal(groups[1].currentNode.id, 'select_creation_strategy')
 assert.equal(groups[1].currentText, '当前：Agent 匹配创作手法、标题公式和正文公式')
 assert.equal(groups[1].completedCount, 0)
-assert.equal(groups[1].totalCount, 3)
+assert.equal(groups[1].totalCount, 4)
 
 const failedGroups = buildContentWorkflowGroups([
   { node_id: 'compile_runtime_snapshot', status: 'completed' },

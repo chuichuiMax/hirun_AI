@@ -1121,6 +1121,14 @@ def test_formal_content_agent_catalog_and_conflict_policy():
     strategy_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-strategy-agent")
     assert strategy_spec.reasoning_effort == "medium"
     assert strategy_spec.config_version == 4
+    generation_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-generation-agent")
+    assert generation_spec.skills == (
+        "content-title-generator",
+        "content-outline-builder",
+        "content-body-generator",
+        "content-human-expression",
+    )
+    assert generation_spec.config_version == 2
     spec = CONTENT_AGENT_SPECS[0]
     existing = Agent(
         slug=spec.slug,

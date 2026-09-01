@@ -9,6 +9,7 @@ import {
   CircleAlert,
   Clock3,
   Copy,
+  ExternalLink,
   FileClock,
   Folder,
   FileText,
@@ -95,6 +96,13 @@ const posterTemplateUrls = ref({})
 const materialSelectorLoading = ref(false)
 const galleryImagesLoading = ref(false)
 const posterTemplatesRefreshing = ref(false)
+const hycanvasTemplates = ref([])
+const hycanvasTemplatesLoading = ref(false)
+const selectedHyCanvasTemplateId = ref('')
+const hycanvasFields = reactive({})
+const hycanvasCreating = ref(false)
+const hycanvasDesign = ref(null)
+const hycanvasImageFile = ref(null)
 const workflowStreamElement = ref(null)
 const accumulatedWorkflowNarrative = ref([])
 const streamedWorkflowNarrative = ref('')
@@ -131,6 +139,79 @@ const selectedImageGalleryPath = computed(() => {
   const parent = materialGalleryMap.value.get(selectedImageGallery.value.parent_id)
   return parent ? `${parent.name} / ${selectedImageGallery.value.name}` : selectedImageGallery.value.name
 })
+const selectedHyCanvasTemplate = computed(() =>
+  hycanvasTemplates.value.find((item) => item.id === selectedHyCanvasTemplateId.value) || null
+)
+
+const suggestedHyCanvasValue = (label) => {
+  const body = String(editor.body || '').replace(/[#*_>`\n]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (label.includes('标题') || label.includes('语录')) return editor.title || store.artifact?.title || ''
+  if (label.includes('账号')) return `@${formValues.brand_name || '品牌账号'}`
+  if (label.includes('产品') || label.includes('店名') || label.includes('名称')) {
+    return formValues.brand_name || editor.title || ''
+  }
+  return body.slice(0, 80)
+}
+
+const initializeHyCanvasFields = () => {
+  Object.keys(hycanvasFields).forEach((key) => delete hycanvasFields[key])
+  for (const field of selectedHyCanvasTemplate.value?.fillable_fields?.filter((item) => item.kind === 'text') || []) {
+    hycanvasFields[field.label] = suggestedHyCanvasValue(field.label)
+  }
+}
+
+const selectHyCanvasImage = (event) => {
+  hycanvasImageFile.value = event.target.files?.[0] || null
+}
+
+const loadHyCanvasTemplates = async () => {
+  if (hycanvasTemplatesLoading.value || hycanvasTemplates.value.length) return
+  hycanvasTemplatesLoading.value = true
+  try {
+    const response = await contentApi.listHyCanvasTemplates()
+    hycanvasTemplates.value = response.templates || []
+    selectedHyCanvasTemplateId.value =
+      store.task?.brief?.visual_material?.hycanvas_template_id ||
+      store.artifact?.hycanvas_design_snapshot?.template_id ||
+      ''
+    initializeHyCanvasFields()
+  } catch (error) {
+    if (error?.response?.data?.detail?.code !== 'hycanvas_not_configured') {
+      message.warning(error.message || '小红书模板专区加载失败')
+    }
+  } finally {
+    hycanvasTemplatesLoading.value = false
+  }
+}
+
+const createHyCanvasDesign = async () => {
+  if (!selectedHyCanvasTemplateId.value) {
+    message.warning('请选择小红书模板')
+    return
+  }
+  hycanvasCreating.value = true
+  try {
+    let imageAssetId = null
+    if (hycanvasImageFile.value) {
+      const uploaded = await contentApi.uploadCoverAsset(hycanvasImageFile.value, 'source', store.task?.id)
+      imageAssetId = uploaded.asset.id
+    }
+    hycanvasDesign.value = await contentApi.createHyCanvasDesign({
+      artifact_id: store.artifact.id,
+      template_id: selectedHyCanvasTemplateId.value,
+      title: editor.title || selectedHyCanvasTemplate.value?.title || '小红书视觉稿',
+      fields: { ...hycanvasFields },
+      image_asset_id: imageAssetId
+    })
+    store.artifact = hycanvasDesign.value.artifact
+    message.success('视觉稿已创建，并自动绑定为当前版本封面')
+    window.open(hycanvasDesign.value.editor_url, '_blank', 'noopener,noreferrer')
+  } catch (error) {
+    message.error(error.message || '创建 HyCanvas 视觉稿失败')
+  } finally {
+    hycanvasCreating.value = false
+  }
+}
 
 const STUDIO_ENTRIES = [
   {
@@ -426,6 +507,7 @@ const initializeVisualSelection = () => {
   selectedImageItemId.value = store.task?.selected_image_item_id || saved.image_item_id || ''
   selectedPosterTemplateId.value =
     store.task?.selected_poster_template_id || saved.poster_template_id || ''
+  selectedHyCanvasTemplateId.value = saved.hycanvas_template_id || ''
 }
 
 const loadGalleryImages = async () => {
@@ -607,7 +689,7 @@ const loadVisualMaterials = async () => {
   try {
     const [galleryResponse] = await Promise.all([
       materialLibraryApi.listGalleries(),
-      refreshPosterTemplates({ notifySelectionReset: false })
+      loadHyCanvasTemplates()
     ])
     materialGalleries.value = galleryResponse.galleries || []
     const savedCategoryId =
@@ -795,6 +877,22 @@ watch(
   }
 )
 
+watch(selectedHyCanvasTemplateId, initializeHyCanvasFields)
+watch(
+  () => store.artifact?.hycanvas_design_snapshot,
+  (snapshot) => {
+    hycanvasDesign.value = snapshot?.design_id ? snapshot : null
+  },
+  { immediate: true, deep: true }
+)
+watch(
+  () => store.artifact?.id,
+  (artifactId) => {
+    if (artifactId) void loadHyCanvasTemplates()
+  },
+  { immediate: true }
+)
+
 onMounted(async () => {
   window.addEventListener('focus', syncPosterTemplatesWhenVisible)
   document.addEventListener('visibilitychange', syncPosterTemplatesWhenVisible)
@@ -803,6 +901,23 @@ onMounted(async () => {
     await store.loadBootstrap(true)
     if (taskId.value) {
       await store.loadTask(taskId.value)
+      if (route.query.hycanvasReturn === '1' && route.query.designId && store.artifact?.id) {
+        try {
+          const synced = await contentApi.syncHyCanvasDesign(
+            String(route.query.designId),
+            store.artifact.id
+          )
+          store.artifact = synced.artifact
+          message.success('HyCanvas 编辑结果已更新为当前封面')
+        } catch (error) {
+          message.error(error.message || 'HyCanvas 编辑结果同步失败')
+        } finally {
+          const nextQuery = { ...route.query, resultDetail: '1' }
+          delete nextQuery.hycanvasReturn
+          delete nextQuery.designId
+          await router.replace({ query: nextQuery })
+        }
+      }
       initializeFormValues()
       initializeVisualSelection()
       syncEditor()
@@ -888,7 +1003,8 @@ const buildBrief = () => ({
   visual_material: selectedImageItemId.value
     ? {
         image_item_id: selectedImageItemId.value,
-        poster_template_id: selectedPosterTemplateId.value || null
+        poster_template_id: null,
+        hycanvas_template_id: selectedHyCanvasTemplateId.value
       }
     : null
 })
@@ -902,7 +1018,7 @@ const scheduleBriefSave = () => {
 }
 
 watch(formValues, scheduleBriefSave, { deep: true })
-watch([selectedImageItemId, selectedPosterTemplateId], scheduleBriefSave)
+watch([selectedImageItemId, selectedHyCanvasTemplateId], scheduleBriefSave)
 onBeforeUnmount(() => {
   window.clearTimeout(draftSaveTimer)
   window.clearTimeout(workflowNarrativeTimer)
@@ -925,6 +1041,14 @@ const compileBrief = async () => {
   )
   if (missing) {
     message.warning(`请填写${missing.label}`)
+    return
+  }
+  if (!selectedImageItemId.value) {
+    message.warning('请选择一张图库原图')
+    return
+  }
+  if (!selectedHyCanvasTemplateId.value) {
+    message.warning('请选择一个 HyCanvas 小红书模板')
     return
   }
   try {
@@ -1074,6 +1198,30 @@ const copyResultText = async (value, label) => {
 }
 
 const openCoverEditor = async () => {
+  const snapshot = store.artifact?.hycanvas_design_snapshot
+  if (snapshot?.design_id && snapshot?.editor_url) {
+    const returnRoute = router.resolve({
+      path: route.path,
+      query: {
+        ...route.query,
+        resultDetail: '1',
+        hycanvasReturn: '1',
+        designId: snapshot.design_id
+      }
+    })
+    const sessionKey = crypto.randomUUID()
+    sessionStorage.setItem(
+      `hycanvas-editor:${sessionKey}`,
+      JSON.stringify({
+        designId: snapshot.design_id,
+        artifactId: store.artifact.id,
+        returnUrl: new URL(returnRoute.href, window.location.origin).toString(),
+        returnLabel: '返回内容结果'
+      })
+    )
+    await router.push({ name: 'HyCanvasWorkspace', query: { session: sessionKey } })
+    return
+  }
   const assetId = store.artifact?.cover_asset_id
   if (!assetId) {
     message.warning('当前内容还没有可编辑封面')
@@ -1290,61 +1438,34 @@ const openVersions = async () => {
               <div class="material-selector-block template-selector-block">
                 <div class="material-selector-title">
                   <div>
-                    <LayoutTemplate :size="18" /><strong>选择封面模板</strong><em>可选 · 单选</em>
-                    <span class="template-sync-status">
-                      <RefreshCw :class="{ spin: posterTemplatesRefreshing }" :size="13" />与素材库实时同步
-                    </span>
+                    <LayoutTemplate :size="18" /><strong>HyCanvas 小红书模板专区</strong><em>必选 · 单选</em>
                   </div>
-                  <small>选择结果随业务简报保存，后续恢复视觉流程时可直接沿用。</small>
+                  <small>标题、副标题和图库原图将在内容生成后自动填入，并保留可编辑设计稿。</small>
                 </div>
                 <div class="poster-choice-grid">
                   <button
-                    type="button"
-                    class="poster-choice automatic"
-                    :class="{ selected: !selectedPosterTemplateId }"
-                    :aria-pressed="!selectedPosterTemplateId"
-                    @click="selectedPosterTemplateId = ''"
-                  >
-                    <span class="poster-auto-preview"><Sparkles :size="24" /></span>
-                    <strong>暂不指定模板</strong>
-                    <small>仅生产标题与正文</small>
-                    <CheckCircle2 v-if="!selectedPosterTemplateId" class="choice-check" :size="20" />
-                  </button>
-                  <button
-                    v-for="item in posterTemplates"
+                    v-for="item in hycanvasTemplates"
                     :key="item.id"
                     type="button"
                     class="poster-choice"
-                    :class="{
-                      selected: selectedPosterTemplateId === item.poster_template_id,
-                      unavailable: !item.selectable
-                    }"
-                    :aria-pressed="selectedPosterTemplateId === item.poster_template_id"
-                    :aria-disabled="!item.selectable"
-                    :disabled="!item.selectable"
-                    @click="selectedPosterTemplateId = item.poster_template_id"
+                    :class="{ selected: selectedHyCanvasTemplateId === item.id }"
+                    :aria-pressed="selectedHyCanvasTemplateId === item.id"
+                    @click="selectedHyCanvasTemplateId = item.id"
                   >
                     <span class="poster-preview">
-                      <img v-if="posterTemplateUrls[item.id]" :src="posterTemplateUrls[item.id]" :alt="item.name" />
+                      <img v-if="item.preview_urls?.[0]" :src="item.preview_urls[0]" :alt="item.title" />
                       <LayoutTemplate v-else :size="24" />
                     </span>
-                    <strong>{{ item.name }}</strong>
-                    <small>
-                      {{ item.category_name || '未分类' }}
-                      <template v-if="!item.selectable">
-                        · {{ item.status === 'disabled' && item.template_status === 'needs_review' ? '待校对' : item.status === 'disabled' ? '已停用' : item.template_status === 'needs_annotation' ? '待标注' : '不可用' }}
-                      </template>
-                    </small>
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ item.format?.width }} × {{ item.format?.height }}</small>
                     <CheckCircle2
-                      v-if="selectedPosterTemplateId === item.poster_template_id"
+                      v-if="selectedHyCanvasTemplateId === item.id"
                       class="choice-check"
                       :size="20"
                     />
                   </button>
                 </div>
-                <a-button type="link" class="template-manage-link" @click="router.push('/materials/cover-templates')">
-                  管理封面模板
-                </a-button>
+                <a-empty v-if="!hycanvasTemplates.length" description="HyCanvas 尚未配置或暂无小红书模板" />
               </div>
             </a-spin>
           </section>
@@ -1702,6 +1823,63 @@ const openVersions = async () => {
               </div>
               <img v-else-if="coverUrl" :src="coverUrl" alt="本次生成封面" />
               <a-empty v-else description="封面暂时无法预览" />
+            </section>
+            <section class="hycanvas-panel">
+              <div class="hycanvas-heading">
+                <div>
+                  <span class="section-kicker">可编辑视觉稿</span>
+                  <h3>小红书模板专区</h3>
+                  <p>把当前内容填入 HyCanvas 模板，创建后可继续精细调整并服务端高清出图。</p>
+                </div>
+                <a-button
+                  v-if="hycanvasDesign"
+                  :href="hycanvasDesign.editor_url"
+                  target="_blank"
+                >
+                  <ExternalLink :size="15" />继续编辑
+                </a-button>
+              </div>
+              <a-spin :spinning="hycanvasTemplatesLoading">
+                <div v-if="hycanvasTemplates.length" class="hycanvas-template-grid">
+                  <button
+                    v-for="item in hycanvasTemplates"
+                    :key="item.id"
+                    type="button"
+                    :class="{ selected: selectedHyCanvasTemplateId === item.id }"
+                    @click="selectedHyCanvasTemplateId = item.id"
+                  >
+                    <LayoutTemplate :size="20" />
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ item.format?.width }} × {{ item.format?.height }}</small>
+                  </button>
+                </div>
+                <a-empty v-else description="HyCanvas 尚未配置或暂无小红书模板" />
+              </a-spin>
+              <div v-if="selectedHyCanvasTemplate" class="hycanvas-fields">
+                <label v-for="field in selectedHyCanvasTemplate.fillable_fields.filter((item) => item.kind === 'text')" :key="field.nodeId">
+                  <span>{{ field.label }}</span>
+                  <a-textarea v-model:value="hycanvasFields[field.label]" :rows="2" :placeholder="field.hint" />
+                </label>
+              </div>
+              <label
+                v-if="selectedHyCanvasTemplate?.fillable_fields?.some((item) => item.kind === 'image')"
+                class="hycanvas-image-field"
+              >
+                <span>替换模板主图（可选）</span>
+                <input type="file" accept="image/png,image/jpeg,image/webp" @change="selectHyCanvasImage" />
+                <small>{{ hycanvasImageFile?.name || '不选择时保留模板原图区域' }}</small>
+              </label>
+              <div class="hycanvas-actions">
+                <span v-if="hycanvasDesign">设计稿 {{ hycanvasDesign.design_id }} 已绑定为版本 {{ hycanvasDesign.artifact_version || store.artifact.current_version }} 的封面</span>
+                <a-button
+                  type="primary"
+                  :loading="hycanvasCreating"
+                  :disabled="!selectedHyCanvasTemplate"
+                  @click="createHyCanvasDesign"
+                >
+                  <WandSparkles :size="15" />创建可编辑视觉稿
+                </a-button>
+              </div>
             </section>
             <label class="field-block"><span>标题</span><a-input v-model:value="editor.title" /></label>
             <label class="field-block"><span>正文</span><a-textarea v-model:value="editor.body" :rows="18" /></label>
@@ -2220,6 +2398,23 @@ const openVersions = async () => {
 .artifact-cover-heading span, .artifact-cover-heading small { color: var(--color-text-tertiary); font-size: 12px; }
 .artifact-cover-heading small { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-cover-preview img { width: min(100%, 320px); aspect-ratio: 3 / 4; align-self: center; border-radius: 8px; object-fit: cover; box-shadow: 0 8px 24px var(--shadow-3); }
+.hycanvas-panel { display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid var(--color-primary-100); border-radius: 8px; background: var(--color-primary-50); }
+.hycanvas-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.hycanvas-heading h3, .hycanvas-heading p { margin: 0; }
+.hycanvas-heading p { margin-top: 5px; color: var(--color-text-secondary); font-size: 13px; }
+.hycanvas-template-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-height: 210px; overflow: auto; }
+.hycanvas-template-grid button { display: grid; gap: 5px; min-width: 0; padding: 12px; border: 1px solid var(--gray-200); border-radius: 7px; color: var(--color-text-primary); text-align: left; background: var(--gray-0); cursor: pointer; }
+.hycanvas-template-grid button.selected { border-color: var(--color-primary-700); box-shadow: 0 0 0 2px var(--color-primary-100); }
+.hycanvas-template-grid strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hycanvas-template-grid small { color: var(--color-text-tertiary); }
+.hycanvas-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.hycanvas-fields label { display: grid; gap: 5px; }
+.hycanvas-fields label span { color: var(--color-text-secondary); font-size: 12px; font-weight: 600; }
+.hycanvas-image-field { display: grid; gap: 6px; padding: 12px; border: 1px dashed var(--gray-300); border-radius: 7px; background: var(--gray-0); }
+.hycanvas-image-field span { font-size: 13px; font-weight: 600; }
+.hycanvas-image-field small { color: var(--color-text-tertiary); }
+.hycanvas-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.hycanvas-actions span { margin-right: auto; color: var(--color-success-700); font-size: 12px; }
 .cover-preview-loading { min-height: 240px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-secondary); background: var(--gray-25); border-radius: 8px; }
 .editor-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .review-sidebar { display: flex; flex-direction: column; gap: 16px; align-self: start; }
@@ -2265,6 +2460,7 @@ const openVersions = async () => {
   .result-detail-content { padding: 0 16px; }
   .result-detail-footer :deep(.ant-btn) { min-width: 0; flex: 1; }
   .template-grid, .dynamic-form { grid-template-columns: 1fr; }
+  .hycanvas-template-grid, .hycanvas-fields { grid-template-columns: 1fr; }
   .dynamic-form .field-block { grid-column: auto; }
   .header-actions, .stage-actions, .stage-actions.split, .editor-actions { width: 100%; flex-direction: column; }
   .visual-material-heading, .material-selector-title { flex-direction: column; }

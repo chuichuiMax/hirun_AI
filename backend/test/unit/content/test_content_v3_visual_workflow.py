@@ -206,6 +206,7 @@ async def test_external_wait_never_falls_back_from_failed_or_cancelled_cover(sta
         content_task_id="task-1",
         status=status,
         error_code="PROVIDER_FAILED",
+        error_message="供应商余额不足",
         created_at=None,
     )
 
@@ -224,7 +225,7 @@ async def test_external_wait_never_falls_back_from_failed_or_cancelled_cover(sta
 
     monkeypatch.setattr(wait_module, "ContentCoverRepository", FakeRepo)
     monkeypatch.setattr(wait_module, "append_run_stream_event", ignore_event)
-    with pytest.raises(RuntimeError, match=status):
+    with pytest.raises(RuntimeError, match=f"{status}: 供应商余额不足"):
         await ExternalWaitNodeHandler().execute(
             db=object(),
             node={
@@ -245,7 +246,7 @@ async def test_external_wait_never_falls_back_from_failed_or_cancelled_cover(sta
 async def test_cover_tool_uses_locked_plan_and_persists_event_resume_metadata(monkeypatch):
     captured = []
     events = []
-    visual_plan = {**_visual_plan(), "plan_hash": "a" * 64}
+    visual_plan = {**_visual_plan(), "mode": "mixed", "plan_hash": "a" * 64}
     node_input = SimpleNamespace(
         task_id="task-1",
         parent_run_id="run-parent",
@@ -322,6 +323,7 @@ async def test_cover_tool_uses_locked_plan_and_persists_event_resume_metadata(mo
     assert captured[0].size == "1080x1440"
     assert captured[0].title == "真实施工过程"
     assert captured[0].source_asset_ids == ["source-1"]
+    assert captured[0].mode == "image_to_image"
     assert captured[0].parameters["workflow_resume"] == {
         "parent_run_id": "run-parent",
         "node_id": "wait_cover_job",

@@ -36,10 +36,10 @@ CONTENT_AGENT_SPECS = (
     ContentAgentSpec(
         slug="content-research-agent",
         name="内容调研 Agent",
-        description="在任务权限与证据缺口内收集可追溯资料。",
+        description="按锁定策略收集真实业务资料与爆款结构参考。",
         skills=("content-evidence-researcher", "strategy-product-researcher"),
         skill_tools=("get_business_facts", "query_kb", "open_kb_document", "find_kb_document"),
-        config_version=2,
+        config_version=3,
     ),
     ContentAgentSpec(
         slug="content-title-agent",
@@ -60,10 +60,15 @@ CONTENT_AGENT_SPECS = (
     ContentAgentSpec(
         slug="content-generation-agent",
         name="内容创作 Agent",
-        description="按已锁定的创作手法、标题公式和正文公式，一次生成标题、大纲与正文。",
-        skills=("content-title-generator", "content-outline-builder", "content-body-generator"),
+        description="按已锁定的创作手法与公式，一次生成标题、大纲和具备自然语气、情绪与人设表达的正文。",
+        skills=(
+            "content-title-generator",
+            "content-outline-builder",
+            "content-body-generator",
+            "content-human-expression",
+        ),
         skill_tools=(),
-        config_version=1,
+        config_version=2,
     ),
     ContentAgentSpec(
         slug="content-review-agent",

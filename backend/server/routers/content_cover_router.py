@@ -15,6 +15,9 @@ from yuxi.content_cover.schemas import (
     CoverGenerateCreate,
     CoverRetryCreate,
     CoverSetCurrentCreate,
+    HyCanvasDesignCreate,
+    HyCanvasDesignSync,
+    HyCanvasEditorSessionCreate,
     Image2ConfigTestRequest,
     Image2GlobalConfigUpdate,
     PosterGenerateCreate,
@@ -54,9 +57,70 @@ from yuxi.services.content_cover_service import (
     update_cover_editor_project,
     update_poster_template,
 )
+from yuxi.services.hycanvas_service import HyCanvasClient
 from yuxi.storage.postgres.models_business import User
 
 content_covers = APIRouter(prefix="/content/covers", tags=["content-covers"])
+
+
+@content_covers.get("/hycanvas/templates")
+async def hycanvas_templates(current_user: User = Depends(get_required_user)):
+    del current_user
+    return await HyCanvasClient.from_env().list_xiaohongshu_templates()
+
+
+@content_covers.post("/hycanvas/designs", status_code=status.HTTP_201_CREATED)
+async def create_hycanvas_design(
+    payload: HyCanvasDesignCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await HyCanvasClient.from_env().create_and_bind(db, current_user, payload)
+
+
+@content_covers.post("/hycanvas/designs/{design_id}/sync")
+async def sync_hycanvas_design(
+    design_id: str,
+    payload: HyCanvasDesignSync,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await HyCanvasClient.from_env().sync_and_bind(db, current_user, payload.artifact_id, design_id)
+
+
+@content_covers.post("/hycanvas/designs/{design_id}/editor-session")
+async def create_hycanvas_editor_session(
+    design_id: str,
+    payload: HyCanvasEditorSessionCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await HyCanvasClient.from_env().create_editor_session(
+        db,
+        current_user,
+        payload.artifact_id,
+        design_id,
+        payload.return_url,
+        payload.return_label,
+    )
+
+
+@content_covers.post("/hycanvas/workspace-session")
+async def create_hycanvas_workspace_session(
+    current_user: User = Depends(get_required_user),
+):
+    del current_user
+    return await HyCanvasClient.from_env().create_workspace_session()
+
+
+@content_covers.get("/hycanvas/designs/{design_id}/render.png")
+async def render_hycanvas_design(
+    design_id: str,
+    current_user: User = Depends(get_required_user),
+):
+    del current_user
+    content, content_type = await HyCanvasClient.from_env().render_png(design_id)
+    return Response(content=content, media_type=content_type)
 
 
 @content_covers.get("/bootstrap")

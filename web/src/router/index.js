@@ -79,9 +79,7 @@ const router = createRouter({
         },
         {
           path: 'cover-templates',
-          name: 'MaterialCoverTemplates',
-          component: () => import('../views/MaterialLibraryView.vue'),
-          meta: { keepAlive: false, requiresAuth: true }
+          redirect: '/materials/images'
         }
       ]
     },
@@ -138,6 +136,19 @@ const router = createRouter({
           name: 'ContentRules',
           component: () => import('../views/ContentRuleLibraryView.vue'),
           meta: { keepAlive: false, requiresAuth: true, requiresAdmin: true }
+        }
+      ]
+    },
+    {
+      path: '/hycanvas',
+      name: 'hycanvas',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'HyCanvasWorkspace',
+          component: () => import('../views/HyCanvasWorkspaceView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
         }
       ]
     },

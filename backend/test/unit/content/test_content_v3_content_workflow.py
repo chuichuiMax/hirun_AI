@@ -17,7 +17,7 @@ from yuxi.agents.buildin.content_workflow.state import ContentWorkflowState
 from yuxi.content.control.workflow.agent_node import AgentNodeHandler, AgentNodeResultMapper
 from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler, _derive_scene_evidence
 from yuxi.content.control.errors import ContentApplicationError
-from yuxi.content.control.workflow.revision import resolve_revision_reason
+from yuxi.content.control.workflow.revision import resolve_revision_reason, revision_reason_label
 from yuxi.content.v3.workflow import WORKFLOW_V3
 from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
 
@@ -28,7 +28,10 @@ from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
     [
         ("TITLE_TOO_LONG", "TITLE_VALIDATION_FAILED"),
         ("PERSONA_TONE_MISMATCH", "PERSONA_STYLE_FAILED"),
+        ("MECHANICAL_META_EXPRESSION", "PERSONA_STYLE_FAILED"),
         ("EVIDENCE_REFERENCE_FORBIDDEN", "BODY_EVIDENCE_FAILED"),
+        ("KNOWLEDGE_EVIDENCE_UNUSED", "BODY_EVIDENCE_FAILED"),
+        ("KNOWLEDGE_PRICE_DETAIL_UNUSED", "BODY_EVIDENCE_FAILED"),
         ("BODY_LENGTH_OUT_OF_RANGE", "BODY_STRUCTURE_FAILED"),
     ],
 )
@@ -52,6 +55,13 @@ def test_revision_reason_is_empty_when_all_checks_pass():
         )
         is None
     )
+
+
+@pytest.mark.unit
+def test_revision_reason_label_never_exposes_internal_code():
+    assert revision_reason_label("BODY_EVIDENCE_FAILED") == "正文缺少有效的事实证据引用"
+    assert revision_reason_label("PERSONA_STYLE_FAILED") == "正文语气或人设表达不符合要求"
+    assert revision_reason_label("UNKNOWN_REASON") == "内容校验发现阻断问题"
 
 
 @pytest.mark.unit
@@ -312,26 +322,11 @@ def test_combined_value_direction_mapper_selects_only_its_own_candidate():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("node_id", "state", "result_key"),
-    [
-        (
-            "collect_missing_evidence",
-            {"evidence_gap_analysis": {"has_missing": False}},
-            "evidence_collection",
-        ),
-        (
-            "rank_formula_candidates",
-            {
-                "formula_candidate_pool": {
-                    "valid_formula_pairs": [{"title_formula_code": "T03", "body_formula_code": "C03"}]
-                }
-            },
-            "formula_rankings",
-        ),
-    ],
-)
-async def test_conditional_agent_nodes_skip_delegation(node_id, state, result_key):
+async def test_formula_ranking_skips_delegation_for_single_valid_pair():
+    node_id = "rank_formula_candidates"
+    state = {
+        "formula_candidate_pool": {"valid_formula_pairs": [{"title_formula_code": "T03", "body_formula_code": "C03"}]}
+    }
     node_run = SimpleNamespace(id="node-run-1")
     task = SimpleNamespace(id="task-1")
     user = SimpleNamespace(uid="user-1")
@@ -359,7 +354,7 @@ async def test_conditional_agent_nodes_skip_delegation(node_id, state, result_ke
         node_run_id="node-run-1",
     )
 
-    assert result[result_key]["skipped"] is True
+    assert result["formula_rankings"]["skipped"] is True
 
 
 @pytest.mark.asyncio

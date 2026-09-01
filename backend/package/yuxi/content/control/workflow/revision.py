@@ -4,6 +4,20 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
+_REVISION_REASON_LABELS = {
+    "TITLE_VALIDATION_FAILED": "标题不符合公式或发布要求",
+    "BODY_STRUCTURE_FAILED": "正文结构或表达不符合要求",
+    "BODY_EVIDENCE_FAILED": "正文缺少有效的事实证据引用",
+    "PERSONA_STYLE_FAILED": "正文语气或人设表达不符合要求",
+    "SYSTEM_CONFIGURATION_FAILED": "系统配置校验失败",
+    "REVIEW_CONTRACT_VIOLATION": "审核结果格式不符合要求",
+}
+
+
+def revision_reason_label(reason_code: str | None) -> str:
+    return _REVISION_REASON_LABELS.get(str(reason_code or "").upper(), "内容校验发现阻断问题")
+
+
 @dataclass(frozen=True, slots=True)
 class RevisionDecision:
     status: Literal["route", "continue", "limit_reached"]
@@ -87,11 +101,14 @@ def resolve_revision_reason(
         "TITLE_PRODUCT_EVIDENCE_NOT_USED": "TITLE_VALIDATION_FAILED",
         "PERSONA_TONE_MISMATCH": "PERSONA_STYLE_FAILED",
         "PERSONA_STYLE_MISMATCH": "PERSONA_STYLE_FAILED",
+        "MECHANICAL_META_EXPRESSION": "PERSONA_STYLE_FAILED",
         "EVIDENCE_REFERENCE_FORBIDDEN": "BODY_EVIDENCE_FAILED",
         "FACT_NUMBER_WITHOUT_SOURCE": "BODY_EVIDENCE_FAILED",
         "NUMERIC_CLAIM_UNSUPPORTED": "BODY_EVIDENCE_FAILED",
         "FACT_CHECK_FAILED": "BODY_EVIDENCE_FAILED",
         "FACT_INCONSISTENT": "BODY_EVIDENCE_FAILED",
+        "KNOWLEDGE_EVIDENCE_UNUSED": "BODY_EVIDENCE_FAILED",
+        "KNOWLEDGE_PRICE_DETAIL_UNUSED": "BODY_EVIDENCE_FAILED",
         "BODY_PRODUCT_EVIDENCE_NOT_USED": "BODY_EVIDENCE_FAILED",
         "BODY_LENGTH_OUT_OF_RANGE": "BODY_STRUCTURE_FAILED",
         "BODY_FORMULA_MISMATCH": "BODY_STRUCTURE_FAILED",
@@ -116,4 +133,4 @@ def resolve_revision_reason(
     return "REVIEW_CONTRACT_VIOLATION"
 
 
-__all__ = ["RevisionDecision", "RevisionRouteController", "resolve_revision_reason"]
+__all__ = ["RevisionDecision", "RevisionRouteController", "resolve_revision_reason", "revision_reason_label"]

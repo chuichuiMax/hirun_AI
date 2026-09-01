@@ -158,7 +158,12 @@ func templatesInstantiateHandler(tm *templates.Service) http.HandlerFunc {
 			WorkspaceID string            `json:"workspaceId"`
 			Title       string            `json:"title"`
 			Fields      map[string]string `json:"fields"`
-			Images      map[string]struct {
+			Background  *struct {
+				Filename    string `json:"filename"`
+				ContentType string `json:"contentType"`
+				DataBase64  string `json:"dataBase64"`
+			} `json:"backgroundImage"`
+			Images map[string]struct {
 				Filename    string `json:"filename"`
 				ContentType string `json:"contentType"`
 				DataBase64  string `json:"dataBase64"`
@@ -179,11 +184,18 @@ func templatesInstantiateHandler(tm *templates.Service) http.HandlerFunc {
 				Filename: image.Filename, ContentType: image.ContentType, DataBase64: image.DataBase64,
 			}
 		}
+		var background *templates.InstantiateImage
+		if body.Background != nil {
+			background = &templates.InstantiateImage{
+				Filename: body.Background.Filename, ContentType: body.Background.ContentType, DataBase64: body.Background.DataBase64,
+			}
+		}
 		designID, err := tm.Instantiate(r.Context(), u.ID, chi.URLParam(r, "id"), templates.InstantiateInput{
 			WorkspaceID: body.WorkspaceID,
 			Title:       body.Title,
 			Fields:      body.Fields,
 			Images:      images,
+			Background:  background,
 		})
 		if err != nil {
 			templatesProblem(w, r, err)

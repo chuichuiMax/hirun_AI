@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from langchain_core.tools import StructuredTool, ToolException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class StrictContract(BaseModel):
@@ -124,6 +124,7 @@ class CollectSelectedStrategyEvidenceInputV1(StrictContract):
     rule_version_id: str
     content_brief: dict[str, Any] = Field(min_length=1)
     strategy_selection: dict[str, Any] = Field(min_length=1)
+    strategy_snapshot: dict[str, Any] = Field(min_length=1)
     evidence_gap_analysis: dict[str, Any] = Field(min_length=1)
     evidence_bundle: dict[str, Any] = Field(min_length=1)
 
@@ -279,10 +280,40 @@ class PersonaStylePolishInputV1(GenerateBodyInputV1):
 class GenerateContentInputV1(StrictContract):
     content_brief: dict[str, Any] = Field(min_length=1)
     strategy_snapshot: StrategySnapshotV1
+    formula_lexicon_bundle: dict[str, Any] = Field(min_length=1)
     evidence_bundle: dict[str, Any] = Field(min_length=1)
     channel_profile: dict[str, Any]
     persona_profile: dict[str, Any]
     validation_report: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def verify_formula_lexicon_bundle(self) -> GenerateContentInputV1:
+        bundle = self.formula_lexicon_bundle
+        title_formula_code = self.strategy_snapshot.title_formula.get("code")
+        body_formula_code = self.strategy_snapshot.body_formula.get("code")
+        if bundle.get("title_formula_code") != title_formula_code:
+            raise ValueError("标题词库包必须匹配锁定标题公式")
+        if bundle.get("body_formula_code") != body_formula_code:
+            raise ValueError("正文词库包必须匹配锁定正文公式")
+        if title_formula_code in {f"T{index:02d}" for index in range(1, 8)} and body_formula_code in {
+            f"C{index:02d}" for index in range(1, 5)
+        }:
+            if bundle.get("required") is not True:
+                raise ValueError("装修标题和正文公式必须经过必选词库加载路径")
+        if bundle.get("required") is True:
+            for scope in ("title", "body"):
+                entries = bundle.get(scope)
+                if not isinstance(entries, list) or not entries:
+                    raise ValueError(f"装修内容生成缺少必选{scope}词库")
+                incomplete = any(
+                    not item.get("knowledge_base_id") or not item.get("file_id") or not item.get("chunks")
+                    for item in entries
+                )
+                if incomplete:
+                    raise ValueError(f"装修内容生成的必选{scope}词库未完整加载")
+            if not bundle.get("bundle_hash"):
+                raise ValueError("装修内容生成的必选词库包缺少 hash")
+        return self
 
 
 class SemanticReviewInputV1(StrictContract):
@@ -306,11 +337,28 @@ class PlanVisualsInputV1(StrictContract):
     artifact_version: dict[str, Any] = Field(min_length=1)
     channel_profile: dict[str, Any]
 
+    @field_validator("media_evidence_items")
+    @classmethod
+    def remove_non_evidence_names(cls, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                key: value
+                for key, value in item.items()
+                if key not in {"display_name", "file_name", "original_file_name"}
+            }
+            for item in items
+        ]
+
 
 class SubmitCoverJobInputV1(StrictContract):
     visual_plan: dict[str, Any] = Field(min_length=1)
     artifact_version: dict[str, Any] = Field(min_length=1)
     media_evidence_items: list[dict[str, Any]]
+
+    @field_validator("media_evidence_items")
+    @classmethod
+    def remove_non_evidence_names(cls, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return PlanVisualsInputV1.remove_non_evidence_names(items)
 
 
 class VisualReviewInputV1(StrictContract):
@@ -464,6 +512,7 @@ class TitleSelectionResultV1(StrictContract):
 class OutlineResultV1(StrictContract):
     body_formula_code: str
     sections: list[OutlineSectionV1] = Field(min_length=1)
+    variant_key: str | None = None
 
 
 class ParagraphEvidenceV1(StrictContract):
@@ -471,17 +520,24 @@ class ParagraphEvidenceV1(StrictContract):
     evidence_ids: list[str]
 
 
+class LexiconUsageV1(StrictContract):
+    code: str = Field(min_length=1)
+    selected_terms: list[str] = Field(min_length=1)
+
+
 class ContentDraftResultV1(StrictContract):
     body: str
     topics: list[str]
     paragraph_evidence: list[ParagraphEvidenceV1]
     body_formula_code: str
+    lexicon_usage: list[LexiconUsageV1] = Field(default_factory=list)
 
 
 class GeneratedTitleV1(StrictContract):
     text: str = Field(min_length=1)
     formula_code: str = Field(min_length=1)
     evidence_ids: list[str]
+    lexicon_usage: list[LexiconUsageV1] = Field(default_factory=list)
 
 
 class GeneratedContentResultV1(StrictContract):
@@ -623,6 +679,12 @@ class ContractDomainContext:
     body_formula_pool: frozenset[str] = frozenset()
     locked_title_formula_code: str | None = None
     locked_body_formula_code: str | None = None
+    locked_body_formula_sections: tuple[str, ...] = ()
+    locked_body_calling_section_ids: tuple[str, ...] = ()
+    allowed_body_variant_keys: frozenset[str] = frozenset()
+    required_title_lexicon_codes: frozenset[str] = frozenset()
+    allowed_body_lexicon_codes: frozenset[str] = frozenset()
+    body_variant_lexicon_codes: dict[str, frozenset[str]] = field(default_factory=dict)
     allowed_evidence_by_usage: dict[str, frozenset[str]] = field(default_factory=dict)
     allowed_asset_ids: frozenset[str] = frozenset()
     required_source_asset_ids: tuple[str, ...] = ()
@@ -655,6 +717,7 @@ class ContractDomainContext:
         locked_versions: LockedVersionsV1 | dict[str, Any],
         locked_values: dict[str, Any],
         product_material_requirements: dict[str, Any] | None = None,
+        strategy_snapshot: dict[str, Any] | None = None,
     ) -> ContractDomainContext:
         versions = (
             locked_versions
@@ -707,6 +770,37 @@ class ContractDomainContext:
             ),
             locked_title_formula_code=(formula.get("selected_title_formula_code") or versions.title_formula_code),
             locked_body_formula_code=(formula.get("selected_body_formula_code") or versions.body_formula_code),
+            locked_body_formula_sections=tuple(
+                ((strategy_snapshot or {}).get("body_formula") or {}).get("structure_schema") or []
+            ),
+            locked_body_calling_section_ids=tuple(
+                section["id"]
+                for section in (
+                    (((strategy_snapshot or {}).get("body_formula") or {}).get("body_calling") or {}).get("sections")
+                    or []
+                )
+            ),
+            allowed_body_variant_keys=frozenset(
+                variant["id"]
+                for variant in (
+                    (((strategy_snapshot or {}).get("body_formula") or {}).get("body_calling") or {}).get("variants")
+                    or []
+                )
+            ),
+            required_title_lexicon_codes=frozenset(
+                ((strategy_snapshot or {}).get("title_formula") or {}).get("lexicon_codes") or []
+            ),
+            allowed_body_lexicon_codes=frozenset(
+                ((((strategy_snapshot or {}).get("body_formula") or {}).get("body_calling") or {}).get("lexicon_calls"))
+                or []
+            ),
+            body_variant_lexicon_codes={
+                variant["id"]: frozenset(variant.get("lexicon_calls") or [])
+                for variant in (
+                    (((strategy_snapshot or {}).get("body_formula") or {}).get("body_calling") or {}).get("variants")
+                    or []
+                )
+            },
             allowed_evidence_by_usage={key: frozenset(value) for key, value in evidence_by_usage.items()},
             allowed_asset_ids=frozenset(locks.get("source_asset_ids") or []),
             required_source_asset_ids=tuple(locks.get("required_source_asset_ids") or []),
@@ -762,6 +856,68 @@ def _validate_evidence_ids(ids: list[str], usage: str, context: ContractDomainCo
         )
 
 
+def _validate_outline_calling_contract(result: OutlineResultV1, context: ContractDomainContext) -> None:
+    expected_ids = context.locked_body_calling_section_ids
+    if expected_ids:
+        actual_ids = tuple(section.section_id for section in result.sections)
+        if actual_ids != expected_ids:
+            raise ContractDomainValidationError(
+                "body_calling_section_order_invalid",
+                "sections",
+                f"正文大纲必须按锁定调用规则输出段落: {', '.join(expected_ids)}",
+            )
+    if context.allowed_body_variant_keys:
+        if result.variant_key not in context.allowed_body_variant_keys:
+            raise ContractDomainValidationError(
+                "body_calling_variant_invalid",
+                "variant_key",
+                "正文公式要求从允许的单一维度中选择一个 variant_key",
+            )
+    elif result.variant_key is not None:
+        raise ContractDomainValidationError(
+            "body_calling_variant_unexpected",
+            "variant_key",
+            "当前正文公式不允许选择额外反差维度",
+        )
+
+
+def _validate_formula_lexicon_usage(result: GeneratedContentResultV1, context: ContractDomainContext) -> None:
+    title_codes = {item.code for item in result.title.lexicon_usage}
+    if context.required_title_lexicon_codes and title_codes != context.required_title_lexicon_codes:
+        raise ContractDomainValidationError(
+            "title_formula_lexicon_usage_incomplete",
+            "title.lexicon_usage",
+            "标题必须使用锁定公式对应的全部必选词库",
+        )
+
+    body_codes = {item.code for item in result.draft.lexicon_usage}
+    if context.allowed_body_lexicon_codes:
+        unexpected = body_codes - context.allowed_body_lexicon_codes
+        if unexpected:
+            raise ContractDomainValidationError(
+                "body_formula_lexicon_usage_invalid",
+                "draft.lexicon_usage",
+                f"正文使用了锁定公式之外的词库: {', '.join(sorted(unexpected))}",
+            )
+        variant_codes = (
+            set().union(*context.body_variant_lexicon_codes.values())
+            if context.body_variant_lexicon_codes
+            else set()
+        )
+        required_codes = set(context.allowed_body_lexicon_codes) - variant_codes
+        if result.outline.variant_key:
+            required_codes.update(context.body_variant_lexicon_codes.get(result.outline.variant_key, frozenset()))
+        elif not context.body_variant_lexicon_codes:
+            required_codes = set(context.allowed_body_lexicon_codes)
+        if not required_codes.issubset(body_codes):
+            missing = sorted(required_codes - body_codes)
+            raise ContractDomainValidationError(
+                "body_formula_lexicon_usage_incomplete",
+                "draft.lexicon_usage",
+                f"正文缺少锁定公式要求的词库调用: {', '.join(missing)}",
+            )
+
+
 def _validate_numbers(text: str, context: ContractDomainContext, field_path: str, usage: str) -> None:
     numbers = set(re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", text))
     allowed = context.allowed_numbers_by_usage.get(usage, context.allowed_numbers)
@@ -804,6 +960,72 @@ def validate_content_node_result(
                 "evidence_items",
                 f"已有 Evidence ID 只能直接引用，不能作为新证据重复提交: {', '.join(reused_ids)}",
             )
+        for index, item in enumerate(result.evidence_items):
+            material_type = item.metadata.get("material_type")
+            if material_type == "price" and item.risk_level != "high_risk":
+                raise ContractDomainValidationError(
+                    "price_governance_invalid",
+                    f"evidence_items.{index}",
+                    "价格资料必须标记 high_risk",
+                )
+            if material_type == "viral_example" and (
+                item.allowed_usage != ["style_reference"]
+                or item.metadata.get("usage_mode") != "structure_reference_only"
+            ):
+                raise ContractDomainValidationError(
+                    "viral_example_usage_invalid",
+                    f"evidence_items.{index}",
+                    "爆款样例只能以 structure_reference_only 用于样式参考",
+                )
+            article_usages = set(item.allowed_usage) & {"title", "body"}
+            if (
+                item.source_type == "knowledge_base"
+                and article_usages
+                and material_type not in {"viral_example", "platform_rule", "compliance_rule", "forbidden_term"}
+            ):
+                if item.metadata.get("writing_ready") is not True:
+                    raise ContractDomainValidationError(
+                        "knowledge_evidence_not_writing_ready",
+                        f"evidence_items.{index}.metadata.writing_ready",
+                        "知识库事实必须先确认可直接写入锁定公式，才能作为标题或正文证据",
+                    )
+                if not str(item.metadata.get("integration_instruction") or "").strip():
+                    raise ContractDomainValidationError(
+                        "knowledge_evidence_integration_missing",
+                        f"evidence_items.{index}.metadata.integration_instruction",
+                        "知识库事实必须说明具体写入方式",
+                    )
+                if not str(item.metadata.get("relevance_reason") or "").strip():
+                    raise ContractDomainValidationError(
+                        "knowledge_evidence_relevance_missing",
+                        f"evidence_items.{index}.metadata.relevance_reason",
+                        "知识库事实必须说明与当前主题和写作逻辑的直接关系",
+                    )
+                if "title" in article_usages:
+                    _require_equal(
+                        item.metadata.get("title_formula_code"),
+                        context.locked_title_formula_code,
+                        f"evidence_items.{index}.metadata.title_formula_code",
+                    )
+                if "body" in article_usages:
+                    _require_equal(
+                        item.metadata.get("body_formula_code"),
+                        context.locked_body_formula_code,
+                        f"evidence_items.{index}.metadata.body_formula_code",
+                    )
+                    section = str(item.metadata.get("formula_section") or "").strip()
+                    if not section:
+                        raise ContractDomainValidationError(
+                            "knowledge_evidence_section_missing",
+                            f"evidence_items.{index}.metadata.formula_section",
+                            "正文知识库事实必须绑定正文公式中的具体段落",
+                        )
+                    if context.locked_body_formula_sections:
+                        _require_member(
+                            section,
+                            context.locked_body_formula_sections,
+                            f"evidence_items.{index}.metadata.formula_section",
+                        )
     elif isinstance(result, ProductEvidenceCollectionResultV1):
         new_ids = [item.id for item in result.evidence_items]
         if len(new_ids) != len(set(new_ids)):
@@ -865,11 +1087,11 @@ def validate_content_node_result(
         for index, item in enumerate(result.evidence_items):
             material_type = item.metadata.get("material_type")
             if material_type == "price":
-                if item.risk_level != "high_risk" or not item.metadata.get("effective_at"):
+                if item.risk_level != "high_risk":
                     raise ContractDomainValidationError(
                         "price_governance_invalid",
                         f"evidence_items.{index}",
-                        "价格资料必须标记 high_risk 并提供 effective_at",
+                        "价格资料必须标记 high_risk",
                     )
             if material_type == "viral_example" and (
                 item.allowed_usage != ["style_reference"]
@@ -898,6 +1120,7 @@ def validate_content_node_result(
             _validate_numbers(item.text, context, f"candidates.{index}.text", "title")
     elif isinstance(result, OutlineResultV1):
         _require_equal(result.body_formula_code, context.locked_body_formula_code, "body_formula_code")
+        _validate_outline_calling_contract(result, context)
         for index, item in enumerate(result.sections):
             _validate_evidence_ids(item.evidence_ids, "body", context, f"sections.{index}.evidence_ids")
     elif isinstance(result, ContentDraftResultV1):
@@ -906,10 +1129,12 @@ def validate_content_node_result(
             _validate_evidence_ids(item.evidence_ids, "body", context, f"paragraph_evidence.{index}.evidence_ids")
         _validate_numbers("\n".join([result.body, *result.topics]), context, "body", "body")
     elif isinstance(result, GeneratedContentResultV1):
+        _validate_formula_lexicon_usage(result, context)
         _require_equal(result.title.formula_code, context.locked_title_formula_code, "title.formula_code")
         _validate_evidence_ids(result.title.evidence_ids, "title", context, "title.evidence_ids")
         _validate_numbers(result.title.text, context, "title.text", "title")
         _require_equal(result.outline.body_formula_code, context.locked_body_formula_code, "outline.body_formula_code")
+        _validate_outline_calling_contract(result.outline, context)
         for index, item in enumerate(result.outline.sections):
             _validate_evidence_ids(item.evidence_ids, "body", context, f"outline.sections.{index}.evidence_ids")
         _require_equal(result.draft.body_formula_code, context.locked_body_formula_code, "draft.body_formula_code")
@@ -926,7 +1151,7 @@ def validate_content_node_result(
         _validate_numbers(result.polished_body, context, "polished_body", "body")
     elif isinstance(result, ContentReviewResultV1):
         for index, item in enumerate(result.checks):
-            _validate_evidence_ids(item.evidence_ids, "body", context, f"checks.{index}.evidence_ids")
+            _validate_evidence_ids(item.evidence_ids, "any", context, f"checks.{index}.evidence_ids")
     elif isinstance(result, VisualPlanResultV1):
         _require_equal(result.artifact_version_id, context.artifact_version_id, "artifact_version_id")
         if context.required_source_asset_ids and tuple(result.source_asset_ids) != context.required_source_asset_ids:
@@ -982,20 +1207,61 @@ class ContentNodeResultCollector:
                 raise ContractDomainValidationError(
                     "duplicate_submission", "submit_content_node_result", "Agent 节点结果只能提交一次"
                 )
+            if self.contract_name == "CoverJobSubmissionResultV1":
+                created_submission = getattr(self.runtime_context, "_content_cover_job_submission", None)
+                if created_submission is None:
+                    raise ContractDomainValidationError(
+                        "cover_job_not_created",
+                        "cover_job_id",
+                        "必须先成功创建 CoverJob，不能提交未创建的任务",
+                    )
+                if payload != created_submission:
+                    raise ContractDomainValidationError(
+                        "cover_job_submission_mismatch",
+                        "cover_job_id",
+                        "封面任务结果必须原样使用创建工具返回值",
+                    )
             required = set(getattr(self.runtime_context, "_required_skill_closure", []) or [])
             activated = set(getattr(self.runtime_context, "_activated_required_skills", []) or [])
             if not required.issubset(activated):
                 raise ContractDomainValidationError(
                     "required_skill_not_activated", "required_skills", "未激活全部必需 Skills，禁止提交"
                 )
+            if self.contract_name == "EvidenceCollectionResultV1":
+                visible = {
+                    str(item.get("kb_id") or ""): str(item.get("name") or "")
+                    for item in (getattr(self.runtime_context, "_visible_knowledge_bases", []) or [])
+                    if isinstance(item, dict) and item.get("kb_id")
+                }
+                required_knowledge_bases = {
+                    kb_id for kb_id, name in visible.items() if name in {"价格库", "品牌知识库", "平台规则", "爆款库"}
+                }
+                queried = set(getattr(self.runtime_context, "_content_queried_knowledge_bases", set()) or set())
+                missing_queries = sorted(required_knowledge_bases - queried)
+                if missing_queries:
+                    missing_names = [visible[kb_id] for kb_id in missing_queries]
+                    raise ContractDomainValidationError(
+                        "required_knowledge_not_queried",
+                        "submit_content_node_result",
+                        f"创作取材前必须检索已授权的必需知识库: {', '.join(missing_names)}",
+                    )
             validated = validate_content_node_result(self.contract_name, payload, self.domain_context)
             self.result = validated.model_dump(mode="json")
             self.submission_count += 1
         except Exception as exc:
+            failure_payload = {**event_payload, "error_type": type(exc).__name__}
+            if isinstance(exc, ContractDomainValidationError):
+                failure_payload.update(
+                    {
+                        "error_code": exc.code,
+                        "error_field_path": exc.field_path,
+                        "message": str(exc),
+                    }
+                )
             await append_content_runtime_event(
                 self.runtime_context,
                 "content.tool.failed",
-                {**event_payload, "error_type": type(exc).__name__},
+                failure_payload,
             )
             raise
         await append_content_runtime_event(

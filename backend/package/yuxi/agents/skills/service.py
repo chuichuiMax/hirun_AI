@@ -1288,9 +1288,6 @@ async def init_builtin_skills(db: AsyncSession, *, created_by: str = "system") -
     for spec in list_builtin_skill_specs():
         slug = spec["slug"]
         existing = await repo.get_by_slug(slug)
-        if existing and not is_builtin_skill(existing):
-            raise ValueError(f"内置 skill '{slug}' 与已存在的非内置 skill 冲突")
-
         target_dir = get_skills_root_dir() / slug
         _replace_skill_target(target_dir, Path(spec["source_dir"]))
 

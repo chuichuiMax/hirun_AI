@@ -30,6 +30,19 @@ export const contentApi = {
   getOcrImage: (resultId) =>
     apiGet(`/api/content/ocr-results/${resultId}/image`, {}, true, 'blob'),
   getCoverBootstrap: () => apiGet('/api/content/covers/bootstrap'),
+  listHyCanvasTemplates: () => apiGet('/api/content/covers/hycanvas/templates'),
+  createHyCanvasDesign: (payload) => apiPost('/api/content/covers/hycanvas/designs', payload),
+  syncHyCanvasDesign: (designId, artifactId) =>
+    apiPost(`/api/content/covers/hycanvas/designs/${encodeURIComponent(designId)}/sync`, {
+      artifact_id: artifactId
+    }),
+  createHyCanvasEditorSession: (designId, payload) =>
+    apiPost(
+      `/api/content/covers/hycanvas/designs/${encodeURIComponent(designId)}/editor-session`,
+      payload
+    ),
+  createHyCanvasWorkspaceSession: () =>
+    apiPost('/api/content/covers/hycanvas/workspace-session'),
   updateCoverImage2Config: (payload) => apiPut('/api/content/covers/image2-config', payload),
   testCoverImage2Config: (payload) => apiPost('/api/content/covers/image2-config/test', payload),
   previewCoverTemplateReplication: (payload) =>

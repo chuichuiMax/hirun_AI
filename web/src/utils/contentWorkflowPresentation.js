@@ -4,6 +4,7 @@ export const CONTENT_WORKFLOW_NODE_LABELS = {
   normalize_evidence: '规范化证据',
   select_creation_strategy: 'Agent 匹配创作手法与公式',
   lock_creation_strategy: '固定规则校验并锁定策略',
+  load_formula_lexicons: '加载公式必选词库',
   analyze_and_select_direction: 'Agent 分析价值并选择内容方向',
   analyze_content_value: 'Agent 分析内容价值',
   select_content_direction: 'Agent 确定内容方向',
@@ -40,6 +41,21 @@ export const CONTENT_WORKFLOW_NODE_LABELS = {
   save_artifact_snapshot: '保存统一内容版本'
 }
 
+const REVISION_REASON_LABELS = {
+  TITLE_VALIDATION_FAILED: '标题不符合公式或发布要求',
+  BODY_STRUCTURE_FAILED: '正文结构或表达不符合要求',
+  BODY_EVIDENCE_FAILED: '正文缺少有效的事实证据引用',
+  PERSONA_STYLE_FAILED: '正文语气或人设表达不符合要求',
+  SYSTEM_CONFIGURATION_FAILED: '系统配置校验失败',
+  REVIEW_CONTRACT_VIOLATION: '审核结果格式不符合要求'
+}
+
+export const formatContentRevisionReason = (reasonCode) =>
+  REVISION_REASON_LABELS[String(reasonCode || '').toUpperCase()] || '内容校验发现阻断问题'
+
+export const formatContentRevisionTarget = (nodeId) =>
+  CONTENT_WORKFLOW_NODE_LABELS[nodeId] || '内容生成节点'
+
 const RUNTIME_EVENT_PRESENTATION = {
   'content.agent.started': { status: 'running', label: 'Agent 开始执行' },
   'content.agent.completed': { status: 'completed', label: 'Agent 执行完成' },
@@ -50,7 +66,8 @@ const RUNTIME_EVENT_PRESENTATION = {
   'content.tool.failed': { status: 'failed', label: '工具调用失败' },
   'content.tool.rejected': { status: 'failed', label: '工具调用被拒绝' },
   'content.knowledge.retrieved': { status: 'completed', label: '知识库检索完成' },
-  'content.validation.completed': { status: 'completed', label: '规则校验完成' }
+  'content.validation.completed': { status: 'completed', label: '规则校验完成' },
+  'content.strategy.locked': { status: 'completed', label: '创作策略与公式已锁定' }
 }
 
 const runtimeEventDetail = (eventType, payload) => {
@@ -68,6 +85,7 @@ const runtimeEventDetail = (eventType, payload) => {
   if (eventType === 'content.validation.completed') {
     return `${payload.status || '已完成'} · ${payload.check_count || 0} 项检查`
   }
+  if (eventType === 'content.strategy.locked') return '已确定创作手法、爆款标题公式和爆款正文公式'
   return ''
 }
 
@@ -102,7 +120,8 @@ export const buildContentRuntimeTimeline = (runEvents = [], auditEvents = []) =>
         nodeLabel: CONTENT_WORKFLOW_NODE_LABELS[event.payload?.node_id] || event.payload?.node_id || '',
         durationMs: event.payload?.duration_ms,
         inputPreview: event.payload?.input_preview || null,
-        outputPreview: event.payload?.output_preview || null,
+        outputPreview:
+          event.payload?.output_preview || event.payload?.strategy_snapshot || null,
         knowledgeResults: event.payload?.results || [],
         queryText: event.payload?.query_text || '',
         resultCount: Number(event.payload?.result_count || 0),
@@ -124,6 +143,7 @@ const NODE_PROGRESS_NARRATIVES = {
   normalize_evidence: '正在核对事实来源，筛除重复或不能直接用于创作的信息。',
   select_creation_strategy: '正在结合目标受众、业务优势和现有证据，判断最值得表达的内容方向。',
   lock_creation_strategy: '正在核对所选方向与创作公式是否满足渠道和证据约束。',
+  load_formula_lexicons: '正在按锁定的标题和正文公式，从对应知识库加载全部必选词库。',
   collect_missing_evidence: '正在检查创作所需事实，并补充影响内容可信度的资料。',
   confirm_high_risk_facts: '正在确认价格、效果和承诺类信息，避免使用未经确认的高风险表述。',
   freeze_evidence_bundle: '正在汇总本次可引用的事实，确保后续生成只使用已确认资料。',
@@ -160,6 +180,53 @@ const normalizeNarrativeText = (value, maxLength = 600) => {
     .trim()
   if (!text) return ''
   return text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`
+}
+
+const narrativeObjectText = (value, maxLength = 600) => {
+  if (value == null) return ''
+  if (typeof value !== 'object') return normalizeNarrativeText(value, maxLength)
+  if (Array.isArray(value)) {
+    return normalizeNarrativeText(
+      value.map((item) => narrativeObjectText(item, 180)).filter(Boolean).join('；'),
+      maxLength
+    )
+  }
+
+  const directText = value.text || value.content || value.summary || value.claim || value.description
+  if (typeof directText === 'string' && directText.trim()) {
+    return normalizeNarrativeText(directText, maxLength)
+  }
+
+  if (Array.isArray(value.items)) {
+    const itemTexts = value.items
+      .map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return narrativeObjectText(item, 120)
+        const name = item.sku || item.name || item.title || item.item
+        const amount = item.price ?? item.amount ?? item.value
+        const unit = item.unit || ''
+        if (name && amount !== undefined && amount !== null) return `${name} ${amount}${unit}`
+        return narrativeObjectText(item, 120)
+      })
+      .filter(Boolean)
+      .slice(0, 3)
+    const scope = [value.city, value.category].filter(Boolean).join('')
+    if (itemTexts.length) return normalizeNarrativeText(`${scope ? `${scope}：` : ''}${itemTexts.join('；')}`, maxLength)
+  }
+
+  for (const key of ['rules', 'structure_patterns', 'safe_replacements', 'facts', 'points']) {
+    if (Array.isArray(value[key])) {
+      const text = narrativeObjectText(value[key].slice(0, 3), maxLength)
+      if (text) return text
+    }
+  }
+
+  return normalizeNarrativeText(
+    Object.entries(value)
+      .filter(([, item]) => item != null && typeof item !== 'object')
+      .map(([key, item]) => `${key}：${item}`)
+      .join('；'),
+    maxLength
+  )
 }
 
 const asTextList = (value, maxItems = 4) =>
@@ -203,6 +270,40 @@ const outputNarratives = (preview) => {
   const valuePoints = asTextList(preview.value_points)
   if (valuePoints.length) add(`识别出的内容价值：${valuePoints.join('；')}。`)
 
+  const methods = Array.isArray(preview.creation_method_definitions)
+    ? preview.creation_method_definitions
+    : []
+  if (methods.length) {
+    add(
+      `创作手法：${methods
+        .map((item) =>
+          [
+            [item?.code, item?.name].filter(Boolean).join('（') + (item?.code && item?.name ? '）' : ''),
+            item?.principle
+          ]
+            .filter(Boolean)
+            .join('：')
+        )
+        .filter(Boolean)
+        .join('；')}。`
+    )
+  }
+
+  if (preview.title_formula?.name) {
+    const formula = preview.title_formula
+    const label = [formula.code, formula.name].filter(Boolean).join('（') +
+      (formula.code && formula.name ? '）' : '')
+    add(`爆款标题公式：${label}${formula.core_goal ? `：${formula.core_goal}` : ''}。`)
+  }
+
+  if (preview.body_formula?.name) {
+    const formula = preview.body_formula
+    const label = [formula.code, formula.name].filter(Boolean).join('（') +
+      (formula.code && formula.name ? '）' : '')
+    const structure = asTextList(formula.structure_schema, 10)
+    add(`爆款正文公式：${label}${structure.length ? `：${structure.join(' → ')}` : ''}。`)
+  }
+
   const reason =
     preview.selection_reason || preview.reason || preview.reasoning || preview.explanation
   if (reason) add(`判断依据：${reason}`)
@@ -210,9 +311,9 @@ const outputNarratives = (preview) => {
   const evidenceItems = Array.isArray(preview.evidence_items) ? preview.evidence_items : []
   if (evidenceItems.length) {
     const facts = evidenceItems
-      .map((item) => normalizeNarrativeText(item?.value, 140))
+      .map((item) => narrativeObjectText(item?.value, 180))
       .filter(Boolean)
-      .slice(0, 3)
+      .slice(0, 4)
     add(
       `补充了 ${evidenceItems.length} 条可用事实${facts.length ? `，包括：${facts.join('；')}` : ''}。`
     )
@@ -345,6 +446,7 @@ export const CONTENT_WORKFLOW_GROUPS = [
     nodes: [
       'select_creation_strategy',
       'lock_creation_strategy',
+      'load_formula_lexicons',
       'collect_missing_evidence',
       'confirm_high_risk_facts',
       'freeze_evidence_bundle'
@@ -359,6 +461,11 @@ export const CONTENT_WORKFLOW_GROUPS = [
         id: 'lock_creation_strategy',
         label: '固定规则校验并锁定策略',
         nodes: ['lock_creation_strategy']
+      },
+      {
+        id: 'load_formula_lexicons',
+        label: '按公式加载标题与正文必选词库',
+        nodes: ['load_formula_lexicons']
       },
       {
         id: 'supplement_evidence',

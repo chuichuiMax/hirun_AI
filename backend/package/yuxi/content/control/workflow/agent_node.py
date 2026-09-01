@@ -204,18 +204,6 @@ class AgentNodeHandler:
         if node_run is None or task is None or user is None:
             raise ValueError("Agent 节点缺少任务、用户或节点 Run")
 
-        if node["id"] == "collect_missing_evidence" and not (state.get("evidence_gap_analysis") or {}).get(
-            "has_missing"
-        ):
-            return {
-                "evidence_collection": {
-                    "evidence_items": [],
-                    "citations": [],
-                    "unresolved_questions": [],
-                    "skipped": True,
-                    "skip_reason": "当前公式候选池没有证据缺口",
-                }
-            }
         if node["id"] == "rank_formula_candidates":
             valid_pairs = (state.get("formula_candidate_pool") or {}).get("valid_formula_pairs") or []
             if len(valid_pairs) == 1:
@@ -267,6 +255,7 @@ class AgentNodeHandler:
             locked_versions=locked_versions,
             locked_values=locked_values,
             product_material_requirements=state.get("product_material_requirements") or {},
+            strategy_snapshot=state.get("strategy_snapshot") or {},
         )
         delegation = AgentDelegationService(db)
         delegated = await delegation.execute(

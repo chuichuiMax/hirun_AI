@@ -40,15 +40,15 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="content-evidence-researcher",
         source_dir=_SKILLS_ROOT / "content-evidence-researcher",
-        description="仅围绕当前任务的证据缺口检索任务材料与知识库。",
-        version="2.0.0",
+        description="按锁定策略检索真实业务资料与爆款结构参考。",
+        version="3.2.0",
         tool_dependencies=("get_business_facts", "query_kb", "open_kb_document", "find_kb_document"),
     ),
     BuiltinSkillSpec(
         slug="strategy-product-researcher",
         source_dir=_SKILLS_ROOT / "strategy-product-researcher",
         description="按锁定策略和公式槽位定向检索产品、价格、案例与爆款结构参考。",
-        version="1.0.1",
+        version="1.1.0",
         tool_dependencies=("get_business_facts", "query_kb", "open_kb_document", "find_kb_document"),
     ),
     BuiltinSkillSpec(
@@ -61,7 +61,13 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-body-generator",
         source_dir=_SKILLS_ROOT / "content-body-generator",
         description="使用人工锁定标题、正文公式和同源证据生成正文与话题。",
-        version="2.0.0",
+        version="2.1.0",
+    ),
+    BuiltinSkillSpec(
+        slug="content-human-expression",
+        source_dir=_SKILLS_ROOT / "content-human-expression",
+        description="在不改变事实、公式和证据的前提下，为文章加入自然语气、情绪推进、稳定人设及适当的 emoji。",
+        version="1.3.0",
     ),
     BuiltinSkillSpec(
         slug="content-outline-builder",
@@ -79,7 +85,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-reviewer",
         source_dir=_SKILLS_ROOT / "content-reviewer",
         description="审核公式执行、事实一致性、人设语气和内容风险。",
-        version="1.1.0",
+        version="1.3.0",
         tool_dependencies=(
             "query_kb",
             "open_kb_document",
@@ -90,7 +96,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-visual-planner",
         source_dir=_SKILLS_ROOT / "content-visual-planner",
         description="按内容快照和渠道规范产出结构化视觉方案。",
-        version="1.1.0",
+        version="1.2.0",
     ),
     BuiltinSkillSpec(
         slug="content-cover-generator",
@@ -127,3 +133,33 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         mcp_dependencies=("mcp-server-chart",),
     ),
 ]
+
+_PLATFORM_SKILL_SLUGS = (
+    "algorithmic-art",
+    "brand-guidelines",
+    "canvas-design",
+    "claude-api",
+    "doc-coauthoring",
+    "docx",
+    "frontend-design",
+    "internal-comms",
+    "mcp-builder",
+    "pdf",
+    "pptx",
+    "skill-creator",
+    "slack-gif-creator",
+    "template-skill",
+    "theme-factory",
+    "web-artifacts-builder",
+    "webapp-testing",
+    "xlsx",
+)
+
+BUILTIN_SKILLS.extend(
+    BuiltinSkillSpec(
+        slug=slug,
+        source_dir=_SKILLS_ROOT / slug,
+        version="2026.09.01",
+    )
+    for slug in _PLATFORM_SKILL_SLUGS
+)

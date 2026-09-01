@@ -17,6 +17,12 @@ from yuxi.content.control.workflow.agent_node import AgentNodeHandler
 from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
 from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler, skip_cover_pipeline
 from yuxi.content.control.workflow.revision import RevisionRouteController, resolve_revision_reason
+from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
+from yuxi.content.control.workflow.revision import (
+    RevisionRouteController,
+    resolve_revision_reason,
+    revision_reason_label,
+)
 from yuxi.content.generation import SKILL_VERSIONS
 from yuxi.content.execution_trace import build_execution_preview
 from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
@@ -303,13 +309,13 @@ class ContentWorkflowAgent(BaseAgent):
             if decision.status == "limit_reached":
                 raise ContentApplicationError(
                     code="content_revision_limit_reached",
-                    message=f"阻断原因 {reason_code} 已达到定点回修次数上限",
+                    message=f"{revision_reason_label(reason_code)}，已达到定点回修次数上限",
                     kind="conflict",
                 )
             if decision.status == "continue" or decision.target_node_id is None:
                 raise ContentApplicationError(
                     code="content_revision_route_missing",
-                    message=f"阻断原因 {reason_code or 'unknown'} 没有可执行的定点回修路线",
+                    message=f"{revision_reason_label(reason_code)}，没有可执行的定点回修路线",
                     kind="conflict",
                 )
             if previous_node == "validate_title_candidates":
@@ -774,6 +780,7 @@ class ContentWorkflowAgent(BaseAgent):
             selected_cover = state.get("selected_cover") or {}
             cover_job_id = selected_cover.get("cover_job_id")
             cover_asset_id = selected_cover.get("asset_id")
+            hycanvas_design_snapshot = {}
             if selected_cover:
                 cover_repo = ContentCoverRepository(db)
                 cover_job = await cover_repo.get_job(str(cover_job_id or ""))
@@ -794,6 +801,7 @@ class ContentWorkflowAgent(BaseAgent):
                     or cover_asset.id not in passed_ids
                 ):
                     raise ValueError("ArtifactVersion 只能绑定本任务中通过视觉审核的 CoverJob 资产")
+                hycanvas_design_snapshot = (cover_job.result_json or {}).get("hycanvas_design_snapshot") or {}
             artifact = await repo.get_artifact_for_task(task.id)
             if artifact is None:
                 artifact = ContentArtifact(
@@ -810,6 +818,7 @@ class ContentWorkflowAgent(BaseAgent):
                     review_snapshot=review,
                     cover_asset_id=cover_asset_id,
                     cover_job_id=cover_job_id,
+                    hycanvas_design_snapshot=hycanvas_design_snapshot,
                     content_type_snapshot=state.get("content_type") or {},
                     angle_snapshot=state.get("selected_angle") or {},
                     pattern_slot_snapshot={
@@ -848,6 +857,7 @@ class ContentWorkflowAgent(BaseAgent):
                 artifact.review_snapshot = review
                 artifact.cover_asset_id = cover_asset_id
                 artifact.cover_job_id = cover_job_id
+                artifact.hycanvas_design_snapshot = hycanvas_design_snapshot
                 artifact.content_type_snapshot = state.get("content_type") or {}
                 artifact.angle_snapshot = state.get("selected_angle") or {}
                 artifact.pattern_slot_snapshot = {

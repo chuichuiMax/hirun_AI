@@ -47,6 +47,10 @@ x-api-worker-env: &api-worker-env
   XHS_BROWSER_CONTROL_LEASE_SECONDS: ${XHS_BROWSER_CONTROL_LEASE_SECONDS:-120}
   XHS_BROWSER_OPERATION_LOCK_SECONDS: ${XHS_BROWSER_OPERATION_LOCK_SECONDS:-180}
   XHS_BROWSER_OPERATION_BLOCK_SECONDS: ${XHS_BROWSER_OPERATION_BLOCK_SECONDS:-3}
+  HYCANVAS_BASE_URL: ${HYCANVAS_BASE_URL:-http://hycanvas-app:8005}
+  HYCANVAS_PUBLIC_URL: ${HYCANVAS_PUBLIC_URL:-http://127.0.0.1:${HYCANVAS_PORT:-8005}}
+  HYCANVAS_API_KEY: ${HYCANVAS_API_KEY:-hyk_contentswarm_local_integration_key_change_me}
+  HYCANVAS_WORKSPACE_ID: ${HYCANVAS_WORKSPACE_ID:-00000000-0000-4000-8000-000000001001}
   WECHAT_MP_APPID: ${WECHAT_MP_APPID:-}
   WECHAT_MP_SECRET: ${WECHAT_MP_SECRET:-}
   # Model request timeouts
@@ -56,8 +60,8 @@ x-api-worker-env: &api-worker-env
   RUN_CANCEL_KEY_TTL_SECONDS: ${RUN_CANCEL_KEY_TTL_SECONDS:-1800}
   RUN_EVENTS_STREAM_TTL_SECONDS: ${RUN_EVENTS_STREAM_TTL_SECONDS:-7200}
   # 其他环境变量
-  NO_PROXY: localhost,127.0.0.1,milvus,graph,minio,milvus-etcd-dev,etcd,mineru,paddlex,sandbox-provisioner,api.siliconflow.cn
-  no_proxy: localhost,127.0.0.1,milvus,graph,minio,milvus-etcd-dev,etcd,mineru,paddlex,sandbox-provisioner,api.siliconflow.cn
+  NO_PROXY: localhost,127.0.0.1,milvus,graph,minio,milvus-etcd-dev,etcd,mineru,paddlex,sandbox-provisioner,hycanvas-app,api.siliconflow.cn
+  no_proxy: localhost,127.0.0.1,milvus,graph,minio,milvus-etcd-dev,etcd,mineru,paddlex,sandbox-provisioner,hycanvas-app,api.siliconflow.cn
 
 services:
   api:
@@ -107,6 +111,8 @@ services:
         condition: service_healthy
       sandbox-provisioner:
         condition: service_healthy
+      hycanvas-init:
+        condition: service_completed_successfully
 
   xhs-browser-gateway:
     build:
@@ -185,6 +191,8 @@ services:
         condition: service_healthy
       sandbox-provisioner:
         condition: service_healthy
+      hycanvas-init:
+        condition: service_completed_successfully
 
   sandbox-provisioner:
     build:
@@ -386,6 +394,77 @@ services:
     networks:
       - app-network
     restart: unless-stopped
+
+  hycanvas-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${HYCANVAS_DB_USER:-hycanvas}
+      POSTGRES_PASSWORD: ${HYCANVAS_DB_PASSWORD:-hycanvas-local-password}
+      POSTGRES_DB: ${HYCANVAS_DB_NAME:-hycanvas}
+    volumes:
+      - ./docker/volumes/hycanvas-postgresql:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${HYCANVAS_DB_USER:-hycanvas} -d ${HYCANVAS_DB_NAME:-hycanvas}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  hycanvas-app:
+    build:
+      context: ./apps/hycanvas
+      dockerfile: Dockerfile
+      args:
+        MANAGED_MODE: contentswarm
+        HOST_APP_URL: ${CONTENTSWARM_PUBLIC_URL:-http://127.0.0.1:5173}
+    image: contentswarm-hycanvas:${YUXI_VERSION:-0.7.0}
+    entrypoint: ["/app/hycanvas"]
+    depends_on:
+      hycanvas-db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "8005"
+      DB_AUTO_MIGRATE: "true"
+      DATABASE_URL: postgresql://${HYCANVAS_DB_USER:-hycanvas}:${HYCANVAS_DB_PASSWORD:-hycanvas-local-password}@hycanvas-db:5432/${HYCANVAS_DB_NAME:-hycanvas}?schema=public
+      JWT_SECRET: ${HYCANVAS_JWT_SECRET:-dev-insecure-hycanvas-jwt-secret-change-me}
+      COOKIE_SECURE: "false"
+      REDIS_URL: ""
+      STORAGE_DRIVER: local
+      LOCAL_STORAGE_PATH: /app/.data/storage
+      HYCANVAS_AUTH_MODE: contentswarm
+      CONTENTSWARM_URL: ${CONTENTSWARM_PUBLIC_URL:-http://127.0.0.1:5173}
+    ports:
+      - "${HYCANVAS_PORT:-8005}:8005"
+    volumes:
+      - ./docker/volumes/hycanvas-storage:/app/.data/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8005/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  hycanvas-init:
+    image: postgres:16-alpine
+    depends_on:
+      hycanvas-app:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${HYCANVAS_DB_USER:-hycanvas}:${HYCANVAS_DB_PASSWORD:-hycanvas-local-password}@hycanvas-db:5432/${HYCANVAS_DB_NAME:-hycanvas}
+      HYCANVAS_API_KEY: ${HYCANVAS_API_KEY:-hyk_contentswarm_local_integration_key_change_me}
+      HYCANVAS_WORKSPACE_ID: ${HYCANVAS_WORKSPACE_ID:-00000000-0000-4000-8000-000000001001}
+    volumes:
+      - ./docker/hycanvas/init-integration.sh:/init-integration.sh:ro
+    entrypoint: ["/bin/sh", "/init-integration.sh"]
+    networks:
+      - app-network
+    restart: "no"
 
   redis:
     image: redis:7-alpine
