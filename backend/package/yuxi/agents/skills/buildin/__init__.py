@@ -133,3 +133,33 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         mcp_dependencies=("mcp-server-chart",),
     ),
 ]
+
+_PLATFORM_SKILL_SLUGS = (
+    "algorithmic-art",
+    "brand-guidelines",
+    "canvas-design",
+    "claude-api",
+    "doc-coauthoring",
+    "docx",
+    "frontend-design",
+    "internal-comms",
+    "mcp-builder",
+    "pdf",
+    "pptx",
+    "skill-creator",
+    "slack-gif-creator",
+    "template-skill",
+    "theme-factory",
+    "web-artifacts-builder",
+    "webapp-testing",
+    "xlsx",
+)
+
+BUILTIN_SKILLS.extend(
+    BuiltinSkillSpec(
+        slug=slug,
+        source_dir=_SKILLS_ROOT / slug,
+        version="2026.09.01",
+    )
+    for slug in _PLATFORM_SKILL_SLUGS
+)

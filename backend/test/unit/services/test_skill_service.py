@@ -278,6 +278,33 @@ def test_image_gen_builtin_skill_spec():
     assert (image_gen["source_dir"] / "SKILL.md").exists()
 
 
+def test_platform_skill_catalog_is_bundled():
+    specs = {spec["slug"]: spec for spec in svc.list_builtin_skill_specs()}
+    expected_slugs = {
+        "algorithmic-art",
+        "brand-guidelines",
+        "canvas-design",
+        "claude-api",
+        "doc-coauthoring",
+        "docx",
+        "frontend-design",
+        "internal-comms",
+        "mcp-builder",
+        "pdf",
+        "pptx",
+        "skill-creator",
+        "slack-gif-creator",
+        "template-skill",
+        "theme-factory",
+        "web-artifacts-builder",
+        "webapp-testing",
+        "xlsx",
+    }
+
+    assert expected_slugs <= specs.keys()
+    assert all((specs[slug]["source_dir"] / "SKILL.md").exists() for slug in expected_slugs)
+
+
 def test_mysql_reporter_builtin_skill_spec_replaces_reporter_and_deep_reporter():
     specs = {spec["slug"]: spec for spec in svc.list_builtin_skill_specs()}
 
@@ -1017,7 +1044,7 @@ async def test_init_builtin_skills_updates_existing_record_and_preserves_disable
 
 
 @pytest.mark.asyncio
-async def test_init_builtin_skills_rejects_non_builtin_conflict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_init_builtin_skills_promotes_existing_non_builtin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(svc.sys_config, "save_dir", str(tmp_path))
 
     source_dir = tmp_path / "builtin" / "reporter"
@@ -1052,10 +1079,47 @@ async def test_init_builtin_skills_rejects_non_builtin_conflict(tmp_path: Path, 
         async def get_by_slug(self, slug: str):
             return Skill(slug=slug, name=slug, description="uploaded", dir_path=f"skills/{slug}", source_type="upload")
 
+        async def update_metadata(self, item: Skill, *, name: str, description: str, updated_by: str | None) -> Skill:
+            item.name = name
+            item.description = description
+            return item
+
+        async def update_dependencies(
+            self,
+            item: Skill,
+            *,
+            tool_dependencies: list[str],
+            mcp_dependencies: list[str],
+            skill_dependencies: list[str],
+            updated_by: str | None,
+        ) -> Skill:
+            item.tool_dependencies = tool_dependencies
+            item.mcp_dependencies = mcp_dependencies
+            item.skill_dependencies = skill_dependencies
+            return item
+
+        async def update_builtin_install(
+            self,
+            item: Skill,
+            *,
+            version: str,
+            content_hash: str,
+            updated_by: str | None,
+        ) -> Skill:
+            item.source_type = "builtin"
+            item.version = version
+            item.content_hash = content_hash
+            item.share_config = svc.BUILTIN_SKILL_SHARE_CONFIG.copy()
+            return item
+
     monkeypatch.setattr(svc, "SkillRepository", FakeRepo)
 
-    with pytest.raises(ValueError, match="非内置 skill 冲突"):
-        await svc.init_builtin_skills(None)
+    items = await svc.init_builtin_skills(None)
+
+    assert len(items) == 1
+    assert items[0].source_type == "builtin"
+    assert items[0].share_config == svc.BUILTIN_SKILL_SHARE_CONFIG
+    assert (tmp_path / "skills" / "reporter" / "SKILL.md").exists()
 
 
 @pytest.mark.asyncio
