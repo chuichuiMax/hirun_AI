@@ -16,6 +16,7 @@ RUN rm -f package-lock.json && npm install --no-audit --no-fund
 ARG MANAGED_MODE=standalone
 ARG HOST_APP_URL=
 RUN HYCANVAS_AUTH_MODE="${MANAGED_MODE}" CONTENTSWARM_URL="${HOST_APP_URL}" \
+    NEXT_PUBLIC_HYCANVAS_AUTH_MODE="${MANAGED_MODE}" NEXT_PUBLIC_CONTENTSWARM_URL="${HOST_APP_URL}" \
     npm run build:packages && npm run build:dist -w frontend
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,14 @@
-export const isContentSwarmManaged =
-  process.env.NEXT_PUBLIC_HYCANVAS_AUTH_MODE === "contentswarm";
+export const isContentSwarmManaged = true;
+
+function contentSwarmOrigin(): string | null {
+  const configured = process.env.NEXT_PUBLIC_CONTENTSWARM_URL?.trim().replace(/\/$/, "");
+  if (configured) return configured;
+  if (typeof document === "undefined" || !document.referrer) return null;
+  return new URL(document.referrer).origin;
+}
 
 export function contentSwarmHyCanvasURL(): string | null {
-  const base = process.env.NEXT_PUBLIC_CONTENTSWARM_URL?.trim().replace(/\/$/, "");
+  const base = contentSwarmOrigin();
   return isContentSwarmManaged && base ? `${base}/hycanvas` : null;
 }
 
@@ -34,7 +40,7 @@ export type ContentSwarmMaterial = {
 type MaterialBridgeAction = "list-galleries" | "list-items" | "get-file" | "ensure-gallery" | "upload-image";
 
 export function requestContentSwarmMaterials<T>(action: MaterialBridgeAction, payload: Record<string, unknown> = {}): Promise<T> {
-  const parentOrigin = process.env.NEXT_PUBLIC_CONTENTSWARM_URL?.trim().replace(/\/$/, "");
+  const parentOrigin = contentSwarmOrigin();
   if (!isContentSwarmManaged || !parentOrigin || typeof window === "undefined" || window.parent === window) {
     return Promise.reject(new Error("ContentSwarm 素材桥接不可用"));
   }
