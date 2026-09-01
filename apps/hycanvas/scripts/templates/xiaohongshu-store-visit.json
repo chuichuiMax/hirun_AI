@@ -1,0 +1,31 @@
+{
+ "id": "xiaohongshu-store-visit",
+ "title": "小红书探店打卡",
+ "previewUrls": ["/template-previews/xiaohongshu-store-visit-p0.png"],
+ "categories": ["social", "lifestyle"],
+ "tags": ["小红书", "探店", "美食", "打卡", "中文"],
+ "styleTags": ["retro", "warm", "editorial"],
+ "rank": 16,
+ "size": [1080, 1440],
+ "typography": [{ "role": "heading", "family": "Noto Sans SC", "weight": 900 }, { "role": "body", "family": "Noto Sans SC", "weight": 500 }],
+ "created": "2026-08-31T00:00:00.000Z",
+ "fillable": [
+  { "node": "p0-n3", "kind": "text", "label": "探店标题", "hint": "突出地点和体验" },
+  { "node": "p0-n7", "kind": "text", "label": "店铺名称", "hint": "店名及推荐菜" },
+  { "node": "p0-n10", "kind": "text", "label": "地址信息", "hint": "地址、人均和营业时间" },
+  { "node": "p0-n5", "kind": "image", "label": "主图", "hint": "门店氛围或招牌产品照片" }
+ ],
+ "pages": [{ "name": "探店打卡", "bg": "#f7e7ce", "nodes": [
+  { "kind": "rect", "x": 52, "y": 52, "w": 976, "h": 1336, "fill": "#f7e7ce", "stroke": "#422006", "strokeWidth": 4, "radius": 24 },
+  { "kind": "text", "x": 104, "y": 108, "w": 500, "h": 44, "family": "Noto Sans SC", "size": 25, "weight": 800, "color": "#b45309", "letterSpacing": 3, "text": "CITY WALK · 周末探店" },
+  { "kind": "rect", "x": 104, "y": 194, "w": 872, "h": 10, "fill": "#422006" },
+  { "kind": "text", "x": 100, "y": 256, "w": 880, "h": 260, "family": "Noto Sans SC", "size": 94, "weight": 900, "color": "#422006", "lineHeight": 1.12, "text": "藏在老街里的\n宝藏咖啡店" },
+  { "kind": "rect", "x": 104, "y": 570, "w": 872, "h": 370, "fill": "#d97706", "radius": 18 },
+  { "kind": "text", "x": 104, "y": 685, "w": 872, "h": 120, "family": "Noto Sans SC", "size": 38, "weight": 900, "color": "#fff7ed", "align": "center", "vAlign": "middle", "text": "氛围照片 / 招牌甜品\n放在这里" },
+  { "kind": "rect", "x": 104, "y": 982, "w": 872, "h": 188, "fill": "#fff7ed", "stroke": "#422006", "strokeWidth": 3, "radius": 18 },
+  { "kind": "text", "x": 142, "y": 1018, "w": 790, "h": 58, "family": "Noto Sans SC", "size": 33, "weight": 900, "color": "#422006", "text": "木屿咖啡｜焦糖布丁必点" },
+  { "kind": "text", "x": 142, "y": 1090, "w": 790, "h": 46, "family": "Noto Sans SC", "size": 24, "weight": 600, "color": "#92400e", "text": "安静好拍 · 咖啡稳定 · 店员友好" },
+  { "kind": "text", "x": 104, "y": 1220, "w": 240, "h": 42, "family": "Noto Sans SC", "size": 23, "weight": 800, "color": "#b45309", "text": "人均 ¥48" },
+  { "kind": "text", "x": 370, "y": 1212, "w": 606, "h": 80, "family": "Noto Sans SC", "size": 22, "weight": 600, "color": "#422006", "align": "right", "lineHeight": 1.4, "text": "梧桐路 18 号｜10:00-21:00\n地铁 2 号线步行 6 分钟" }
+ ] }]
+}

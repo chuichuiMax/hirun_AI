@@ -1,0 +1,245 @@
+{
+ "id": "xiaohongshu-creator-tips",
+ "title": "小红书爆款笔记封面",
+ "previewUrls": ["/template-previews/xiaohongshu-creator-tips-p0.png"],
+ "categories": [
+  "social",
+  "education"
+ ],
+ "tags": [
+  "小红书",
+  "种草",
+  "知识分享",
+  "干货",
+  "中文"
+ ],
+ "styleTags": [
+  "bold",
+  "editorial",
+  "playful"
+ ],
+ "rank": 12,
+ "size": [
+  1080,
+  1440
+ ],
+ "typography": [
+  {
+   "role": "heading",
+   "family": "Noto Sans SC",
+   "weight": 900
+  },
+  {
+   "role": "body",
+   "family": "Noto Sans SC",
+   "weight": 500
+  }
+ ],
+ "created": "2026-08-30T00:00:00.000Z",
+ "fillable": [
+  {
+   "node": "p0-n4",
+   "kind": "text",
+   "label": "主题标签",
+   "hint": "例如：小红书创作指南"
+  },
+  {
+   "node": "p0-n6",
+   "kind": "text",
+   "label": "封面主标题",
+   "hint": "建议控制在 12 个汉字以内"
+  },
+  {
+   "node": "p0-n8",
+   "kind": "text",
+   "label": "内容亮点",
+   "hint": "用三个短语概括笔记价值"
+  },
+  {
+   "node": "p0-n13",
+   "kind": "text",
+   "label": "账号名称",
+   "hint": "填写你的账号名或栏目名"
+  }
+ ],
+ "pages": [
+  {
+   "name": "小红书封面",
+   "bg": "#fff8ed",
+   "nodes": [
+    {
+     "kind": "ellipse",
+     "x": 748,
+     "y": 54,
+     "w": 250,
+     "h": 250,
+     "fill": "#ff4d6d"
+    },
+    {
+     "kind": "ellipse",
+     "x": 808,
+     "y": 114,
+     "w": 130,
+     "h": 130,
+     "fill": "#fff8ed"
+    },
+    {
+     "kind": "rect",
+     "x": 72,
+     "y": 72,
+     "w": 936,
+     "h": 1296,
+     "stroke": "#171717",
+     "strokeWidth": 4,
+     "radius": 38
+    },
+    {
+     "kind": "rect",
+     "x": 112,
+     "y": 116,
+     "w": 322,
+     "h": 62,
+     "fill": "#171717",
+     "radius": 31
+    },
+    {
+     "kind": "text",
+     "x": 112,
+     "y": 116,
+     "w": 322,
+     "h": 62,
+     "family": "Noto Sans SC",
+     "size": 24,
+     "weight": 700,
+     "color": "#ffffff",
+     "align": "center",
+     "vAlign": "middle",
+     "letterSpacing": 2,
+     "text": "小红书创作指南"
+    },
+    {
+     "kind": "text",
+     "x": 112,
+     "y": 264,
+     "w": 856,
+     "h": 48,
+     "family": "Noto Sans SC",
+     "size": 28,
+     "weight": 700,
+     "color": "#ff4d6d",
+     "letterSpacing": 3,
+     "text": "新手也能立刻用的"
+    },
+    {
+     "kind": "text",
+     "x": 108,
+     "y": 326,
+     "w": 864,
+     "h": 328,
+     "family": "Noto Sans SC",
+     "size": 112,
+     "weight": 900,
+     "color": "#171717",
+     "lineHeight": 1.08,
+     "text": "7 个爆款\n排版技巧"
+    },
+    {
+     "kind": "rect",
+     "x": 112,
+     "y": 664,
+     "w": 612,
+     "h": 20,
+     "fill": "#ffd84d",
+     "rotation": -2
+    },
+    {
+     "kind": "text",
+     "x": 116,
+     "y": 728,
+     "w": 836,
+     "h": 64,
+     "family": "Noto Sans SC",
+     "size": 32,
+     "weight": 700,
+     "color": "#404040",
+     "letterSpacing": 1,
+     "text": "标题醒目  ·  层次清晰  ·  一眼看懂"
+    },
+    {
+     "kind": "rect",
+     "x": 112,
+     "y": 844,
+     "w": 856,
+     "h": 294,
+     "fill": "#ffd84d",
+     "stroke": "#171717",
+     "strokeWidth": 4,
+     "radius": 34
+    },
+    {
+     "kind": "text",
+     "x": 158,
+     "y": 890,
+     "w": 110,
+     "h": 92,
+     "family": "Noto Sans SC",
+     "size": 72,
+     "weight": 900,
+     "color": "#ff4d6d",
+     "text": "01"
+    },
+    {
+     "kind": "text",
+     "x": 296,
+     "y": 886,
+     "w": 612,
+     "h": 104,
+     "family": "Noto Sans SC",
+     "size": 46,
+     "weight": 900,
+     "color": "#171717",
+     "lineHeight": 1.15,
+     "text": "先说结论\n再补充细节"
+    },
+    {
+     "kind": "text",
+     "x": 158,
+     "y": 1032,
+     "w": 750,
+     "h": 44,
+     "family": "Noto Sans SC",
+     "size": 24,
+     "weight": 500,
+     "color": "#404040",
+     "text": "让读者 3 秒内知道这篇笔记能带来什么"
+    },
+    {
+     "kind": "text",
+     "x": 112,
+     "y": 1248,
+     "w": 520,
+     "h": 42,
+     "family": "Noto Sans SC",
+     "size": 24,
+     "weight": 700,
+     "color": "#171717",
+     "text": "@你的创作账号"
+    },
+    {
+     "kind": "button",
+     "x": 752,
+     "y": 1228,
+     "w": 216,
+     "h": 72,
+     "fill": "#ff4d6d",
+     "label": "建议收藏",
+     "family": "Noto Sans SC",
+     "size": 25,
+     "weight": 800,
+     "color": "#ffffff",
+     "radius": 36
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "id": "xiaohongshu-promotion",
+ "title": "小红书活动促销",
+ "previewUrls": ["/template-previews/xiaohongshu-promotion-p0.png"],
+ "categories": ["social", "marketing"],
+ "tags": ["小红书", "活动", "促销", "上新", "中文"],
+ "styleTags": ["bold", "energetic", "commercial"],
+ "rank": 20,
+ "size": [1080, 1440],
+ "typography": [{ "role": "heading", "family": "Noto Sans SC", "weight": 900 }, { "role": "body", "family": "Noto Sans SC", "weight": 600 }],
+ "created": "2026-08-31T00:00:00.000Z",
+ "fillable": [
+  { "node": "p0-n4", "kind": "text", "label": "活动标题", "hint": "突出优惠或活动主题" },
+  { "node": "p0-n8", "kind": "text", "label": "优惠内容", "hint": "折扣、赠品或套餐" },
+  { "node": "p0-n11", "kind": "text", "label": "活动时间", "hint": "开始和结束日期" }
+ ],
+ "pages": [{ "name": "活动促销", "bg": "#fff7d6", "nodes": [
+  { "kind": "ellipse", "x": 735, "y": 60, "w": 280, "h": 280, "fill": "#fb2c36" },
+  { "kind": "rect", "x": 54, "y": 54, "w": 972, "h": 1332, "stroke": "#111827", "strokeWidth": 5, "radius": 30 },
+  { "kind": "rect", "x": 104, "y": 108, "w": 230, "h": 64, "fill": "#111827", "radius": 10 },
+  { "kind": "text", "x": 104, "y": 108, "w": 230, "h": 64, "family": "Noto Sans SC", "size": 25, "weight": 900, "color": "#ffffff", "align": "center", "vAlign": "middle", "text": "限时福利放送" },
+  { "kind": "text", "x": 100, "y": 260, "w": 880, "h": 280, "family": "Noto Sans SC", "size": 104, "weight": 900, "color": "#111827", "lineHeight": 1.08, "text": "秋日上新\n全场 7 折" },
+  { "kind": "rect", "x": 104, "y": 590, "w": 872, "h": 320, "fill": "#fb2c36", "radius": 28 },
+  { "kind": "text", "x": 145, "y": 630, "w": 790, "h": 70, "family": "Noto Sans SC", "size": 32, "weight": 900, "color": "#fff7d6", "text": "到店出示本篇笔记即可参与" },
+  { "kind": "rect", "x": 145, "y": 730, "w": 250, "h": 110, "fill": "#fff7d6", "radius": 18 },
+  { "kind": "text", "x": 145, "y": 730, "w": 250, "h": 110, "family": "Noto Sans SC", "size": 38, "weight": 900, "color": "#fb2c36", "align": "center", "vAlign": "middle", "text": "满 299\n再减 50" },
+  { "kind": "text", "x": 460, "y": 738, "w": 430, "h": 98, "family": "Noto Sans SC", "size": 29, "weight": 800, "color": "#ffffff", "lineHeight": 1.45, "text": "前 50 名赠限定礼袋\n会员积分双倍" },
+  { "kind": "text", "x": 104, "y": 995, "w": 872, "h": 60, "family": "Noto Sans SC", "size": 27, "weight": 700, "color": "#374151", "text": "线下门店 / 小程序同步参与" },
+  { "kind": "text", "x": 104, "y": 1085, "w": 872, "h": 75, "family": "Noto Sans SC", "size": 42, "weight": 900, "color": "#111827", "text": "08.31 - 09.15" },
+  { "kind": "rect", "x": 104, "y": 1220, "w": 872, "h": 68, "fill": "#111827", "radius": 34 },
+  { "kind": "text", "x": 104, "y": 1220, "w": 872, "h": 68, "family": "Noto Sans SC", "size": 25, "weight": 800, "color": "#ffffff", "align": "center", "vAlign": "middle", "text": "数量有限 · 售完即止 · 快来抢购" }
+ ] }]
+}

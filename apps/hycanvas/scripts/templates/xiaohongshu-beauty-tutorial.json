@@ -1,0 +1,31 @@
+{
+ "id": "xiaohongshu-beauty-tutorial",
+ "title": "小红书美妆教程",
+ "previewUrls": ["/template-previews/xiaohongshu-beauty-tutorial-p0.png"],
+ "categories": ["social", "education"],
+ "tags": ["小红书", "美妆", "教程", "护肤", "中文"],
+ "styleTags": ["soft", "feminine", "clean"],
+ "rank": 18,
+ "size": [1080, 1440],
+ "typography": [{ "role": "heading", "family": "Noto Sans SC", "weight": 900 }, { "role": "body", "family": "Noto Sans SC", "weight": 500 }],
+ "created": "2026-08-31T00:00:00.000Z",
+ "fillable": [
+  { "node": "p0-n3", "kind": "text", "label": "教程标题", "hint": "妆容风格或护肤主题" },
+  { "node": "p0-n8", "kind": "text", "label": "步骤说明", "hint": "替换为教程重点" },
+  { "node": "p0-n10", "kind": "text", "label": "适用信息", "hint": "肤质、场景或难度" },
+  { "node": "p0-n5", "kind": "image", "label": "主图", "hint": "妆前妆后或教程效果图" }
+ ],
+ "pages": [{ "name": "美妆教程", "bg": "#fff7f8", "nodes": [
+  { "kind": "ellipse", "x": 760, "y": 70, "w": 230, "h": 230, "fill": "#fecdd3" },
+  { "kind": "text", "x": 104, "y": 110, "w": 460, "h": 42, "family": "Noto Sans SC", "size": 24, "weight": 700, "color": "#be123c", "letterSpacing": 3, "text": "MAKEUP TUTORIAL" },
+  { "kind": "rect", "x": 104, "y": 182, "w": 180, "h": 58, "fill": "#be123c", "radius": 29 },
+  { "kind": "text", "x": 100, "y": 300, "w": 880, "h": 250, "family": "Noto Sans SC", "size": 91, "weight": 900, "color": "#4c0519", "lineHeight": 1.12, "text": "新手也能画的\n清透通勤妆" },
+  { "kind": "rect", "x": 104, "y": 596, "w": 872, "h": 330, "fill": "#fda4af", "radius": 36 },
+  { "kind": "text", "x": 104, "y": 705, "w": 872, "h": 110, "family": "Noto Sans SC", "size": 34, "weight": 900, "color": "#ffffff", "align": "center", "vAlign": "middle", "text": "妆前 / 完妆对比图" },
+  { "kind": "rect", "x": 104, "y": 970, "w": 872, "h": 226, "fill": "#ffffff", "stroke": "#be123c", "strokeWidth": 3, "radius": 24 },
+  { "kind": "text", "x": 144, "y": 1005, "w": 96, "h": 80, "family": "Noto Sans SC", "size": 56, "weight": 900, "color": "#be123c", "text": "01" },
+  { "kind": "text", "x": 268, "y": 1005, "w": 650, "h": 122, "family": "Noto Sans SC", "size": 31, "weight": 700, "color": "#4c0519", "lineHeight": 1.45, "text": "底妆少量多次拍开\n眼妆只用三个低饱和色" },
+  { "kind": "text", "x": 144, "y": 1148, "w": 750, "h": 36, "family": "Noto Sans SC", "size": 22, "weight": 600, "color": "#9f1239", "text": "完整步骤和产品色号见正文" },
+  { "kind": "text", "x": 104, "y": 1250, "w": 872, "h": 46, "family": "Noto Sans SC", "size": 23, "weight": 700, "color": "#4c0519", "text": "混合皮友好｜10 分钟完成｜上班上学都适合" }
+ ] }]
+}
