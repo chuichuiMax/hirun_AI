@@ -129,6 +129,8 @@ def test_build_mp_brief_payload_maps_decoration_fields_to_v3_variables():
     values = brief.form_values
     assert values["brand_name"] == "鸿扬家居"
     assert values["project_type"] == "星河湾"
+    assert values.get("voice") != "业主第一人称"
+    assert "好评知识库" not in str(values.get("writing_instruction") or "")
     assert values["area"] == "50-70㎡"
     assert values["mp_content_code"] == "NR20260825001"
     assert values["audience"] == ["长沙市 岳麓区"]

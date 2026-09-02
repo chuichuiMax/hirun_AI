@@ -247,6 +247,49 @@ def test_decoration_generation_rejects_optional_formula_lexicon_bundle():
 
 
 @pytest.mark.unit
+def test_review_notes_generation_allows_optional_formula_lexicon_bundle():
+    node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "generate_content")
+    state = {**_state(), "channel_profile": {}, "persona_profile": {}}
+    state["content_brief"] = {
+        "brand": {"name": "ContentFlow"},
+        "form_values": {"mp_service_entry": "好评笔记"},
+    }
+    state["formula_lexicon_bundle"] = {
+        "required": False,
+        "title_formula_code": "T03",
+        "body_formula_code": "C03",
+        "title": [],
+        "body": [],
+    }
+
+    payload = ContentNodeInputAssembler.build(node=node, state=state).payload
+    assert payload["formula_lexicon_bundle"]["required"] is False
+
+
+@pytest.mark.unit
+def test_home_furnishing_generation_rejects_optional_formula_lexicon_bundle():
+    node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "generate_content")
+    state = {**_state(), "channel_profile": {}, "persona_profile": {}}
+    state["content_brief"] = {
+        "brand": {"name": "ContentFlow"},
+        "form_values": {"mp_service_entry": "装修家居"},
+    }
+    state["formula_lexicon_bundle"] = {
+        "required": False,
+        "title_formula_code": "T03",
+        "body_formula_code": "C03",
+        "title": [],
+        "body": [],
+    }
+
+    with pytest.raises(ContentApplicationError) as exc_info:
+        ContentNodeInputAssembler.build(node=node, state=state)
+
+    assert exc_info.value.code == "node_input_invalid"
+    assert "必须经过必选词库加载路径" in exc_info.value.message
+
+
+@pytest.mark.unit
 def test_input_contract_registry_contains_every_agent_payload_contract():
     assert set(INPUT_CONTRACT_REGISTRY) == {
         "AnalyzeContentValueInputV1",

@@ -83,18 +83,42 @@ def test_formula_without_variants_rejects_extra_variant() -> None:
         )
 
 
+def test_review_notes_skip_body_calling_section_order() -> None:
+    calling = get_decoration_body_calling("C04")
+    context = ContractDomainContext(
+        locked_body_formula_code="C04",
+        locked_body_calling_section_ids=tuple(section["id"] for section in calling["sections"]),
+        skip_formula_lexicon_usage=True,
+        allowed_evidence_by_usage={"body": frozenset()},
+    )
+    result = validate_content_node_result(
+        "OutlineResultV1",
+        _outline_payload(formula_code="C04", section_ids=["owner_review"]),
+        context,
+    )
+    assert [section.section_id for section in result.sections] == ["owner_review"]
+
+
 def test_formula_lexicon_requirements_cover_all_title_formulas_and_locked_body_formula() -> None:
     assert set(TITLE_FORMULA_LEXICON_CODES) == {f"T{index:02d}" for index in range(1, 8)}
     requirements = get_formula_lexicon_requirements("T01", "C02")
     assert [item["filename"] for item in requirements["title"]] == [
-        "人群定位资料库-人群词库.txt",
-        "结果价值资料库-正向结果词库.txt",
+        "3、人群定位资料库-人群词库.txt",
+        "4、结果价值资料库-正向结果词库.txt",
     ]
     assert [item["filename"] for item in requirements["body"]] == [
-        "实景改造资料库-旧房痛点词库.txt",
-        "实景改造资料库-改造优势词库.txt",
-        "人设价值资料库-落地背书词库.txt",
-        "结尾引导资料库-案例引导词库.txt",
+        "24、实景改造资料库-旧房痛点词库.txt",
+        "25、实景改造资料库-改造优势词库.txt",
+        "27、人设价值资料库-落地背书词库.txt",
+        "34、结尾引导资料库-案例引导词库.txt",
+    ]
+
+
+def test_t02_c02_lexicon_filenames_keep_source_heading_number_prefix() -> None:
+    requirements = get_formula_lexicon_requirements("T02", "C02")
+    assert [item["filename"] for item in requirements["title"]] == [
+        "1、情绪词资料库-口语情绪词库.txt",
+        "5、结果价值资料库-反差结果词库.txt",
     ]
 
 

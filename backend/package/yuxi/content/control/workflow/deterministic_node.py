@@ -30,6 +30,7 @@ from yuxi.content.model.rules.engine import CombinationMatcher, MatchRequest
 from yuxi.content.rules import brief_variable_map
 from yuxi.content.validation import ComplianceEngine, validate_numeric_evidence_coverage
 from yuxi.content.validators import validate_content
+from yuxi.content.control.workflow.external_wait import skip_formula_lexicon_pipeline
 from yuxi.content.v3.body_calling import SOURCE_METADATA as BODY_CALLING_SOURCE
 from yuxi.content.v3.body_calling import get_decoration_body_calling
 from yuxi.content.v3.formula_lexicons import get_formula_lexicon_requirements
@@ -339,10 +340,11 @@ class V3DeterministicNodeHandler:
             delegated_agent_run_id=(state.get("delegated_agent_runs") or {}).get("select_creation_strategy"),
         )
         method_by_code = {item.code: item for item in methods}
-        body_calling = get_decoration_body_calling(body_formula.code) if context.industry_slug == "decoration" else None
+        use_decoration_formulas = context.industry_slug == "decoration" and not skip_formula_lexicon_pipeline(state)
+        body_calling = get_decoration_body_calling(body_formula.code) if use_decoration_formulas else None
         formula_lexicons = (
             get_formula_lexicon_requirements(title_formula.code, body_formula.code)
-            if context.industry_slug == "decoration"
+            if use_decoration_formulas
             else None
         )
         body_structure = (
@@ -455,7 +457,7 @@ class V3DeterministicNodeHandler:
             or (state.get("industry_pack") or {}).get("id")
             or ""
         )
-        if industry_pack_id != "industry-pack-decoration-v3":
+        if skip_formula_lexicon_pipeline(state) or industry_pack_id != "industry-pack-decoration-v3":
             return {
                 "formula_lexicon_bundle": {
                     "required": False,

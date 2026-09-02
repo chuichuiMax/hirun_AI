@@ -39,7 +39,7 @@ def get_formula_lexicon_requirements(title_formula_code: str, body_formula_code:
                     "code": code,
                     "name": item["name"],
                     "knowledge_base_name": "标题资料库" if scope == "title" else "正文资料库",
-                    "filename": item["source_heading"].split("、", 1)[-1],
+                    "filename": item["source_heading"],
                 }
             )
         return requirements

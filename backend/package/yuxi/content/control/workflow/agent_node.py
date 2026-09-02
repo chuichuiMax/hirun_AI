@@ -8,7 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content.control.workflow.content_node_input import ContentNodeInputAssembler
-from yuxi.content.control.workflow.external_wait import COVER_SKIP_REASON, skip_cover_pipeline
+from yuxi.content.control.workflow.external_wait import (
+    COVER_SKIP_REASON,
+    RESEARCH_SKIP_REASON,
+    skip_cover_pipeline,
+    skip_formula_lexicon_pipeline,
+    skip_research_pipeline,
+)
 from yuxi.content.model.contracts import ContractDomainContext
 from yuxi.services.agent_delegation_service import AgentDelegationRequest, AgentDelegationService
 from yuxi.storage.postgres.models_business import User
@@ -39,6 +45,29 @@ PROHIBITED_ACTIONS = {
     "submit_cover_job": ("不直接写 MinIO", "不轮询封面任务"),
     "visual_review": ("不直接修改或删除资产",),
 }
+
+DECORATION_FORMULA_REVIEW_CODES = frozenset(
+    {
+        "TITLE_FORMULA_MISMATCH",
+        "BODY_FORMULA_MISMATCH",
+        "CONTENT_STRUCTURE_MISMATCH",
+    }
+)
+
+
+def _review_report_without_decoration_formulas(result: dict[str, Any]) -> dict[str, Any]:
+    checks = [
+        item
+        for item in result.get("checks") or []
+        if str(item.get("code") or "").upper() not in DECORATION_FORMULA_REVIEW_CODES
+    ]
+    if any(item.get("status") == "blocked" for item in checks):
+        status = "blocked"
+    elif any(item.get("status") == "warning" for item in checks):
+        status = "warning"
+    else:
+        status = "passed"
+    return {**result, "checks": checks, "status": status}
 
 
 class AgentNodeResultMapper:
@@ -157,7 +186,10 @@ class AgentNodeResultMapper:
                 },
             }
         if node_id == "semantic_review":
-            return {"review_report": result}
+            report = result
+            if skip_cover_pipeline(state):
+                report = _review_report_without_decoration_formulas(result)
+            return {"review_report": report}
         if node_id == "plan_visuals":
             canonical = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             return {
@@ -195,6 +227,28 @@ class AgentNodeHandler:
                         "assets": [],
                     }
                 }
+        if skip_research_pipeline(state) and node["id"] == "collect_missing_evidence":
+            return {
+                "evidence_collection": {
+                    "skipped": True,
+                    "skip_reason": RESEARCH_SKIP_REASON,
+                    "evidence_items": [],
+                    "citations": [],
+                    "unresolved_questions": [],
+                }
+            }
+        if node["id"] == "collect_missing_evidence" and not (state.get("evidence_gap_analysis") or {}).get(
+            "has_missing"
+        ):
+            return {
+                "evidence_collection": {
+                    "evidence_items": [],
+                    "citations": [],
+                    "unresolved_questions": [],
+                    "skipped": True,
+                    "skip_reason": "当前公式候选池没有证据缺口",
+                }
+            }
 
         node_run = await db.get(ContentNodeRun, node_run_id)
         task = await db.get(ContentTask, state["task_id"])
@@ -256,7 +310,18 @@ class AgentNodeHandler:
             locked_values=locked_values,
             product_material_requirements=state.get("product_material_requirements") or {},
             strategy_snapshot=state.get("strategy_snapshot") or {},
+            skip_formula_lexicon_usage=skip_formula_lexicon_pipeline(state),
         )
+        prohibited_actions = list(PROHIBITED_ACTIONS.get(node["id"], ()))
+        if skip_cover_pipeline(state) and node["id"] == "semantic_review":
+            prohibited_actions.extend(
+                (
+                    "不得按装修获客标题公式或正文公式阻断",
+                    "不得要求细分人群+数字+结果或人设沉淀分段结构",
+                )
+            )
+        if skip_cover_pipeline(state) and node["id"] == "generate_content":
+            prohibited_actions.append("不按装修获客标题公式或正文调用规则写作")
         delegation = AgentDelegationService(db)
         delegated = await delegation.execute(
             AgentDelegationRequest(
@@ -289,7 +354,7 @@ class AgentNodeHandler:
                 max_retrieval_rounds=int(node.get("max_retrieval_rounds") or 0),
                 max_knowledge_bases=int(node.get("max_knowledge_bases") or 0),
                 max_chunks_per_knowledge_base=int(node.get("max_chunks_per_knowledge_base") or 0),
-                prohibited_actions=PROHIBITED_ACTIONS.get(node["id"], ()),
+                prohibited_actions=tuple(prohibited_actions),
             )
         )
         mapped = AgentNodeResultMapper.to_state(node["id"], delegated.output, state)

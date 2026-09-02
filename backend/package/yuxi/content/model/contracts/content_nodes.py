@@ -295,9 +295,13 @@ class GenerateContentInputV1(StrictContract):
             raise ValueError("标题词库包必须匹配锁定标题公式")
         if bundle.get("body_formula_code") != body_formula_code:
             raise ValueError("正文词库包必须匹配锁定正文公式")
-        if title_formula_code in {f"T{index:02d}" for index in range(1, 8)} and body_formula_code in {
-            f"C{index:02d}" for index in range(1, 5)
-        }:
+        form_values = (self.content_brief.get("form_values") or {}) if isinstance(self.content_brief, dict) else {}
+        review_notes = str(form_values.get("mp_service_entry") or "") == "好评笔记"
+        if (
+            not review_notes
+            and title_formula_code in {f"T{index:02d}" for index in range(1, 8)}
+            and body_formula_code in {f"C{index:02d}" for index in range(1, 5)}
+        ):
             if bundle.get("required") is not True:
                 raise ValueError("装修标题和正文公式必须经过必选词库加载路径")
         if bundle.get("required") is True:
@@ -683,6 +687,7 @@ class ContractDomainContext:
     locked_body_calling_section_ids: tuple[str, ...] = ()
     allowed_body_variant_keys: frozenset[str] = frozenset()
     required_title_lexicon_codes: frozenset[str] = frozenset()
+    skip_formula_lexicon_usage: bool = False
     allowed_body_lexicon_codes: frozenset[str] = frozenset()
     body_variant_lexicon_codes: dict[str, frozenset[str]] = field(default_factory=dict)
     allowed_evidence_by_usage: dict[str, frozenset[str]] = field(default_factory=dict)
@@ -718,6 +723,7 @@ class ContractDomainContext:
         locked_values: dict[str, Any],
         product_material_requirements: dict[str, Any] | None = None,
         strategy_snapshot: dict[str, Any] | None = None,
+        skip_formula_lexicon_usage: bool = False,
     ) -> ContractDomainContext:
         versions = (
             locked_versions
@@ -787,6 +793,7 @@ class ContractDomainContext:
                     or []
                 )
             ),
+            skip_formula_lexicon_usage=skip_formula_lexicon_usage,
             required_title_lexicon_codes=frozenset(
                 ((strategy_snapshot or {}).get("title_formula") or {}).get("lexicon_codes") or []
             ),
@@ -857,6 +864,8 @@ def _validate_evidence_ids(ids: list[str], usage: str, context: ContractDomainCo
 
 
 def _validate_outline_calling_contract(result: OutlineResultV1, context: ContractDomainContext) -> None:
+    if context.skip_formula_lexicon_usage:
+        return
     expected_ids = context.locked_body_calling_section_ids
     if expected_ids:
         actual_ids = tuple(section.section_id for section in result.sections)
@@ -882,6 +891,8 @@ def _validate_outline_calling_contract(result: OutlineResultV1, context: Contrac
 
 
 def _validate_formula_lexicon_usage(result: GeneratedContentResultV1, context: ContractDomainContext) -> None:
+    if context.skip_formula_lexicon_usage:
+        return
     title_codes = {item.code for item in result.title.lexicon_usage}
     if context.required_title_lexicon_codes and title_codes != context.required_title_lexicon_codes:
         raise ContractDomainValidationError(

@@ -65,6 +65,78 @@ def test_revision_reason_label_never_exposes_internal_code():
 
 
 @pytest.mark.unit
+def test_review_notes_ignore_decoration_formula_review_blocks():
+    mapped = AgentNodeResultMapper.to_state(
+        "semantic_review",
+        {
+            "status": "blocked",
+            "checks": [
+                {
+                    "code": "TITLE_FORMULA_MISMATCH",
+                    "status": "blocked",
+                    "location": "title",
+                    "message": "不符合 T01",
+                    "suggestion": "",
+                    "evidence_ids": [],
+                },
+                {
+                    "code": "BODY_FORMULA_MISMATCH",
+                    "status": "blocked",
+                    "location": "body",
+                    "message": "不符合 C04",
+                    "suggestion": "",
+                    "evidence_ids": [],
+                },
+                {
+                    "code": "PERSONA_TONE_MISMATCH",
+                    "status": "warning",
+                    "location": "body",
+                    "message": "语气略书面",
+                    "suggestion": "",
+                    "evidence_ids": [],
+                },
+            ],
+            "evidence_conflicts": [],
+        },
+        {"content_brief": {"form_values": {"mp_service_entry": "好评笔记"}}},
+    )
+    report = mapped["review_report"]
+    assert report["status"] == "warning"
+    assert [item["code"] for item in report["checks"]] == ["PERSONA_TONE_MISMATCH"]
+    assert (
+        resolve_revision_reason(
+            title_validation_report=None,
+            validation_report={"status": "passed", "checks": []},
+            review_report=report,
+        )
+        is None
+    )
+
+
+@pytest.mark.unit
+def test_decoration_review_keeps_formula_mismatch_blocks():
+    mapped = AgentNodeResultMapper.to_state(
+        "semantic_review",
+        {
+            "status": "blocked",
+            "checks": [
+                {
+                    "code": "TITLE_FORMULA_MISMATCH",
+                    "status": "blocked",
+                    "location": "title",
+                    "message": "不符合 T01",
+                    "suggestion": "",
+                    "evidence_ids": [],
+                }
+            ],
+            "evidence_conflicts": [],
+        },
+        {"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}},
+    )
+    assert mapped["review_report"]["status"] == "blocked"
+
+
+@pytest.mark.unit
 def test_scene_evidence_is_derived_only_from_traceable_business_fields():
     derived = _derive_scene_evidence(
         "task-1",

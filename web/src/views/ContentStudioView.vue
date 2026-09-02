@@ -254,6 +254,7 @@ const availableContentGoals = computed(() => {
 const studioServiceEntry = computed(
   () => store.task?.brief?.form_values?.mp_service_entry || creation.service_entry
 )
+const isReviewNotes = computed(() => studioServiceEntry.value === '好评笔记')
 const studioEdition = computed(() => (store.task ? store.task.mode : creation.mode) === 'pro' ? 'pro' : 'quick')
 const activeFields = computed(() =>
   (store.contentVariables || [])
@@ -465,6 +466,11 @@ const externalWaitStatusLabel = computed(() => {
 })
 const failedNodeId = computed(
   () => [...store.runEvents].reverse().find((item) => item.status === 'failed')?.node_id || null
+)
+const reviewNotesAutoRetried = ref(false)
+const reviewNotesAutoRetrying = ref(false)
+const showRunFailure = computed(
+  () => runFailed.value && !(isReviewNotes.value && (reviewNotesAutoRetrying.value || !reviewNotesAutoRetried.value))
 )
 const saveStatusLabel = computed(() => {
   if (store.saveStatus === 'saving') return '正在自动保存…'
@@ -922,7 +928,7 @@ onMounted(async () => {
       initializeVisualSelection()
       syncEditor()
       if (route.query.resultDetail === '1' && store.artifact) resultDetailOpen.value = true
-      if (stage.value === 1) await loadVisualMaterials()
+      if (stage.value === 1 && !isReviewNotes.value) await loadVisualMaterials()
       if (
         store.task?.latest_run_id &&
         [
@@ -969,16 +975,23 @@ const createTask = async () => {
     return
   }
   try {
-    const task = await store.createTask({
+    const payload = {
       industry_template_id: creation.industry_template_id,
       mode: creation.mode,
       content_goal: creation.content_goal,
       name: creation.name
-    })
+    }
+    if (creation.service_entry === '好评笔记') {
+      const reviewType = (store.ruleBundle?.content_types || []).find(
+        (item) => item.name === '人设自荐' || item.code === 'CT07'
+      )
+      if (reviewType?.code) payload.content_type_code = reviewType.code
+    }
+    const task = await store.createTask(payload)
     await router.replace(`/content/tasks/${task.id}`)
     initializeFormValues()
     initializeVisualSelection()
-    await loadVisualMaterials()
+    if (!isReviewNotes.value) await loadVisualMaterials()
     message.success('内容任务已创建')
   } catch (error) {
     message.error(error.message || '创建任务失败')
@@ -1043,18 +1056,26 @@ const compileBrief = async () => {
     message.warning(`请填写${missing.label}`)
     return
   }
-  if (!selectedImageItemId.value) {
-    message.warning('请选择一张图库原图')
-    return
-  }
-  if (!selectedHyCanvasTemplateId.value) {
-    message.warning('请选择一个 HyCanvas 小红书模板')
-    return
+  if (!isReviewNotes.value) {
+    if (!selectedImageItemId.value) {
+      message.warning('请选择一张图库原图')
+      return
+    }
+    if (!selectedHyCanvasTemplateId.value) {
+      message.warning('请选择一个 HyCanvas 小红书模板')
+      return
+    }
   }
   try {
     window.clearTimeout(draftSaveTimer)
     await store.compileBrief(buildBrief())
     stage.value = 2
+    if (isReviewNotes.value) {
+      reviewNotesAutoRetried.value = false
+      message.success('正在生成好评笔记')
+      await startGeneration()
+      return
+    }
     message.success('业务简报已形成，可启动 V3 内容工作流')
   } catch (error) {
     message.error(error.message || '请补充必填业务信息')
@@ -1077,6 +1098,19 @@ const retryFailedRun = async () => {
     message.error(error.message || '失败节点重试失败')
   }
 }
+
+watch([runFailed, failedNodeId], async ([failed, nodeId]) => {
+  if (!isReviewNotes.value || !failed || reviewNotesAutoRetried.value || !nodeId || store.loading.running) return
+  reviewNotesAutoRetried.value = true
+  reviewNotesAutoRetrying.value = true
+  try {
+    await store.retryNode(nodeId, modelSpec.value)
+  } catch (error) {
+    message.error(error.message || '内容生成失败')
+  } finally {
+    reviewNotesAutoRetrying.value = false
+  }
+})
 
 const submitHumanReview = async () => {
   try {
@@ -1379,7 +1413,7 @@ const openVersions = async () => {
               </ul>
             </aside>
           </div>
-          <section class="visual-material-card">
+          <section v-if="!isReviewNotes" class="visual-material-card">
             <div class="visual-material-heading">
               <div>
                 <span class="section-kicker">视觉素材</span>
@@ -1470,8 +1504,8 @@ const openVersions = async () => {
             </a-spin>
           </section>
           <div class="stage-actions">
-            <a-button type="primary" :loading="store.loading.saving" @click="compileBrief">
-              形成事实简报并进入 V3 生产
+            <a-button type="primary" :loading="store.loading.saving || store.loading.running" @click="compileBrief">
+              {{ isReviewNotes ? '生成内容' : '形成事实简报并进入 V3 生产' }}
             </a-button>
           </div>
         </template>
@@ -1484,10 +1518,11 @@ const openVersions = async () => {
       >
         <div v-if="!store.currentRun && !store.interrupt" class="generation-start">
           <Sparkles :size="30" />
-          <h3>事实简报已锁定</h3>
-          <p>固定工作流会在动态节点调用 Agent，Agent 再使用 Skill、知识库和工具，关键选择会暂停等待人工确认。</p>
-          <a-input v-if="!isQuickMode" v-model:value="modelSpec" placeholder="可选：指定模型 spec；留空使用系统默认模型" />
-          <a-button type="primary" size="large" @click="startGeneration"><Play :size="17" />开始生成</a-button>
+          <h3>{{ isReviewNotes ? '正在生成好评笔记' : '事实简报已锁定' }}</h3>
+          <p v-if="isReviewNotes">提交后会直接开跑，失败时自动重试，完成后即可查看标题和正文。</p>
+          <p v-else>固定工作流会在动态节点调用 Agent，Agent 再使用 Skill、知识库和工具，关键选择会暂停等待人工确认。</p>
+          <a-input v-if="!isQuickMode && !isReviewNotes" v-model:value="modelSpec" placeholder="可选：指定模型 spec；留空使用系统默认模型" />
+          <a-button v-if="!isReviewNotes" type="primary" size="large" @click="startGeneration"><Play :size="17" />开始生成</a-button>
         </div>
 
         <div
@@ -1756,7 +1791,7 @@ const openVersions = async () => {
             <small>{{ externalWaitStatusLabel }}</small>
           </div>
 
-          <div v-else-if="runFailed" class="running-card failure-card">
+          <div v-else-if="showRunFailure" class="running-card failure-card">
             <CircleAlert :size="26" />
             <h3>工作流执行失败</h3>
             <p>{{ store.task?.error?.message || store.lastError?.message || '已保留完成节点和 checkpoint，可从失败节点恢复。' }}</p>

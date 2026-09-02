@@ -1,7 +1,7 @@
 ---
 name: content-reviewer
 description: 审核 Yuxi 生成内容的创作手法贯穿、公式执行、事实一致性、人设语气和风险表达。仅在确定性校验完成后的内容审核节点使用。
-version: 1.2.0
+version: 1.3.0
 ---
 
 # 内容审核
@@ -9,6 +9,7 @@ version: 1.2.0
 1. 当前节点 `payload` 必须包含 `content_draft`、`selected_title`、`content_outline`、`strategy_snapshot`、`validation_report` 和 `evidence_bundle`；缺少任一必需输入时直接报告契约错误，不得猜测补齐。
 2. 先确认 `validation_report.status` 为 `passed` 或 `warning`。若它为 `blocked`，返回 `REVIEW_CONTRACT_INVALID`，因为确定性阻断不应进入本节点。
 3. 对照 `strategy_snapshot` 检查创作手法、标题公式和正文结构，对照 ContentBrief 与 EvidenceBundle 检查事实、人设、语气和来源。
+   - 若 `content_brief.form_values.mp_service_entry` 为「好评笔记」，只审业主第一人称、项目成员评价、事实一致性和风险，不得用装修获客标题公式（如细分人群＋数字＋结果）或正文公式（如人设沉淀分段、body_calling）阻断。
    - 公式只决定信息顺序，不允许把“旧况、关键数据、过程、结果”等公式步骤写成读者可见的报幕句。
    - 出现“旧况很典型”“关键数据先摊开”“先说背景”“再看过程”“最后看结果”“下面来说”“接下来看看”等元话术，或多个段落使用相同模板句式开场时，必须以 `PERSONA_STYLE_MISMATCH` 阻断并给出直接进入场景或事实的改写建议。
    - 不得因为结构、事实和证据正确，就把明显的提纲填充、审核报告腔或机械连接词判为语气通过。

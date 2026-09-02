@@ -11,10 +11,13 @@ import yuxi.agents.toolkits.content.tools as content_tools
 import yuxi.content.control.workflow.agent_node as agent_node_module
 from yuxi.agents.buildin.content_workflow.graph import ContentWorkflowAgent
 from yuxi.content.control.workflow.agent_node import AgentNodeHandler, AgentNodeResultMapper
+from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
 from yuxi.content.control.workflow.external_wait import (
     COVER_SKIP_REASON,
+    RESEARCH_SKIP_REASON,
     ExternalWaitNodeHandler,
     skip_cover_pipeline,
+    skip_formula_lexicon_pipeline,
 )
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.storage.postgres.models_content import ContentCoverAsset, ContentCoverJob, ContentNodeRun, ContentTask
@@ -482,13 +485,120 @@ def test_skip_cover_pipeline_only_for_review_notes():
     assert not skip_cover_pipeline({})
 
 
-def _review_notes_state(**extra) -> dict:
+def test_skip_formula_lexicon_pipeline_only_for_review_notes():
+    assert skip_formula_lexicon_pipeline({"content_brief": {"form_values": {"mp_service_entry": "好评笔记"}}})
+    assert not skip_formula_lexicon_pipeline({"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}})
+    assert not skip_formula_lexicon_pipeline({"content_brief": {}})
+    assert not skip_formula_lexicon_pipeline({})
+
+
+@pytest.mark.asyncio
+async def test_review_notes_skip_decoration_formula_lexicon_files():
+    class ForbiddenDB:
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("好评笔记不应查询装修标题/正文词库文件")
+
+    result = await V3DeterministicNodeHandler()._load_formula_lexicons(
+        db=ForbiddenDB(),
+        state=_review_notes_state(
+            strategy_snapshot={"title_formula": {"code": "T02"}, "body_formula": {"code": "C02"}},
+            industry_pack_version_id="industry-pack-decoration-v3",
+        ),
+        node_run_id="node-1",
+    )
+    assert result["formula_lexicon_bundle"]["required"] is False
+    assert result["formula_lexicon_bundle"]["title"] == []
+    assert result["formula_lexicon_bundle"]["body"] == []
+
+
+@pytest.mark.asyncio
+async def test_home_furnishing_still_loads_decoration_formula_lexicons():
+    class ProbeDB:
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("装修家居应查询装修标题/正文词库文件")
+
+    with pytest.raises(AssertionError, match="装修家居应查询装修标题/正文词库文件"):
+        await V3DeterministicNodeHandler()._load_formula_lexicons(
+            db=ProbeDB(),
+            state=_review_notes_state(
+                service_entry="装修家居",
+                strategy_snapshot={"title_formula": {"code": "T02"}, "body_formula": {"code": "C02"}},
+                industry_pack_version_id="industry-pack-decoration-v3",
+            ),
+            node_run_id="node-1",
+        )
+
+
+@pytest.mark.asyncio
+async def test_review_notes_skip_research_agent_without_delegation():
+    class ForbiddenDB:
+        async def get(self, *args, **kwargs):
+            raise AssertionError("好评笔记不应调用调研 Agent")
+
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("好评笔记不应调用调研 Agent")
+
+    result = await AgentNodeHandler().execute(
+        db=ForbiddenDB(),
+        node={"id": "collect_missing_evidence"},
+        state=_review_notes_state(evidence_gap_analysis={"has_missing": True}),
+        node_run_id="node-run-1",
+    )
+
+    assert result["evidence_collection"]["skipped"] is True
+    assert result["evidence_collection"]["skip_reason"] == RESEARCH_SKIP_REASON
+    assert result["evidence_collection"]["evidence_items"] == []
+    assert result["evidence_collection"]["citations"] == []
+
+
+@pytest.mark.asyncio
+async def test_home_furnishing_skips_research_when_no_evidence_gap():
+    class ForbiddenDB:
+        async def get(self, *args, **kwargs):
+            raise AssertionError("无证据缺口时不应调用调研 Agent")
+
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("无证据缺口时不应调用调研 Agent")
+
+    result = await AgentNodeHandler().execute(
+        db=ForbiddenDB(),
+        node={"id": "collect_missing_evidence"},
+        state=_review_notes_state(service_entry="装修家居"),
+        node_run_id="node-run-1",
+    )
+
+    assert result["evidence_collection"]["skipped"] is True
+    assert result["evidence_collection"]["skip_reason"] == "当前公式候选池没有证据缺口"
+
+
+@pytest.mark.asyncio
+async def test_home_furnishing_research_runs_when_evidence_gap_exists():
+    class ProbeDB:
+        async def get(self, *args, **kwargs):
+            raise AssertionError("装修家居有证据缺口时应进入调研 Agent")
+
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("装修家居有证据缺口时应进入调研 Agent")
+
+    with pytest.raises(AssertionError, match="装修家居有证据缺口时应进入调研 Agent"):
+        await AgentNodeHandler().execute(
+            db=ProbeDB(),
+            node={"id": "collect_missing_evidence"},
+            state=_review_notes_state(
+                service_entry="装修家居",
+                evidence_gap_analysis={"has_missing": True},
+            ),
+            node_run_id="node-run-1",
+        )
+
+
+def _review_notes_state(*, service_entry: str = "好评笔记", **extra) -> dict:
     return {
         "task_id": "task-1",
         "uid": "user-1",
         "run_id": "run-1",
         "state_version": 2,
-        "content_brief": {"form_values": {"mp_service_entry": "好评笔记"}},
+        "content_brief": {"form_values": {"mp_service_entry": service_entry}},
         **extra,
     }
 

@@ -24,7 +24,7 @@ RUN HYCANVAS_AUTH_MODE="${MANAGED_MODE}" CONTENTSWARM_URL="${HOST_APP_URL}" \
 FROM golang:1.25-bookworm AS backend
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
-RUN go mod download
+RUN GOPROXY=https://goproxy.cn,direct go mod download
 COPY backend/ ./
 # Stage the frontend export into the Go module so go:embed bakes it into the
 # binary (single self-contained file; no sidecar public/ at runtime).

@@ -68,6 +68,8 @@ def test_compile_brief_requires_configured_variables_for_studio_entry():
     assert compiled["form_values"]["project_type"] == "星河湾"
     assert compiled["business_variables"]["product"] == "星河湾"
     assert compiled["brand"]["name"] == "鸿扬家居"
+    assert compiled["form_values"].get("voice") != "业主第一人称"
+    assert "好评知识库" not in str(compiled["form_values"].get("writing_instruction") or "")
     assert missing == [{"field": "主材", "label": "主材"}]
 
 

@@ -11,15 +11,28 @@ from yuxi.services.run_queue_service import append_run_stream_event
 from yuxi.utils.datetime_utils import utc_now_naive
 
 COVER_SKIP_REASON = "好评笔记跳过封面生成"
+RESEARCH_SKIP_REASON = "好评笔记沿用简报已锁定事实，跳过获客调研"
 REVIEW_NOTES_SERVICE_ENTRY = "好评笔记"
 
 
-def skip_cover_pipeline(state: dict[str, Any]) -> bool:
+def _brief_service_entry(state: dict[str, Any]) -> str:
     brief = state.get("content_brief") or {}
     values = brief.get("form_values") if isinstance(brief, dict) else {}
     if not isinstance(values, dict):
         values = {}
-    return str(values.get("mp_service_entry") or "") == REVIEW_NOTES_SERVICE_ENTRY
+    return str(values.get("mp_service_entry") or "")
+
+
+def skip_cover_pipeline(state: dict[str, Any]) -> bool:
+    return _brief_service_entry(state) == REVIEW_NOTES_SERVICE_ENTRY
+
+
+def skip_formula_lexicon_pipeline(state: dict[str, Any]) -> bool:
+    return skip_cover_pipeline(state)
+
+
+def skip_research_pipeline(state: dict[str, Any]) -> bool:
+    return skip_cover_pipeline(state)
 
 
 class ExternalWaitNodeHandler:
@@ -134,4 +147,11 @@ class ExternalWaitNodeHandler:
         }
 
 
-__all__ = ["COVER_SKIP_REASON", "ExternalWaitNodeHandler", "skip_cover_pipeline"]
+__all__ = [
+    "COVER_SKIP_REASON",
+    "RESEARCH_SKIP_REASON",
+    "ExternalWaitNodeHandler",
+    "skip_cover_pipeline",
+    "skip_formula_lexicon_pipeline",
+    "skip_research_pipeline",
+]
