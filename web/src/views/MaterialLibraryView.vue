@@ -33,6 +33,8 @@ const loading = ref(false)
 const uploading = ref(false)
 const categories = ref([])
 const galleries = ref([])
+const industries = ref([])
+const industryFilter = ref('')
 const activeGallery = ref('')
 const items = ref([])
 const total = ref(0)
@@ -58,7 +60,7 @@ const categorySaving = ref(false)
 const categoryEditorMode = ref('create')
 const editingCategory = ref(null)
 const categoryParentId = ref('')
-const categoryForm = reactive({ name: '', description: '' })
+const categoryForm = reactive({ name: '', description: '', industry_slug: '' })
 const categoryManagerOpen = ref(false)
 const deleteCategoryOpen = ref(false)
 const categoryDeleting = ref(false)
@@ -84,8 +86,23 @@ const filteredGalleries = computed(() => {
   const scoped = isGalleryRoot.value
     ? galleries.value.filter((item) => !item.parent_id)
     : (isTopLevelGallery.value ? galleries.value.filter((item) => item.parent_id === activeGallery.value) : [])
-  if (!term) return scoped
-  return scoped.filter((item) => `${item.name}${item.description}`.toLowerCase().includes(term))
+  const industryScoped = isGalleryRoot.value && industryFilter.value
+    ? scoped.filter((item) => (item.industry_slug || 'uncategorized') === industryFilter.value)
+    : scoped
+  if (!term) return industryScoped
+  return industryScoped.filter((item) => `${item.name}${item.description}`.toLowerCase().includes(term))
+})
+const galleryGroups = computed(() => {
+  if (!isGalleryRoot.value) return [{ slug: 'children', name: '二级图库', galleries: filteredGalleries.value }]
+  const options = [...industries.value, { slug: 'uncategorized', name: '未分类行业' }]
+  return options
+    .map((industry) => ({
+      ...industry,
+      galleries: filteredGalleries.value.filter(
+        (gallery) => (gallery.industry_slug || 'uncategorized') === industry.slug
+      )
+    }))
+    .filter((group) => group.galleries.length)
 })
 const createCategoryTitle = computed(() => {
   if (categoryEditorMode.value === 'edit') {
@@ -118,7 +135,11 @@ function openCreateCategory(parentId = '') {
   categoryEditorMode.value = 'create'
   editingCategory.value = null
   categoryParentId.value = typeof parentId === 'string' ? parentId : ''
-  Object.assign(categoryForm, { name: '', description: '' })
+  Object.assign(categoryForm, {
+    name: '',
+    description: '',
+    industry_slug: categoryParentId.value ? (categoryMap.value[categoryParentId.value]?.industry_slug || '') : ''
+  })
   categoryEditorOpen.value = true
 }
 
@@ -126,15 +147,25 @@ function openEditCategory(category) {
   categoryEditorMode.value = 'edit'
   editingCategory.value = category
   categoryParentId.value = category.parent_id || ''
-  Object.assign(categoryForm, { name: category.name, description: category.description || '' })
+  Object.assign(categoryForm, {
+    name: category.name,
+    description: category.description || '',
+    industry_slug: category.industry_slug || ''
+  })
   categoryEditorOpen.value = true
 }
 
 async function saveCategory() {
   if (!categoryForm.name.trim()) return message.warning('请输入名称')
+  if (materialType.value === 'image' && !categoryParentId.value && !categoryForm.industry_slug) {
+    return message.warning('请选择图库所属行业')
+  }
   const payload = {
     name: categoryForm.name.trim(),
-    description: categoryForm.description.trim()
+    description: categoryForm.description.trim(),
+    ...(materialType.value === 'image' && !categoryParentId.value
+      ? { industry_slug: categoryForm.industry_slug }
+      : {})
   }
   categorySaving.value = true
   try {
@@ -197,6 +228,7 @@ async function loadGalleries() {
   try {
     const response = await materialLibraryApi.listGalleries()
     releasePreviews()
+    industries.value = response.industries || []
     galleries.value = await Promise.all((response.galleries || []).map(async (gallery) => ({
       ...gallery,
       coverUrl: gallery.cover_item_id ? await blobPreview(gallery.cover_item_id, `gallery-${gallery.code}`) : ''
@@ -531,7 +563,11 @@ onBeforeUnmount(releasePreviews)
         <a-input v-model:value="queryInput" allow-clear :placeholder="isGalleryRoot ? '搜索图库名称' : '搜索素材名称'" @pressEnter="search" @clear="search">
           <template #prefix><Search :size="15" /></template>
         </a-input>
-        <a-select v-if="materialType === 'cover_template'" v-model:value="categoryFilter" class="category-filter" placeholder="全部分类" allow-clear @change="page = 1; loadItems()">
+        <a-select v-if="isGalleryRoot" v-model:value="industryFilter" class="category-filter" placeholder="全部行业" allow-clear>
+          <a-select-option v-for="item in industries" :key="item.slug" :value="item.slug">{{ item.name }}</a-select-option>
+          <a-select-option value="uncategorized">未分类行业</a-select-option>
+        </a-select>
+        <a-select v-else-if="materialType === 'cover_template'" v-model:value="categoryFilter" class="category-filter" placeholder="全部分类" allow-clear @change="page = 1; loadItems()">
           <a-select-option v-for="item in categories" :key="item.code" :value="item.code">{{ item.name }}</a-select-option>
         </a-select>
         <a-select v-if="!isGalleryRoot" v-model:value="sort" class="sort-filter" @change="page = 1; loadItems()">
@@ -544,17 +580,17 @@ onBeforeUnmount(releasePreviews)
       </div>
 
       <a-spin :spinning="loading">
-        <div v-if="filteredGalleries.length" class="gallery-section">
-          <h3 v-if="isTopLevelGallery">二级图库</h3>
+        <div v-for="group in galleryGroups" :key="group.slug" class="gallery-section">
+          <h3>{{ group.name }}</h3>
           <div class="gallery-grid">
-          <article v-for="gallery in filteredGalleries" :key="gallery.id" class="gallery-card">
+          <article v-for="gallery in group.galleries" :key="gallery.id" class="gallery-card">
             <button type="button" class="gallery-open" @click="enterGallery(gallery)">
               <span class="gallery-cover">
                 <img v-if="gallery.coverUrl" :src="gallery.coverUrl" alt="" />
                 <span v-else class="folder-art"><Folder :size="44" /><i></i></span>
                 <em>{{ gallery.count }} 张<span v-if="gallery.child_count"> · {{ gallery.child_count }} 个子图库</span></em>
               </span>
-              <span class="gallery-copy"><strong>{{ gallery.name }}</strong><small>{{ gallery.description || '暂未填写图库说明' }}</small></span>
+              <span class="gallery-copy"><strong>{{ gallery.name }}</strong><small>{{ gallery.description || '暂未填写图库说明' }}</small><em v-if="isGalleryRoot">{{ gallery.industry_name }}</em></span>
             </button>
             <div class="gallery-actions">
               <button type="button" :aria-label="`编辑图库 ${gallery.name}`" title="编辑图库" @click="openEditCategory(gallery)"><Pencil :size="15" /></button>
@@ -635,6 +671,9 @@ onBeforeUnmount(releasePreviews)
     <a-modal v-model:open="categoryEditorOpen" :title="createCategoryTitle" :confirm-loading="categorySaving" ok-text="保存" @ok="saveCategory">
       <div class="upload-form">
         <label v-if="categoryEditorMode === 'create' && categoryParentId"><span>所属一级图库</span><a-input :value="categoryMap[categoryParentId]?.name" disabled /></label>
+        <label v-if="materialType === 'image' && !categoryParentId"><span>所属行业 <b>*</b></span><a-select v-model:value="categoryForm.industry_slug" placeholder="请选择一个行业">
+          <a-select-option v-for="item in industries" :key="item.slug" :value="item.slug">{{ item.name }}</a-select-option>
+        </a-select></label>
         <label><span>{{ categoryParentId ? '二级图库名称' : (materialType === 'image' ? '图库名称' : '分类名称') }} <b>*</b></span><a-input v-model:value="categoryForm.name" maxlength="80" :placeholder="categoryParentId ? '例如：客厅案例' : (materialType === 'image' ? '例如：春季新品素材' : '例如：客户案例')" /></label>
         <label><span>说明</span><a-textarea v-model:value="categoryForm.description" :rows="3" maxlength="255" show-count :placeholder="materialType === 'image' ? '说明图库收纳的图片范围，方便团队快速判断' : '说明这个分类适用的封面场景'" /></label>
       </div>
@@ -698,6 +737,7 @@ onBeforeUnmount(releasePreviews)
 .gallery-cover em { position: absolute; z-index: 1; right: 12px; bottom: 12px; padding: 4px 9px; border-radius: 14px; background: rgb(15 25 45 / 66%); color: white; font-size: 12px; font-style: normal; backdrop-filter: blur(4px); }
 .gallery-copy { display: flex; flex-direction: column; gap: 6px; padding: 15px 76px 18px 16px; }
 .gallery-copy strong { overflow: hidden; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text); }.gallery-copy small { min-height: 40px; color: var(--color-text-secondary); line-height: 1.55; }
+.gallery-copy em { color: var(--color-primary); font-size: 12px; font-style: normal; }
 .gallery-actions { position: absolute; right: 12px; bottom: 15px; display: flex; gap: 3px; }.gallery-actions button, .category-row-actions button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 7px; background: var(--gray-25); color: var(--color-text-secondary); cursor: pointer; }.gallery-actions button:hover, .category-row-actions button:hover { background: var(--main-20); color: var(--color-primary); }.gallery-actions button.danger:hover, .category-row-actions button.danger:hover { color: var(--color-error-700); }
 .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
 .poster-wall { columns: 260px; column-gap: 18px; }

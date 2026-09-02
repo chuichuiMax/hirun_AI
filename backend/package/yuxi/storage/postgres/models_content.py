@@ -1083,6 +1083,7 @@ class ContentMaterialCategory(Base):
     id = Column(String(64), primary_key=True)
     tenant_id = Column(String(64), nullable=True, index=True)
     parent_id = Column(String(64), nullable=True, index=True)
+    industry_slug = Column(String(80), nullable=False, default="uncategorized", index=True)
     name = Column(String(80), nullable=False)
     description = Column(String(255), nullable=False, default="")
     sort_order = Column(Integer, nullable=False, default=0)
@@ -1126,6 +1127,7 @@ class ContentMaterialCategory(Base):
             "material_type": self.material_type,
             "parent_id": self.parent_id,
             "level": 2 if self.parent_id else 1,
+            "industry_slug": self.industry_slug,
             "name": self.name,
             "description": self.description or "",
             "sort_order": self.sort_order,

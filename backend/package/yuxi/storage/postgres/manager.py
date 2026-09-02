@@ -390,8 +390,25 @@ class PostgresManager(metaclass=SingletonMeta):
         stmts = [
             "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS parent_id VARCHAR(64)",
             (
+                "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS "
+                "industry_slug VARCHAR(80) NOT NULL DEFAULT 'uncategorized'"
+            ),
+            (
+                "UPDATE content_material_categories SET industry_slug = 'uncategorized' "
+                "WHERE industry_slug IS NULL"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_material_categories "
+                "ALTER COLUMN industry_slug SET DEFAULT 'uncategorized', "
+                "ALTER COLUMN industry_slug SET NOT NULL"
+            ),
+            (
                 "CREATE INDEX IF NOT EXISTS idx_content_material_category_owner_type_parent "
                 "ON content_material_categories(owner_uid, material_type, parent_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_content_material_category_owner_type_industry "
+                "ON content_material_categories(owner_uid, material_type, industry_slug)"
             ),
             (
                 "DO $$ BEGIN "

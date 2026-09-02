@@ -19,7 +19,8 @@ export const materialLibraryApi = {
     apiDelete(`/api/material-library/categories/${categoryId}?material_type=${materialType}`, {
       body: JSON.stringify({ target_category_id: targetCategoryId })
     }),
-  listGalleries: () => apiGet('/api/material-library/galleries'),
+  listGalleries: (industrySlug = '') =>
+    apiGet(`/api/material-library/galleries${encodeQuery({ industry_slug: industrySlug })}`),
   importImages: (files, category) => {
     const form = new FormData()
     Array.from(files).forEach((file) => form.append('files', file))

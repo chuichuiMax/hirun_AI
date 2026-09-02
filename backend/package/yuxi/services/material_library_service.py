@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
+from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
 from yuxi.services.material_library_categories import (
     list_material_categories,
@@ -53,6 +54,7 @@ class MaterialCategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=255)
     parent_id: str | None = Field(default=None, max_length=64)
+    industry_slug: str | None = Field(default=None, max_length=80)
 
     @field_validator("name")
     @classmethod
@@ -66,6 +68,7 @@ class MaterialCategoryUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=255)
     sort_order: int | None = Field(default=None, ge=0, le=100000)
+    industry_slug: str | None = Field(default=None, max_length=80)
 
     @field_validator("name")
     @classmethod
@@ -126,6 +129,7 @@ def serialize_item(
         {
             "category": category.id,
             "category_name": category.name,
+            "industry_slug": category.industry_slug,
             "file_name": asset.original_file_name,
             "content_type": asset.content_type,
             "file_size": asset.file_size,
@@ -197,6 +201,20 @@ async def ensure_material_categories(
         fallback.id,
     )
     return categories
+
+
+async def _industry_catalog(db: AsyncSession) -> dict[str, str]:
+    return {
+        item["slug"]: item["name"]
+        for item in await ContentRepository(db).list_templates()
+    }
+
+
+async def _validate_industry_slug(db: AsyncSession, value: str | None) -> str | None:
+    slug = (value or "").strip() or None
+    if slug is not None and slug != "uncategorized" and slug not in await _industry_catalog(db):
+        raise _error(422, "MATERIAL_INDUSTRY_INVALID", "所选行业不存在或尚未发布")
+    return slug
 
 
 async def resolve_material_category(
@@ -452,12 +470,21 @@ async def get_material_categories(db: AsyncSession, user: User, material_type: s
         tenant_id=_tenant_id(user),
         material_type=material_type,
     )
+    industry_catalog = await _industry_catalog(db)
+    parents = {category.id: category for category in categories if category.parent_id is None}
     result = []
     for category in categories:
+        effective_industry = (
+            parents[category.parent_id].industry_slug
+            if category.parent_id and category.parent_id in parents
+            else category.industry_slug
+        )
         children = await repo.list_child_categories(_owner_uid(user), material_type, category.id)
         result.append(
             {
                 **category.to_dict(),
+                "industry_slug": effective_industry,
+                "industry_name": industry_catalog.get(effective_industry, "未分类行业"),
                 "count": await repo.category_item_count(_owner_uid(user), material_type, category.id),
                 "child_count": len(children),
             }
@@ -479,6 +506,7 @@ async def create_material_category(
         material_type=payload.material_type,
     )
     parent = None
+    industry_slug = None
     if payload.parent_id:
         if payload.material_type != "image":
             raise _error(422, "MATERIAL_CATEGORY_DEPTH_INVALID", "只有素材图片图库支持二级图库")
@@ -487,6 +515,11 @@ async def create_material_category(
             raise _error(422, "MATERIAL_CATEGORY_PARENT_INVALID", "所属一级图库不存在")
         if parent.parent_id or parent.is_system:
             raise _error(422, "MATERIAL_CATEGORY_DEPTH_INVALID", "二级图库只能创建在普通一级图库下")
+        if payload.industry_slug and payload.industry_slug != parent.industry_slug:
+            raise _error(422, "MATERIAL_INDUSTRY_INHERITED", "二级图库必须继承一级图库行业")
+        industry_slug = parent.industry_slug
+    elif payload.material_type == "image":
+        industry_slug = await _validate_industry_slug(db, payload.industry_slug) or "uncategorized"
     try:
         category = await repo.create_category(
             owner_uid=_owner_uid(user),
@@ -494,6 +527,7 @@ async def create_material_category(
             tenant_id=_tenant_id(user),
             material_type=payload.material_type,
             parent_id=parent.id if parent else None,
+            industry_slug=industry_slug,
             name=payload.name.strip(),
             description=payload.description.strip(),
             sort_order=(max(item.sort_order for item in categories) + 10),
@@ -532,6 +566,13 @@ async def update_material_category(
         category.description = changes["description"].strip()
     if "sort_order" in changes:
         category.sort_order = changes["sort_order"]
+    if "industry_slug" in changes:
+        if material_type != "image" or category.parent_id:
+            raise _error(422, "MATERIAL_INDUSTRY_INHERITED", "只有一级图片图库可以设置行业")
+        category.industry_slug = await _validate_industry_slug(db, changes["industry_slug"]) or "uncategorized"
+        await repo.update_child_category_industry(
+            _owner_uid(user), material_type, category.id, category.industry_slug
+        )
     category.updated_at = utc_now_naive()
     try:
         await db.commit()
@@ -539,7 +580,14 @@ async def update_material_category(
         await db.rollback()
         raise _error(409, "MATERIAL_CATEGORY_NAME_DUPLICATE", "图库或分类名称已存在") from exc
     count = await repo.category_item_count(_owner_uid(user), material_type, category.id)
-    return {"category": {**category.to_dict(), "count": count}}
+    industry_catalog = await _industry_catalog(db)
+    return {
+        "category": {
+            **category.to_dict(),
+            "industry_name": industry_catalog.get(category.industry_slug, "未分类行业"),
+            "count": count,
+        }
+    }
 
 
 async def delete_material_category(
@@ -581,7 +629,9 @@ async def delete_material_category(
     return {"success": True, "id": category.id, "moved": moved, "target_category_id": target.id}
 
 
-async def list_image_galleries(db: AsyncSession, user: User) -> dict[str, Any]:
+async def list_image_galleries(
+    db: AsyncSession, user: User, industry_slug: str | None = None
+) -> dict[str, Any]:
     categories = await ensure_material_categories(
         db,
         owner_uid=_owner_uid(user),
@@ -589,8 +639,20 @@ async def list_image_galleries(db: AsyncSession, user: User) -> dict[str, Any]:
         material_type="image",
     )
     raw = await MaterialLibraryRepository(db).category_summaries(_owner_uid(user), material_type="image")
+    industry_catalog = await _industry_catalog(db)
+    parents = {category.id: category for category in categories if category.parent_id is None}
     galleries = []
     for category in categories:
+        effective_industry = (
+            parents[category.parent_id].industry_slug
+            if category.parent_id and category.parent_id in parents
+            else category.industry_slug
+        )
+        if industry_slug and (
+            (industry_slug == "uncategorized" and effective_industry != "uncategorized")
+            or (industry_slug != "uncategorized" and effective_industry != industry_slug)
+        ):
+            continue
         direct_count, latest = raw.get(category.id, (0, None))
         children = [item for item in categories if item.parent_id == category.id]
         count = direct_count
@@ -605,6 +667,8 @@ async def list_image_galleries(db: AsyncSession, user: User) -> dict[str, Any]:
         galleries.append(
             {
                 **category.to_dict(),
+                "industry_slug": effective_industry,
+                "industry_name": industry_catalog.get(effective_industry, "未分类行业"),
                 "count": count,
                 "direct_count": direct_count,
                 "child_count": len(children),
@@ -613,7 +677,12 @@ async def list_image_galleries(db: AsyncSession, user: User) -> dict[str, Any]:
             }
         )
     await db.commit()
-    return {"galleries": galleries}
+    return {
+        "galleries": galleries,
+        "industries": [
+            {"slug": slug, "name": name} for slug, name in industry_catalog.items()
+        ],
+    }
 
 
 async def get_material_file(db: AsyncSession, user: User, item_id: str) -> tuple[bytes, str, str]:

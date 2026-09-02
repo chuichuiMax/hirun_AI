@@ -253,6 +253,7 @@ const taskId = computed(() => route.params.taskId)
 const selectedTemplate = computed(() =>
   store.templates.find((item) => item.id === creation.industry_template_id)
 )
+const selectedIndustrySlug = computed(() => store.template?.slug || selectedTemplate.value?.slug || '')
 const activeFields = computed(() => {
   if (!store.task) {
     if (!selectedTemplate.value) return []
@@ -703,7 +704,7 @@ const loadVisualMaterials = async () => {
   materialSelectorLoading.value = true
   try {
     const [galleryResponse] = await Promise.all([
-      materialLibraryApi.listGalleries(),
+      materialLibraryApi.listGalleries(selectedIndustrySlug.value),
       loadHyCanvasTemplates()
     ])
     materialGalleries.value = galleryResponse.galleries || []

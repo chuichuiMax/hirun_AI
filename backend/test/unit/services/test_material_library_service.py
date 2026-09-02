@@ -60,6 +60,7 @@ def test_material_category_exposes_gallery_level():
         owner_uid="owner-1",
         material_type="image",
         id="gallery-1",
+        industry_slug="decoration",
         name="案例",
     )
     child = ContentMaterialCategory(
@@ -72,6 +73,7 @@ def test_material_category_exposes_gallery_level():
 
     assert parent.to_dict()["level"] == 1
     assert parent.to_dict()["parent_id"] is None
+    assert parent.to_dict()["industry_slug"] == "decoration"
     assert child.to_dict()["level"] == 2
     assert child.to_dict()["parent_id"] == parent.id
 
