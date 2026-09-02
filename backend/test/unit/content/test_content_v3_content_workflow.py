@@ -33,6 +33,9 @@ from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
         ("KNOWLEDGE_EVIDENCE_UNUSED", "BODY_EVIDENCE_FAILED"),
         ("KNOWLEDGE_PRICE_DETAIL_UNUSED", "BODY_EVIDENCE_FAILED"),
         ("BODY_LENGTH_OUT_OF_RANGE", "BODY_STRUCTURE_FAILED"),
+        ("CHANNEL_TITLE_LONG", "TITLE_VALIDATION_FAILED"),
+        ("CHANNEL_BODY_LONG", "BODY_STRUCTURE_FAILED"),
+        ("CHANNEL_TOPIC_COUNT", "BODY_STRUCTURE_FAILED"),
     ],
 )
 def test_revision_reason_is_deterministic(code: str, expected: str):
@@ -941,6 +944,64 @@ async def test_system_validation_failure_never_reaches_semantic_agent_or_human_a
         )
 
     assert exc_info.value.code == "system_configuration_failed"
+
+
+@pytest.mark.asyncio
+async def test_channel_title_too_long_routes_to_generation_instead_of_contract_error():
+    agent = ContentWorkflowAgent()
+    result = await agent._execute_node(
+        {"id": "revise_if_needed", "type": "revision_router"},
+        {
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "current_node": "semantic_review",
+            "state_version": 1,
+            "retry_counts": {},
+            "content_brief": {
+                "form_values": {"mp_service_entry": "装修家居", "mp_content_code": "ZX-001"}
+            },
+            "review_report": {
+                "status": "blocked",
+                "checks": [{"code": "CHANNEL_TITLE_LONG", "status": "blocked"}],
+            },
+        },
+        WORKFLOW_V3,
+    )
+
+    assert result["revision_reason_code"] == "TITLE_VALIDATION_FAILED"
+    assert result["revision_target"] == "generate_content"
+
+
+@pytest.mark.asyncio
+async def test_deterministic_validate_blocks_channel_title_overflow():
+    result = await V3DeterministicNodeHandler._deterministic_validate(
+        db=SimpleNamespace(),
+        state={
+            "content_brief": {"form_values": {"mp_service_entry": "装修家居"}},
+            "content_draft": {"body": "正文" * 80, "topics": [], "paragraph_evidence": []},
+            "selected_title": {"text": "长沙装修闭眼入不踩雷五十到七十平照着做"},
+            "evidence_bundle": {"items": []},
+            "strategy_snapshot": {
+                "creation_methods": [{"code": "M01"}],
+                "title_formula": {"code": "T01"},
+                "body_formula": {"code": "C01"},
+            },
+            "channel_result": {
+                "checks": [
+                    {
+                        "code": "CHANNEL_TITLE_LONG",
+                        "level": "error",
+                        "location": "title",
+                        "message": "title 超过 20 字",
+                    }
+                ]
+            },
+        },
+        node_run_id="node-1",
+    )
+
+    assert result["validation_report"]["status"] == "blocked"
+    assert any(item["code"] == "CHANNEL_TITLE_LONG" for item in result["validation_report"]["checks"])
 
 
 @pytest.mark.asyncio

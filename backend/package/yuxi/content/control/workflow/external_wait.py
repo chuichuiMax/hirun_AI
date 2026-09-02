@@ -35,6 +35,16 @@ def skip_research_pipeline(state: dict[str, Any]) -> bool:
     return skip_cover_pipeline(state)
 
 
+def skip_content_correction_interrupt(state: dict[str, Any]) -> bool:
+    if skip_cover_pipeline(state):
+        return True
+    brief = state.get("content_brief") or {}
+    values = brief.get("form_values") if isinstance(brief, dict) else {}
+    if not isinstance(values, dict):
+        return False
+    return bool(str(values.get("mp_content_code") or "").strip())
+
+
 class ExternalWaitNodeHandler:
     """把外部 CoverJob 转成可恢复的工作流等待，不在 Agent 节点轮询。"""
 
@@ -154,4 +164,5 @@ __all__ = [
     "skip_cover_pipeline",
     "skip_formula_lexicon_pipeline",
     "skip_research_pipeline",
+    "skip_content_correction_interrupt",
 ]

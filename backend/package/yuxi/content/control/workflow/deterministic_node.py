@@ -1289,6 +1289,10 @@ class V3DeterministicNodeHandler:
                 }
             )
             report["status"] = "blocked"
+        for item in (state.get("channel_result") or {}).get("checks") or []:
+            if item.get("level") == "error":
+                report["checks"].append(item)
+                report["status"] = "blocked"
         return {"validation_report": report}
 
     @staticmethod

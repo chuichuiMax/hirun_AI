@@ -44,6 +44,8 @@ def _agent(
     max_knowledge_bases: int = 0,
     max_chunks_per_knowledge_base: int = 0,
     token_budget: int = 8000,
+    timeout_seconds: int = 120,
+    max_execution_steps: int = 12,
 ) -> dict[str, Any]:
     node = {
         "id": node_id,
@@ -56,8 +58,8 @@ def _agent(
         "output_contract": output_contract,
         "backend": "managed",
         "knowledge_policy": knowledge_policy,
-        "timeout_seconds": 120,
-        "max_execution_steps": 12,
+        "timeout_seconds": timeout_seconds,
+        "max_execution_steps": max_execution_steps,
         "max_tool_calls": max_tool_calls,
         "token_budget": token_budget,
         "result_tool_name": "submit_content_node_result",
@@ -114,6 +116,8 @@ WORKFLOW_V3_NODES = [
         max_knowledge_bases=5,
         max_chunks_per_knowledge_base=6,
         token_budget=14000,
+        timeout_seconds=180,
+        max_execution_steps=40,
     ),
     _human("confirm_high_risk_facts", "high_risk_facts"),
     _fixed("freeze_evidence_bundle"),

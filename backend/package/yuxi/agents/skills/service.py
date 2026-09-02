@@ -341,21 +341,37 @@ def _compute_dir_hash(source_dir: Path) -> str:
 
 
 def _replace_skill_target(target_dir: Path, source_dir: Path) -> None:
+    if target_dir.exists() and _compute_dir_hash(target_dir) == _compute_dir_hash(source_dir):
+        return
+
     temp_target = target_dir.with_name(f".{target_dir.name}.tmp-{uuid.uuid4().hex[:8]}")
-    trash_dir: Path | None = None
     if temp_target.exists():
         shutil.rmtree(temp_target, ignore_errors=True)
 
     shutil.copytree(source_dir, temp_target, symlinks=False)
+    trash_dir: Path | None = None
     try:
         if target_dir.exists():
             trash_dir = target_dir.with_name(f".{target_dir.name}.bak-{uuid.uuid4().hex[:8]}")
-            target_dir.rename(trash_dir)
-        temp_target.rename(target_dir)
+            try:
+                target_dir.rename(trash_dir)
+            except OSError:
+                shutil.rmtree(target_dir)
+        try:
+            temp_target.rename(target_dir)
+        except OSError:
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            shutil.copytree(temp_target, target_dir, symlinks=False)
+            shutil.rmtree(temp_target, ignore_errors=True)
     except Exception:
         shutil.rmtree(temp_target, ignore_errors=True)
         if trash_dir and trash_dir.exists() and not target_dir.exists():
-            trash_dir.rename(target_dir)
+            try:
+                trash_dir.rename(target_dir)
+            except OSError:
+                shutil.copytree(trash_dir, target_dir, symlinks=False)
+                shutil.rmtree(trash_dir, ignore_errors=True)
         raise
 
     if trash_dir and trash_dir.exists():

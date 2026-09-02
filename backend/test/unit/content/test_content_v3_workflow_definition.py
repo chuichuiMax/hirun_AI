@@ -94,8 +94,9 @@ def test_creation_research_runs_with_business_and_viral_retrieval_budget():
     assert research["max_knowledge_bases"] == 5
     assert research["max_chunks_per_knowledge_base"] == 6
     assert research["max_tool_calls"] == 6
-    assert research["max_execution_steps"] == 12
-    assert research["timeout_seconds"] == 120
+    assert research["max_execution_steps"] == 40
+    assert research["timeout_seconds"] == 180
+    assert research["max_execution_steps"] > 2 * (research["max_tool_calls"] + 2)
 
 
 @pytest.mark.unit
@@ -126,7 +127,7 @@ def test_strategy_and_generation_are_single_agent_calls():
 
 
 @pytest.mark.unit
-def test_system_seed_upgrades_to_content_and_cover_version_11():
+def test_system_seed_upgrades_to_content_and_cover_version_12():
     stale = SimpleNamespace(
         created_by="system",
         schema_version=3,
@@ -136,7 +137,7 @@ def test_system_seed_upgrades_to_content_and_cover_version_11():
         output_schema={},
     )
     assert _upgrade_system_workflow_v3(stale) is True
-    assert stale.version == 11
+    assert stale.version == 12
     assert stale.definition_json == WORKFLOW_V3
 
 

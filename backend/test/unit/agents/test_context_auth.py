@@ -71,6 +71,26 @@ def test_filter_config_by_role_removes_unauthorized_context_values():
     assert config_json["context"]["summary_threshold"] == 10
 
 
+def test_filter_config_by_role_keeps_hidden_admin_runtime_capabilities_for_user():
+    filtered = filter_config_by_role(
+        {
+            "context": {
+                "system_prompt": "visible",
+                "skill_tool_allowlist": ["get_creation_rule_bundle"],
+                "max_execution_steps": 50,
+            }
+        },
+        "user",
+    )
+
+    assert filtered == {
+        "context": {
+            "system_prompt": "visible",
+            "skill_tool_allowlist": ["get_creation_rule_bundle"],
+        }
+    }
+
+
 def test_filter_config_by_role_keeps_admin_context_values_for_admin():
     filtered = filter_config_by_role(
         {
@@ -199,6 +219,19 @@ async def test_normalize_agent_context_config_expands_null_and_filters_explicit_
     assert "summary_prompt" not in normalized
     assert "summary_tool_result_token_limit" not in normalized
     assert "max_execution_steps" not in normalized
+
+    allowlist_normalized = await normalize_agent_context_config(
+        {
+            "skills": ["content-strategy-planner"],
+            "skill_tool_allowlist": ["get_creation_rule_bundle"],
+            "max_execution_steps": 50,
+        },
+        db=object(),
+        user=types.SimpleNamespace(role="user", uid="u1", department_id=None),
+        context_schema=ChatBotContext,
+    )
+    assert allowlist_normalized["skill_tool_allowlist"] == ["get_creation_rule_bundle"]
+    assert "max_execution_steps" not in allowlist_normalized
 
     empty_subagents_normalized = await normalize_agent_context_config(
         {"tools": [], "knowledges": [], "mcps": [], "skills": [], "subagents": []},

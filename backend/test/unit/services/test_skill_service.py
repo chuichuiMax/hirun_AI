@@ -918,6 +918,48 @@ async def test_init_builtin_skills_create_missing(tmp_path: Path, monkeypatch: p
     assert (tmp_path / "skills" / "reporter" / "prompts" / "system.md").read_text(encoding="utf-8") == "prompt"
 
 
+def test_replace_skill_target_skips_identical_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source_dir = tmp_path / "src"
+    target_dir = tmp_path / "dst"
+    source_dir.mkdir()
+    target_dir.mkdir()
+    (source_dir / "SKILL.md").write_text("same", encoding="utf-8")
+    (target_dir / "SKILL.md").write_text("same", encoding="utf-8")
+    calls: list[bool] = []
+    original = svc.shutil.copytree
+
+    def spy(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(svc.shutil, "copytree", spy)
+    svc._replace_skill_target(target_dir, source_dir)
+
+    assert calls == []
+    assert (target_dir / "SKILL.md").read_text(encoding="utf-8") == "same"
+
+
+def test_replace_skill_target_copies_when_rename_is_denied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source_dir = tmp_path / "src"
+    target_dir = tmp_path / "dst"
+    source_dir.mkdir()
+    target_dir.mkdir()
+    (source_dir / "SKILL.md").write_text("new", encoding="utf-8")
+    (target_dir / "SKILL.md").write_text("old", encoding="utf-8")
+
+    original_rename = Path.rename
+
+    def deny_into_target(self: Path, target):
+        if Path(target) == target_dir:
+            raise OSError(13, "Permission denied")
+        return original_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", deny_into_target)
+    svc._replace_skill_target(target_dir, source_dir)
+
+    assert (target_dir / "SKILL.md").read_text(encoding="utf-8") == "new"
+
+
 @pytest.mark.asyncio
 async def test_init_builtin_skills_updates_existing_record_and_preserves_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

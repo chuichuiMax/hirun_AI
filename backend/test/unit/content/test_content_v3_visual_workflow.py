@@ -16,6 +16,7 @@ from yuxi.content.control.workflow.external_wait import (
     COVER_SKIP_REASON,
     RESEARCH_SKIP_REASON,
     ExternalWaitNodeHandler,
+    skip_content_correction_interrupt,
     skip_cover_pipeline,
     skip_formula_lexicon_pipeline,
 )
@@ -483,6 +484,15 @@ def test_skip_cover_pipeline_only_for_review_notes():
     assert not skip_cover_pipeline({"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}})
     assert not skip_cover_pipeline({"content_brief": {}})
     assert not skip_cover_pipeline({})
+
+
+def test_mp_decoration_skips_content_correction_interrupt():
+    assert skip_content_correction_interrupt(
+        {"content_brief": {"form_values": {"mp_service_entry": "装修家居", "mp_content_code": "ZX-1"}}}
+    )
+    assert not skip_content_correction_interrupt(
+        {"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}}
+    )
 
 
 def test_skip_formula_lexicon_pipeline_only_for_review_notes():

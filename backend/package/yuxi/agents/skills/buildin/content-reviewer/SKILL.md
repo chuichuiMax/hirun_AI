@@ -1,7 +1,7 @@
 ---
 name: content-reviewer
 description: 审核 Yuxi 生成内容的创作手法贯穿、公式执行、事实一致性、人设语气和风险表达。仅在确定性校验完成后的内容审核节点使用。
-version: 1.3.0
+version: 1.4.0
 ---
 
 # 内容审核
@@ -19,6 +19,6 @@ version: 1.3.0
 7. `evidence_ids` 可引用当前冻结 EvidenceBundle 中任何真实存在的证据，包括用于核对结构、节奏和 emoji 模式的 `style_reference`；不得引用未知 Evidence ID。
 8. 顶层 `status` 必须与 `checks` 中最严重状态一致：存在 `blocked` 则为 `blocked`，否则存在 `warning` 则为 `warning`，其余为 `passed`。
 
-允许用于定点回修的阻断 code 为 `TITLE_FORMULA_MISMATCH`、`BODY_FORMULA_MISMATCH`、`CONTENT_STRUCTURE_MISMATCH`、`PERSONA_TONE_MISMATCH`、`PERSONA_STYLE_MISMATCH`、`FACT_CHECK_FAILED`、`FACT_INCONSISTENT`。其他阻断 code 会被视为审核契约错误并停止工作流。
+允许用于定点回修的阻断 code 为 `TITLE_FORMULA_MISMATCH`、`BODY_FORMULA_MISMATCH`、`CONTENT_STRUCTURE_MISMATCH`、`PERSONA_TONE_MISMATCH`、`PERSONA_STYLE_MISMATCH`、`FACT_CHECK_FAILED`、`FACT_INCONSISTENT`、`TITLE_TOO_LONG`、`TITLE_TOO_SHORT`、`BODY_LENGTH_OUT_OF_RANGE`。标题超过渠道字数上限时使用 `TITLE_TOO_LONG`，禁止使用 `CHANNEL_TITLE_LONG` 等渠道内部码。其他阻断 code 会被视为审核契约错误并停止工作流。
 
 不得用单一综合分数替代问题列表，不得修改原内容。

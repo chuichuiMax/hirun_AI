@@ -41,7 +41,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-evidence-researcher",
         source_dir=_SKILLS_ROOT / "content-evidence-researcher",
         description="按锁定策略检索真实业务资料与爆款结构参考。",
-        version="3.2.0",
+        version="3.3.0",
         tool_dependencies=("get_business_facts", "query_kb", "open_kb_document", "find_kb_document"),
     ),
     BuiltinSkillSpec(
@@ -85,7 +85,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-reviewer",
         source_dir=_SKILLS_ROOT / "content-reviewer",
         description="审核公式执行、事实一致性、人设语气和内容风险。",
-        version="1.3.0",
+        version="1.4.0",
         tool_dependencies=(
             "query_kb",
             "open_kb_document",

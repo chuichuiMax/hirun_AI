@@ -117,6 +117,11 @@ def resolve_revision_reason(
         "CONTENT_HIGH_RISK_CLAIM": "BODY_STRUCTURE_FAILED",
         "COMPLIANCE_RULE_MATCH": "BODY_STRUCTURE_FAILED",
         "UNSAFE_AUTO_REPLACEMENT": "BODY_STRUCTURE_FAILED",
+        "CHANNEL_TITLE_LONG": "TITLE_VALIDATION_FAILED",
+        "CHANNEL_TITLE_SHORT": "TITLE_VALIDATION_FAILED",
+        "CHANNEL_BODY_LONG": "BODY_STRUCTURE_FAILED",
+        "CHANNEL_BODY_SHORT": "BODY_STRUCTURE_FAILED",
+        "CHANNEL_TOPIC_COUNT": "BODY_STRUCTURE_FAILED",
     }
     reasons = {reason_by_code[code] for code in blocked_codes if code in reason_by_code}
     if len(reasons) == 1 and len(blocked_codes) == sum(code in reason_by_code for code in blocked_codes):
