@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  deploymentId: process.env.HYCANVAS_DEPLOYMENT_ID,
   reactStrictMode: true,
   output: "export",
   trailingSlash: true,

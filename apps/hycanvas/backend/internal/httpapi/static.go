@@ -23,8 +23,8 @@ func init() {
 // matching the NestJS bundle it replaces. It is wired as the router's NotFound
 // handler, so it only runs for paths no API/realtime route claimed.
 //
-// Next's `output: "export"` (with `trailingSlash: true`) emits hashed immutable
-// assets under /_next plus per-route directories holding index.html (e.g.
+// Next's `output: "export"` (with `trailingSlash: true`) emits assets under
+// /_next plus per-route directories holding index.html (e.g.
 // /login/index.html, /dashboard/index.html). Resolution order for a GET:
 //  1. exact file (assets, /_next/*, favicon, ...)
 //  2. <path>.html (per-route export pages without trailingSlash)
@@ -202,8 +202,14 @@ func serveFile(w http.ResponseWriter, req *http.Request, root http.FileSystem, n
 		}
 		// Read failed: fall through to ServeContent from the still-open file.
 	}
-	// Hashed Next assets are content-addressed and safe to cache aggressively.
-	if strings.HasPrefix(name, "/_next/") {
+	// Turbopack chunk names are not guaranteed to change between production
+	// builds. Revalidate them so a deployment cannot mix an old runtime with new
+	// lazy editor chunks. Build-scoped manifests and media remain immutable.
+	if strings.HasPrefix(name, "/_next/static/chunks/") {
+		w.Header().Set("Cache-Control", "no-store")
+		req.Header.Del("If-Modified-Since")
+		req.Header.Del("If-None-Match")
+	} else if strings.HasPrefix(name, "/_next/") {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
 	http.ServeContent(w, req, info.Name(), info.ModTime(), f)
