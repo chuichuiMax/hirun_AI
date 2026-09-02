@@ -169,6 +169,12 @@ func rowToTemplate(r TemplateRow) Template {
 	if len(r.FillableFields) > 0 {
 		_ = json.Unmarshal(r.FillableFields, &fillable)
 	}
+	if len(fillable) == 0 {
+		meta := asObj(file["meta"])
+		if declared, ok := meta["brandEditableFields"].([]any); ok {
+			fillable = declared
+		}
+	}
 	attrs := []any{}
 	if len(r.Attributions) > 0 {
 		_ = json.Unmarshal(r.Attributions, &attrs)
@@ -328,15 +334,16 @@ func (s *Service) Apply(ctx context.Context, userID, templateID, workspaceID str
 
 // SaveInput is the save-as-template payload.
 type SaveInput struct {
-	WorkspaceID  string
-	DesignID     string
-	File         map[string]any
-	Title        string
-	Category     string
-	Tags         []string
-	Thumbnail    string
-	Visibility   string // private|workspace|public
-	CollectionID string
+	WorkspaceID    string
+	DesignID       string
+	File           map[string]any
+	Title          string
+	Category       string
+	Tags           []string
+	Thumbnail      string
+	Visibility     string // private|workspace|public
+	CollectionID   string
+	FillableFields []any
 }
 
 func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInput) (Template, error) {
@@ -361,6 +368,11 @@ func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInpu
 		file = in.File
 	} else {
 		return Template{}, ErrBadRequest
+	}
+	if in.FillableFields != nil {
+		meta := asObj(file["meta"])
+		meta["brandEditableFields"] = in.FillableFields
+		file["meta"] = meta
 	}
 	if in.CollectionID != "" {
 		col, err := s.getCollection(ctx, in.CollectionID)

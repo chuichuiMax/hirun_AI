@@ -3,8 +3,9 @@
 // Uses the design's id when available (server loads its latest snapshot) and
 // otherwise sends the in-memory file so unsaved work can still be templatized.
 
-import { useState } from "react";
-import type { TemplateVisibility } from "@hc/sdk";
+import { useMemo, useState } from "react";
+import { childrenOf, type Node } from "@hc/schema";
+import type { FillableFieldSummary, TemplateVisibility } from "@hc/sdk";
 import { oc } from "@/lib/sdk";
 import { useEditor } from "@/store/editor";
 import { useToast } from "@/components/ui/Toast";
@@ -18,14 +19,42 @@ const visibilities = (): { value: TemplateVisibility; label: string; hint: strin
   { value: "public", label: tr("editor.everyone"), hint: tr("editor.public_template_free_to_all") },
 ];
 
+const semanticRoles = [
+  ["title", "内容标题"],
+  ["subtitle", "内容副标题"],
+  ["project_name", "项目名称"],
+  ["project_name_en", "项目英文名"],
+  ["project_area", "项目面积"],
+  ["designer", "设计师"],
+  ["completion_year", "完成年份"],
+  ["brand_name", "品牌名称"],
+  ["body_excerpt", "正文摘要"],
+] as const;
+
+function textNodes(file: ReturnType<typeof useEditor.getState>["doc"]): Array<{ id: string; text: string }> {
+  const result: Array<{ id: string; text: string }> = [];
+  const visit = (node: Node) => {
+    if (node.type === "text") {
+      const content = (node as unknown as { content?: { runs?: { text?: string }[] }[] }).content ?? [];
+      const text = content.map((p) => (p.runs ?? []).map((r) => r.text ?? "").join("")).join(" ").trim();
+      result.push({ id: node.id, text: text || node.name || "未命名文字" });
+    }
+    for (const child of childrenOf(node)) visit(child);
+  };
+  for (const page of file.pages) for (const node of page.children) visit(node);
+  return result;
+}
+
 export function SaveAsTemplateDialog({
   open,
   onClose,
+  onSaved,
   designId,
   workspaceId,
 }: {
   open: boolean;
   onClose: () => void;
+  onSaved?: (fields: FillableFieldSummary[]) => void | Promise<void>;
   designId: string | null;
   workspaceId: string | null;
 }) {
@@ -35,9 +64,37 @@ export function SaveAsTemplateDialog({
   const [category, setCategory] = useState("");
   const [visibility, setVisibility] = useState<TemplateVisibility>("workspace");
   const [busy, setBusy] = useState(false);
+  const doc = useEditor((s) => s.doc);
+  const availableTextNodes = useMemo(() => textNodes(doc), [doc]);
+  const [fillableFields, setFillableFields] = useState<FillableFieldSummary[]>(() =>
+    (doc.meta as { brandEditableFields?: FillableFieldSummary[] } | undefined)?.brandEditableFields ?? [],
+  );
+  const fieldsValid = fillableFields.length > 0 && fillableFields.every((field) =>
+    Boolean(field.label.trim() && field.key?.trim() && field.semanticRole && (field.constraints?.maxChars ?? 0) > 0),
+  ) && new Set(fillableFields.map((field) => field.key)).size === fillableFields.length;
+
+  function toggleField(nodeId: string, text: string) {
+    setFillableFields((current) => current.some((field) => field.nodeId === nodeId)
+      ? current.filter((field) => field.nodeId !== nodeId)
+      : [...current, {
+          nodeId,
+          kind: "text",
+          key: `field_${current.length + 1}`,
+          label: text.slice(0, 30),
+          semanticRole: "title",
+          constraints: { required: true, maxChars: Math.max(4, Math.min(120, text.length || 20)) },
+        }]);
+  }
+
+  function updateField(nodeId: string, patch: Partial<FillableFieldSummary>) {
+    setFillableFields((current) => current.map((field) => field.nodeId === nodeId ? { ...field, ...patch } : field));
+  }
 
   async function save() {
-    if (!workspaceId || !title.trim()) return;
+    if (!workspaceId || !title.trim() || !fieldsValid) {
+      if (!fieldsValid) toast.error("请至少选择一个文字字段，并完整填写字段名称、唯一编码、语义和最大字数。");
+      return;
+    }
     setBusy(true);
     try {
       await oc.saveAsTemplate({
@@ -48,7 +105,10 @@ export function SaveAsTemplateDialog({
         title: title.trim(),
         category: category.trim() || undefined,
         visibility,
+        fillableFields,
       });
+      useEditor.getState().setDocMeta({ brandEditableFields: fillableFields });
+      await onSaved?.(fillableFields);
       toast.success(tr("editor.saved_as_template"));
       onClose();
     } catch {
@@ -59,7 +119,7 @@ export function SaveAsTemplateDialog({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={tr("editor.save_as_template")}>
+    <Modal open={open} onClose={onClose} title="设置模板字段并保存">
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -108,11 +168,36 @@ export function SaveAsTemplateDialog({
             ))}
           </div>
         </fieldset>
+        <fieldset className="flex max-h-72 flex-col gap-2 overflow-auto rounded-xl border border-neutral-200 p-3">
+          <span className="text-sm font-medium text-neutral-700">可填充文字字段</span>
+          <span className="text-xs text-neutral-500">勾选内容生成完成后需要自动替换的文字，并声明它的含义。</span>
+          {availableTextNodes.map((node) => {
+            const field = fillableFields.find((item) => item.nodeId === node.id);
+            return (
+              <div key={node.id} className="rounded-lg border border-neutral-100 p-2">
+                <label className="flex items-center gap-2 text-sm text-neutral-700">
+                  <input type="checkbox" checked={Boolean(field)} onChange={() => toggleField(node.id, node.text)} />
+                  <span className="truncate">{node.text}</span>
+                </label>
+                {field && (
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <input value={field.label} onChange={(e) => updateField(node.id, { label: e.target.value })} placeholder="字段名称" className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs" />
+                    <input value={field.key ?? ""} onChange={(e) => updateField(node.id, { key: e.target.value })} placeholder="字段编码" className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs" />
+                    <select value={field.semanticRole ?? "title"} onChange={(e) => updateField(node.id, { semanticRole: e.target.value as FillableFieldSummary["semanticRole"] })} className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs">
+                      {semanticRoles.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select>
+                    <input type="number" min={1} max={500} value={field.constraints?.maxChars ?? 20} onChange={(e) => updateField(node.id, { constraints: { ...field.constraints, maxChars: Number(e.target.value) } })} aria-label="最大字数" className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs" />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </fieldset>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" size="sm" onClick={onClose}>
             {tr("editor.cancel")}
           </Button>
-          <Button type="submit" size="sm" disabled={busy || !title.trim() || !workspaceId}>
+          <Button type="submit" size="sm" disabled={busy || !title.trim() || !workspaceId || !fieldsValid}>
             {busy ? tr("editor.saving") : tr("editor.save_template")}
           </Button>
         </div>

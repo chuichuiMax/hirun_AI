@@ -146,8 +146,22 @@ const selectedHyCanvasTemplate = computed(() =>
   hycanvasTemplates.value.find((item) => item.id === selectedHyCanvasTemplateId.value) || null
 )
 
-const suggestedHyCanvasValue = (label) => {
+const suggestedHyCanvasValue = (field) => {
+  const label = field.label || ''
   const body = String(editor.body || '').replace(/[#*_>`\n]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const facts = store.task?.brief?.form_values || formValues
+  const semanticValues = {
+    title: editor.title || store.artifact?.title || '',
+    subtitle: editor.topics?.[0] || '',
+    body_excerpt: body.slice(0, field.constraints?.maxChars || 80),
+    project_name: facts.project_name || facts.community_name || '',
+    project_name_en: facts.project_name_en || facts.community_name_en || '',
+    project_area: String(facts.project_area || facts.area || facts.area_sqm || '').match(/\d+(?:\.\d+)?/)?.[0] || '',
+    designer: facts.designer || facts.designer_name || '',
+    completion_year: String(facts.completion_year || facts.year || '').match(/(?:19|20)\d{2}/)?.[0] || '',
+    brand_name: formValues.brand_name || '',
+  }
+  if (field.semanticRole && semanticValues[field.semanticRole] !== undefined) return semanticValues[field.semanticRole]
   if (label.includes('标题') || label.includes('语录')) return editor.title || store.artifact?.title || ''
   if (label.includes('账号')) return `@${formValues.brand_name || '品牌账号'}`
   if (label.includes('产品') || label.includes('店名') || label.includes('名称')) {
@@ -159,7 +173,7 @@ const suggestedHyCanvasValue = (label) => {
 const initializeHyCanvasFields = () => {
   Object.keys(hycanvasFields).forEach((key) => delete hycanvasFields[key])
   for (const field of selectedHyCanvasTemplate.value?.fillable_fields?.filter((item) => item.kind === 'text') || []) {
-    hycanvasFields[field.label] = suggestedHyCanvasValue(field.label)
+    hycanvasFields[field.label] = suggestedHyCanvasValue(field)
   }
 }
 
@@ -1851,7 +1865,7 @@ const openVersions = async () => {
               <div v-if="selectedHyCanvasTemplate" class="hycanvas-fields">
                 <label v-for="field in selectedHyCanvasTemplate.fillable_fields.filter((item) => item.kind === 'text')" :key="field.nodeId">
                   <span>{{ field.label }}</span>
-                  <a-textarea v-model:value="hycanvasFields[field.label]" :rows="2" :placeholder="field.hint" />
+                  <a-textarea v-model:value="hycanvasFields[field.label]" :rows="2" :maxlength="field.constraints?.maxChars" :show-count="Boolean(field.constraints?.maxChars)" :placeholder="field.hint" />
                 </label>
               </div>
               <label

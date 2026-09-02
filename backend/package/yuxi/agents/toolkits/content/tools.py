@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -108,6 +109,56 @@ class ValidateFactsInput(BaseModel):
 
 class CreateContentCoverJobInput(BaseModel):
     task_id: str = Field(description="当前内容任务 ID；视觉方案由运行时锁定快照提供")
+
+
+def _hycanvas_template_fields(
+    declarations: list[dict[str, Any]],
+    *,
+    visual_text: list[str],
+    brief: dict[str, Any],
+) -> dict[str, str]:
+    """Resolve author-declared template semantics from locked content inputs."""
+    form_values = brief.get("form_values") or {}
+    brand = brief.get("brand") or {}
+    sources = {
+        "title": visual_text[0] if visual_text else "",
+        "subtitle": visual_text[1] if len(visual_text) > 1 else "",
+        "body_excerpt": visual_text[1] if len(visual_text) > 1 else (visual_text[0] if visual_text else ""),
+        "project_name": form_values.get("project_name") or form_values.get("community_name") or "",
+        "project_name_en": form_values.get("project_name_en") or form_values.get("community_name_en") or "",
+        "project_area": form_values.get("project_area") or form_values.get("area") or form_values.get("area_sqm") or "",
+        "designer": form_values.get("designer") or form_values.get("designer_name") or "",
+        "completion_year": form_values.get("completion_year") or form_values.get("year") or "",
+        "brand_name": brand.get("name") or form_values.get("brand_name") or "",
+    }
+    fields: dict[str, str] = {}
+    for field in declarations:
+        if field.get("kind") != "text" or not field.get("label"):
+            continue
+        label = str(field["label"])
+        role = str(field.get("semanticRole") or "")
+        value = str(sources.get(role) or "").strip()
+        if not role:
+            if "副标题" in label:
+                value = sources["subtitle"]
+            elif "标题" in label or "语录" in label:
+                value = sources["title"]
+            else:
+                value = sources["body_excerpt"]
+        if role == "project_area":
+            match = re.search(r"\d+(?:\.\d+)?", value)
+            value = match.group(0) if match else ""
+        elif role == "completion_year":
+            match = re.search(r"(?:19|20)\d{2}", value)
+            value = match.group(0) if match else ""
+        constraints = field.get("constraints") or {}
+        if constraints.get("required") and not value:
+            raise ValueError(f"封面模板必填字段“{label}”在事实简报中没有对应内容")
+        max_chars = constraints.get("maxChars")
+        if isinstance(max_chars, int) and max_chars > 0 and len(value) > max_chars:
+            raise ValueError(f"封面字段“{label}”超过模板限制的 {max_chars} 个字符")
+        fields[label] = value
+    return fields
 
 
 def _runtime_uid(runtime: ToolRuntime | None) -> str:
@@ -395,7 +446,11 @@ async def create_content_cover_job(
             from yuxi.services.content_cover_service import create_hycanvas_cover_job
 
             fillable_fields = visual_material.get("hycanvas_fillable_fields") or []
-            fields = {}
+            fields = _hycanvas_template_fields(
+                fillable_fields,
+                visual_text=text,
+                brief=task.brief_json or {},
+            )
             image_field_label = None
             for field in fillable_fields:
                 if not field.get("label"):
@@ -404,14 +459,6 @@ async def create_content_cover_job(
                 if field.get("kind") == "image":
                     image_field_label = label
                     continue
-                if field.get("kind") != "text":
-                    continue
-                if "副标题" in label:
-                    fields[label] = text[1] if len(text) > 1 else ""
-                elif "标题" in label or "语录" in label:
-                    fields[label] = text[0]
-                else:
-                    fields[label] = text[1] if len(text) > 1 else text[0]
             result = await create_hycanvas_cover_job(
                 db,
                 user,

@@ -467,3 +467,51 @@ async def test_cover_tool_rejects_assets_outside_locked_visual_plan():
 
 def test_cover_tool_only_accepts_task_id_from_agent():
     assert set(content_tools.CreateContentCoverJobInput.model_fields) == {"task_id"}
+
+
+def test_hycanvas_template_fields_resolve_semantics_and_constraints():
+    fields = content_tools._hycanvas_template_fields(
+        [
+            {
+                "nodeId": "n1",
+                "kind": "text",
+                "label": "项目面积",
+                "semanticRole": "project_area",
+                "constraints": {"required": True, "maxChars": 6},
+            },
+            {
+                "nodeId": "n2",
+                "kind": "text",
+                "label": "项目名称",
+                "semanticRole": "project_name",
+                "constraints": {"required": True, "maxChars": 12},
+            },
+            {
+                "nodeId": "n3",
+                "kind": "text",
+                "label": "封面标题",
+                "semanticRole": "title",
+                "constraints": {"maxChars": 20},
+            },
+        ],
+        visual_text=["住进理想新家", "空间焕新"],
+        brief={"form_values": {"project_area": "152㎡", "project_name": "岳阳·杏林小区"}},
+    )
+
+    assert fields == {"项目面积": "152", "项目名称": "岳阳·杏林小区", "封面标题": "住进理想新家"}
+
+
+def test_hycanvas_template_fields_reject_missing_required_fact():
+    with pytest.raises(ValueError, match="完成年份"):
+        content_tools._hycanvas_template_fields(
+            [
+                {
+                    "kind": "text",
+                    "label": "完成年份",
+                    "semanticRole": "completion_year",
+                    "constraints": {"required": True},
+                }
+            ],
+            visual_text=["标题"],
+            brief={"form_values": {}},
+        )

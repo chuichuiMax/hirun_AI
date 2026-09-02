@@ -69,15 +69,16 @@ func templatesListHandler(tm *templates.Service) http.HandlerFunc {
 func templatesSaveHandler(tm *templates.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			WorkspaceID  string         `json:"workspaceId"`
-			DesignID     string         `json:"designId"`
-			File         map[string]any `json:"file"`
-			Title        string         `json:"title"`
-			Category     string         `json:"category"`
-			Tags         []string       `json:"tags"`
-			Thumbnail    string         `json:"thumbnail"`
-			Visibility   string         `json:"visibility"`
-			CollectionID string         `json:"collectionId"`
+			WorkspaceID    string         `json:"workspaceId"`
+			DesignID       string         `json:"designId"`
+			File           map[string]any `json:"file"`
+			Title          string         `json:"title"`
+			Category       string         `json:"category"`
+			Tags           []string       `json:"tags"`
+			Thumbnail      string         `json:"thumbnail"`
+			Visibility     string         `json:"visibility"`
+			CollectionID   string         `json:"collectionId"`
+			FillableFields []any          `json:"fillableFields"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			problemWithCode(w, r, http.StatusBadRequest, "Bad Request", "invalid body", "invalid_body")
@@ -88,6 +89,7 @@ func templatesSaveHandler(tm *templates.Service) http.HandlerFunc {
 			WorkspaceID: body.WorkspaceID, DesignID: body.DesignID, File: body.File, Title: body.Title,
 			Category: body.Category, Tags: body.Tags, Thumbnail: body.Thumbnail,
 			Visibility: body.Visibility, CollectionID: body.CollectionID,
+			FillableFields: body.FillableFields,
 		})
 		if err != nil {
 			templatesProblem(w, r, err)

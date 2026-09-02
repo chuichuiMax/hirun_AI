@@ -310,6 +310,7 @@ export interface SaveAsTemplateInput {
   thumbnail?: string;
   visibility?: TemplateVisibility;
   collectionId?: string;
+  fillableFields?: FillableFieldSummary[];
 }
 
 // --- bulk create + data autofill ----------------
@@ -320,6 +321,8 @@ export interface FillableFieldSummary {
   nodeId: string;
   kind: "text" | "image" | "color";
   label: string;
+  key?: string;
+  semanticRole?: "title" | "subtitle" | "project_name" | "project_name_en" | "project_area" | "designer" | "completion_year" | "brand_name" | "body_excerpt";
   hint?: string;
   constraints?: { maxChars?: number; aspect?: number; required?: boolean };
 }

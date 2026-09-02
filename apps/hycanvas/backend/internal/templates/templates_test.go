@@ -2,9 +2,11 @@ package templates
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -52,6 +54,33 @@ func TestSearchTemplates(t *testing.T) {
 	res2 := searchTemplates(pool, TemplateQuery{Categories: []string{"doc"}})
 	if len(res2) != 1 || res2[0].ID != "2" {
 		t.Fatalf("category filter wrong: %+v", res2)
+	}
+}
+
+func TestRowToTemplateUsesDeclaredFieldsFromDesignMeta(t *testing.T) {
+	file, err := json.Marshal(map[string]any{
+		"pages": []any{map[string]any{"width": 1080, "height": 1440}},
+		"meta": map[string]any{"brandEditableFields": []any{map[string]any{
+			"nodeId": "project-name", "kind": "text", "label": "项目名称",
+			"key": "project_name", "semanticRole": "project_name",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("marshal design: %v", err)
+	}
+	now := time.Now()
+	template := rowToTemplate(TemplateRow{
+		ID: "custom-template", Title: "项目案例封面", Visibility: "workspace",
+		File: file, Style: json.RawMessage(`{}`), FillableFields: json.RawMessage(`[]`),
+		Attributions: json.RawMessage(`[]`), CreatedAt: now, UpdatedAt: now,
+	})
+
+	if len(template.FillableFields) != 1 {
+		t.Fatalf("fillable fields = %+v", template.FillableFields)
+	}
+	field := asObj(template.FillableFields[0])
+	if asStr(field["semanticRole"]) != "project_name" || asStr(field["nodeId"]) != "project-name" {
+		t.Fatalf("declared field = %+v", field)
 	}
 }
 
@@ -128,6 +157,20 @@ func TestFillTextFieldsRejectsUnknownLabel(t *testing.T) {
 	}
 }
 
+func TestFillTextFieldsEnforcesRequiredAndMaxChars(t *testing.T) {
+	file := map[string]any{"pages": []any{}}
+	fields := []any{map[string]any{
+		"nodeId": "title-node", "kind": "text", "label": "项目名称",
+		"constraints": map[string]any{"required": true, "maxChars": 4.0},
+	}}
+	if err := fillTextFields(file, fields, map[string]string{}); err != ErrBadRequest {
+		t.Fatalf("missing required field: expected ErrBadRequest, got %v", err)
+	}
+	if err := fillTextFields(file, fields, map[string]string{"项目名称": "岳阳杏林小区"}); err != ErrBadRequest {
+		t.Fatalf("oversized field: expected ErrBadRequest, got %v", err)
+	}
+}
+
 func TestFillImageFieldsReplacesDeclaredNode(t *testing.T) {
 	file := map[string]any{
 		"pages": []any{map[string]any{"children": []any{map[string]any{
@@ -168,7 +211,7 @@ func TestApplyBackgroundImageKeepsTemplateLayersAboveSelectedMaterial(t *testing
 		"pages": []any{map[string]any{
 			"width": 1080.0, "height": 1440.0,
 			"background": map[string]any{"type": "solid"},
-			"children": []any{map[string]any{"id": "title", "type": "text"}},
+			"children":   []any{map[string]any{"id": "title", "type": "text"}},
 		}},
 	}
 	err := applyBackgroundImage(file, InstantiateImage{ContentType: "image/png", DataBase64: "cG5n"})

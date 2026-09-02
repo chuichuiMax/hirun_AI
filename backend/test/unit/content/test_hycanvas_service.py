@@ -26,10 +26,10 @@ def test_from_env_requires_complete_configuration(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lists_only_xiaohongshu_templates_and_keeps_fillable_fields():
+async def test_lists_three_by_four_fillable_templates_and_keeps_metadata():
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer hyk_test"
-        assert request.url.params["q"] == "小红书"
+        assert "q" not in request.url.params
         return httpx.Response(
             200,
             json=[
@@ -39,6 +39,22 @@ async def test_lists_only_xiaohongshu_templates_and_keeps_fillable_fields():
                     "format": {"width": 1080, "height": 1440, "unit": "px"},
                     "fillableFields": [{"nodeId": "n1", "kind": "text", "label": "主标题"}],
                     "previewUrls": ["/template-previews/xiaohongshu-checklist-p0.png"],
+                },
+                {
+                    "id": "8c5f80d4-9fd7-4e77-a709-53b0c00f61ae",
+                    "title": "鸿扬项目案例封面",
+                    "format": {"width": 1080, "height": 1440, "unit": "px"},
+                    "fillableFields": [
+                        {"nodeId": "project", "kind": "text", "label": "项目名称", "semanticRole": "project_name"}
+                    ],
+                },
+                {
+                    "id": "landscape-template",
+                    "title": "横版封面",
+                    "format": {"width": 1200, "height": 628, "unit": "px"},
+                    "fillableFields": [
+                        {"nodeId": "title", "kind": "text", "label": "标题"}
+                    ],
                 },
                 {"id": "generic-poster", "title": "普通海报"},
             ],
@@ -54,12 +70,13 @@ async def test_lists_only_xiaohongshu_templates_and_keeps_fillable_fields():
 
     result = await client.list_xiaohongshu_templates()
 
-    assert result["total"] == 1
+    assert result["total"] == 2
     assert result["templates"][0]["id"] == "xiaohongshu-checklist"
     assert result["templates"][0]["fillable_fields"][0]["label"] == "主标题"
     assert result["templates"][0]["preview_urls"] == [
         "/hycanvas-template-previews/xiaohongshu-checklist-p0.png"
     ]
+    assert result["templates"][1]["id"] == "8c5f80d4-9fd7-4e77-a709-53b0c00f61ae"
 
 
 @pytest.mark.asyncio

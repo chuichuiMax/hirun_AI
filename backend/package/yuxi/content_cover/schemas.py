@@ -11,7 +11,7 @@ AI_MODES = {"text_to_image", "image_to_image", "multi_reference", "mask"}
 
 class HyCanvasDesignCreate(BaseModel):
     artifact_id: str = Field(min_length=1, max_length=64)
-    template_id: str = Field(pattern=r"^xiaohongshu-[a-z0-9-]+$")
+    template_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     title: str = Field(min_length=1, max_length=200)
     fields: dict[str, str]
     image_asset_id: str | None = Field(default=None, min_length=1, max_length=64)

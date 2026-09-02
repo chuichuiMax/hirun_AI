@@ -55,17 +55,21 @@ class HyCanvasClient:
         )
 
     async def list_xiaohongshu_templates(self) -> dict:
-        data = await self._request("GET", "/api/v1/templates", params={"q": "小红书"})
+        data = await self._request("GET", "/api/v1/templates")
         templates = []
         for item in data:
-            if not str(item.get("id", "")).startswith("xiaohongshu-"):
+            fillable_fields = item.get("fillableFields") or []
+            format_ = item.get("format") or {}
+            width = float(format_.get("width") or 0)
+            height = float(format_.get("height") or 0)
+            if not fillable_fields or height <= 0 or abs(width / height - 0.75) > 0.02:
                 continue
             templates.append(
                 {
                     "id": item["id"],
                     "title": item["title"],
-                    "format": item.get("format") or {},
-                    "fillable_fields": item.get("fillableFields") or [],
+                    "format": format_,
+                    "fillable_fields": fillable_fields,
                     "preview_urls": [f"/hycanvas-template-previews/{quote(item['id'], safe='')}-p0.png"],
                 }
             )
