@@ -128,6 +128,48 @@ async def test_query_kb_returns_search_schema_without_sandbox_paths(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_query_kb_freezes_content_evidence_provenance(monkeypatch) -> None:
+    async def _fake_retriever(query_text: str, **kwargs):
+        del query_text, kwargs
+        return [
+            {
+                "content": "powder metallurgy reference",
+                "metadata": {
+                    "file_id": "file-1",
+                    "chunk_id": "chunk-1",
+                    "source": "process-guide.pdf",
+                },
+            }
+        ]
+
+    _patch_retrievers(monkeypatch, retriever=_fake_retriever)
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_kbs)
+    context = SimpleNamespace(
+        _content_node_output_contract="EvidenceCollectionResultV1",
+        _content_max_retrieval_rounds=2,
+        _content_max_knowledge_bases=1,
+        _content_max_chunks_per_knowledge_base=5,
+    )
+
+    result = await _run_query_kb(kb_id="db-1", query_text="process", runtime=SimpleNamespace(context=context))
+
+    assert result["results"][0]["metadata"] == {
+        "file_id": "file-1",
+        "chunk_id": "chunk-1",
+        "source": "process-guide.pdf",
+        "knowledge_base_id": "db-1",
+        "knowledge_base_name": "FAQ",
+        "document_id": "file-1",
+        "document_name": "process-guide.pdf",
+    }
+    assert context._content_retrieved_knowledge_results["chunk-1"][0]["metadata"]["knowledge_base_id"] == "db-1"
+
+    await _run_query_kb(kb_id="db-1", query_text="process again", runtime=SimpleNamespace(context=context))
+
+    assert len(context._content_retrieved_knowledge_results["chunk-1"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_query_kb_allows_dify_knowledge_base(monkeypatch) -> None:
     async def _fake_retriever(query_text: str, **kwargs):
         assert query_text == "auth"

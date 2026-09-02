@@ -1,8 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { CheckCircle2, CircleAlert, LoaderCircle, Search, Send, Settings2 } from 'lucide-vue-next'
+import { CheckCircle2, CircleAlert, LoaderCircle, Search, Send } from 'lucide-vue-next'
 import { accountApi } from '@/apis/account_api'
 import { contentApi } from '@/apis/content_api'
 
@@ -11,18 +10,18 @@ const props = defineProps({
   artifact: { type: Object, default: null }
 })
 const emit = defineEmits(['update:open'])
-const router = useRouter()
+const PAGE_SIZE = 5
 
 const loading = ref(false)
 const submitting = ref(false)
 const keyword = ref('')
+const currentPage = ref(1)
 const managedAccounts = ref([])
 const distributionAccounts = ref([])
 const selectedAccountId = ref('')
 const currentJob = ref(null)
 let pollTimer = null
 
-const accountTypeLabels = { enterprise: '企业号', personal: '个人号' }
 const jobStatusLabels = {
   queued: '等待发布',
   running: '正在发布',
@@ -48,13 +47,8 @@ const rows = computed(() => {
     return {
       key: `configured-${account.id}`,
       distributionAccountId: binding?.id || '',
-      name: binding?.platform_nickname || account.name,
-      accountId: account.account_id,
-      accountType: accountTypeLabels[account.account_type] || account.account_type || '-',
-      followingCount: account.following_count,
-      followerCount: account.follower_count,
-      likesCount: account.likes_count,
-      worksCount: account.works_count,
+      name: binding?.platform_nickname || account.name || '-',
+      remarkName: binding?.display_name || '-',
       ready,
       status: !account.enabled
         ? '禁用'
@@ -72,13 +66,8 @@ const rows = computed(() => {
     .map((account) => ({
       key: `bound-${account.id}`,
       distributionAccountId: account.id,
-      name: account.platform_nickname || account.display_name,
-      accountId: account.platform_account_id || '-',
-      accountType: '小红书账号',
-      followingCount: '-',
-      followerCount: '-',
-      likesCount: '-',
-      worksCount: '-',
+      name: account.platform_nickname || '-',
+      remarkName: account.display_name || '-',
       ready: account.enabled && account.login_status === 'logged_in',
       status: !account.enabled
         ? '禁用'
@@ -93,9 +82,17 @@ const filteredRows = computed(() => {
   const value = keyword.value.trim().toLowerCase()
   if (!value) return rows.value
   return rows.value.filter((row) =>
-    [row.name, row.accountId].some((item) => String(item || '').toLowerCase().includes(value))
+    [row.name, row.remarkName].some((item) => String(item || '').toLowerCase().includes(value))
   )
 })
+const pagination = computed(() => ({
+  current: currentPage.value,
+  pageSize: PAGE_SIZE,
+  total: filteredRows.value.length,
+  showSizeChanger: false,
+  hideOnSinglePage: true,
+  position: ['bottomRight']
+}))
 const isRunning = computed(() => ['queued', 'running'].includes(currentJob.value?.status))
 const canPublish = computed(
   () => Boolean(selectedAccountId.value && props.artifact?.id && !submitting.value && !currentJob.value)
@@ -135,6 +132,7 @@ const initialize = async () => {
   loading.value = true
   submitting.value = false
   keyword.value = ''
+  currentPage.value = 1
   selectedAccountId.value = ''
   currentJob.value = null
   try {
@@ -176,10 +174,13 @@ const close = () => {
   emit('update:open', false)
 }
 
-const openAccountManagement = () => {
-  close()
-  void router.push('/content/accounts')
+const handleTableChange = (nextPagination) => {
+  currentPage.value = nextPagination.current || 1
 }
+
+watch(keyword, () => {
+  currentPage.value = 1
+})
 
 watch(
   () => props.open,
@@ -196,7 +197,7 @@ onBeforeUnmount(stopPolling)
     :open="open"
     class="xhs-account-publish-modal"
     title="选择要发布的账号"
-    :width="900"
+    :width="640"
     :closable="!isRunning"
     :mask-closable="!isRunning"
     destroy-on-close
@@ -205,22 +206,20 @@ onBeforeUnmount(stopPolling)
     <div class="publish-modal-body">
       <div class="publish-toolbar">
         <a-input v-model:value="keyword" placeholder="输入搜索关键词" allow-clear>
-          <template #prefix><Search :size="15" /></template>
+          <template #suffix><Search :size="18" /></template>
         </a-input>
-        <a-button class="lucide-icon-btn" @click="openAccountManagement">
-          <Settings2 :size="15" />账号管理
-        </a-button>
       </div>
 
       <a-table
         :data-source="filteredRows"
         :loading="loading"
-        :pagination="false"
+        :pagination="pagination"
         row-key="key"
         size="middle"
-        :scroll="{ x: 800 }"
+        bordered
+        @change="handleTableChange"
       >
-        <a-table-column title="单选" key="selection" :width="58" align="center">
+        <a-table-column title="单选" key="selection" :width="64" align="center">
           <template #default="{ record }">
             <a-radio
               :checked="selectedAccountId === record.distributionAccountId"
@@ -229,16 +228,11 @@ onBeforeUnmount(stopPolling)
             />
           </template>
         </a-table-column>
-        <a-table-column title="序号" key="index" :width="58" align="center">
-          <template #default="{ index }">{{ index + 1 }}</template>
+        <a-table-column title="序号" key="index" :width="64" align="center">
+          <template #default="{ index }">{{ (currentPage - 1) * PAGE_SIZE + index + 1 }}</template>
         </a-table-column>
-        <a-table-column title="账号名称" data-index="name" key="name" :width="130" />
-        <a-table-column title="ID" data-index="accountId" key="accountId" :width="120" />
-        <a-table-column title="账号类型" data-index="accountType" key="accountType" :width="105" />
-        <a-table-column title="关注数" data-index="followingCount" key="followingCount" :width="86" align="center" />
-        <a-table-column title="粉丝数/个" data-index="followerCount" key="followerCount" :width="98" align="center" />
-        <a-table-column title="获赞与收藏" data-index="likesCount" key="likesCount" :width="105" align="center" />
-        <a-table-column title="作品数" data-index="worksCount" key="worksCount" :width="86" align="center" />
+        <a-table-column title="账号名称" data-index="name" key="name" :width="170" />
+        <a-table-column title="备注名" data-index="remarkName" key="remarkName" :width="210" />
         <a-table-column title="状态" key="status" :width="90" align="center">
           <template #default="{ record }">
             <span class="account-status" :class="{ ready: record.ready }">{{ record.status }}</span>
@@ -247,7 +241,6 @@ onBeforeUnmount(stopPolling)
         <template #emptyText>
           <div class="publish-empty">
             <span>暂无已配置的小红书账号</span>
-            <a-button type="link" @click="openAccountManagement">前往绑定账号</a-button>
           </div>
         </template>
       </a-table>
@@ -262,7 +255,6 @@ onBeforeUnmount(stopPolling)
           <span v-else>当前内容版本已锁定，发布结果会保存在分发记录中。</span>
         </div>
       </div>
-      <p v-else class="publish-warning">确认后，当前标题、正文、标签和封面将立即公开发布到所选小红书账号。</p>
     </div>
 
     <template #footer>
@@ -276,7 +268,7 @@ onBeforeUnmount(stopPolling)
           :disabled="!canPublish"
           @click="publish"
         >
-          <Send :size="15" />确认发布
+          <Send :size="15" />确定并同步应用
         </a-button>
       </div>
     </template>
@@ -284,18 +276,17 @@ onBeforeUnmount(stopPolling)
 </template>
 
 <style scoped lang="less">
-.publish-modal-body { display: grid; gap: 14px; }
-.publish-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.publish-toolbar :deep(.ant-input-affix-wrapper) { width: 280px; }
-.publish-toolbar :deep(.ant-btn) { display: inline-flex; align-items: center; gap: 6px; }
-.xhs-account-publish-modal :deep(.ant-table) { border: 1px solid var(--gray-150); border-radius: 6px; overflow: hidden; }
+.publish-modal-body { display: grid; gap: 18px; }
+.publish-toolbar { display: flex; align-items: center; }
+.publish-toolbar :deep(.ant-input-affix-wrapper) { width: 300px; height: 42px; }
+.xhs-account-publish-modal :deep(.ant-table) { border-radius: 6px; overflow: hidden; }
 .xhs-account-publish-modal :deep(.ant-table-thead > tr > th) { background: var(--gray-50); color: var(--color-text); font-size: 12px; font-weight: 600; }
 .xhs-account-publish-modal :deep(.ant-table-tbody > tr:nth-child(even) > td) { background: var(--gray-25); }
-.xhs-account-publish-modal :deep(.ant-table-cell) { font-size: 12px; }
+.xhs-account-publish-modal :deep(.ant-table-cell) { height: 54px; padding: 10px 12px; font-size: 12px; }
+.xhs-account-publish-modal :deep(.ant-table-pagination) { margin: 14px 0 0; }
 .account-status { color: var(--color-text-tertiary); }
 .account-status.ready { color: var(--color-success-700); }
 .publish-empty { min-height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--color-text-secondary); }
-.publish-warning { margin: 0; padding: 10px 12px; border-radius: 6px; color: var(--color-warning-900); background: var(--color-warning-50); font-size: 12px; line-height: 1.6; }
 .publish-progress { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border-radius: 6px; color: var(--color-info-700); background: var(--color-info-50); }
 .publish-progress.completed { color: var(--color-success-700); background: var(--color-success-50); }
 .publish-progress.failed, .publish-progress.partial_failed { color: var(--color-error-700); background: var(--color-error-50); }

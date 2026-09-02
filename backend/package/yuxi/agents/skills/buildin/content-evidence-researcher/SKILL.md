@@ -21,6 +21,7 @@ version: 3.2.0
 - `evidence_items` 只能提交相对当前 `evidence_bundle` 新增的证据，禁止回传、复制或改写已有 Evidence ID。
 - 如果当前事实已经覆盖证据缺口，且知识库没有可自然补入公式段落的新事实，提交空的业务 `evidence_items`，不得把已有事实冒充为新证据，也不得把无关知识库资料变成强制引用项。
 - 每条新证据必须使用全新的 Evidence ID，并保存来源、引用、可用范围和置信状态。
+- 知识库证据的 `source_id` 必须原样使用 `query_kb` 返回的结果 `id`；不得使用文件名、知识库名或自行生成的值代替。知识库、文档和分块元数据由系统按该结果 ID 校验并冻结。
 - 未授权任何知识库、未查到可核验业务资料或爆款参考时，在 `unresolved_questions` 中明确说明，不得猜测或编造。
 - 不生成标题、正文、大纲或视觉文案。
 - 严格提交 `EvidenceCollectionResultV1`：`evidence_items`、`citations`、`unresolved_questions`。

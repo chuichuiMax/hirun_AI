@@ -16,6 +16,7 @@ version: 1.1.0
 8. 案例证明不得把不同客户或项目的数字拼接成一个案例；客户身份、地域或敏感信息只能在来源明确允许时使用。
 9. 爆款样例只能标记 `allowed_usage=[style_reference]`，`metadata.material_type=viral_example` 且 `metadata.usage_mode=structure_reference_only`。只提取结构、节奏和表达模式，禁止复制原句，也不得把其中事实或数字映射到标题、正文槽位。
 10. `slot_mappings.slot` 必须来自资料需求中的 `requirement_id`，`target_usage` 必须来自该需求自己的 `target_usages`，新证据的 `metadata.material_type` 必须等于该需求的 `material_type`。案例证明只能映射 `case_proof`，绝不能映射 `viral_example`；只有真实爆款样例才能进入 `style_reference`。
-11. 可选资料没有合法证据时不要创建 `slot_mapping`，不得拿其他资料类型补位。必需资料缺失时写入 `unresolved_questions`，不得猜测、补造或用爆款样例替代公司业务事实。
-12. 不生成标题、正文、大纲或视觉文案。
-13. 严格提交 `ProductEvidenceCollectionResultV1`：`evidence_items`、`citations`、`slot_mappings`、`unresolved_questions`；提交工具返回校验错误时，按错误修正映射后重新提交。
+11. 知识库证据的 `source_id` 必须原样使用 `query_kb` 返回的结果 `id`；不得使用文件名、知识库名或自行生成的值代替。知识库、文档和分块元数据由系统按该结果 ID 校验并冻结。
+12. 可选资料没有合法证据时不要创建 `slot_mapping`，不得拿其他资料类型补位。必需资料缺失时写入 `unresolved_questions`，不得猜测、补造或用爆款样例替代公司业务事实。
+13. 不生成标题、正文、大纲或视觉文案。
+14. 严格提交 `ProductEvidenceCollectionResultV1`：`evidence_items`、`citations`、`slot_mappings`、`unresolved_questions`；提交工具返回校验错误时，按错误修正映射后重新提交。

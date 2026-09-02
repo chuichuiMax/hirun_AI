@@ -880,6 +880,10 @@ class PostgresManager(metaclass=SingletonMeta):
                 "ADD COLUMN IF NOT EXISTS edit_diff_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb"
             ),
             (
+                "ALTER TABLE IF EXISTS content_artifacts "
+                "ADD COLUMN IF NOT EXISTS evidence_usage_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
+            ),
+            (
                 "ALTER TABLE IF EXISTS content_artifact_versions "
                 "ADD COLUMN IF NOT EXISTS content_type_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
             ),
@@ -910,6 +914,10 @@ class PostgresManager(metaclass=SingletonMeta):
             (
                 "ALTER TABLE IF EXISTS content_artifact_versions "
                 "ADD COLUMN IF NOT EXISTS edit_diff_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_artifact_versions "
+                "ADD COLUMN IF NOT EXISTS evidence_usage_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb"
             ),
             "ALTER TABLE IF EXISTS content_employees ADD COLUMN IF NOT EXISTS avatar VARCHAR(1024)",
             "ALTER TABLE IF EXISTS content_employees ADD COLUMN IF NOT EXISTS bio TEXT",

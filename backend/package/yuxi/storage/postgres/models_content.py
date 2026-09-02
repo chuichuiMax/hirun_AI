@@ -888,6 +888,7 @@ class ContentArtifact(Base):
     topics = Column(JSON, nullable=False, default=list)
     strategy_snapshot = Column(JSON, nullable=False, default=dict)
     evidence_snapshot = Column(JSON, nullable=False, default=dict)
+    evidence_usage_snapshot = Column(JSON, nullable=False, default=dict)
     review_snapshot = Column(JSON, nullable=False, default=dict)
     cover_asset_id = Column(String(64), nullable=True, index=True)
     cover_job_id = Column(String(64), nullable=True, index=True)
@@ -916,6 +917,7 @@ class ContentArtifact(Base):
             "topics": self.topics or [],
             "strategy_snapshot": self.strategy_snapshot or {},
             "evidence_snapshot": self.evidence_snapshot or {},
+            "evidence_usage_snapshot": self.evidence_usage_snapshot or {},
             "review_snapshot": self.review_snapshot or {},
             "cover_asset_id": self.cover_asset_id,
             "cover_job_id": self.cover_job_id,
@@ -948,6 +950,7 @@ class ContentArtifactVersion(Base):
     skill_versions = Column(JSON, nullable=False, default=dict)
     rule_version_id = Column(String(64), nullable=False)
     knowledge_snapshot = Column(JSON, nullable=False, default=dict)
+    evidence_usage_snapshot = Column(JSON, nullable=False, default=dict)
     review_snapshot = Column(JSON, nullable=False, default=dict)
     cover_asset_id = Column(String(64), nullable=True, index=True)
     cover_job_id = Column(String(64), nullable=True, index=True)

@@ -21,6 +21,7 @@ from yuxi.content.control.workflow.revision import (
     resolve_revision_reason,
     revision_reason_label,
 )
+from yuxi.content.evidence_usage import build_evidence_usage_snapshot
 from yuxi.content.generation import SKILL_VERSIONS
 from yuxi.content.execution_trace import build_execution_preview
 from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
@@ -752,6 +753,10 @@ class ContentWorkflowAgent(BaseAgent):
         approval_rejected = (state.get("approval_result") or {}).get("status") == "rejected"
         artifact_status = "blocked" if review["status"] == "blocked" or approval_rejected else "reviewed"
         strategy_snapshot = state.get("strategy_snapshot") or {}
+        evidence_usage_snapshot = build_evidence_usage_snapshot(
+            selected_title=state["selected_title"],
+            content_draft=draft,
+        )
         if not strategy_snapshot.get("snapshot_hash"):
             raise ValueError("保存内容资产前缺少锁定 StrategySnapshot")
         async with pg_manager.get_async_session_context() as db:
@@ -795,6 +800,7 @@ class ContentWorkflowAgent(BaseAgent):
                     topics=draft.get("topics") or [],
                     strategy_snapshot=strategy_snapshot,
                     evidence_snapshot=state["evidence_bundle"],
+                    evidence_usage_snapshot=evidence_usage_snapshot,
                     review_snapshot=review,
                     cover_asset_id=cover_asset_id,
                     cover_job_id=cover_job_id,
@@ -834,6 +840,7 @@ class ContentWorkflowAgent(BaseAgent):
                 artifact.topics = draft.get("topics") or []
                 artifact.strategy_snapshot = strategy_snapshot
                 artifact.evidence_snapshot = state["evidence_bundle"]
+                artifact.evidence_usage_snapshot = evidence_usage_snapshot
                 artifact.review_snapshot = review
                 artifact.cover_asset_id = cover_asset_id
                 artifact.cover_job_id = cover_job_id

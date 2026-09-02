@@ -649,7 +649,7 @@ async def test_save_artifact_allows_content_version_without_cover(monkeypatch):
             return None
 
         async def save_artifact_version(self, *, artifact, **kwargs):
-            del kwargs
+            saved["version_kwargs"] = kwargs
             return SimpleNamespace(
                 id="artifact-version-1",
                 version=1,
@@ -684,8 +684,16 @@ async def test_save_artifact_allows_content_version_without_cover(monkeypatch):
             "task_id": task.id,
             "uid": "user-1",
             "run_id": "run-1",
-            "content_draft": {"body": "已审核正文", "topics": ["装修"]},
-            "selected_title": {"id": "title-1", "text": "Agent 选择的标题"},
+            "content_draft": {
+                "body": "已审核正文",
+                "topics": ["装修"],
+                "paragraph_evidence": [{"paragraph_id": "p1", "evidence_ids": ["ev-body"]}],
+            },
+            "selected_title": {
+                "id": "title-1",
+                "text": "Agent 选择的标题",
+                "evidence_ids": ["ev-title"],
+            },
             "strategy_snapshot": {"snapshot_hash": "s" * 64, "title_formula": {}, "body_formula": {}},
             "evidence_bundle": {"bundle_hash": "e" * 64, "items": []},
             "review_report": {"status": "passed", "checks": []},
@@ -696,6 +704,16 @@ async def test_save_artifact_allows_content_version_without_cover(monkeypatch):
 
     assert result["artifact_version"]["cover_asset_id"] is None
     assert saved["artifact"].cover_asset_id is None
+    assert saved["artifact"].evidence_usage_snapshot == {
+        "version": 1,
+        "items": [
+            {"evidence_id": "ev-title", "usages": [{"target": "title", "location": "标题"}]},
+            {
+                "evidence_id": "ev-body",
+                "usages": [{"target": "body", "location": "正文第1段", "paragraph_id": "p1"}],
+            },
+        ],
+    }
     assert task.selected_title_json["text"] == "Agent 选择的标题"
     assert task.status == "reviewed"
 
