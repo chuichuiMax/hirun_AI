@@ -650,7 +650,12 @@ async def list_image_galleries(
         )
         if industry_slug and (
             (industry_slug == "uncategorized" and effective_industry != "uncategorized")
-            or (industry_slug != "uncategorized" and effective_industry != industry_slug)
+            # Unclassified galleries are shared legacy/general-purpose assets;
+            # keep them available when content is scoped to a specific industry.
+            or (
+                industry_slug != "uncategorized"
+                and effective_industry not in {industry_slug, "uncategorized"}
+            )
         ):
             continue
         direct_count, latest = raw.get(category.id, (0, None))

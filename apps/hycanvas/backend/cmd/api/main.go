@@ -527,6 +527,14 @@ func (t templatesPersist) GetWorkspaceID(ctx context.Context, designID string) (
 	return t.p.GetWorkspaceID(ctx, designID)
 }
 
+func (t templatesPersist) GetTemplateZone(ctx context.Context, designID string) (string, error) {
+	rec, err := t.p.GetRecord(ctx, designID)
+	if err != nil || rec.TemplateZone == nil {
+		return "", err
+	}
+	return *rec.TemplateZone, nil
+}
+
 func (t templatesPersist) LoadDesignFile(ctx context.Context, designID, workspaceID string) (map[string]any, error) {
 	loaded, err := t.p.LoadFile(ctx, designID, workspaceID)
 	if err != nil {

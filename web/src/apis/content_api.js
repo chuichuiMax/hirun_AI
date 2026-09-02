@@ -31,6 +31,13 @@ export const contentApi = {
     apiGet(`/api/content/ocr-results/${resultId}/image`, {}, true, 'blob'),
   getCoverBootstrap: () => apiGet('/api/content/covers/bootstrap'),
   listHyCanvasTemplates: () => apiGet('/api/content/covers/hycanvas/templates'),
+  getHyCanvasTemplatePreview: (templateId) =>
+    apiGet(
+      `/api/content/covers/hycanvas/templates/${encodeURIComponent(templateId)}/render.png`,
+      {},
+      true,
+      'blob'
+    ),
   createHyCanvasDesign: (payload) => apiPost('/api/content/covers/hycanvas/designs', payload),
   syncHyCanvasDesign: (designId, artifactId) =>
     apiPost(`/api/content/covers/hycanvas/designs/${encodeURIComponent(designId)}/sync`, {

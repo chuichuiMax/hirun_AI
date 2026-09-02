@@ -73,6 +73,16 @@ func docKindOf(file DesignFile) string {
 	return ""
 }
 
+// templateZoneOf reads the dashboard grouping marker from file.meta.
+func templateZoneOf(file DesignFile) string {
+	if meta, ok := file["meta"].(map[string]any); ok {
+		if zone, ok := meta["templateZone"].(string); ok {
+			return zone
+		}
+	}
+	return ""
+}
+
 // withID returns a shallow copy of the file with its id set (the stored blob is
 // self-describing: its id mirrors the design row).
 func withID(file DesignFile, id string) DesignFile {

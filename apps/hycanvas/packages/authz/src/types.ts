@@ -89,6 +89,8 @@ export interface HomeItem {
   title: string;
   thumbnailUrl?: string;
   workspaceId: string;
+  /** Optional dashboard zone for grouped design drafts. */
+  templateZone?: "xiaohongshu" | null;
   updatedAt: string;
   starred: boolean;
   sharedWithMe: boolean;

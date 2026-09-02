@@ -102,6 +102,7 @@ import { stageAiSources } from "@/lib/aiRequests";
 import { tr, trOr } from "@/lib/i18n";
 import { apiCodeMessage, userMessage } from "@/lib/errors";
 import { isContentSwarmManaged } from "@/lib/managedAuth";
+import { isDesignInZone, isTemplateInZone, templateZoneForFormat, type TemplateZone } from "@/lib/templateZones";
 
 // Time-aware greeting for the dashboard hero band.
 function greetByHour(): string {
@@ -127,7 +128,7 @@ const DASH_BACKDROP: React.CSSProperties = {
  *  deployment, so switching workspace should not ask for it again. */
 let aiPresetCache: AiProviderPreset[] | null = null;
 
-type Format = { label: string; icon: typeof Plus; w: number; h: number; kind?: string; templateZone?: "xiaohongshu" };
+type Format = { label: string; icon: typeof Plus; w: number; h: number; kind?: string; templateZone?: TemplateZone };
 
 /** Canvases the brief composer can generate for. Short on purpose: these are
  *  the shapes AI generation actually composes well for, and the full format
@@ -210,6 +211,9 @@ export function DashboardApp({ view }: { view: DashboardView }) {
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<HomeItem | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [templateRenameTarget, setTemplateRenameTarget] = useState<TemplateSummary | null>(null);
+  const [templateRenameValue, setTemplateRenameValue] = useState("");
+  const [templateRenaming, setTemplateRenaming] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<HomeItem | null>(null);
   const [wsModal, setWsModal] = useState(false);
   const [sizeOpen, setSizeOpen] = useState(false);
@@ -287,7 +291,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
     stageAiSources(briefSources);
     // Created untitled on purpose: the generation names it from the outline it
     // produces, which reads far better than the raw prompt.
-    void createDesign(fmt.w, fmt.h, undefined, fmt.kind, brief);
+    void createDesign(fmt.w, fmt.h, undefined, fmt.kind, { brief });
   }
   const [bulkOpen, setBulkOpen] = useState(false);
   const [customW, setCustomW] = useState(1080);
@@ -431,7 +435,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
   // Categories present across the loaded templates, for the filter chips.
   const templateZone = router.query.zone === "xiaohongshu" ? "xiaohongshu" : null;
   const zoneTemplates = templateZone
-    ? templates.filter((t) => t.id.startsWith("xiaohongshu-"))
+    ? templates.filter((t) => isTemplateInZone(t, templateZone))
     : templates;
   const templateCategories = Array.from(
     new Set(zoneTemplates.flatMap((t) => t.categories ?? [])),
@@ -439,6 +443,9 @@ export function DashboardApp({ view }: { view: DashboardView }) {
   const filteredTemplates = tplCategory
     ? zoneTemplates.filter((t) => (t.categories ?? []).includes(tplCategory))
     : zoneTemplates;
+  const zoneDesigns = templateZone
+    ? items.filter((item) => isDesignInZone(item, templateZone)).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    : [];
   // Recents sort (client-side): last edited or name. Shared by Home + Favorites.
   const bySort = (a: HomeItem, b: HomeItem) =>
     sortBy === "name" ? a.title.localeCompare(b.title) : new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
@@ -587,7 +594,13 @@ export function DashboardApp({ view }: { view: DashboardView }) {
     }
   }
 
-  async function createDesign(width = 1080, height = 1080, label = tr("dashboard.untitled_design"), kind?: string, brief?: string) {
+  async function createDesign(
+    width = 1080,
+    height = 1080,
+    label = tr("dashboard.untitled_design"),
+    kind?: string,
+    options: { brief?: string; templateZone?: TemplateZone } = {},
+  ) {
     if (!activeWorkspaceId) return;
     setSizeOpen(false);
     setBusy(true);
@@ -596,8 +609,9 @@ export function DashboardApp({ view }: { view: DashboardView }) {
       // Document types (docs 28-32) carry their surface marker in meta.kind; a
       // plain design leaves it unset (treated as "design").
       if (kind) from.meta.kind = kind;
+      if (options.templateZone) from.meta.templateZone = options.templateZone;
       const rec = await oc.createDesign({ workspaceId: activeWorkspaceId, title: label, from });
-      await open(rec.id, brief);
+      await open(rec.id, options.brief);
     } catch {
       toast.error(tr("dashboard.could_not_create_design"));
       setBusy(false);
@@ -622,8 +636,9 @@ export function DashboardApp({ view }: { view: DashboardView }) {
   }
 
   function startFormat(f: Format) {
+    const zone = templateZoneForFormat(f);
     if (f.label === "Blank") setSizeOpen(true);
-    else if (f.templateZone) void router.push({ pathname: dashboardPath("templates"), query: { zone: f.templateZone } });
+    else if (zone) void router.push({ pathname: dashboardPath("templates"), query: { zone } });
     else void createDesign(f.w, f.h, f.label, f.kind);
   }
 
@@ -637,6 +652,22 @@ export function DashboardApp({ view }: { view: DashboardView }) {
     } catch {
       toast.error(tr("dashboard.could_not_open_template"));
       setBusy(false);
+    }
+  }
+
+  async function confirmTemplateRename() {
+    const title = templateRenameValue.trim();
+    if (!templateRenameTarget || !title || templateRenaming) return;
+    setTemplateRenaming(true);
+    try {
+      const renamed = await oc.renameTemplate(templateRenameTarget.id, title);
+      setTemplates((current) => current.map((template) => (template.id === renamed.id ? renamed : template)));
+      setTemplateRenameTarget(null);
+      toast.success(tr("dashboard.template_renamed"));
+    } catch {
+      toast.error(tr("dashboard.could_not_rename_template"));
+    } finally {
+      setTemplateRenaming(false);
     }
   }
 
@@ -655,6 +686,13 @@ export function DashboardApp({ view }: { view: DashboardView }) {
     toast.success(tr("dashboard.renamed"));
     setItems(await load(query));
   }
+
+  const canRenameTemplate = (template: TemplateSummary) => {
+    if (template.visibility === "personal") return template.ownerId === user?.id;
+    if (template.visibility !== "team" || !template.workspaceId) return false;
+    const role = workspaces.find((workspace) => workspace.id === template.workspaceId)?.role;
+    return role === "member" || role === "admin" || role === "owner";
+  };
 
   async function confirmDelete() {
     if (!deleteTarget) return;
@@ -843,7 +881,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
           <div className="ms-auto flex items-center gap-2">
             <CreateMenu
               disabled={busy || !activeWorkspaceId}
-              onPick={(f) => void createDesign(f.w, f.h, f.label, f.kind)}
+              onPick={(f) => void createDesign(f.w, f.h, f.label, f.kind, { templateZone: f.templateZone })}
               onCustom={() => setSizeOpen(true)}
               onBulk={() => setBulkOpen(true)}
             />
@@ -1189,7 +1227,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
                 <div className="mb-4 flex items-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-ink">
                   <LayoutTemplate size={16} />
                   <span className="font-semibold">{tr("dashboard.xiaohongshu_template_zone")}</span>
-                  <span className="text-brand-700">{tr("dashboard.templates_count", { count: filteredTemplates.length })}</span>
+                  <span className="text-brand-700">{tr("dashboard.designs")} {zoneDesigns.length} · {tr("dashboard.templates")} {filteredTemplates.length}</span>
                   <span className="flex-1" />
                   <button
                     onClick={() => void router.push(dashboardPath("templates"))}
@@ -1220,9 +1258,18 @@ export function DashboardApp({ view }: { view: DashboardView }) {
                   ))}
                 </div>
               )}
-              {filteredTemplates.length === 0 ? (
+              {templateZone && zoneDesigns.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="mb-3 text-xs font-bold uppercase tracking-wide text-neutral-400">{tr("dashboard.designs")} ({zoneDesigns.length})</h3>
+                  <ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{zoneDesigns.map(renderCard)}</ul>
+                </div>
+              )}
+              {templateZone && filteredTemplates.length > 0 && (
+                <h3 className="mb-3 text-xs font-bold uppercase tracking-wide text-neutral-400">{tr("dashboard.templates")} ({filteredTemplates.length})</h3>
+              )}
+              {filteredTemplates.length === 0 && zoneDesigns.length === 0 ? (
                 <EmptyState message={tr("dashboard.no_templates_yet_open_a_design_and_use_save")} />
-              ) : (
+              ) : filteredTemplates.length > 0 ? (
                 <ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                   {filteredTemplates.map((t) => (
                     <li key={t.id} className="group relative rounded-2xl border border-neutral-200 bg-surface shadow-sm transition hover:shadow-md">
@@ -1235,18 +1282,35 @@ export function DashboardApp({ view }: { view: DashboardView }) {
                         <div className="aspect-[4/3] overflow-hidden rounded-t-2xl bg-neutral-100"><DesignThumb templateId={t.id} /></div>
                         <div className="truncate px-3 py-2.5 text-sm font-semibold text-neutral-800">{t.title}</div>
                       </button>
-                      <button
-                        onClick={() => void downloadTemplateHyc(t)}
-                        title={tr("dashboard.download_as_hyc_file")}
-                        aria-label={`Download "${t.title}" as .hyc file`}
-                        className="absolute end-2 top-2 rounded-lg border border-neutral-200 bg-surface p-1.5 text-neutral-600 opacity-0 shadow-sm transition hover:text-brand-ink focus-visible:opacity-100 group-hover:opacity-100"
-                      >
-                        <FileDown size={14} />
-                      </button>
+                      <div className="absolute end-2 top-2">
+                        <IconButton
+                          size="sm"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            const menuID = `template:${t.id}`;
+                            setMenuFor(menuFor === menuID ? null : menuID);
+                          }}
+                          aria-label={tr("dashboard.more")}
+                        >
+                          <MoreHorizontal size={16} />
+                        </IconButton>
+                        {menuFor === `template:${t.id}` && (
+                          <div className="absolute end-0 z-30 mt-1 w-36 overflow-hidden rounded-xl border border-neutral-200 bg-surface py-1 text-sm shadow-lg" onClick={(event) => event.stopPropagation()}>
+                            <MenuRow icon={FileDown} onClick={() => { setMenuFor(null); void downloadTemplateHyc(t); }}>{tr("dashboard.download_as_hyc_file")}</MenuRow>
+                            {canRenameTemplate(t) && (
+                              <MenuRow icon={Pencil} onClick={() => {
+                                setMenuFor(null);
+                                setTemplateRenameTarget(t);
+                                setTemplateRenameValue(t.title);
+                              }}>{tr("dashboard.rename")}</MenuRow>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ul>
-              )}
+              ) : null}
             </section>
           )}
 
@@ -1409,6 +1473,17 @@ export function DashboardApp({ view }: { view: DashboardView }) {
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="ghost" onClick={() => setRenameTarget(null)}>{tr("dashboard.cancel")}</Button>
           <Button onClick={() => void confirmRename()}>{tr("dashboard.save")}</Button>
+        </div>
+      </Modal>
+
+      <Modal open={!!templateRenameTarget} onClose={() => { if (!templateRenaming) setTemplateRenameTarget(null); }} title={tr("dashboard.rename_template")}>
+        <Input label={tr("dashboard.title")} value={templateRenameValue} onChange={(e) => setTemplateRenameValue(e.target.value)} autoFocus />
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" disabled={templateRenaming} onClick={() => setTemplateRenameTarget(null)}>{tr("dashboard.cancel")}</Button>
+          <Button disabled={templateRenaming || !templateRenameValue.trim()} onClick={() => void confirmTemplateRename()}>
+            {templateRenaming ? <Loader2 size={16} className="animate-spin" /> : null}
+            {tr("dashboard.save")}
+          </Button>
         </div>
       </Modal>
 

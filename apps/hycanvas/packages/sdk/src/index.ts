@@ -139,6 +139,7 @@ export interface DesignRecord {
   workspaceId: string;
   title: string;
   schemaVersion: number;
+  templateZone?: "xiaohongshu" | null;
   currentSnapshotId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -285,7 +286,11 @@ export type SavableSnapshotKind = Exclude<SnapshotKind, "branch">;
 export interface TemplateSummary {
   id: string;
   title: string;
+  visibility: "personal" | "team" | "public";
+  ownerId: string;
+  workspaceId: string | null;
   categories: string[];
+  tags: string[];
   previewUrls: string[];
   format: { width: number; height: number; unit: string };
 }
@@ -1751,6 +1756,9 @@ export class HyCanvasClient {
   /** Save the current design (by id or inline file) as a template (FR-9). */
   saveAsTemplate(input: SaveAsTemplateInput): Promise<TemplateSummary> {
     return this.request("POST", "/v1/templates", input);
+  }
+  renameTemplate(id: string, title: string): Promise<TemplateSummary> {
+    return this.request("PATCH", `/v1/templates/${id}`, { title });
   }
   assignTemplateCollection(id: string, collectionId: string | null): Promise<TemplateSummary> {
     return this.request("POST", `/v1/templates/${id}/collection`, { collectionId });

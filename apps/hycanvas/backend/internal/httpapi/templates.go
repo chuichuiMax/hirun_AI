@@ -9,13 +9,15 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"hycanvas/backend/internal/accounts"
+	"hycanvas/backend/internal/render"
 	"hycanvas/backend/internal/templates"
+	"hycanvas/backend/internal/uploads"
 )
 
 // mountTemplates attaches the templates catalog + apply + collections (doc 14).
 // All JWT-guarded; visibility scope is enforced in the service. Static segments
 // (collections) are registered before the {id} param routes.
-func mountTemplates(api chi.Router, tm *templates.Service, acct *accounts.Service) {
+func mountTemplates(api chi.Router, tm *templates.Service, acct *accounts.Service, up *uploads.Service) {
 	api.Group(func(r chi.Router) {
 		r.Use(requireAuth(acct))
 		r.Get("/templates", templatesListHandler(tm))
@@ -24,12 +26,74 @@ func mountTemplates(api chi.Router, tm *templates.Service, acct *accounts.Servic
 		r.Post("/templates/collections", templatesCreateCollectionHandler(tm))
 		r.Delete("/templates/collections/{id}", templatesDeleteCollectionHandler(tm))
 		r.Get("/templates/{id}", templatesGetHandler(tm))
+		r.Patch("/templates/{id}", templatesRenameHandler(tm))
 		r.Get("/templates/{id}/file", templatesFileHandler(tm))
+		r.Get("/templates/{id}/render.png", templatesRenderHandler(tm, up))
 		r.Get("/templates/{id}/fillable-fields", templatesFillableHandler(tm))
 		r.Post("/templates/{id}/apply", templatesApplyHandler(tm))
 		r.Post("/templates/{id}/instantiate", templatesInstantiateHandler(tm))
 		r.Post("/templates/{id}/collection", templatesAssignCollectionHandler(tm))
 	})
+}
+
+func templatesRenderHandler(tm *templates.Service, up *uploads.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u := userFrom(r.Context())
+		template, err := tm.Get(r.Context(), u.ID, chi.URLParam(r, "id"))
+		if err != nil {
+			templatesProblem(w, r, err)
+			return
+		}
+		if key := apiKeyFrom(r.Context()); key != nil &&
+			(template.WorkspaceID == nil || *template.WorkspaceID != key.WorkspaceID) {
+			templatesProblem(w, r, templates.ErrNotFound)
+			return
+		}
+		file, err := tm.GetFile(r.Context(), u.ID, template.ID)
+		if err != nil {
+			templatesProblem(w, r, err)
+			return
+		}
+		var fetch assetContent
+		if up != nil && template.WorkspaceID != nil {
+			workspaceID := *template.WorkspaceID
+			fetch = func(assetID string) ([]byte, string, error) {
+				return up.ContentInWorkspace(r.Context(), workspaceID, assetID)
+			}
+		}
+		png, err := renderTemplatePreview(file, fetch)
+		if err != nil {
+			problemWithCode(w, r, http.StatusBadRequest, "Bad Request", "could not render template", "could_not_render_template")
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(png)
+	}
+}
+
+func renderTemplatePreview(file map[string]any, fetch assetContent) ([]byte, error) {
+	return render.ToPNG(render.Design(embedDesignFileAssets(fetch, file)), 0, 0.25)
+}
+
+func templatesRenameHandler(tm *templates.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u := userFrom(r.Context())
+		var body struct {
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			problemWithCode(w, r, http.StatusBadRequest, "Bad Request", "invalid body", "invalid_body")
+			return
+		}
+		t, err := tm.Rename(r.Context(), u.ID, chi.URLParam(r, "id"), body.Title)
+		if err != nil {
+			templatesProblem(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, t)
+	}
 }
 
 func templatesProblem(w http.ResponseWriter, r *http.Request, err error) {

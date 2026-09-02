@@ -103,6 +103,7 @@ func (s *Service) Create(ctx context.Context, workspaceID, title string, from De
 		title = "Untitled design"
 	}
 	var docKind *string
+	var templateZone *string
 	if from != nil {
 		// Validate a client-supplied seed file BEFORE inserting the design row, so a
 		// malformed `from` is rejected (ErrInvalidFile -> 422) without leaving an
@@ -114,10 +115,13 @@ func (s *Service) Create(ctx context.Context, workspaceID, title string, from De
 		if k := docKindOf(from); k != "" {
 			docKind = &k
 		}
+		if zone := templateZoneOf(from); zone != "" {
+			templateZone = &zone
+		}
 	}
 	d, err := s.createDesign(ctx, createDesignInput{
 		workspaceID: workspaceID, title: title, schemaVersion: currentSchemaVersion,
-		docKind: docKind, createdByID: authorID,
+		docKind: docKind, templateZone: templateZone, createdByID: authorID,
 	})
 	if err != nil {
 		return DesignRecord{}, err
@@ -589,7 +593,7 @@ func lockDesignLineage(ctx context.Context, tx pgx.Tx, designID string) error {
 func toRecord(d designRow) DesignRecord {
 	return DesignRecord{
 		ID: d.ID, WorkspaceID: d.WorkspaceID, Title: d.Title, SchemaVersion: d.SchemaVersion,
-		DocKind: d.DocKind, CurrentSnapshot: d.CurrentSnapshot,
+		DocKind: d.DocKind, TemplateZone: d.TemplateZone, CurrentSnapshot: d.CurrentSnapshot,
 		CreatedAt: d.CreatedAt.UTC().Format(iso), UpdatedAt: d.UpdatedAt.UTC().Format(iso),
 		DeletedAt: isoPtr(d.DeletedAt), PurgeAfter: isoPtr(d.PurgeAfter),
 		SourceDesignID: d.SourceDesignID, SourceVersionID: d.SourceVersionID,

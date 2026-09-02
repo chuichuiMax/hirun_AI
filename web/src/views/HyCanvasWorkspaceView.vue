@@ -5,6 +5,7 @@ import { ArrowLeft, RefreshCw } from 'lucide-vue-next'
 import { contentApi } from '@/apis/content_api'
 import { materialLibraryApi } from '@/apis/material_library_api'
 import VisualWorkspaceHeader from '@/components/content/VisualWorkspaceHeader.vue'
+import { normalizeHyCanvasSessionUrl } from '@/utils/hycanvasSession'
 
 const route = useRoute()
 const router = useRouter()
@@ -119,10 +120,10 @@ const loadHyCanvas = async () => {
         return_url: editContext.returnUrl,
         return_label: editContext.returnLabel
       })
-      editorUrl.value = session.editor_url
+      editorUrl.value = normalizeHyCanvasSessionUrl(session.editor_url, window.location.href)
     } else {
       const session = await contentApi.createHyCanvasWorkspaceSession()
-      editorUrl.value = session.editor_url
+      editorUrl.value = normalizeHyCanvasSessionUrl(session.editor_url, window.location.href)
     }
   } catch (error) {
     errorMessage.value = error.message || 'HyCanvas 工作台加载失败'

@@ -23,6 +23,7 @@ type designRow struct {
 	Title           string
 	SchemaVersion   int
 	DocKind         *string
+	TemplateZone    *string
 	CurrentSnapshot *string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -32,11 +33,11 @@ type designRow struct {
 	SourceVersionID *string
 }
 
-const designCols = `id,"workspace_id",title,"schema_version","doc_kind","current_snapshot_id","created_at","updated_at","deleted_at","purge_after","source_design_id","source_version_id"`
+const designCols = `id,"workspace_id",title,"schema_version","doc_kind","template_zone","current_snapshot_id","created_at","updated_at","deleted_at","purge_after","source_design_id","source_version_id"`
 
 func scanDesign(row pgx.Row) (designRow, error) {
 	var d designRow
-	err := row.Scan(&d.ID, &d.WorkspaceID, &d.Title, &d.SchemaVersion, &d.DocKind, &d.CurrentSnapshot,
+	err := row.Scan(&d.ID, &d.WorkspaceID, &d.Title, &d.SchemaVersion, &d.DocKind, &d.TemplateZone, &d.CurrentSnapshot,
 		&d.CreatedAt, &d.UpdatedAt, &d.DeletedAt, &d.PurgeAfter, &d.SourceDesignID, &d.SourceVersionID)
 	return d, err
 }
@@ -54,15 +55,16 @@ type createDesignInput struct {
 	title           string
 	schemaVersion   int
 	docKind         *string
+	templateZone    *string
 	createdByID     *string
 	sourceDesignID  *string
 	sourceVersionID *string
 }
 
 func (s *Service) createDesign(ctx context.Context, in createDesignInput) (designRow, error) {
-	const q = `INSERT INTO "designs" (id,"workspace_id",title,"schema_version","doc_kind","created_by_id","source_design_id","source_version_id","updated_at")
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()) RETURNING ` + designCols
-	return scanDesign(s.db.QueryRow(ctx, q, uuid.NewString(), in.workspaceID, in.title, in.schemaVersion, in.docKind, in.createdByID, in.sourceDesignID, in.sourceVersionID))
+	const q = `INSERT INTO "designs" (id,"workspace_id",title,"schema_version","doc_kind","template_zone","created_by_id","source_design_id","source_version_id","updated_at")
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now()) RETURNING ` + designCols
+	return scanDesign(s.db.QueryRow(ctx, q, uuid.NewString(), in.workspaceID, in.title, in.schemaVersion, in.docKind, in.templateZone, in.createdByID, in.sourceDesignID, in.sourceVersionID))
 }
 
 type designPatch struct {

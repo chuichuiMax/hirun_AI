@@ -111,6 +111,7 @@ type Access interface {
 type Persistence interface {
 	CreateDesign(ctx context.Context, workspaceID, title string, from map[string]any, authorID *string) (designID string, err error)
 	GetWorkspaceID(ctx context.Context, designID string) (string, error)
+	GetTemplateZone(ctx context.Context, designID string) (string, error)
 	LoadDesignFile(ctx context.Context, designID, workspaceID string) (file map[string]any, err error)
 }
 
@@ -312,9 +313,12 @@ func (s *Service) Apply(ctx context.Context, userID, templateID, workspaceID str
 	}
 	var file map[string]any
 	var title string
+	var tags []string
 	if seed, ok := findSeed(templateID); ok {
 		_ = json.Unmarshal(seed.File, &file)
-		title = seed.toTemplate().Title
+		template := seed.toTemplate()
+		title = template.Title
+		tags = template.Tags
 	} else {
 		row, err := s.getRow(ctx, templateID)
 		if err != nil {
@@ -325,8 +329,17 @@ func (s *Service) Apply(ctx context.Context, userID, templateID, workspaceID str
 		}
 		_ = json.Unmarshal(row.File, &file)
 		title = row.Title
+		tags = row.Tags
 	}
 	applied, _ := deepCopyDesign(file)
+	if contains(tags, "小红书") {
+		meta := asObj(applied["meta"])
+		if meta == nil {
+			meta = map[string]any{}
+			applied["meta"] = meta
+		}
+		meta["templateZone"] = "xiaohongshu"
+	}
 	return s.persist.CreateDesign(ctx, workspaceID, title, applied, &userID)
 }
 
@@ -351,6 +364,8 @@ func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInpu
 		return Template{}, ErrForbidden
 	}
 	var file map[string]any
+	category := in.Category
+	tags := in.Tags
 	if in.DesignID != "" {
 		dws, err := s.persist.GetWorkspaceID(ctx, in.DesignID)
 		if err != nil {
@@ -358,6 +373,18 @@ func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInpu
 		}
 		if err := s.access.AssertMember(ctx, userID, dws, "viewer"); err != nil {
 			return Template{}, ErrForbidden
+		}
+		zone, err := s.persist.GetTemplateZone(ctx, in.DesignID)
+		if err != nil {
+			return Template{}, ErrNotFound
+		}
+		if zone == "xiaohongshu" {
+			if category == "" {
+				category = "小红书"
+			}
+			if !contains(tags, "小红书") {
+				tags = append(tags, "小红书")
+			}
 		}
 		loaded, err := s.persist.LoadDesignFile(ctx, in.DesignID, dws)
 		if err != nil {
@@ -386,10 +413,9 @@ func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInpu
 	}
 	style, _ := json.Marshal(extractStyle(file))
 	fileRaw, _ := json.Marshal(file)
-	tags := in.Tags
 	if tags == nil {
-		if in.Category != "" {
-			tags = []string{in.Category}
+		if category != "" {
+			tags = []string{category}
 		} else {
 			tags = []string{}
 		}
@@ -400,7 +426,7 @@ func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInpu
 		wsPtr = &ws
 	}
 	row, err := s.createRow(ctx, createTemplateInput{
-		ownerID: userID, workspaceID: wsPtr, title: in.Title, category: nilIfEmpty(in.Category),
+		ownerID: userID, workspaceID: wsPtr, title: in.Title, category: nilIfEmpty(category),
 		tags: tags, file: fileRaw, thumbnail: nilIfEmpty(in.Thumbnail), visibility: visibility,
 		collectionID: nilIfEmpty(in.CollectionID), style: style,
 	})
@@ -408,6 +434,42 @@ func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInpu
 		return Template{}, err
 	}
 	return rowToTemplate(row), nil
+}
+
+// Rename updates a mutable custom template in place. Saving a design as a
+// template remains a separate copy operation.
+func (s *Service) Rename(ctx context.Context, userID, templateID, title string) (Template, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return Template{}, ErrBadRequest
+	}
+	if _, ok := findSeed(templateID); ok {
+		return Template{}, ErrForbidden
+	}
+	row, err := s.getRow(ctx, templateID)
+	if err != nil {
+		return Template{}, err
+	}
+	switch row.Visibility {
+	case "private":
+		if row.OwnerID != userID {
+			return Template{}, ErrForbidden
+		}
+	case "workspace":
+		if row.WorkspaceID == nil {
+			return Template{}, ErrBadRequest
+		}
+		if err := s.access.AssertMember(ctx, userID, *row.WorkspaceID, "member"); err != nil {
+			return Template{}, ErrForbidden
+		}
+	default:
+		return Template{}, ErrForbidden
+	}
+	updated, err := s.renameRow(ctx, templateID, title)
+	if err != nil {
+		return Template{}, err
+	}
+	return rowToTemplate(updated), nil
 }
 
 // --- collections (FR-3) --------------------------------------------------

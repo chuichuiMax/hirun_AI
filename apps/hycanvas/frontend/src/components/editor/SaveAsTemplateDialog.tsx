@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/Toast";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { tr } from "@/lib/i18n";
+import { templateTagForZone, templateZoneFromMeta } from "@/lib/templateZones";
 
 const visibilities = (): { value: TemplateVisibility; label: string; hint: string }[] => [
   { value: "private", label: tr("editor.only_me"), hint: tr("editor.visible_only_to_you") },
@@ -60,8 +61,10 @@ export function SaveAsTemplateDialog({
 }) {
   const toast = useToast();
   const docTitle = useEditor((s) => s.doc.title);
+  const templateZone = useEditor((s) => templateZoneFromMeta(s.doc.meta));
+  const zoneTag = templateTagForZone(templateZone);
   const [title, setTitle] = useState(docTitle);
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(zoneTag ?? "");
   const [visibility, setVisibility] = useState<TemplateVisibility>("workspace");
   const [busy, setBusy] = useState(false);
   const doc = useEditor((s) => s.doc);
@@ -104,6 +107,7 @@ export function SaveAsTemplateDialog({
         file: designId ? undefined : useEditor.getState().doc,
         title: title.trim(),
         category: category.trim() || undefined,
+        tags: zoneTag ? [zoneTag] : undefined,
         visibility,
         fillableFields,
       });

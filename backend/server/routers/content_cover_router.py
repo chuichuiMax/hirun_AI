@@ -69,6 +69,16 @@ async def hycanvas_templates(current_user: User = Depends(get_required_user)):
     return await HyCanvasClient.from_env().list_xiaohongshu_templates()
 
 
+@content_covers.get("/hycanvas/templates/{template_id}/render.png")
+async def render_hycanvas_template(
+    template_id: str,
+    current_user: User = Depends(get_required_user),
+):
+    del current_user
+    content, content_type = await HyCanvasClient.from_env().render_template_png(template_id)
+    return Response(content=content, media_type=content_type)
+
+
 @content_covers.post("/hycanvas/designs", status_code=status.HTTP_201_CREATED)
 async def create_hycanvas_design(
     payload: HyCanvasDesignCreate,

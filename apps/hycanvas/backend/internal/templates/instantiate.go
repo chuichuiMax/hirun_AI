@@ -27,7 +27,7 @@ type InstantiateInput struct {
 // Instantiate fills a template's declared text fields and creates a decoupled
 // design in the requested workspace.
 func (s *Service) Instantiate(ctx context.Context, userID, templateID string, in InstantiateInput) (string, error) {
-	if in.WorkspaceID == "" || len(in.Fields) == 0 {
+	if in.WorkspaceID == "" {
 		return "", ErrBadRequest
 	}
 	if err := s.access.AssertMember(ctx, userID, in.WorkspaceID, "member"); err != nil {

@@ -100,6 +100,7 @@ const materialSelectorLoading = ref(false)
 const galleryImagesLoading = ref(false)
 const posterTemplatesRefreshing = ref(false)
 const hycanvasTemplates = ref([])
+const hycanvasTemplateUrls = ref({})
 const hycanvasTemplatesLoading = ref(false)
 const selectedHyCanvasTemplateId = ref('')
 const hycanvasFields = reactive({})
@@ -117,6 +118,7 @@ let coverLoadGeneration = 0
 let coverCandidateLoadGeneration = 0
 let materialPreviewGeneration = 0
 let posterPreviewGeneration = 0
+let hycanvasTemplateLoadGeneration = 0
 let posterTemplateSignature = ''
 
 const materialGalleryMap = computed(() => new Map(materialGalleries.value.map((item) => [item.id, item])))
@@ -183,10 +185,38 @@ const selectHyCanvasImage = (event) => {
 
 const loadHyCanvasTemplates = async () => {
   if (hycanvasTemplatesLoading.value || hycanvasTemplates.value.length) return
+  const generation = ++hycanvasTemplateLoadGeneration
   hycanvasTemplatesLoading.value = true
   try {
     const response = await contentApi.listHyCanvasTemplates()
-    hycanvasTemplates.value = response.templates || []
+    const templates = response.templates || []
+    const nextUrls = {}
+    await Promise.all(
+      templates.map(async (item) => {
+        const previewUrl = item.preview_urls?.[0] || ''
+        if (!previewUrl.startsWith('/api/content/covers/hycanvas/templates/')) {
+          nextUrls[item.id] = previewUrl
+          return
+        }
+        try {
+          const file = await contentApi.getHyCanvasTemplatePreview(item.id)
+          nextUrls[item.id] = URL.createObjectURL(await file.blob())
+        } catch {
+          nextUrls[item.id] = ''
+        }
+      })
+    )
+    if (generation !== hycanvasTemplateLoadGeneration) {
+      Object.values(nextUrls).forEach((url) => {
+        if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+      })
+      return
+    }
+    Object.values(hycanvasTemplateUrls.value).forEach((url) => {
+      if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+    })
+    hycanvasTemplates.value = templates
+    hycanvasTemplateUrls.value = nextUrls
     selectedHyCanvasTemplateId.value =
       store.task?.brief?.visual_material?.hycanvas_template_id ||
       store.artifact?.hycanvas_design_snapshot?.template_id ||
@@ -197,7 +227,7 @@ const loadHyCanvasTemplates = async () => {
       message.warning(error.message || '小红书模板专区加载失败')
     }
   } finally {
-    hycanvasTemplatesLoading.value = false
+    if (generation === hycanvasTemplateLoadGeneration) hycanvasTemplatesLoading.value = false
   }
 }
 
@@ -222,7 +252,7 @@ const createHyCanvasDesign = async () => {
     })
     store.artifact = hycanvasDesign.value.artifact
     message.success('视觉稿已创建，并自动绑定为当前版本封面')
-    window.open(hycanvasDesign.value.editor_url, '_blank', 'noopener,noreferrer')
+    await openCoverEditor()
   } catch (error) {
     message.error(error.message || '创建 HyCanvas 视觉稿失败')
   } finally {
@@ -1041,10 +1071,14 @@ onBeforeUnmount(() => {
   coverCandidateLoadGeneration += 1
   materialPreviewGeneration += 1
   posterPreviewGeneration += 1
+  hycanvasTemplateLoadGeneration += 1
   if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
   Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
   revokePreviewUrls(materialImageUrls.value)
   revokePreviewUrls(posterTemplateUrls.value)
+  Object.values(hycanvasTemplateUrls.value).forEach((url) => {
+    if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
+  })
 })
 
 const compileBrief = async () => {
@@ -1454,7 +1488,7 @@ const openVersions = async () => {
                     @click="selectedHyCanvasTemplateId = item.id"
                   >
                     <span class="poster-preview">
-                      <img v-if="item.preview_urls?.[0]" :src="item.preview_urls[0]" :alt="item.title" />
+                      <img v-if="hycanvasTemplateUrls[item.id]" :src="hycanvasTemplateUrls[item.id]" :alt="item.title" />
                       <LayoutTemplate v-else :size="24" />
                     </span>
                     <strong>{{ item.title }}</strong>
@@ -1841,8 +1875,7 @@ const openVersions = async () => {
                 </div>
                 <a-button
                   v-if="hycanvasDesign"
-                  :href="hycanvasDesign.editor_url"
-                  target="_blank"
+                  @click="openCoverEditor"
                 >
                   <ExternalLink :size="15" />继续编辑
                 </a-button>

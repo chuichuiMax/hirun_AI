@@ -336,7 +336,7 @@ async def test_image_gallery_supports_exactly_one_nested_level(test_client, mate
         )
         assert decoration_response.status_code == 200, decoration_response.text
         decoration_ids = {entry["id"] for entry in decoration_response.json()["galleries"]}
-        assert {parent["id"], child["id"]} <= decoration_ids
+        assert {parent["id"], child["id"], "uncategorized"} <= decoration_ids
 
         changed = await test_client.patch(
             f"/api/material-library/categories/{parent['id']}?material_type=image",

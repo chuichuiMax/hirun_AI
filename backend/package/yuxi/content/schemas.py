@@ -35,7 +35,13 @@ class ContentVisualMaterialSelection(BaseModel):
 
     image_item_id: str = Field(min_length=1, max_length=64)
     poster_template_id: str | None = Field(default=None, min_length=1, max_length=64)
-    hycanvas_template_id: str | None = Field(default=None, pattern=r"^xiaohongshu-[a-z0-9-]+$")
+    hycanvas_template_id: str | None = Field(
+        default=None,
+        pattern=(
+            r"^(?:xiaohongshu-[a-z0-9-]+|"
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+        ),
+    )
 
 
 class ContentBriefPayload(BaseModel):
