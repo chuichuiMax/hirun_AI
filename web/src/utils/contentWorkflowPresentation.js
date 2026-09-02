@@ -182,6 +182,88 @@ const normalizeNarrativeText = (value, maxLength = 600) => {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`
 }
 
+const normalizeNarrativeMarkdown = (value, maxLength = 600) => {
+  const text = String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  if (!text) return ''
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`
+}
+
+const parsePipeRow = (line) => {
+  const text = String(line || '').trim()
+  if (!text.startsWith('|') || !text.endsWith('|')) return null
+  const cells = text
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => cell.trim())
+  return cells.length >= 2 && cells.some(Boolean) ? cells : null
+}
+
+const isPipeTableSeparator = (line) => {
+  const cells = parsePipeRow(line)
+  return Boolean(cells?.length && cells.every((cell) => /^:?-{2,}:?$/.test(cell.replace(/\s/g, ''))))
+}
+
+const formatKnowledgeTextSnippet = (value) => {
+  const text = normalizeNarrativeMarkdown(value, 180)
+  if (!text || text.includes('|')) return text
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const isShortItemList =
+    lines.length >= 2 &&
+    lines.every((line) => line.length <= 40 && !/[。！？；.!?;]$/.test(line))
+  return isShortItemList ? lines.map((line) => `- ${line.replace(/^[-*+]\s+/, '')}`).join('\n') : text
+}
+
+const formatKnowledgeSnippets = (values) => {
+  const snippets = values.map((value) => normalizeNarrativeMarkdown(value, 600)).filter(Boolean)
+  if (!snippets.length) return []
+
+  const lineGroups = snippets.map((snippet) => snippet.split('\n').filter(Boolean))
+  const detectedHeader = lineGroups
+    .map((lines) => {
+      const separatorIndex = lines.findIndex(isPipeTableSeparator)
+      return separatorIndex > 0 ? parsePipeRow(lines[separatorIndex - 1]) : null
+    })
+    .find(Boolean)
+  const pipeRows = lineGroups
+    .flat()
+    .filter((line) => !isPipeTableSeparator(line))
+    .map(parsePipeRow)
+    .filter(Boolean)
+
+  if (pipeRows.length) {
+    const firstSnippetRows = lineGroups[0].map(parsePipeRow).filter(Boolean)
+    const positionalHeader =
+      !detectedHeader && snippets.length > 1 && firstSnippetRows.length === 1
+        ? firstSnippetRows[0]
+        : null
+    const header = detectedHeader || positionalHeader
+    const columnCount = header?.length || Math.max(...pipeRows.map((row) => row.length))
+    const normalizedHeader =
+      header || Array.from({ length: columnCount }, (_, index) => `字段 ${index + 1}`)
+    const headerKey = header?.join('|')
+    const rows = pipeRows
+      .filter((row) => row.length === columnCount && (!headerKey || row.join('|') !== headerKey))
+      .slice(0, 5)
+    return [
+      [
+        `| ${normalizedHeader.join(' | ')} |`,
+        `| ${normalizedHeader.map(() => '---').join(' | ')} |`,
+        ...rows.map((row) => `| ${row.join(' | ')} |`)
+      ].join('\n')
+    ]
+  }
+
+  return snippets.map(formatKnowledgeTextSnippet)
+}
+
 const narrativeObjectText = (value, maxLength = 600) => {
   if (value == null) return ''
   if (typeof value !== 'object') return normalizeNarrativeText(value, maxLength)
@@ -306,7 +388,12 @@ const outputNarratives = (preview) => {
 
   const reason =
     preview.selection_reason || preview.reason || preview.reasoning || preview.explanation
-  if (reason) add(`判断依据：${reason}`)
+  const hasStructuredStrategy =
+    preview.selected_direction_code &&
+    Array.isArray(preview.creation_method_codes) &&
+    preview.title_formula_code &&
+    preview.body_formula_code
+  if (reason && !hasStructuredStrategy) add(`判断依据：${reason}`)
 
   const evidenceItems = Array.isArray(preview.evidence_items) ? preview.evidence_items : []
   if (evidenceItems.length) {
@@ -363,8 +450,11 @@ const outputNarratives = (preview) => {
 export const buildContentNarrativeStream = (activities = [], codeLabels = {}) => {
   const lines = []
   const seen = new Set()
-  const add = (id, text, tone = 'normal') => {
-    const normalized = explainNarrativeCodes(normalizeNarrativeText(text, 1400), codeLabels)
+  const add = (id, text, tone = 'normal', preserveMarkdown = false) => {
+    const normalized = explainNarrativeCodes(
+      preserveMarkdown ? normalizeNarrativeMarkdown(text, 1400) : normalizeNarrativeText(text, 1400),
+      codeLabels
+    )
     if (!normalized || seen.has(normalized)) return
     seen.add(normalized)
     lines.push({ id, text: normalized, tone })
@@ -376,14 +466,16 @@ export const buildContentNarrativeStream = (activities = [], codeLabels = {}) =>
       continue
     }
     if (activity.eventType === 'content.knowledge.retrieved') {
-      const snippets = (activity.knowledgeResults || [])
-        .map((item) => normalizeNarrativeText(item?.content, 180))
-        .filter(Boolean)
-        .slice(0, 2)
+      const snippets = formatKnowledgeSnippets(
+        (activity.knowledgeResults || []).map((item) => item?.content)
+      )
       const query = normalizeNarrativeText(activity.queryText, 120)
+      const snippetSeparator = snippets.some((snippet) => snippet.includes('\n')) ? '\n\n' : ''
       add(
         activity.id,
-        `${query ? `围绕“${query}”` : ''}检索到 ${activity.resultCount} 条相关资料${snippets.length ? `，其中有价值的信息是：${snippets.join('；')}` : ''}。`
+        `${query ? `围绕“${query}”` : ''}检索到 ${activity.resultCount} 条相关资料${snippets.length ? `，其中有价值的信息是：${snippetSeparator}${snippets.join('\n\n')}` : ''}。`,
+        'normal',
+        true
       )
       continue
     }
@@ -420,6 +512,170 @@ export const appendContentNarrativeText = (currentLines = [], narrativeItems = [
     lines.push(item.text)
   }
   return lines
+}
+
+const strategyCodeRole = (code) => {
+  if (code.startsWith('CT')) return { type: '内容方向', purpose: '确定本次内容的核心表达角度' }
+  if (code.startsWith('T')) return { type: '标题公式', purpose: '组织标题的信息结构和吸引点' }
+  if (code.startsWith('C')) return { type: '正文公式', purpose: '组织正文的叙事顺序和内容层次' }
+  if (code.startsWith('S')) return { type: '场景增强', purpose: '补充真实场景，增强内容代入感' }
+  return { type: '创作手法', purpose: '决定事实和价值点的表达方式' }
+}
+
+const normalizeStrategyCodes = (values) =>
+  (Array.isArray(values) ? values : [])
+    .map((item) => (typeof item === 'string' ? item : item?.code))
+    .map((item) => String(item || '').toUpperCase())
+    .filter(Boolean)
+
+export const buildContentStrategyPresentation = (
+  activities = [],
+  codeLabels = {},
+  taskStrategy = {}
+) => {
+  const selected = {
+    directionCode: '',
+    methodCodes: [],
+    titleFormulaCode: '',
+    bodyFormulaCode: '',
+    groupId: '',
+    reason: '',
+    evidenceIds: []
+  }
+  const applySelection = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+    const directionCode =
+      value.selected_direction_code || value.content_direction || value.direction_code
+    const methodCodes = normalizeStrategyCodes(
+      value.creation_method_codes || value.creation_methods || value.creation_method_definitions
+    )
+    const titleFormulaCode =
+      value.title_formula_code || value.selected_title_formula_code || value.title_formula?.code
+    const bodyFormulaCode =
+      value.body_formula_code || value.selected_body_formula_code || value.body_formula?.code
+    if (directionCode) selected.directionCode = String(directionCode).toUpperCase()
+    if (methodCodes.length) selected.methodCodes = methodCodes
+    if (titleFormulaCode) selected.titleFormulaCode = String(titleFormulaCode).toUpperCase()
+    if (bodyFormulaCode) selected.bodyFormulaCode = String(bodyFormulaCode).toUpperCase()
+    if (value.selected_group_id || value.combination_group_id) {
+      selected.groupId = value.selected_group_id || value.combination_group_id
+    }
+    if (value.selection_reason || value.reason || value.explanation) {
+      selected.reason = value.selection_reason || value.reason || value.explanation
+    }
+    if (Array.isArray(value.evidence_ids) && value.evidence_ids.length) {
+      selected.evidenceIds = value.evidence_ids.filter(Boolean)
+    }
+  }
+
+  applySelection(taskStrategy)
+  for (const activity of activities) {
+    const preview = activity?.outputPreview
+    if (!preview || typeof preview !== 'object' || Array.isArray(preview)) continue
+    applySelection(preview.strategy_selection)
+    applySelection(preview.strategy_snapshot)
+    applySelection(preview)
+  }
+
+  const formulaCodes = [
+    selected.directionCode,
+    ...selected.methodCodes,
+    selected.titleFormulaCode,
+    selected.bodyFormulaCode
+  ].filter((code, index, values) => code && values.indexOf(code) === index)
+  const rows = formulaCodes.map((code) => {
+    const role = strategyCodeRole(code)
+    return {
+      code,
+      name: codeLabels[code] || code,
+      ...role
+    }
+  })
+
+  return {
+    ...selected,
+    formulaCodes,
+    formulaText: formulaCodes.join(' + '),
+    formulaDescription: rows.map((item) => item.name).join(' + '),
+    rows
+  }
+}
+
+export const buildContentEvidenceUsageSnapshot = (generatedContent = {}) => {
+  const usagesByEvidence = new Map()
+  const addUsage = (evidenceId, usage) => {
+    const id = String(evidenceId || '').trim()
+    if (!id) return
+    const usages = usagesByEvidence.get(id) || []
+    if (!usages.some((item) => JSON.stringify(item) === JSON.stringify(usage))) usages.push(usage)
+    usagesByEvidence.set(id, usages)
+  }
+
+  const title = generatedContent.title || generatedContent.selected_title || {}
+  for (const evidenceId of title.evidence_ids || []) {
+    addUsage(evidenceId, { target: 'title', location: '标题' })
+  }
+
+  const draft = generatedContent.draft || generatedContent.content_draft || {}
+  for (const [index, paragraph] of (draft.paragraph_evidence || []).entries()) {
+    const usage = {
+      target: 'body',
+      location: `正文第${index + 1}段`,
+      paragraph_id: String(paragraph?.paragraph_id || `p${index + 1}`)
+    }
+    for (const evidenceId of paragraph?.evidence_ids || []) addUsage(evidenceId, usage)
+  }
+
+  return {
+    version: 1,
+    items: [...usagesByEvidence].map(([evidence_id, usages]) => ({ evidence_id, usages }))
+  }
+}
+
+const evidenceDisplayValue = (value) => {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  return JSON.stringify(value)
+}
+
+export const buildKnowledgeEvidenceGroups = (evidenceBundle = {}, usageSnapshot = {}) => {
+  const evidenceById = new Map(
+    (evidenceBundle.items || []).filter((item) => item?.id).map((item) => [String(item.id), item])
+  )
+  const groups = new Map()
+
+  for (const usageItem of usageSnapshot.items || []) {
+    const evidence = evidenceById.get(String(usageItem?.evidence_id || ''))
+    if (!evidence || evidence.source_type !== 'knowledge_base') continue
+    const metadata = evidence.metadata || {}
+    const knowledgeBaseId = String(metadata.knowledge_base_id || '').trim()
+    const groupId = knowledgeBaseId || '__legacy_knowledge_base__'
+    const group = groups.get(groupId) || {
+      id: groupId,
+      name:
+        metadata.knowledge_base_name ||
+        (knowledgeBaseId ? `知识库 ${knowledgeBaseId}` : '历史知识库来源'),
+      rows: []
+    }
+    group.rows.push({
+      id: evidence.id,
+      value: evidenceDisplayValue(evidence.value),
+      source:
+        metadata.document_name ||
+        metadata.source ||
+        metadata.document_id ||
+        evidence.source_id ||
+        '-',
+      usage:
+        (usageItem.usages || [])
+          .map((item) => item?.location)
+          .filter(Boolean)
+          .join('、') || '-'
+    })
+    groups.set(groupId, group)
+  }
+
+  return [...groups.values()]
 }
 
 export const buildFormulaPresentation = (strategy = {}, type) => {

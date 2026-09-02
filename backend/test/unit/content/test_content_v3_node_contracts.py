@@ -558,6 +558,9 @@ async def test_creation_research_must_query_available_business_and_viral_librari
         {"kb_id": "kb-viral", "name": "爆款库"},
     ]
     runtime._content_queried_knowledge_bases = {"kb-viral"}
+    runtime._content_retrieved_knowledge_results = {
+        "source-1": [{"source_id": "source-1", "metadata": {}}]
+    }
     collector = ContentNodeResultCollector("EvidenceCollectionResultV1", DOMAIN_CONTEXT, runtime)
 
     with pytest.raises(ContractDomainValidationError, match="必需知识库"):
@@ -567,6 +570,75 @@ async def test_creation_research_must_query_available_business_and_viral_librari
     await collector.submit(**VALID_PAYLOADS["EvidenceCollectionResultV1"])
 
     assert collector.submission_count == 1
+
+
+@pytest.mark.asyncio
+async def test_result_collector_requires_retrieved_knowledge_source_and_freezes_metadata():
+    runtime = type("Runtime", (), {})()
+    runtime._required_skill_closure = []
+    runtime._activated_required_skills = []
+    runtime._content_retrieved_knowledge_results = {
+        "chunk-1": [
+            {
+                "source_id": "chunk-1",
+                "content": "retrieved content",
+                "metadata": {
+                    "knowledge_base_id": "kb-1",
+                    "knowledge_base_name": "工艺知识库",
+                    "document_id": "file-1",
+                    "document_name": "工艺手册.pdf",
+                    "chunk_id": "chunk-1",
+                },
+            }
+        ]
+    }
+    collector = ContentNodeResultCollector("EvidenceCollectionResultV1", DOMAIN_CONTEXT, runtime)
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+
+    with pytest.raises(ContractDomainValidationError, match="检索结果 ID"):
+        await collector.submit(**payload)
+
+    payload["evidence_items"][0]["source_id"] = "chunk-1"
+    payload["evidence_items"][0]["metadata"]["agent_note"] = "keep"
+    await collector.submit(**payload)
+
+    metadata = collector.finalize()["evidence_items"][0]["metadata"]
+    assert metadata["knowledge_base_id"] == "kb-1"
+    assert metadata["document_name"] == "工艺手册.pdf"
+    assert metadata["chunk_id"] == "chunk-1"
+    assert metadata["agent_note"] == "keep"
+
+
+@pytest.mark.asyncio
+async def test_evidence_result_tool_accepts_schema_parsed_items_and_freezes_metadata():
+    runtime = type("Runtime", (), {})()
+    runtime._required_skill_closure = []
+    runtime._activated_required_skills = []
+    runtime._content_retrieved_knowledge_results = {
+        "source-1": [
+            {
+                "source_id": "source-1",
+                "content": "retrieved content",
+                "metadata": {
+                    "knowledge_base_id": "kb-1",
+                    "knowledge_base_name": "工艺知识库",
+                    "document_id": "file-1",
+                    "document_name": "工艺手册.pdf",
+                    "chunk_id": "source-1",
+                },
+            }
+        ]
+    }
+    collector = ContentNodeResultCollector("EvidenceCollectionResultV1", DOMAIN_CONTEXT, runtime)
+    tool = build_content_result_tool(collector)
+
+    result = await tool.ainvoke(deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"]))
+
+    assert result == {"accepted": True, "contract": "EvidenceCollectionResultV1"}
+    metadata = collector.finalize()["evidence_items"][0]["metadata"]
+    assert metadata["knowledge_base_id"] == "kb-1"
+    assert metadata["document_name"] == "工艺手册.pdf"
+    assert metadata["chunk_id"] == "source-1"
 
 
 @pytest.mark.asyncio

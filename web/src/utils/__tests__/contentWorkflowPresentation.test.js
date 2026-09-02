@@ -4,9 +4,12 @@ import {
   CONTENT_WORKFLOW_GROUPS,
   CONTENT_WORKFLOW_NODE_LABELS,
   appendContentNarrativeText,
+  buildContentEvidenceUsageSnapshot,
   buildContentCompletionSummary,
   buildContentNarrativeCodeLabels,
   buildContentNarrativeStream,
+  buildContentStrategyPresentation,
+  buildKnowledgeEvidenceGroups,
   buildFormulaPresentation,
   buildContentRuntimeTimeline,
   buildContentWorkflowGroups,
@@ -118,6 +121,87 @@ assert.match(narrative[0].text, /目标受众.*内容方向/)
 assert.match(narrative[1].text, /杭州装修案例.*3 条相关资料.*89㎡三居改造案例/)
 assert.ok(narrative.every((item) => !/Agent|Skill|工具调用|content-strategy-agent/.test(item.text)))
 
+const excelNarrative = buildContentNarrativeStream([
+  {
+    id: 'excel-retrieval',
+    eventType: 'content.knowledge.retrieved',
+    queryText: '装修材料',
+    resultCount: 1,
+    knowledgeResults: [
+      {
+        content: '| 杭州市 | 泥瓦 | 300300-400800mm墙砖斜铺 | 67 | 平方米 |'
+      }
+    ]
+  }
+])
+assert.match(excelNarrative[0].text, /其中有价值的信息是：\n\n\| 字段 1 \| 字段 2 \|/)
+assert.match(excelNarrative[0].text, /\| 杭州市 \| 泥瓦 \| 300300-400800mm墙砖斜铺/)
+
+const mergedExcelNarrative = buildContentNarrativeStream([
+  {
+    id: 'merged-excel-retrieval',
+    eventType: 'content.knowledge.retrieved',
+    resultCount: 2,
+    knowledgeResults: [
+      { content: '| 城市 | 类别 |\n| --- | --- |\n| 杭州 | 泥瓦 |' },
+      { content: '| 杭州 | 木工 |\n| 杭州 | 油漆 |' }
+    ]
+  }
+])
+assert.match(mergedExcelNarrative[0].text, /\| 杭州 \| 木工 \|/)
+assert.match(mergedExcelNarrative[0].text, /\| 杭州 \| 油漆 \|/)
+
+const headerOnlyExcelNarrative = buildContentNarrativeStream([
+  {
+    id: 'header-only-excel-retrieval',
+    eventType: 'content.knowledge.retrieved',
+    resultCount: 2,
+    knowledgeResults: [
+      { content: '| 城市 | 技能包类别 | sku名称 | sku价格，单位：元 | 规格值 |' },
+      { content: '| 杭州市 | 设计 | 高端定制设计 | 300 | 平方米 |' }
+    ]
+  }
+])
+assert.match(headerOnlyExcelNarrative[0].text, /\| 城市 \| 技能包类别 \| sku名称 \|/)
+assert.doesNotMatch(headerOnlyExcelNarrative[0].text, /字段 1/)
+
+const realRetrievalOrderNarrative = buildContentNarrativeStream([
+  {
+    id: 'real-retrieval-order',
+    eventType: 'content.knowledge.retrieved',
+    resultCount: 3,
+    knowledgeResults: [
+      {
+        content:
+          '| 杭州市 | 泥瓦 | 300300-400800mm墙砖斜铺 | 67 | 平方米 |\n| 杭州市 | 泥瓦 | 300300-400800mm墙砖混铺 | 72 | 平方米 |'
+      },
+      {
+        content:
+          '| 杭州市 | 泥瓦 | 马桶改蹲便器施工包 | 2300 | 间 |\n| 杭州市 | 泥瓦 | 地砖铺贴 | 85 | 平方米 |'
+      },
+      {
+        content:
+          '| 城市 | 技能包类别 | sku名称 | sku价格，单位：元 | 规格值 |\n| --- | --- | --- | --- | --- |\n| 杭州市 | 设计 | 高端定制设计 | 55.8 | 平方米 |'
+      }
+    ]
+  }
+])
+const realRetrievalLines = realRetrievalOrderNarrative[0].text.split('\n')
+assert.equal(realRetrievalLines[2], '| 城市 | 技能包类别 | sku名称 | sku价格，单位：元 | 规格值 |')
+assert.equal(realRetrievalLines[4], '| 杭州市 | 泥瓦 | 300300-400800mm墙砖斜铺 | 67 | 平方米 |')
+assert.doesNotMatch(realRetrievalOrderNarrative[0].text, /字段 1/)
+
+const listNarrative = buildContentNarrativeStream([
+  {
+    id: 'list-retrieval',
+    eventType: 'content.knowledge.retrieved',
+    resultCount: 4,
+    knowledgeResults: [{ content: '90后自装业主\n\n新手装修业主\n\n旧房翻新业主\n\n刚需买房业主' }]
+  }
+])
+assert.match(listNarrative[0].text, /其中有价值的信息是：\n\n- 90后自装业主/)
+assert.match(listNarrative[0].text, /\n- 新手装修业主\n- 旧房翻新业主/)
+
 const generatedNarrative = buildContentNarrativeStream([
   {
     id: 'generated-result',
@@ -228,6 +312,10 @@ const explainedFormulaNarrative = buildContentNarrativeStream(
       eventType: 'content.agent.completed',
       status: 'completed',
       outputPreview: {
+        selected_direction_code: 'CT01',
+        creation_method_codes: ['M01', 'S01', 'M03'],
+        title_formula_code: 'T01',
+        body_formula_code: 'C02',
         reason:
           'brief 锁定内容类型为 CT01 案例/成果展示；选择 CT01 下的 M01+S01+M03，标题公式 T01，正文公式 C02。'
       }
@@ -235,9 +323,116 @@ const explainedFormulaNarrative = buildContentNarrativeStream(
   ],
   codeLabels
 )
+assert.equal(explainedFormulaNarrative.length, 0)
+assert.match(
+  buildContentNarrativeStream(
+    [
+      {
+        id: 'legacy-strategy-reason',
+        nodeId: 'select_creation_strategy',
+        eventType: 'content.agent.completed',
+        status: 'completed',
+        outputPreview: { reason: '仍需兼容只有文字依据的历史运行。' }
+      }
+    ],
+    codeLabels
+  )[0].text,
+  /仍需兼容只有文字依据的历史运行/
+)
+const strategyPresentation = buildContentStrategyPresentation(
+  [
+    {
+      outputPreview: {
+        selected_direction_code: 'CT01',
+        selected_group_id: 'decoration-ct01-m01-s01-m03-v3',
+        creation_method_codes: ['M01', 'S01', 'M03'],
+        title_formula_code: 'T01',
+        body_formula_code: 'C02',
+        reason: '现有案例证据完整。',
+        evidence_ids: ['ev-1', 'ev-2']
+      }
+    }
+  ],
+  codeLabels
+)
+assert.equal(strategyPresentation.formulaText, 'CT01 + M01 + S01 + M03 + T01 + C02')
 assert.equal(
-  explainedFormulaNarrative[0].text,
-  '判断依据：brief 锁定内容类型为 CT01 案例/成果展示；选择 CT01（案例/成果展示）下的 M01（数字法）+S01（场景增强）+M03（价值法），标题公式 T01（细分人群＋数字＋结果），正文公式 C02（实景流量类）。'
+  strategyPresentation.formulaDescription,
+  '案例/成果展示 + 数字法 + 场景增强 + 价值法 + 细分人群＋数字＋结果 + 实景流量类'
+)
+assert.deepEqual(strategyPresentation.evidenceIds, ['ev-1', 'ev-2'])
+assert.deepEqual(strategyPresentation.rows[2], {
+  code: 'S01',
+  name: '场景增强',
+  type: '场景增强',
+  purpose: '补充真实场景，增强内容代入感'
+})
+assert.equal(
+  buildContentStrategyPresentation([], codeLabels, {
+    content_direction: 'CT01',
+    creation_methods: ['M01'],
+    title_formula: { code: 'T01' },
+    body_formula: { code: 'C02' }
+  }).formulaText,
+  'CT01 + M01 + T01 + C02'
+)
+
+const evidenceUsageSnapshot = buildContentEvidenceUsageSnapshot({
+  title: { evidence_ids: ['ev-kb-1'] },
+  draft: {
+    paragraph_evidence: [
+      { paragraph_id: 'p1', evidence_ids: ['ev-kb-1', 'ev-kb-2'] },
+      { paragraph_id: 'p2', evidence_ids: ['ev-kb-3', 'ev-manual'] }
+    ]
+  }
+})
+const knowledgeEvidenceGroups = buildKnowledgeEvidenceGroups(
+  {
+    items: [
+      {
+        id: 'ev-kb-1',
+        source_type: 'knowledge_base',
+        source_id: 'chunk-1',
+        value: '同一知识库的第一条内容',
+        metadata: {
+          knowledge_base_id: 'kb-1',
+          knowledge_base_name: '工艺知识库',
+          document_name: '工艺手册.pdf'
+        }
+      },
+      {
+        id: 'ev-kb-2',
+        source_type: 'knowledge_base',
+        source_id: 'chunk-2',
+        value: '同一知识库的第二条内容',
+        metadata: { knowledge_base_id: 'kb-1', knowledge_base_name: '工艺知识库' }
+      },
+      {
+        id: 'ev-kb-3',
+        source_type: 'knowledge_base',
+        source_id: 'chunk-3',
+        value: '另一个知识库的内容',
+        metadata: { knowledge_base_id: 'kb-2', knowledge_base_name: '质检知识库' }
+      },
+      { id: 'ev-unused', source_type: 'knowledge_base', value: '检索但未采用' },
+      { id: 'ev-manual', source_type: 'manual_input', value: '非知识库证据' }
+    ]
+  },
+  evidenceUsageSnapshot
+)
+assert.equal(knowledgeEvidenceGroups.length, 2)
+assert.equal(knowledgeEvidenceGroups[0].name, '工艺知识库')
+assert.equal(knowledgeEvidenceGroups[0].rows.length, 2)
+assert.equal(knowledgeEvidenceGroups[0].rows[0].usage, '标题、正文第1段')
+assert.equal(knowledgeEvidenceGroups[0].rows[0].source, '工艺手册.pdf')
+assert.equal(knowledgeEvidenceGroups[1].name, '质检知识库')
+assert.equal(
+  knowledgeEvidenceGroups.flatMap((group) => group.rows).some((row) => row.id === 'ev-unused'),
+  false
+)
+assert.equal(
+  knowledgeEvidenceGroups.flatMap((group) => group.rows).some((row) => row.id === 'ev-manual'),
+  false
 )
 
 const groupsWithActivity = buildContentWorkflowGroups(

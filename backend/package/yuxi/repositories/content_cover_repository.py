@@ -375,6 +375,7 @@ class ContentCoverRepository:
             skill_versions=previous.skill_versions or {},
             rule_version_id=previous.rule_version_id,
             knowledge_snapshot=previous.knowledge_snapshot or {},
+            evidence_usage_snapshot=previous.evidence_usage_snapshot or {},
             review_snapshot=previous.review_snapshot or {},
             cover_asset_id=asset.id,
             cover_job_id=job.id,

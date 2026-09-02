@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -1201,6 +1202,30 @@ class ContentNodeResultCollector:
     submission_count: int = 0
     result: dict[str, Any] | None = None
 
+    def _with_verified_knowledge_provenance(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.contract_name not in {"EvidenceCollectionResultV1", "ProductEvidenceCollectionResultV1"}:
+            return payload
+
+        normalized = deepcopy(payload)
+        normalized["evidence_items"] = [
+            item.model_dump(mode="python") if isinstance(item, EvidenceDraftV1) else item
+            for item in normalized.get("evidence_items") or []
+        ]
+        retrieved = getattr(self.runtime_context, "_content_retrieved_knowledge_results", {}) or {}
+        for index, item in enumerate(normalized.get("evidence_items") or []):
+            if item.get("source_type") != "knowledge_base":
+                continue
+            source_id = str(item.get("source_id") or "")
+            matches = retrieved.get(source_id) or []
+            if len(matches) != 1:
+                raise ContractDomainValidationError(
+                    "knowledge_source_unknown",
+                    f"evidence_items.{index}.source_id",
+                    "知识库 Evidence 的 source_id 必须等于本节点唯一检索结果 ID",
+                )
+            item["metadata"] = {**(item.get("metadata") or {}), **matches[0]["metadata"]}
+        return normalized
+
     async def submit(self, **payload: Any) -> dict[str, Any]:
         from yuxi.services.run_queue_service import append_content_runtime_event
 
@@ -1256,7 +1281,11 @@ class ContentNodeResultCollector:
                         "submit_content_node_result",
                         f"创作取材前必须检索已授权的必需知识库: {', '.join(missing_names)}",
                     )
-            validated = validate_content_node_result(self.contract_name, payload, self.domain_context)
+            validated = validate_content_node_result(
+                self.contract_name,
+                self._with_verified_knowledge_provenance(payload),
+                self.domain_context,
+            )
             self.result = validated.model_dump(mode="json")
             self.submission_count += 1
         except Exception as exc:

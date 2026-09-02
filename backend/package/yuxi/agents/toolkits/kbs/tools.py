@@ -198,6 +198,44 @@ def _find_query_target(
     return target_info, normalized_kb_id, None
 
 
+def _attach_content_knowledge_provenance(
+    runtime: ToolRuntime | None,
+    *,
+    kb_id: str,
+    kb_name: str,
+    output: dict[str, Any],
+) -> None:
+    context = getattr(runtime, "context", None)
+    if context is None or not getattr(context, "_content_node_output_contract", None):
+        return
+
+    retrieved = dict(getattr(context, "_content_retrieved_knowledge_results", {}) or {})
+    for item in output.get("results") or []:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        metadata = dict(item.get("metadata") or {})
+        metadata.update(
+            {
+                "knowledge_base_id": kb_id,
+                "knowledge_base_name": kb_name,
+                "document_id": str(item.get("file_id") or ""),
+                "document_name": str(metadata.get("source") or item.get("file_id") or ""),
+                "chunk_id": str(item["id"]),
+            }
+        )
+        item["metadata"] = metadata
+        records = list(retrieved.get(str(item["id"])) or [])
+        record = {
+            "source_id": str(item["id"]),
+            "content": str(item.get("content") or ""),
+            "metadata": metadata,
+        }
+        if record not in records:
+            records.append(record)
+        retrieved[str(item["id"])] = records
+    context._content_retrieved_knowledge_results = retrieved
+
+
 async def _emit_content_knowledge_event(
     runtime: ToolRuntime | None,
     kb_id: str,
@@ -352,6 +390,12 @@ async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, ru
         maximum_chunks = int(getattr(context, "_content_max_chunks_per_knowledge_base", 0) or 0)
         if maximum_chunks and isinstance(output.get("results"), list):
             output["results"] = output["results"][:maximum_chunks]
+        _attach_content_knowledge_provenance(
+            runtime,
+            kb_id=target_kb_id,
+            kb_name=str(target_info.get("name") or target_kb_id),
+            output=output,
+        )
         await _emit_content_knowledge_event(runtime, target_kb_id, query_text, output)
         return output
 
