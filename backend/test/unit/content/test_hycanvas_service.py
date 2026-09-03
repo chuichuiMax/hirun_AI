@@ -12,6 +12,7 @@ from yuxi.services import hycanvas_service
 def test_from_env_requires_complete_configuration(monkeypatch):
     for name in (
         "HYCANVAS_BASE_URL",
+        "HYCANVAS_DEV_PUBLIC_URL",
         "HYCANVAS_PUBLIC_URL",
         "HYCANVAS_API_KEY",
         "HYCANVAS_WORKSPACE_ID",
@@ -23,6 +24,16 @@ def test_from_env_requires_complete_configuration(monkeypatch):
 
     assert exc.value.status_code == 503
     assert exc.value.detail["code"] == "hycanvas_not_configured"
+
+
+def test_from_env_prefers_local_dev_public_url(monkeypatch):
+    monkeypatch.setenv("HYCANVAS_BASE_URL", "http://hycanvas-app:8005")
+    monkeypatch.setenv("HYCANVAS_PUBLIC_URL", "http://127.0.0.1:8005")
+    monkeypatch.setenv("HYCANVAS_DEV_PUBLIC_URL", "http://127.0.0.1:3000")
+    monkeypatch.setenv("HYCANVAS_API_KEY", "hyk_test")
+    monkeypatch.setenv("HYCANVAS_WORKSPACE_ID", "workspace-1")
+
+    assert HyCanvasClient.from_env().public_url == "http://127.0.0.1:3000"
 
 
 @pytest.mark.asyncio

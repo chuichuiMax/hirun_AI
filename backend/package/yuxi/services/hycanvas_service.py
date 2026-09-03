@@ -36,7 +36,9 @@ class HyCanvasClient:
     @classmethod
     def from_env(cls) -> HyCanvasClient:
         base_url = (os.getenv("HYCANVAS_BASE_URL") or "").strip()
-        public_url = (os.getenv("HYCANVAS_PUBLIC_URL") or base_url).strip()
+        public_url = (
+            os.getenv("HYCANVAS_DEV_PUBLIC_URL") or os.getenv("HYCANVAS_PUBLIC_URL") or base_url
+        ).strip()
         api_key = (os.getenv("HYCANVAS_API_KEY") or "").strip()
         workspace_id = (os.getenv("HYCANVAS_WORKSPACE_ID") or "").strip()
         if not all((base_url, public_url, api_key, workspace_id)):

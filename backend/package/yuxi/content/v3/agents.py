@@ -19,7 +19,11 @@ class ContentAgentSpec:
     description: str
     skills: tuple[str, ...]
     skill_tools: tuple[str, ...] = ()
+    model: str | None = None
     reasoning_effort: str | None = None
+    model_call_timeout_seconds: float | None = None
+    model_retry_times: int | None = None
+    inherit_context_from: str | None = None
     config_version: int = 1
 
 
@@ -31,15 +35,80 @@ CONTENT_AGENT_SPECS = (
         skills=("content-value-analyzer", "content-strategy-planner"),
         skill_tools=("get_creation_rule_bundle",),
         reasoning_effort="medium",
-        config_version=4,
+        model_call_timeout_seconds=70,
+        model_retry_times=1,
+        config_version=5,
     ),
     ContentAgentSpec(
         slug="content-research-agent",
         name="内容调研 Agent",
         description="按锁定策略收集真实业务资料与爆款结构参考。",
-        skills=("content-evidence-researcher", "strategy-product-researcher"),
+        skills=("content-evidence-researcher", "viral-reference-selector", "strategy-product-researcher"),
         skill_tools=("get_business_facts", "query_kb", "open_kb_document", "find_kb_document"),
-        config_version=3,
+        reasoning_effort="low",
+        model_call_timeout_seconds=60,
+        model_retry_times=1,
+        config_version=6,
+    ),
+    ContentAgentSpec(
+        slug="content-business-rule-research-agent",
+        name="业务与规则调研 Agent",
+        description="并发检索品牌业务事实与平台业务规则。",
+        skills=("content-business-rule-researcher",),
+        skill_tools=("query_kb",),
+        reasoning_effort="low",
+        model_call_timeout_seconds=55,
+        model_retry_times=0,
+        inherit_context_from="content-research-agent",
+        config_version=4,
+    ),
+    ContentAgentSpec(
+        slug="content-price-research-agent",
+        name="价格调研 Agent",
+        description="并发检索与当前项目口径一致的价格证据。",
+        skills=("content-price-researcher",),
+        skill_tools=("query_kb",),
+        model="",
+        reasoning_effort="low",
+        model_call_timeout_seconds=55,
+        model_retry_times=0,
+        inherit_context_from="content-research-agent",
+        config_version=7,
+    ),
+    ContentAgentSpec(
+        slug="content-compliance-research-agent",
+        name="封禁词调研 Agent",
+        description="并发读取封禁词库中的问题词与常用表达映射。",
+        skills=("content-compliance-researcher",),
+        skill_tools=("query_kb",),
+        reasoning_effort="low",
+        model_call_timeout_seconds=45,
+        model_retry_times=0,
+        inherit_context_from="content-research-agent",
+        config_version=2,
+    ),
+    ContentAgentSpec(
+        slug="content-viral-candidate-agent",
+        name="爆款候选检索 Agent",
+        description="并发检索多篇与当前输入变量匹配的爆款候选。",
+        skills=("viral-candidate-researcher",),
+        skill_tools=("query_kb",),
+        reasoning_effort="low",
+        model_call_timeout_seconds=65,
+        model_retry_times=0,
+        inherit_context_from="content-research-agent",
+        config_version=5,
+    ),
+    ContentAgentSpec(
+        slug="content-viral-selection-agent",
+        name="爆款匹配与结构解析 Agent",
+        description="结合输入变量与真实证据选择唯一可填充爆款并抽取动态结构。",
+        skills=("viral-reference-selector",),
+        reasoning_effort="low",
+        model_call_timeout_seconds=65,
+        model_retry_times=0,
+        inherit_context_from="content-research-agent",
+        config_version=4,
     ),
     ContentAgentSpec(
         slug="content-title-agent",
@@ -65,10 +134,12 @@ CONTENT_AGENT_SPECS = (
             "content-title-generator",
             "content-outline-builder",
             "content-body-generator",
+            "viral-structure-rewriter",
+            "viral-layout-formatter",
             "content-human-expression",
         ),
         skill_tools=(),
-        config_version=2,
+        config_version=4,
     ),
     ContentAgentSpec(
         slug="content-review-agent",
@@ -89,7 +160,7 @@ CONTENT_AGENT_SPECS = (
 )
 
 
-def _agent_context(spec: ContentAgentSpec) -> dict:
+def _agent_context(spec: ContentAgentSpec, inherited_context: dict | None = None) -> dict:
     context = {
         "system_prompt": (
             f"你是{spec.name}。你只执行当前工作流节点的职责，不修改固定工作流、规则匹配结果、人工审批结果或证据事实。"
@@ -97,8 +168,17 @@ def _agent_context(spec: ContentAgentSpec) -> dict:
         "skills": list(spec.skills),
         "skill_tool_allowlist": list(spec.skill_tools),
     }
+    if spec.model is not None:
+        context["model"] = spec.model
     if spec.reasoning_effort:
         context["reasoning_effort"] = spec.reasoning_effort
+    if spec.model_call_timeout_seconds:
+        context["model_call_timeout_seconds"] = spec.model_call_timeout_seconds
+    if spec.model_retry_times is not None:
+        context["model_retry_times"] = spec.model_retry_times
+    for key in ("model", "knowledges"):
+        if key not in context and inherited_context and key in inherited_context:
+            context[key] = inherited_context[key]
     return context
 
 
@@ -124,9 +204,81 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
     current_version = int(agent.config_version or 1)
     if current_version >= spec.config_version:
         return False
-    if agent.created_by != "system" or agent.updated_by != "system":
-        return False
     context = (agent.config_json or {}).get("context")
+    if agent.created_by == "system" and agent.updated_by != "system":
+        additive_migrations = {
+            "content-price-research-agent": {
+                5: (
+                    (),
+                    {"content-price-researcher"},
+                    {"model_call_timeout_seconds": spec.model_call_timeout_seconds},
+                ),
+            },
+            "content-research-agent": {
+                4: (
+                    ("viral-reference-selector",),
+                    {"content-evidence-researcher", "strategy-product-researcher"},
+                    {
+                        "reasoning_effort": spec.reasoning_effort,
+                        "model_call_timeout_seconds": spec.model_call_timeout_seconds,
+                        "model_retry_times": spec.model_retry_times,
+                    },
+                ),
+                5: (
+                    (),
+                    {
+                        "content-evidence-researcher",
+                        "strategy-product-researcher",
+                        "viral-reference-selector",
+                    },
+                    {
+                        "reasoning_effort": spec.reasoning_effort,
+                        "model_call_timeout_seconds": spec.model_call_timeout_seconds,
+                        "model_retry_times": spec.model_retry_times,
+                    },
+                ),
+            },
+            "content-generation-agent": {
+                2: (
+                    ("viral-structure-rewriter", "viral-layout-formatter"),
+                    {
+                        "content-title-generator",
+                        "content-outline-builder",
+                        "content-body-generator",
+                        "content-human-expression",
+                    },
+                    {},
+                ),
+                3: (
+                    ("viral-layout-formatter",),
+                    {
+                        "content-title-generator",
+                        "content-outline-builder",
+                        "content-body-generator",
+                        "viral-structure-rewriter",
+                        "content-human-expression",
+                    },
+                    {},
+                ),
+            },
+        }
+        migration = additive_migrations.get(spec.slug, {}).get(current_version)
+        if migration and isinstance(context, dict):
+            added_skills, previous_required_skills, context_updates = migration
+            if not previous_required_skills.issubset(context.get("skills") or []):
+                return False
+            config_json = dict(agent.config_json or {})
+            migrated_context = dict(context)
+            migrated_context["skills"] = list(dict.fromkeys([*(context.get("skills") or []), *added_skills]))
+            migrated_context.update(context_updates)
+            config_json["context"] = migrated_context
+            agent.config_json = config_json
+            agent.config_version = spec.config_version
+            agent.updated_at = now or utc_now_naive()
+            return True
+        return False
+    if agent.created_by != "system":
+        return False
     if (
         agent.backend_id != DEFAULT_AGENT_BACKEND_ID
         or agent.is_subagent
@@ -147,7 +299,7 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
 
 
 async def ensure_content_v3_agents(db: AsyncSession) -> tuple[Agent, ...]:
-    """幂等创建六个正式 Agent；已有同 slug 配置不被覆盖。"""
+    """幂等创建正式内容 Agent；已有同 slug 配置按版本策略迁移。"""
 
     slugs = [spec.slug for spec in CONTENT_AGENT_SPECS]
     existing_items = (await db.execute(select(Agent).where(Agent.slug.in_(slugs)))).scalars().all()
@@ -168,7 +320,16 @@ async def ensure_content_v3_agents(db: AsyncSession) -> tuple[Agent, ...]:
             description=spec.description,
             icon=None,
             pics=[],
-            config_json={"context": _agent_context(spec)},
+            config_json={
+                "context": _agent_context(
+                    spec,
+                    (
+                        ((existing_by_slug.get(spec.inherit_context_from).config_json or {}).get("context") or {})
+                        if spec.inherit_context_from and existing_by_slug.get(spec.inherit_context_from)
+                        else None
+                    ),
+                )
+            },
             share_config=DEFAULT_SHARE_CONFIG.copy(),
             enabled=True,
             config_version=spec.config_version,

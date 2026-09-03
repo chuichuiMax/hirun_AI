@@ -138,6 +138,11 @@ func (s *Service) renameRow(ctx context.Context, id, title string) (TemplateRow,
 	return t, err
 }
 
+func (s *Service) deleteRow(ctx context.Context, id string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM "templates" WHERE id = $1`, id)
+	return err
+}
+
 // --- collections ---------------------------------------------------------
 
 type collectionRow struct {

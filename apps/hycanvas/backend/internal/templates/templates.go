@@ -212,9 +212,11 @@ func (s *Service) List(ctx context.Context, userID string, q TemplateQuery, work
 	// then restore their true visibility in the response.
 	var pool []Template
 	trueVis := map[string]string{}
+	trueWorkspace := map[string]*string{}
 	for _, r := range rows {
 		t := rowToTemplate(r)
 		trueVis[t.ID] = t.Visibility
+		trueWorkspace[t.ID] = t.WorkspaceID
 		t.Visibility = "public"
 		t.WorkspaceID = nil
 		pool = append(pool, t)
@@ -230,6 +232,7 @@ func (s *Service) List(ctx context.Context, userID string, q TemplateQuery, work
 	for _, t := range ranked {
 		if v, ok := trueVis[t.ID]; ok {
 			t.Visibility = v
+			t.WorkspaceID = trueWorkspace[t.ID]
 		}
 		out = append(out, t)
 	}
@@ -470,6 +473,34 @@ func (s *Service) Rename(ctx context.Context, userID, templateID, title string) 
 		return Template{}, err
 	}
 	return rowToTemplate(updated), nil
+}
+
+// Delete permanently removes a mutable custom template. Built-in seed
+// templates are immutable and cannot be deleted.
+func (s *Service) Delete(ctx context.Context, userID, templateID string) error {
+	if _, ok := findSeed(templateID); ok {
+		return ErrForbidden
+	}
+	row, err := s.getRow(ctx, templateID)
+	if err != nil {
+		return err
+	}
+	switch row.Visibility {
+	case "private":
+		if row.OwnerID != userID {
+			return ErrForbidden
+		}
+	case "workspace":
+		if row.WorkspaceID == nil {
+			return ErrBadRequest
+		}
+		if err := s.access.AssertMember(ctx, userID, *row.WorkspaceID, "member"); err != nil {
+			return ErrForbidden
+		}
+	default:
+		return ErrForbidden
+	}
+	return s.deleteRow(ctx, templateID)
 }
 
 // --- collections (FR-3) --------------------------------------------------

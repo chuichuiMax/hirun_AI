@@ -24,6 +24,11 @@ DEFAULT_CONTRACTS = {
     "CollectMissingEvidenceInputV1",
     "CollectMissingEvidenceInputV2",
     "CollectSelectedStrategyEvidenceInputV1",
+    "CollectBusinessRuleEvidenceInputV1",
+    "CollectPriceEvidenceInputV1",
+    "CollectComplianceEvidenceInputV1",
+    "CollectViralCandidatesInputV1",
+    "SelectViralReferenceInputV1",
     "RankFormulaCandidatesInputV1",
     "RankFormulaCandidatesInputV2",
     "CollectStrategyProductEvidenceInputV1",
@@ -43,6 +48,11 @@ DEFAULT_CONTRACTS = {
     "DirectionSelectionResultV1",
     "StrategyExplanationResultV1",
     "EvidenceCollectionResultV1",
+    "BusinessRuleEvidenceCollectionResultV1",
+    "PriceEvidenceCollectionResultV1",
+    "ComplianceEvidenceCollectionResultV1",
+    "ViralCandidateCollectionResultV1",
+    "ViralReferenceSelectionResultV1",
     "ProductEvidenceCollectionResultV1",
     "FormulaRankingResultV1",
     "TitleCandidatesResultV1",
@@ -118,8 +128,8 @@ class WorkflowDefinitionPolicy:
 
     @classmethod
     def _validate_v3_nodes(cls, node_by_id: dict[str, dict[str, Any]], catalog: WorkflowCatalog | None) -> None:
-        if len(node_by_id) != 21:
-            raise ValueError("V3 内容与封面工作流必须声明 21 个节点")
+        if len(node_by_id) != 26:
+            raise ValueError("V3.7 内容与封面工作流必须声明 26 个节点")
         missing_gates = sorted(V3_HUMAN_GATE_IDS - set(node_by_id))
         if missing_gates:
             raise ValueError(f"V3 工作流缺少必选人工关口: {', '.join(missing_gates)}")
@@ -155,11 +165,20 @@ class WorkflowDefinitionPolicy:
             ("semantic_review", "revise_if_needed"),
             ("select_creation_strategy", "lock_creation_strategy"),
             ("lock_creation_strategy", "load_formula_lexicons"),
-            ("load_formula_lexicons", "collect_missing_evidence"),
+            ("load_formula_lexicons", "collect_business_rule_evidence"),
+            ("load_formula_lexicons", "collect_price_evidence"),
+            ("load_formula_lexicons", "collect_compliance_evidence"),
+            ("load_formula_lexicons", "collect_viral_candidates"),
+            ("collect_business_rule_evidence", "select_viral_reference"),
+            ("collect_price_evidence", "select_viral_reference"),
+            ("collect_compliance_evidence", "select_viral_reference"),
+            ("collect_viral_candidates", "select_viral_reference"),
+            ("select_viral_reference", "merge_research_evidence"),
+            ("merge_research_evidence", "confirm_high_risk_facts"),
             ("freeze_evidence_bundle", "generate_content"),
         }
         if not required <= edge_set:
-            raise ValueError("V3 工作流缺少策略锁定、单次按需检索或固定回修链路")
+            raise ValueError("V3.7 工作流缺少策略锁定、并发调研汇总、爆款选择或固定回修链路")
         forbidden = {
             ("deterministic_validate", "semantic_review"),
             ("revise_if_needed", "human_content_approval"),

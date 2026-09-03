@@ -10,10 +10,11 @@ LEGACY_PLATFORM_WORKFLOW_V3_IDS = frozenset(
         "content-workflow-enterprise-v3.3",
         "content-workflow-enterprise-v3.4",
         "content-workflow-enterprise-v3.5",
+        "content-workflow-enterprise-v3.6",
     }
 )
 LEGACY_PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.5"
-PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.6"
+PLATFORM_WORKFLOW_V3_ID = "content-workflow-enterprise-v3.7"
 
 
 def _fixed(node_id: str) -> dict[str, Any]:
@@ -43,9 +44,12 @@ def _agent(
     max_retrieval_rounds: int = 0,
     max_knowledge_bases: int = 0,
     max_chunks_per_knowledge_base: int = 0,
+    max_chars_per_knowledge_chunk: int = 0,
     token_budget: int = 8000,
     timeout_seconds: int = 120,
     max_execution_steps: int = 12,
+    timeout_seconds: int = 120,
+    parallel_group: str | None = None,
 ) -> dict[str, Any]:
     node = {
         "id": node_id,
@@ -60,6 +64,8 @@ def _agent(
         "knowledge_policy": knowledge_policy,
         "timeout_seconds": timeout_seconds,
         "max_execution_steps": max_execution_steps,
+        "timeout_seconds": timeout_seconds,
+        "max_execution_steps": 12,
         "max_tool_calls": max_tool_calls,
         "token_budget": token_budget,
         "result_tool_name": "submit_content_node_result",
@@ -70,8 +76,11 @@ def _agent(
                 "max_retrieval_rounds": max_retrieval_rounds,
                 "max_knowledge_bases": max_knowledge_bases,
                 "max_chunks_per_knowledge_base": max_chunks_per_knowledge_base,
+                "max_chars_per_knowledge_chunk": max_chars_per_knowledge_chunk,
             }
         )
+    if parallel_group:
+        node["parallel_group"] = parallel_group
     return node
 
 
@@ -97,11 +106,11 @@ WORKFLOW_V3_NODES = [
     _fixed("lock_creation_strategy"),
     _fixed("load_formula_lexicons"),
     _agent(
-        "collect_missing_evidence",
-        "content-research-agent",
-        "content-evidence-researcher",
-        "CollectSelectedStrategyEvidenceInputV1",
-        "EvidenceCollectionResultV1",
+        "collect_business_rule_evidence",
+        "content-business-rule-research-agent",
+        "content-business-rule-researcher",
+        "CollectBusinessRuleEvidenceInputV1",
+        "BusinessRuleEvidenceCollectionResultV1",
         state_inputs=(
             "rule_version_id",
             "content_brief",
@@ -109,16 +118,108 @@ WORKFLOW_V3_NODES = [
             "strategy_snapshot",
             "evidence_gap_analysis",
             "evidence_bundle",
+            "runtime_config_snapshot",
         ),
         knowledge_policy="agent_scope",
-        max_tool_calls=6,
-        max_retrieval_rounds=4,
-        max_knowledge_bases=5,
-        max_chunks_per_knowledge_base=6,
-        token_budget=14000,
-        timeout_seconds=180,
-        max_execution_steps=40,
+        max_tool_calls=4,
+        max_retrieval_rounds=2,
+        max_knowledge_bases=2,
+        max_chunks_per_knowledge_base=4,
+        max_chars_per_knowledge_chunk=2400,
+        token_budget=6000,
+        timeout_seconds=125,
+        parallel_group="research",
     ),
+    _agent(
+        "collect_price_evidence",
+        "content-price-research-agent",
+        "content-price-researcher",
+        "CollectPriceEvidenceInputV1",
+        "PriceEvidenceCollectionResultV1",
+        state_inputs=(
+            "content_brief",
+            "strategy_snapshot",
+            "evidence_gap_analysis",
+            "runtime_config_snapshot",
+        ),
+        knowledge_policy="agent_scope",
+        max_tool_calls=3,
+        max_retrieval_rounds=1,
+        max_knowledge_bases=1,
+        max_chunks_per_knowledge_base=4,
+        max_chars_per_knowledge_chunk=2400,
+        token_budget=5000,
+        timeout_seconds=125,
+        parallel_group="research",
+    ),
+    _agent(
+        "collect_compliance_evidence",
+        "content-compliance-research-agent",
+        "content-compliance-researcher",
+        "CollectComplianceEvidenceInputV1",
+        "ComplianceEvidenceCollectionResultV1",
+        state_inputs=(
+            "rule_version_id",
+            "content_brief",
+            "strategy_selection",
+            "strategy_snapshot",
+            "evidence_gap_analysis",
+            "evidence_bundle",
+            "runtime_config_snapshot",
+        ),
+        knowledge_policy="agent_scope",
+        max_tool_calls=4,
+        max_retrieval_rounds=1,
+        max_knowledge_bases=1,
+        max_chunks_per_knowledge_base=4,
+        max_chars_per_knowledge_chunk=2400,
+        token_budget=5000,
+        timeout_seconds=100,
+        parallel_group="research",
+    ),
+    _agent(
+        "collect_viral_candidates",
+        "content-viral-candidate-agent",
+        "viral-candidate-researcher",
+        "CollectViralCandidatesInputV1",
+        "ViralCandidateCollectionResultV1",
+        state_inputs=(
+            "rule_version_id",
+            "content_brief",
+            "strategy_selection",
+            "strategy_snapshot",
+            "evidence_gap_analysis",
+            "evidence_bundle",
+            "runtime_config_snapshot",
+        ),
+        knowledge_policy="agent_scope",
+        max_execution_steps=40,
+        max_tool_calls=3,
+        max_retrieval_rounds=1,
+        max_knowledge_bases=1,
+        max_chunks_per_knowledge_base=2,
+        max_chars_per_knowledge_chunk=800,
+        token_budget=4000,
+        timeout_seconds=140,
+        parallel_group="research",
+    ),
+    _agent(
+        "select_viral_reference",
+        "content-viral-selection-agent",
+        "viral-reference-selector",
+        "SelectViralReferenceInputV1",
+        "ViralReferenceSelectionResultV1",
+        state_inputs=(
+            "content_brief",
+            "strategy_snapshot",
+            "runtime_config_snapshot",
+            "viral_candidate_collection",
+        ),
+        max_tool_calls=1,
+        token_budget=8000,
+        timeout_seconds=75,
+    ),
+    _fixed("merge_research_evidence"),
     _human("confirm_high_risk_facts", "high_risk_facts"),
     _fixed("freeze_evidence_bundle"),
     _agent(
@@ -128,6 +229,8 @@ WORKFLOW_V3_NODES = [
             "content-title-generator",
             "content-outline-builder",
             "content-body-generator",
+            "viral-structure-rewriter",
+            "viral-layout-formatter",
             "content-human-expression",
         ),
         "GenerateContentInputV1",
@@ -139,11 +242,16 @@ WORKFLOW_V3_NODES = [
             "evidence_bundle",
             "channel_profile",
             "persona_profile",
+            "runtime_config_snapshot",
         ),
-        optional_state_inputs=("validation_report", "review_report", "selected_title", "content_outline", "content_draft"),
+        optional_state_inputs=(
+            "validation_report",
+            "review_report",
+            "selected_title",
+            "content_outline",
+            "content_draft",
+        ),
         token_budget=12000,
-        timeout_seconds=240,
-        max_execution_steps=30,
     ),
     _fixed("adapt_to_channel"),
     _fixed("deterministic_validate"),
@@ -226,13 +334,43 @@ WORKFLOW_V3 = {
     "runtime_limits": {"max_steps": 60, "max_revision_attempts": 3},
     "nodes": WORKFLOW_V3_NODES,
     "edges": [
-        [WORKFLOW_V3_NODES[index]["id"], WORKFLOW_V3_NODES[index + 1]["id"]]
-        for index in range(len(WORKFLOW_V3_NODES) - 1)
-        if (WORKFLOW_V3_NODES[index]["id"], WORKFLOW_V3_NODES[index + 1]["id"])
-        not in {("deterministic_validate", "semantic_review"), ("revise_if_needed", "human_content_approval")}
-    ]
-    + [
+        ["compile_runtime_snapshot", "ingest_real_materials"],
+        ["ingest_real_materials", "normalize_evidence"],
+        ["normalize_evidence", "select_creation_strategy"],
+        ["select_creation_strategy", "lock_creation_strategy"],
+        ["lock_creation_strategy", "load_formula_lexicons"],
+        *[
+            ["load_formula_lexicons", node_id]
+            for node_id in (
+                "collect_business_rule_evidence",
+                "collect_price_evidence",
+                "collect_compliance_evidence",
+                "collect_viral_candidates",
+            )
+        ],
+        *[
+            [node_id, "select_viral_reference"]
+            for node_id in (
+                "collect_business_rule_evidence",
+                "collect_price_evidence",
+                "collect_compliance_evidence",
+                "collect_viral_candidates",
+            )
+        ],
+        ["select_viral_reference", "merge_research_evidence"],
+        ["merge_research_evidence", "confirm_high_risk_facts"],
+        ["confirm_high_risk_facts", "freeze_evidence_bundle"],
+        ["freeze_evidence_bundle", "generate_content"],
+        ["generate_content", "adapt_to_channel"],
+        ["adapt_to_channel", "deterministic_validate"],
         ["deterministic_validate", "revise_if_needed"],
+        ["semantic_review", "revise_if_needed"],
+        ["human_content_approval", "plan_visuals"],
+        ["plan_visuals", "submit_cover_job"],
+        ["submit_cover_job", "wait_cover_job"],
+        ["wait_cover_job", "visual_review"],
+        ["visual_review", "select_cover"],
+        ["select_cover", "save_artifact_snapshot"],
     ],
     "revision_routes": [
         {

@@ -171,6 +171,27 @@ func TestFillTextFieldsEnforcesRequiredAndMaxChars(t *testing.T) {
 	}
 }
 
+func TestFillTextFieldsPreservesLabelText(t *testing.T) {
+	file := map[string]any{
+		"pages": []any{map[string]any{"children": []any{map[string]any{
+			"id": "label-node", "type": "text",
+			"content": []any{map[string]any{"runs": []any{map[string]any{"text": "VILLA INTERIOR DESIGN"}}}},
+		}}}},
+	}
+	fields := []any{map[string]any{
+		"nodeId": "label-node", "kind": "text", "label": "英文装饰标签", "semanticRole": "label",
+		"constraints": map[string]any{"required": true, "maxChars": 4.0},
+	}}
+	if err := fillTextFields(file, fields, map[string]string{}); err != nil {
+		t.Fatalf("label field should not require a replacement: %v", err)
+	}
+	node := asObj(asArr(asObj(asArr(file["pages"])[0])["children"])[0])
+	run := asObj(asArr(asObj(asArr(node["content"])[0])["runs"])[0])
+	if asStr(run["text"]) != "VILLA INTERIOR DESIGN" {
+		t.Fatalf("label text was replaced: %+v", run)
+	}
+}
+
 func TestFillImageFieldsReplacesDeclaredNode(t *testing.T) {
 	file := map[string]any{
 		"pages": []any{map[string]any{"children": []any{map[string]any{
@@ -404,6 +425,20 @@ func TestTemplates_DB(t *testing.T) {
 	if _, err := svc.Rename(ctx, other.ID, saved.ID, "Unauthorized"); err != ErrForbidden {
 		t.Fatalf("non-owner should not rename a private template, got %v", err)
 	}
+	if err := svc.Delete(ctx, other.ID, saved.ID); err != ErrForbidden {
+		t.Fatalf("non-owner should not delete a private template, got %v", err)
+	}
+	if err := svc.Delete(ctx, owner.ID, saved.ID); err != nil {
+		t.Fatalf("owner should delete a private template: %v", err)
+	}
+	if _, err := svc.Get(ctx, owner.ID, saved.ID); err != ErrNotFound {
+		t.Fatalf("deleted template should no longer exist, got %v", err)
+	}
+	if len(seedEntries) > 0 {
+		if err := svc.Delete(ctx, owner.ID, seedEntries[0].toTemplate().ID); err != ErrForbidden {
+			t.Fatalf("built-in template should not be deletable, got %v", err)
+		}
+	}
 
 	// Collections: create, assign, list, delete.
 	col, err := svc.CreateCollection(ctx, owner.ID, ws.ID, "Brand")
@@ -415,6 +450,20 @@ func TestTemplates_DB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("save workspace template: %v", err)
 	}
+	workspaceTemplates, err := svc.List(ctx, owner.ID, TemplateQuery{}, ws.ID, "")
+	if err != nil {
+		t.Fatalf("list workspace templates: %v", err)
+	}
+	var listedWorkspaceTemplate *Template
+	for i := range workspaceTemplates {
+		if workspaceTemplates[i].ID == wsTmpl.ID {
+			listedWorkspaceTemplate = &workspaceTemplates[i]
+			break
+		}
+	}
+	if listedWorkspaceTemplate == nil || listedWorkspaceTemplate.Visibility != "team" || listedWorkspaceTemplate.WorkspaceID == nil || *listedWorkspaceTemplate.WorkspaceID != ws.ID {
+		t.Fatalf("workspace template scope metadata missing from list: %+v", listedWorkspaceTemplate)
+	}
 	if _, err := svc.AssignCollection(ctx, owner.ID, wsTmpl.ID, col.ID); err != nil {
 		t.Fatalf("AssignCollection: %v", err)
 	}
@@ -424,5 +473,11 @@ func TestTemplates_DB(t *testing.T) {
 	}
 	if err := svc.DeleteCollection(ctx, owner.ID, col.ID); err != nil {
 		t.Fatalf("DeleteCollection: %v", err)
+	}
+	if err := svc.Delete(ctx, other.ID, wsTmpl.ID); err != ErrForbidden {
+		t.Fatalf("non-member should not delete a workspace template, got %v", err)
+	}
+	if err := svc.Delete(ctx, owner.ID, wsTmpl.ID); err != nil {
+		t.Fatalf("workspace member should delete a workspace template: %v", err)
 	}
 }

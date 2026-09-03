@@ -63,6 +63,7 @@ const creation = reactive({
   industry_template_id: '',
   service_entry: '装修家居',
   mode: window.matchMedia('(max-width: 800px)').matches ? 'quick' : 'quick',
+  creation_mode: 'original',
   content_goal: '',
   name: ''
 })
@@ -180,7 +181,7 @@ const suggestedHyCanvasValue = (field) => {
 
 const initializeHyCanvasFields = () => {
   Object.keys(hycanvasFields).forEach((key) => delete hycanvasFields[key])
-  for (const field of selectedHyCanvasTemplate.value?.fillable_fields?.filter((item) => item.kind === 'text') || []) {
+  for (const field of selectedHyCanvasTemplate.value?.fillable_fields?.filter((item) => item.kind === 'text' && item.semanticRole !== 'label') || []) {
     hycanvasFields[field.label] = suggestedHyCanvasValue(field)
   }
 }
@@ -1235,8 +1236,10 @@ const buildBrief = () => ({
       : {})
   },
   visual_material: !isReviewNotes.value && selectedImageItemId.value
+  form_values: { ...formValues },
+  visual_material: selectedImageItemId.value || selectedHyCanvasTemplateId.value
     ? {
-        image_item_id: selectedImageItemId.value,
+        image_item_id: selectedImageItemId.value || null,
         poster_template_id: null,
         hycanvas_template_id: selectedHyCanvasTemplateId.value
       }
@@ -1297,6 +1300,13 @@ const compileBrief = async () => {
       message.warning('请选择一个 HyCanvas 小红书模板')
       return
     }
+  if (!selectedImageItemId.value) {
+    message.warning('请选择一张图库图片作为封面主图')
+    return
+  }
+  if (!selectedHyCanvasTemplateId.value) {
+    message.warning('请选择一个 HyCanvas 小红书模板')
+    return
   }
   try {
     window.clearTimeout(draftSaveTimer)
@@ -1604,6 +1614,10 @@ const openVersions = async () => {
               <div class="mode-row">
                 <span class="mode-badge">{{ isQuickMode ? '简化版' : '专业版' }}</span>
                 <span>{{ studioEntryTitle }}</span>
+                <span class="mode-badge">
+                  {{ store.task?.runtime_config_snapshot?.creation_mode === 'viral_rewrite' ? '爆款仿写' : '原创模式' }}
+                </span>
+                <span>{{ store.template?.name }}</span>
                 <small v-if="saveStatusLabel" :class="{ 'save-error': store.saveStatus === 'error' }">{{ saveStatusLabel }}</small>
               </div>
               <div class="dynamic-form">
@@ -1686,6 +1700,7 @@ const openVersions = async () => {
               <div>
                 <span class="section-kicker">视觉素材</span>
                 <h3>选择图库与封面模板</h3>
+                <p>图库图片将作为 HyCanvas 封面主图；内容生成并审核通过后，系统会按所选模板生成可继续编辑的封面。</p>
                 <p>未选择图库原图时跳过封面生成，不影响标题和正文；选择图库和 HyCanvas 模板后才会生成封面。</p>
               </div>
               <a-button @click="router.push('/materials/images')">
@@ -1698,6 +1713,8 @@ const openVersions = async () => {
                 <div class="material-selector-title">
                   <div><Image :size="18" /><strong>选择图库图片</strong><em>可选 · 单选</em></div>
                   <small>可从当前账号的图库中选择一张已启用且未被其他内容占用的图片；不选择也可以进入内容生产。</small>
+                  <div><Image :size="18" /><strong>选择图库图片</strong><em>必选 · 单选</em></div>
+                  <small>从当前账号的图库中选择一张已启用图片，作为 HyCanvas 封面主图。</small>
                 </div>
                 <div v-if="rootMaterialGalleries.length" class="gallery-folder-grid" aria-label="素材图库">
                   <button
@@ -2165,7 +2182,7 @@ const openVersions = async () => {
                 <a-empty v-else description="HyCanvas 尚未配置或暂无小红书模板" />
               </a-spin>
               <div v-if="selectedHyCanvasTemplate" class="hycanvas-fields">
-                <label v-for="field in selectedHyCanvasTemplate.fillable_fields.filter((item) => item.kind === 'text')" :key="field.nodeId">
+                <label v-for="field in selectedHyCanvasTemplate.fillable_fields.filter((item) => item.kind === 'text' && item.semanticRole !== 'label')" :key="field.nodeId">
                   <span>{{ field.label }}</span>
                   <a-textarea v-model:value="hycanvasFields[field.label]" :rows="2" :maxlength="field.constraints?.maxChars" :show-count="Boolean(field.constraints?.maxChars)" :placeholder="field.hint" />
                 </label>

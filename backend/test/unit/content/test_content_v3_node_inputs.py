@@ -67,6 +67,7 @@ def test_visual_plan_input_does_not_expose_material_names_as_image_evidence():
     media = payload.media_evidence_items[0]
     assert media == {"id": "asset-1", "selected_for_cover": True}
 
+
 EVIDENCE_BUNDLE = {
     "id": "bundle-1",
     "version": 2,
@@ -89,6 +90,7 @@ PRODUCT_EVIDENCE_PACK["pack_hash"] = hashlib.sha256(
 def _state() -> dict:
     return {
         "content_brief": {"brand": {"name": "ContentFlow"}},
+        "runtime_config_snapshot": {"creation_mode": "original"},
         "strategy_snapshot": deepcopy(STRATEGY),
         "formula_lexicon_bundle": {
             "required": True,
@@ -169,9 +171,15 @@ def test_unified_generation_input_exposes_locked_strategy_and_previous_validatio
         "status": "blocked",
         "checks": [{"code": "FACT_CHECK_FAILED", "status": "blocked", "message": "事实不一致"}],
     }
+    state["review_report"] = {
+        "status": "blocked",
+        "checks": [{"code": "TITLE_FACT_UNSUPPORTED", "location": "title"}],
+    }
     node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "generate_content")
 
     assembly = ContentNodeInputAssembler.build(node=node, state=state)
+
+    assert assembly.payload["runtime_config_snapshot"]["creation_mode"] == "original"
 
     assert assembly.payload["strategy_snapshot"]["title_formula"]["code"] == "T03"
     assert assembly.payload["strategy_snapshot"]["body_formula"]["code"] == "C03"
@@ -179,6 +187,9 @@ def test_unified_generation_input_exposes_locked_strategy_and_previous_validatio
     assert assembly.payload["review_report"]["status"] == "blocked"
     assert assembly.payload["selected_title"]["text"] == "锁定标题"
     assert assembly.payload["content_outline"]["body_formula_code"] == "C03"
+    assert assembly.payload["content_draft"]["body"] == "正文"
+    assert assembly.payload["review_report"]["checks"][0]["code"] == "TITLE_FACT_UNSUPPORTED"
+    assert assembly.payload["selected_title"]["text"] == "锁定标题"
     assert assembly.payload["content_draft"]["body"] == "正文"
 
 
@@ -308,6 +319,11 @@ def test_input_contract_registry_contains_every_agent_payload_contract():
         "CollectMissingEvidenceInputV1",
         "CollectMissingEvidenceInputV2",
         "CollectSelectedStrategyEvidenceInputV1",
+        "CollectBusinessRuleEvidenceInputV1",
+        "CollectPriceEvidenceInputV1",
+        "CollectComplianceEvidenceInputV1",
+        "CollectViralCandidatesInputV1",
+        "SelectViralReferenceInputV1",
         "RankFormulaCandidatesInputV1",
         "RankFormulaCandidatesInputV2",
         "CollectStrategyProductEvidenceInputV1",
@@ -382,6 +398,18 @@ def test_every_published_agent_node_can_assemble_its_declared_payload():
             "missing_variable_codes": [],
             "missing_evidence_types": [],
         },
+        "business_rule_evidence_collection": {
+            "evidence_items": [],
+            "citations": [],
+            "unresolved_questions": [],
+        },
+        "price_evidence_collection": {"evidence_items": [], "citations": [], "unresolved_questions": []},
+        "compliance_evidence_collection": {
+            "evidence_items": [],
+            "citations": [],
+            "unresolved_questions": [],
+        },
+        "viral_candidate_collection": {"evidence_items": [], "citations": [], "unresolved_questions": []},
         "strategy_explanation": {"locked_group_id": "group-1"},
         "product_material_requirements": {
             "strategy_snapshot_hash": STRATEGY["snapshot_hash"],
@@ -416,8 +444,14 @@ def test_title_selection_input_requires_a_selectable_candidate():
         "id": "select_title",
         "input_contract": "SelectTitleInputV1",
         "state_inputs": [
-            "content_brief", "strategy_snapshot", "product_evidence_pack", "evidence_bundle",
-            "channel_profile", "persona_profile", "title_candidates", "title_validation_report",
+            "content_brief",
+            "strategy_snapshot",
+            "product_evidence_pack",
+            "evidence_bundle",
+            "channel_profile",
+            "persona_profile",
+            "title_candidates",
+            "title_validation_report",
         ],
     }
     state = {**_state(), "channel_profile": {}, "persona_profile": {}}

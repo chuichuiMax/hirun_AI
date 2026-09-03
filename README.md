@@ -155,6 +155,14 @@ openssl rand -hex 32
 docker compose up -d --build
 ```
 
+首次启动或 `Dockerfile.dev` 依赖变化时才需要 `--build`；日常启动使用
+`docker compose up -d` 即可。
+
+本地 Compose 中 HyCanvas 使用热更新开发服务：Go API 位于
+`http://127.0.0.1:8005`，Next.js 前端位于 `http://127.0.0.1:3000`。
+日常修改 `apps/hycanvas` 下的前端、Go、共享包或模板源码后无需重新构建
+镜像；生产环境的 `docker-compose.prod.yml` 仍使用单二进制镜像。
+
 查看启动状态：
 
 ```bash

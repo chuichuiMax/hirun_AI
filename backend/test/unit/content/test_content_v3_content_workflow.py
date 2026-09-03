@@ -27,6 +27,7 @@ from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
     ("code", "expected"),
     [
         ("TITLE_TOO_LONG", "TITLE_VALIDATION_FAILED"),
+        ("TITLE_FACT_UNSUPPORTED", "TITLE_VALIDATION_FAILED"),
         ("PERSONA_TONE_MISMATCH", "PERSONA_STYLE_FAILED"),
         ("MECHANICAL_META_EXPRESSION", "PERSONA_STYLE_FAILED"),
         ("EVIDENCE_REFERENCE_FORBIDDEN", "BODY_EVIDENCE_FAILED"),

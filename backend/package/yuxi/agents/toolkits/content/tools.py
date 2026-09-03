@@ -137,6 +137,8 @@ def _hycanvas_template_fields(
             continue
         label = str(field["label"])
         role = str(field.get("semanticRole") or "")
+        if role == "label":
+            continue
         value = str(sources.get(role) or "").strip()
         if not role:
             if "副标题" in label:

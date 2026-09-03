@@ -58,6 +58,7 @@ class AgentDelegationRequest:
     max_retrieval_rounds: int = 0
     max_knowledge_bases: int = 0
     max_chunks_per_knowledge_base: int = 0
+    max_chars_per_knowledge_chunk: int = 0
     prohibited_actions: tuple[str, ...] = ()
     cancel_event: asyncio.Event | None = field(default=None, compare=False)
 
@@ -98,6 +99,9 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
             "max_execution_steps": request.max_execution_steps,
             "max_tool_calls": request.max_tool_calls,
             "token_budget": request.token_budget,
+            "model_call_timeout_seconds": getattr(context, "model_call_timeout_seconds", None),
+            "model_retry_times": getattr(context, "model_retry_times", None),
+            "max_chars_per_knowledge_chunk": request.max_chars_per_knowledge_chunk,
         },
         "output_contract": request.output_contract,
         "input_contract": request.input_contract,
@@ -108,8 +112,22 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
 
 
 class AgentDelegationService:
-    KNOWLEDGE_NODE_IDS = {"collect_missing_evidence", "collect_strategy_product_evidence", "semantic_review"}
+    KNOWLEDGE_NODE_IDS = {
+        "collect_missing_evidence",
+        "collect_strategy_product_evidence",
+        "collect_business_rule_evidence",
+        "collect_price_evidence",
+        "collect_compliance_evidence",
+        "collect_viral_candidates",
+        "semantic_review",
+    }
     KNOWLEDGE_TOOL_NAMES = {"list_kbs", "get_mindmap", "query_kb", "open_kb_document", "find_kb_document"}
+    RESEARCH_KNOWLEDGE_NAMES = {
+        "collect_business_rule_evidence": {"品牌知识库", "平台规则"},
+        "collect_price_evidence": {"价格库"},
+        "collect_compliance_evidence": {"封禁词库"},
+        "collect_viral_candidates": {"爆款库"},
+    }
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -147,6 +165,7 @@ class AgentDelegationService:
         context.required_skills = list(request.required_skills)
         self._apply_node_constraints(context, request)
         await prepare_agent_runtime_context(context, context_schema=backend.context_schema)
+        self._restrict_research_knowledge_scope(context, request.node_run.node_id)
         self._apply_knowledge_tool_scope(context)
         activated_scope = set(getattr(context, "_required_skill_closure", []) or [])
         if not set(request.required_skills).issubset(activated_scope):
@@ -188,6 +207,7 @@ class AgentDelegationService:
         context._content_max_retrieval_rounds = request.max_retrieval_rounds
         context._content_max_knowledge_bases = request.max_knowledge_bases
         context._content_max_chunks_per_knowledge_base = request.max_chunks_per_knowledge_base
+        context._content_max_chars_per_knowledge_chunk = request.max_chars_per_knowledge_chunk
 
         child_run = await self.run_repo.create_run(
             run_id=child_run_id,
@@ -349,6 +369,19 @@ class AgentDelegationService:
         context._required_skill_tools = [
             name for name in getattr(context, "_required_skill_tools", []) or [] if name not in cls.KNOWLEDGE_TOOL_NAMES
         ]
+
+    @classmethod
+    def _restrict_research_knowledge_scope(cls, context, node_id: str) -> None:
+        allowed_names = cls.RESEARCH_KNOWLEDGE_NAMES.get(node_id)
+        if allowed_names is None:
+            return
+        visible = [
+            item
+            for item in (getattr(context, "_visible_knowledge_bases", []) or [])
+            if isinstance(item, dict) and item.get("name") in allowed_names
+        ]
+        context._visible_knowledge_bases = visible
+        context.knowledges = [str(item["kb_id"]) for item in visible if item.get("kb_id")]
 
     @staticmethod
     async def _invoke_graph(

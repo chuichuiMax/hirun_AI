@@ -203,6 +203,160 @@ def test_creation_research_viral_example_is_style_reference_only():
         validate_content_node_result("EvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
 
 
+def _selected_viral_reference() -> dict:
+    return {
+        "id": "viral-reference",
+        "variable_codes": [],
+        "value": "抽象结构参考",
+        "source_type": "knowledge_base",
+        "source_id": "viral-source-1",
+        "source_version": "1",
+        "verified_status": "retrieved",
+        "allowed_usage": ["style_reference"],
+        "risk_level": "normal",
+        "source_hash": "viral-hash",
+        "metadata": {
+            "material_type": "viral_example",
+            "usage_mode": "structure_reference_only",
+            "selected_reference": True,
+            "selection_reason": "行业、渠道和正文结构一致",
+            "selection_basis": {
+                "input_variable_paths": ["business_variables.project_type", "business_variables.owner_pain"],
+                "matched_dimensions": {"industry": "matched", "pain": "matched"},
+                "structure_fillability": {
+                    "required_variable_kinds": ["pain", "solution"],
+                    "available_variable_paths": [
+                        "business_variables.owner_pain",
+                        "business_variables.advantages",
+                    ],
+                    "unfilled_required_slots": [],
+                },
+                "candidate_comparison": [
+                    {"source_id": "viral-source-1", "decision": "selected", "reason": "结构可填充"}
+                ],
+            },
+            "reference_blueprint": {
+                "title_pattern": "痛点加结果悬念",
+                "title_slot_sequence": ["audience", "pain", "solution"],
+                "opening_hook": "具体用户场景切入",
+                "content_block_sequence": [
+                    {"order": 1, "function": "pain", "presentation": "short_paragraph"},
+                    {"order": 2, "function": "solution", "presentation": "narrative"},
+                ],
+                "narrative_structure": ["痛点", "原因", "方案", "结果"],
+                "paragraph_rhythm": "短段落",
+                "list_pattern": {"type": "none", "position": [], "observed_item_count": 0},
+                "emoji_pattern": {"enabled": False, "positions": [], "functions": []},
+                "interaction_style": "结尾邀请讨论",
+            },
+        },
+    }
+
+
+def test_viral_rewrite_requires_exactly_one_selected_reference_with_blueprint():
+    context = replace(DOMAIN_CONTEXT, creation_mode="viral_rewrite")
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+
+    with pytest.raises(ContractDomainValidationError, match="必须且只能选择一篇"):
+        validate_content_node_result("EvidenceCollectionResultV1", payload, context)
+
+    payload["evidence_items"].append(_selected_viral_reference())
+    result = validate_content_node_result("EvidenceCollectionResultV1", payload, context)
+    assert result.evidence_items[1].metadata["selected_reference"] is True
+
+    payload["evidence_items"].append({**_selected_viral_reference(), "id": "viral-reference-2"})
+    with pytest.raises(ContractDomainValidationError, match="必须且只能选择一篇"):
+        validate_content_node_result("EvidenceCollectionResultV1", payload, context)
+
+
+def test_original_mode_rejects_selected_viral_reference():
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+    payload["evidence_items"].append(_selected_viral_reference())
+
+    with pytest.raises(ContractDomainValidationError, match="原创模式不得选用"):
+        validate_content_node_result("EvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
+
+
+def test_viral_rewrite_rejects_reference_not_selected_from_current_variables():
+    context = replace(DOMAIN_CONTEXT, creation_mode="viral_rewrite")
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+    reference = _selected_viral_reference()
+    reference["metadata"].pop("selection_basis")
+    payload["evidence_items"].append(reference)
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("EvidenceCollectionResultV1", payload, context)
+
+    assert exc_info.value.code == "viral_reference_selection_invalid"
+
+
+def test_viral_rewrite_rejects_unfillable_or_untyped_reference_structure():
+    context = replace(DOMAIN_CONTEXT, creation_mode="viral_rewrite")
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+    reference = _selected_viral_reference()
+    reference["metadata"]["selection_basis"]["structure_fillability"]["unfilled_required_slots"] = ["itemized_price"]
+    payload["evidence_items"].append(reference)
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("EvidenceCollectionResultV1", payload, context)
+
+    assert exc_info.value.code == "viral_reference_unfillable"
+
+    reference["metadata"]["selection_basis"]["structure_fillability"]["unfilled_required_slots"] = []
+    reference["metadata"]["reference_blueprint"]["list_pattern"] = {"type": "fixed-four"}
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("EvidenceCollectionResultV1", payload, context)
+
+    assert exc_info.value.code == "viral_reference_blueprint_invalid"
+
+
+def test_parallel_research_contracts_reject_cross_domain_evidence():
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+    payload["evidence_items"][0]["metadata"]["material_type"] = "price"
+    payload["evidence_items"][0]["risk_level"] = "high_risk"
+    validate_content_node_result("PriceEvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("BusinessRuleEvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
+    assert exc_info.value.code == "business_evidence_scope_invalid"
+
+    payload["evidence_items"][0]["metadata"] = {
+        "material_type": "platform_rule",
+        "rule_kind": "forbidden_replacement_map",
+    }
+    payload["evidence_items"][0]["risk_level"] = "sensitive"
+    validate_content_node_result("ComplianceEvidenceCollectionResultV1", payload, DOMAIN_CONTEXT)
+
+
+def test_viral_candidate_and_selection_contracts_keep_retrieval_and_selection_separate():
+    candidate = _selected_viral_reference()
+    candidate["metadata"].pop("selected_reference")
+    candidate["metadata"].pop("selection_reason")
+    candidate["metadata"].pop("selection_basis")
+    candidate["metadata"].pop("reference_blueprint")
+    candidates = {"evidence_items": [candidate], "citations": [candidate["source_id"]], "unresolved_questions": []}
+    validate_content_node_result("ViralCandidateCollectionResultV1", candidates, DOMAIN_CONTEXT)
+
+    selection = {
+        "selected_candidate_id": candidate["id"],
+        "selection_reason": "项目、场景和痛点匹配，结构可由当前事实填充",
+        "selection_basis": _selected_viral_reference()["metadata"]["selection_basis"],
+        "reference_blueprint": _selected_viral_reference()["metadata"]["reference_blueprint"],
+        "unresolved_questions": [],
+    }
+    context = replace(
+        DOMAIN_CONTEXT,
+        creation_mode="viral_rewrite",
+        viral_candidate_ids=frozenset({candidate["id"]}),
+    )
+    validate_content_node_result("ViralReferenceSelectionResultV1", selection, context)
+
+    selection["selected_candidate_id"] = "other-candidate"
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("ViralReferenceSelectionResultV1", selection, context)
+    assert exc_info.value.code == "unknown_id"
+
+
 def test_creation_research_price_accepts_knowledge_price_without_effective_date():
     payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
     payload["evidence_items"][0]["metadata"] = {
@@ -466,6 +620,19 @@ def test_creative_contracts_block_unsupported_numbers(contract_name, field_path,
     assert exc_info.value.code == "unsupported_number"
 
 
+def test_body_number_validation_ignores_line_leading_sequence_markers_only():
+    payload = deepcopy(VALID_PAYLOADS["ContentDraftResultV1"])
+    payload["body"] = "1. 第一项\n2、第二项\n3）第三项"
+
+    validate_content_node_result("ContentDraftResultV1", payload, DOMAIN_CONTEXT)
+
+    payload["body"] = "1. 第一项包含 99 元"
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("ContentDraftResultV1", payload, DOMAIN_CONTEXT)
+
+    assert exc_info.value.code == "unsupported_number"
+
+
 def test_common_agent_input_requires_all_trace_and_lock_fields():
     payload = {
         "task_id": "task",
@@ -558,9 +725,7 @@ async def test_creation_research_must_query_available_business_and_viral_librari
         {"kb_id": "kb-viral", "name": "爆款库"},
     ]
     runtime._content_queried_knowledge_bases = {"kb-viral"}
-    runtime._content_retrieved_knowledge_results = {
-        "source-1": [{"source_id": "source-1", "metadata": {}}]
-    }
+    runtime._content_retrieved_knowledge_results = {"source-1": [{"source_id": "source-1", "metadata": {}}]}
     collector = ContentNodeResultCollector("EvidenceCollectionResultV1", DOMAIN_CONTEXT, runtime)
 
     with pytest.raises(ContractDomainValidationError, match="必需知识库"):
@@ -657,4 +822,4 @@ async def test_structured_result_tool_uses_registered_pydantic_schema():
 
     assert tool.name == "submit_content_node_result"
     assert collector.submission_count == 1
-    assert len(CONTRACT_REGISTRY) == 18
+    assert len(CONTRACT_REGISTRY) == 23

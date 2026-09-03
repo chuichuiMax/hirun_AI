@@ -11,7 +11,9 @@ tmp_dir = "tmp"
   cmd = "go build -o ./tmp/api ./cmd/api"
   bin = "./tmp/api"
   delay = 800
-  include_ext = ["go"]
+  # seed.json is generated from scripts/templates by the dev watcher. Reloading
+  # it recompiles the embedded catalog without rebuilding a Docker image.
+  include_ext = ["go", "json"]
   exclude_dir = ["tmp", "internal/webui/public"]
   stop_on_error = true
   # fsnotify is unreliable on Docker bind mounts (macOS/Windows), so poll for

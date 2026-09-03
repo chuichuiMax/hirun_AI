@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from yuxi.content.model.industry.pack import IndustryPackRegressionMetrics
 
 ContentMode = Literal["quick", "pro"]
+CreationMode = Literal["original", "viral_rewrite"]
 
 
 class ContentTaskCreate(BaseModel):
@@ -13,6 +14,7 @@ class ContentTaskCreate(BaseModel):
 
     industry_template_id: str
     mode: ContentMode = "quick"
+    creation_mode: CreationMode = "original"
     content_goal: str | None = None
     content_type_code: str | None = Field(default=None, pattern=r"^CT0[1-7]$")
     persona_profile_version_id: str | None = None
@@ -33,7 +35,7 @@ class ContentTaskUpdate(BaseModel):
 class ContentVisualMaterialSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    image_item_id: str = Field(min_length=1, max_length=64)
+    image_item_id: str | None = Field(default=None, min_length=1, max_length=64)
     poster_template_id: str | None = Field(default=None, min_length=1, max_length=64)
     hycanvas_template_id: str | None = Field(
         default=None,

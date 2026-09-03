@@ -48,7 +48,11 @@ x-api-worker-env: &api-worker-env
   XHS_BROWSER_OPERATION_LOCK_SECONDS: ${XHS_BROWSER_OPERATION_LOCK_SECONDS:-180}
   XHS_BROWSER_OPERATION_BLOCK_SECONDS: ${XHS_BROWSER_OPERATION_BLOCK_SECONDS:-3}
   HYCANVAS_BASE_URL: ${HYCANVAS_BASE_URL:-http://hycanvas-app:8005}
-  HYCANVAS_PUBLIC_URL: ${HYCANVAS_PUBLIC_URL:-http://127.0.0.1:${HYCANVAS_PORT:-8005}}
+  # Local HyCanvas runs its hot-reload Next.js frontend separately from the Go
+  # API. ContentFlow browser links must point at the frontend port; server-side
+  # API traffic continues to use hycanvas-app:8005.
+  HYCANVAS_PUBLIC_URL: ${HYCANVAS_DEV_PUBLIC_URL:-http://127.0.0.1:${HYCANVAS_DEV_FRONTEND_PORT:-3000}}
+  HYCANVAS_DEV_PUBLIC_URL: ${HYCANVAS_DEV_PUBLIC_URL:-http://127.0.0.1:${HYCANVAS_DEV_FRONTEND_PORT:-3000}}
   HYCANVAS_API_KEY: ${HYCANVAS_API_KEY:-hyk_contentswarm_local_integration_key_change_me}
   HYCANVAS_WORKSPACE_ID: ${HYCANVAS_WORKSPACE_ID:-00000000-0000-4000-8000-000000001001}
   WECHAT_MP_APPID: ${WECHAT_MP_APPID:-}
@@ -415,17 +419,15 @@ services:
   hycanvas-app:
     build:
       context: ./apps/hycanvas
-      dockerfile: Dockerfile
-      args:
-        MANAGED_MODE: contentswarm
-        HOST_APP_URL: ${CONTENTSWARM_PUBLIC_URL:-http://127.0.0.1:5173}
-    image: contentswarm-hycanvas:${YUXI_VERSION:-0.7.0}
-    entrypoint: ["/app/hycanvas"]
+      dockerfile: Dockerfile.dev
+    image: contentswarm-hycanvas-dev:${YUXI_VERSION:-0.7.0}
+    entrypoint: ["/bin/sh", "/app/docker/entrypoint-dev.sh"]
+    working_dir: /app
     depends_on:
       hycanvas-db:
         condition: service_healthy
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
       PORT: "8005"
       DB_AUTO_MIGRATE: "true"
       DATABASE_URL: postgresql://${HYCANVAS_DB_USER:-hycanvas}:${HYCANVAS_DB_PASSWORD:-hycanvas-local-password}@hycanvas-db:5432/${HYCANVAS_DB_NAME:-hycanvas}?schema=public
@@ -433,13 +435,27 @@ services:
       COOKIE_SECURE: ${HYCANVAS_COOKIE_SECURE:-false}
       APP_URL: ${HYCANVAS_PUBLIC_URL:-http://127.0.0.1:${HYCANVAS_PORT:-8005}}
       REDIS_URL: ""
+      PUBLIC_DIR: ""
+      FRONTEND_URL: http://127.0.0.1:${HYCANVAS_DEV_FRONTEND_PORT:-3000}
+      APP_URL: http://127.0.0.1:${HYCANVAS_PORT:-8005}
+      NEXT_PUBLIC_BACKEND_URL: http://127.0.0.1:${HYCANVAS_PORT:-8005}/api
+      HYCANVAS_DEV_BACKEND_URL: http://127.0.0.1:8005
       STORAGE_DRIVER: local
       LOCAL_STORAGE_PATH: /app/.data/storage
+      FONTS_DIR: /usr/share/fonts/opentype/noto
       HYCANVAS_AUTH_MODE: contentswarm
       CONTENTSWARM_URL: ${CONTENTSWARM_PUBLIC_URL:-http://127.0.0.1:5173}
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
     ports:
       - "${HYCANVAS_PORT:-8005}:8005"
+      - "${HYCANVAS_DEV_FRONTEND_PORT:-3000}:3000"
     volumes:
+      - ./apps/hycanvas:/app
+      - hycanvas-node-modules:/app/node_modules
+      - hycanvas-frontend-node-modules:/app/frontend/node_modules
+      - hycanvas-go-mod:/go/pkg/mod
+      - hycanvas-go-build:/root/.cache/go-build
       - ./docker/volumes/hycanvas-storage:/app/.data/storage
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8005/healthz || exit 1"]
@@ -555,6 +571,10 @@ services:
 
 volumes:
   nltk_data:
+  hycanvas-node-modules:
+  hycanvas-frontend-node-modules:
+  hycanvas-go-mod:
+  hycanvas-go-build:
 
 networks:
   app-network:
