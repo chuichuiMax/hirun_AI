@@ -493,12 +493,23 @@ def test_hycanvas_template_fields_resolve_semantics_and_constraints():
                 "semanticRole": "title",
                 "constraints": {"maxChars": 20},
             },
+            {
+                "nodeId": "n4",
+                "kind": "text",
+                "label": "内容标签",
+                "semanticRole": "label",
+                "constraints": {"maxChars": 12},
+            },
         ],
-        visual_text=["住进理想新家", "空间焕新"],
+        visual_text=["住进理想新家", "空间焕新", "别墅设计"],
         brief={"form_values": {"project_area": "152㎡", "project_name": "岳阳·杏林小区"}},
     )
 
-    assert fields == {"项目面积": "152", "项目名称": "岳阳·杏林小区", "封面标题": "住进理想新家"}
+    assert fields == {
+        "项目面积": "152",
+        "项目名称": "岳阳·杏林小区",
+        "封面标题": "住进理想新家",
+    }
 
 
 def test_hycanvas_template_fields_reject_missing_required_fact():

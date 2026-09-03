@@ -8,6 +8,7 @@ import pytest
 from yuxi.content.control.workflow.revision import RevisionRouteController
 from yuxi.content.model.workflows.definition import DEFAULT_CONTRACTS, WorkflowCatalog, WorkflowDefinitionPolicy
 from yuxi.content.v3.seed import _upgrade_system_workflow_v3
+from yuxi.content.v3.agents import CONTENT_AGENT_SPECS
 from yuxi.content.v3.workflow import WORKFLOW_V3
 
 
@@ -130,21 +131,37 @@ def test_creation_research_is_split_into_bounded_parallel_nodes_before_selection
     for node_id in research_ids:
         node = _node(WORKFLOW_V3, node_id)
         assert node["parallel_group"] == "research"
-        assert node["timeout_seconds"] <= 75
+        assert node["timeout_seconds"] <= 140
         assert node["max_knowledge_bases"] <= 2
         assert node["max_chars_per_knowledge_chunk"] <= 2400
         assert "runtime_config_snapshot" in node["state_inputs"]
         assert ["load_formula_lexicons", node_id] in WORKFLOW_V3["edges"]
         assert [node_id, "select_viral_reference"] in WORKFLOW_V3["edges"]
     selector = _node(WORKFLOW_V3, "select_viral_reference")
-    assert _node(WORKFLOW_V3, "collect_business_rule_evidence")["timeout_seconds"] == 75
+    assert _node(WORKFLOW_V3, "collect_business_rule_evidence")["timeout_seconds"] == 125
     assert _node(WORKFLOW_V3, "collect_viral_candidates")["max_chunks_per_knowledge_base"] == 2
     assert _node(WORKFLOW_V3, "collect_viral_candidates")["max_chars_per_knowledge_chunk"] == 800
-    assert _node(WORKFLOW_V3, "collect_viral_candidates")["timeout_seconds"] == 75
+    assert _node(WORKFLOW_V3, "collect_viral_candidates")["timeout_seconds"] == 140
     assert selector["timeout_seconds"] == 75
     assert selector["knowledge_policy"] == "frozen_evidence_only"
     assert selector["required_skills"] == ["viral-reference-selector"]
     assert ["select_viral_reference", "merge_research_evidence"] in WORKFLOW_V3["edges"]
+
+
+@pytest.mark.unit
+def test_parallel_research_two_model_calls_fit_inside_each_node_timeout():
+    agent_by_node = {
+        "collect_business_rule_evidence": "content-business-rule-research-agent",
+        "collect_price_evidence": "content-price-research-agent",
+        "collect_compliance_evidence": "content-compliance-research-agent",
+        "collect_viral_candidates": "content-viral-candidate-agent",
+    }
+    specs = {item.slug: item for item in CONTENT_AGENT_SPECS}
+
+    for node_id, agent_slug in agent_by_node.items():
+        spec = specs[agent_slug]
+        assert spec.model_retry_times == 0
+        assert spec.model_call_timeout_seconds * 2 + 10 <= _node(WORKFLOW_V3, node_id)["timeout_seconds"]
 
 
 @pytest.mark.unit

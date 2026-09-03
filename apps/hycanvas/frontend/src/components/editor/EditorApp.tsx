@@ -939,8 +939,7 @@ export function EditorApp() {
   const saveAndConfigureTemplate = useCallback(async () => {
     if (!(await save())) return;
     if (!isContentSwarmManaged) return;
-    const fields = (useEditor.getState().doc.meta as { brandEditableFields?: unknown[] } | undefined)?.brandEditableFields;
-    if (!Array.isArray(fields) || fields.length === 0) setTemplateOpen(true);
+    setTemplateOpen(true);
   }, [save]);
 
   async function commitTitle() {
@@ -1165,7 +1164,7 @@ export function EditorApp() {
               <Share2 size={16} /> {tr("editor.share")}
             </Button>
           )}
-          <Button size="sm" onClick={() => void saveAndConfigureTemplate()} disabled={!designId || saving || accessMode !== "edit"} title={accessMode !== "edit" ? tr("editor.you_do_not_have_edit_access") : designId ? "保存设计；首次保存时设置模板字段" : tr("editor.open_from_the_dashboard_to_save")}>
+          <Button size="sm" onClick={() => void saveAndConfigureTemplate()} disabled={!designId || saving || accessMode !== "edit"} title={accessMode !== "edit" ? tr("editor.you_do_not_have_edit_access") : designId ? "保存设计并确认模板字段" : tr("editor.open_from_the_dashboard_to_save")}>
             {saving ? tr("editor.saving") : tr("editor.save")}
           </Button>
           {integrationReturnUrl && (

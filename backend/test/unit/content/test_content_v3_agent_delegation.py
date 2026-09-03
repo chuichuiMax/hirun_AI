@@ -1192,7 +1192,8 @@ def test_formal_content_agent_catalog_and_conflict_policy():
     assert business_spec.config_version == 4
     price_spec = next(item for item in specialist_specs if item.slug == "content-price-research-agent")
     assert price_spec.model == ""
-    assert price_spec.config_version == 5
+    assert price_spec.model_call_timeout_seconds == 55
+    assert price_spec.config_version == 7
     assert all(item.config_version >= 2 for item in specialist_specs)
     research_collectors = [item for item in specialist_specs if item.slug != "content-viral-selection-agent"]
     assert all(item.skill_tools == ("query_kb",) for item in research_collectors)

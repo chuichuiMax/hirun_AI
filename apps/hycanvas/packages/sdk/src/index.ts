@@ -327,7 +327,7 @@ export interface FillableFieldSummary {
   kind: "text" | "image" | "color";
   label: string;
   key?: string;
-  semanticRole?: "title" | "subtitle" | "project_name" | "project_name_en" | "project_area" | "designer" | "completion_year" | "brand_name" | "body_excerpt";
+  semanticRole?: "title" | "subtitle" | "project_name" | "project_name_en" | "project_area" | "designer" | "completion_year" | "brand_name" | "label" | "body_excerpt";
   hint?: string;
   constraints?: { maxChars?: number; aspect?: number; required?: boolean };
 }
@@ -1759,6 +1759,9 @@ export class HyCanvasClient {
   }
   renameTemplate(id: string, title: string): Promise<TemplateSummary> {
     return this.request("PATCH", `/v1/templates/${id}`, { title });
+  }
+  deleteTemplate(id: string): Promise<void> {
+    return this.request("DELETE", `/v1/templates/${id}`);
   }
   assignTemplateCollection(id: string, collectionId: string | null): Promise<TemplateSummary> {
     return this.request("POST", `/v1/templates/${id}/collection`, { collectionId });

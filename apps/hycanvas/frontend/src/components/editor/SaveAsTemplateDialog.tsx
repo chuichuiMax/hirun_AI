@@ -29,6 +29,7 @@ const semanticRoles = [
   ["designer", "设计师"],
   ["completion_year", "完成年份"],
   ["brand_name", "品牌名称"],
+  ["label", "标签（保留原文）"],
   ["body_excerpt", "正文摘要"],
 ] as const;
 
@@ -91,6 +92,16 @@ export function SaveAsTemplateDialog({
 
   function updateField(nodeId: string, patch: Partial<FillableFieldSummary>) {
     setFillableFields((current) => current.map((field) => field.nodeId === nodeId ? { ...field, ...patch } : field));
+  }
+
+  function updateSemanticRole(nodeId: string, semanticRole: FillableFieldSummary["semanticRole"]) {
+    setFillableFields((current) => current.map((field) => field.nodeId === nodeId
+      ? {
+          ...field,
+          semanticRole,
+          constraints: { ...field.constraints, required: semanticRole === "label" ? false : field.constraints?.required },
+        }
+      : field));
   }
 
   async function save() {
@@ -187,7 +198,7 @@ export function SaveAsTemplateDialog({
                   <div className="mt-2 grid grid-cols-2 gap-2">
                     <input value={field.label} onChange={(e) => updateField(node.id, { label: e.target.value })} placeholder="字段名称" className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs" />
                     <input value={field.key ?? ""} onChange={(e) => updateField(node.id, { key: e.target.value })} placeholder="字段编码" className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs" />
-                    <select value={field.semanticRole ?? "title"} onChange={(e) => updateField(node.id, { semanticRole: e.target.value as FillableFieldSummary["semanticRole"] })} className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs">
+                    <select value={field.semanticRole ?? "title"} onChange={(e) => updateSemanticRole(node.id, e.target.value as FillableFieldSummary["semanticRole"])} className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs">
                       {semanticRoles.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                     </select>
                     <input type="number" min={1} max={500} value={field.constraints?.maxChars ?? 20} onChange={(e) => updateField(node.id, { constraints: { ...field.constraints, maxChars: Number(e.target.value) } })} aria-label="最大字数" className="rounded-lg border border-neutral-200 px-2 py-1.5 text-xs" />

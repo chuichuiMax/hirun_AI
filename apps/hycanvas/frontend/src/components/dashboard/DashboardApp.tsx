@@ -214,6 +214,8 @@ export function DashboardApp({ view }: { view: DashboardView }) {
   const [templateRenameTarget, setTemplateRenameTarget] = useState<TemplateSummary | null>(null);
   const [templateRenameValue, setTemplateRenameValue] = useState("");
   const [templateRenaming, setTemplateRenaming] = useState(false);
+  const [templateDeleteTarget, setTemplateDeleteTarget] = useState<TemplateSummary | null>(null);
+  const [templateDeleting, setTemplateDeleting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<HomeItem | null>(null);
   const [wsModal, setWsModal] = useState(false);
   const [sizeOpen, setSizeOpen] = useState(false);
@@ -671,6 +673,21 @@ export function DashboardApp({ view }: { view: DashboardView }) {
     }
   }
 
+  async function confirmTemplateDelete() {
+    if (!templateDeleteTarget || templateDeleting) return;
+    setTemplateDeleting(true);
+    try {
+      await oc.deleteTemplate(templateDeleteTarget.id);
+      setTemplates((current) => current.filter((template) => template.id !== templateDeleteTarget.id));
+      setTemplateDeleteTarget(null);
+      toast.success(tr("dashboard.template_deleted"));
+    } catch {
+      toast.error(tr("dashboard.could_not_delete_template"));
+    } finally {
+      setTemplateDeleting(false);
+    }
+  }
+
   async function onSearch(e: FormEvent) {
     e.preventDefault();
     gotoView("home"); // search always lands on the results in the home view
@@ -687,7 +704,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
     setItems(await load(query));
   }
 
-  const canRenameTemplate = (template: TemplateSummary) => {
+  const canManageTemplate = (template: TemplateSummary) => {
     if (template.visibility === "personal") return template.ownerId === user?.id;
     if (template.visibility !== "team" || !template.workspaceId) return false;
     const role = workspaces.find((workspace) => workspace.id === template.workspaceId)?.role;
@@ -1297,12 +1314,18 @@ export function DashboardApp({ view }: { view: DashboardView }) {
                         {menuFor === `template:${t.id}` && (
                           <div className="absolute end-0 z-30 mt-1 w-36 overflow-hidden rounded-xl border border-neutral-200 bg-surface py-1 text-sm shadow-lg" onClick={(event) => event.stopPropagation()}>
                             <MenuRow icon={FileDown} onClick={() => { setMenuFor(null); void downloadTemplateHyc(t); }}>{tr("dashboard.download_as_hyc_file")}</MenuRow>
-                            {canRenameTemplate(t) && (
-                              <MenuRow icon={Pencil} onClick={() => {
-                                setMenuFor(null);
-                                setTemplateRenameTarget(t);
-                                setTemplateRenameValue(t.title);
-                              }}>{tr("dashboard.rename")}</MenuRow>
+                            {canManageTemplate(t) && (
+                              <>
+                                <MenuRow icon={Pencil} onClick={() => {
+                                  setMenuFor(null);
+                                  setTemplateRenameTarget(t);
+                                  setTemplateRenameValue(t.title);
+                                }}>{tr("dashboard.rename")}</MenuRow>
+                                <MenuRow icon={Trash2} danger onClick={() => {
+                                  setMenuFor(null);
+                                  setTemplateDeleteTarget(t);
+                                }}>{tr("dashboard.delete")}</MenuRow>
+                              </>
                             )}
                           </div>
                         )}
@@ -1483,6 +1506,17 @@ export function DashboardApp({ view }: { view: DashboardView }) {
           <Button disabled={templateRenaming || !templateRenameValue.trim()} onClick={() => void confirmTemplateRename()}>
             {templateRenaming ? <Loader2 size={16} className="animate-spin" /> : null}
             {tr("dashboard.save")}
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal open={!!templateDeleteTarget} onClose={() => { if (!templateDeleting) setTemplateDeleteTarget(null); }} title={tr("dashboard.delete_template")}>
+        <p className="text-sm text-neutral-600">{tr("dashboard.delete_template_confirmation", { title: templateDeleteTarget?.title ?? "" })}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" disabled={templateDeleting} onClick={() => setTemplateDeleteTarget(null)}>{tr("dashboard.cancel")}</Button>
+          <Button variant="danger" disabled={templateDeleting} onClick={() => void confirmTemplateDelete()}>
+            {templateDeleting ? <Loader2 size={16} className="animate-spin" /> : null}
+            {templateDeleting ? tr("dashboard.deleting") : tr("dashboard.delete")}
           </Button>
         </div>
       </Modal>

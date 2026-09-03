@@ -175,7 +175,7 @@ const suggestedHyCanvasValue = (field) => {
 
 const initializeHyCanvasFields = () => {
   Object.keys(hycanvasFields).forEach((key) => delete hycanvasFields[key])
-  for (const field of selectedHyCanvasTemplate.value?.fillable_fields?.filter((item) => item.kind === 'text') || []) {
+  for (const field of selectedHyCanvasTemplate.value?.fillable_fields?.filter((item) => item.kind === 'text' && item.semanticRole !== 'label') || []) {
     hycanvasFields[field.label] = suggestedHyCanvasValue(field)
   }
 }
@@ -1915,7 +1915,7 @@ const openVersions = async () => {
                 <a-empty v-else description="HyCanvas 尚未配置或暂无小红书模板" />
               </a-spin>
               <div v-if="selectedHyCanvasTemplate" class="hycanvas-fields">
-                <label v-for="field in selectedHyCanvasTemplate.fillable_fields.filter((item) => item.kind === 'text')" :key="field.nodeId">
+                <label v-for="field in selectedHyCanvasTemplate.fillable_fields.filter((item) => item.kind === 'text' && item.semanticRole !== 'label')" :key="field.nodeId">
                   <span>{{ field.label }}</span>
                   <a-textarea v-model:value="hycanvasFields[field.label]" :rows="2" :maxlength="field.constraints?.maxChars" :show-count="Boolean(field.constraints?.maxChars)" :placeholder="field.hint" />
                 </label>

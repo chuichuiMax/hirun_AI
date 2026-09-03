@@ -12,7 +12,7 @@ FROM golang:1.25-bookworm
 # and db client tools used by the entrypoint's readiness wait + migrations.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg ffmpeg netcat-openbsd postgresql-client \
+      ca-certificates curl gnupg ffmpeg fonts-noto-cjk netcat-openbsd postgresql-client \
  && mkdir -p /etc/apt/keyrings \
  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
@@ -23,7 +23,8 @@ RUN apt-get update \
 
 # Go live-reload for the dev backend (rebuilds + restarts on source changes).
 # Installed into /go/bin, which is on PATH in the golang base image.
-RUN go install github.com/air-verse/air@latest
+# v1.67 requires Go 1.26; HyCanvas intentionally builds with Go 1.25.
+RUN go install github.com/air-verse/air@v1.66.0
 
 WORKDIR /app
 

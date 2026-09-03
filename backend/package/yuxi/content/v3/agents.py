@@ -73,7 +73,7 @@ CONTENT_AGENT_SPECS = (
         model_call_timeout_seconds=55,
         model_retry_times=0,
         inherit_context_from="content-research-agent",
-        config_version=5,
+        config_version=7,
     ),
     ContentAgentSpec(
         slug="content-compliance-research-agent",
@@ -207,6 +207,13 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
     context = (agent.config_json or {}).get("context")
     if agent.created_by == "system" and agent.updated_by != "system":
         additive_migrations = {
+            "content-price-research-agent": {
+                5: (
+                    (),
+                    {"content-price-researcher"},
+                    {"model_call_timeout_seconds": spec.model_call_timeout_seconds},
+                ),
+            },
             "content-research-agent": {
                 4: (
                     ("viral-reference-selector",),

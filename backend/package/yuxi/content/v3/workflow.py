@@ -123,7 +123,7 @@ WORKFLOW_V3_NODES = [
         max_chunks_per_knowledge_base=4,
         max_chars_per_knowledge_chunk=2400,
         token_budget=6000,
-        timeout_seconds=75,
+        timeout_seconds=125,
         parallel_group="research",
     ),
     _agent(
@@ -145,7 +145,7 @@ WORKFLOW_V3_NODES = [
         max_chunks_per_knowledge_base=4,
         max_chars_per_knowledge_chunk=2400,
         token_budget=5000,
-        timeout_seconds=75,
+        timeout_seconds=125,
         parallel_group="research",
     ),
     _agent(
@@ -170,7 +170,7 @@ WORKFLOW_V3_NODES = [
         max_chunks_per_knowledge_base=4,
         max_chars_per_knowledge_chunk=2400,
         token_budget=5000,
-        timeout_seconds=60,
+        timeout_seconds=100,
         parallel_group="research",
     ),
     _agent(
@@ -195,7 +195,7 @@ WORKFLOW_V3_NODES = [
         max_chunks_per_knowledge_base=2,
         max_chars_per_knowledge_chunk=800,
         token_budget=4000,
-        timeout_seconds=75,
+        timeout_seconds=140,
         parallel_group="research",
     ),
     _agent(

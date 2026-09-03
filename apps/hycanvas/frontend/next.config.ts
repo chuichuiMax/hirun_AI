@@ -5,6 +5,10 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   output: "export",
   trailingSlash: true,
+  // ContentSwarm embeds the dev frontend from :5173. Allow its localhost
+  // origins to keep the HMR connection alive instead of falling back to full
+  // iframe reloads, which would discard open modal state and unsaved form data.
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   // yjs must load as ONE module instance (two copies break instanceof checks
   // inside the CRDT bridge: yjs issue #438). @hc/realtime is built as ESM so
   // every consumer resolves the same yjs.mjs; no resolve alias needed (a
@@ -41,6 +45,10 @@ const nextConfig: NextConfig = {
     ? {
         async rewrites() {
           return [
+            // ContentFlow opens the managed-auth redemption URL on the public
+            // frontend origin. Proxy that one same-origin /api path to the Go
+            // dev server; normal SDK traffic still uses NEXT_PUBLIC_BACKEND_URL.
+            { source: "/api/:path*", destination: `${process.env.HYCANVAS_DEV_BACKEND_URL || "http://127.0.0.1:8005"}/api/:path*` },
             { source: "/editor/:id", destination: "/editor" },
             { source: "/shared/:token", destination: "/shared" },
             { source: "/present/:id", destination: "/present" },

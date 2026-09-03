@@ -151,6 +151,9 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 	for _, raw := range declarations {
 		field := asObj(raw)
 		if asStr(field["kind"]) == "text" {
+			if asStr(field["semanticRole"]) == "label" {
+				continue
+			}
 			label := asStr(field["label"])
 			fieldNodes[label] = asStr(field["nodeId"])
 			constraints := asObj(field["constraints"])
