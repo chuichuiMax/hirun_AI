@@ -19,6 +19,7 @@ from yuxi.content.control.workflow.external_wait import (
     ExternalWaitNodeHandler,
     skip_content_correction_interrupt,
     skip_cover_pipeline,
+    skip_formula_lexicon_pipeline,
 )
 from yuxi.content.control.workflow.revision import RevisionRouteController, resolve_revision_reason
 from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
@@ -599,7 +600,7 @@ class ContentWorkflowAgent(BaseAgent):
                     message=f"最终审批前仍有阻断报告: {', '.join(invalid_reports)}",
                     kind="conflict",
                 )
-            if skip_cover_pipeline(state):
+            if skip_formula_lexicon_pipeline(state):
                 answer = {"decision": "approved", "note": "好评笔记自动审批"}
             else:
                 answer = require_resume(

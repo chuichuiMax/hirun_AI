@@ -1453,7 +1453,7 @@ const openVersions = async () => {
               <div>
                 <span class="section-kicker">视觉素材</span>
                 <h3>选择图库与封面模板</h3>
-                <p>可提前保存图库图片和封面模板；当前 V3.4 暂不执行封面生成与交付，不影响标题和正文生产。</p>
+                <p>未选择图库原图时跳过封面生成，不影响标题和正文；选择图库和 HyCanvas 模板后才会生成封面。</p>
               </div>
               <a-button @click="router.push('/materials/images')">
                 <FolderOpen :size="15" />管理素材库

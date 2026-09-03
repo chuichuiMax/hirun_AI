@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content.control.workflow.content_node_input import ContentNodeInputAssembler
 from yuxi.content.control.workflow.external_wait import (
-    COVER_SKIP_REASON,
     RESEARCH_SKIP_REASON,
+    cover_skip_reason,
     skip_cover_pipeline,
     skip_formula_lexicon_pipeline,
     skip_research_pipeline,
@@ -187,7 +187,7 @@ class AgentNodeResultMapper:
             }
         if node_id == "semantic_review":
             report = result
-            if skip_cover_pipeline(state):
+            if skip_formula_lexicon_pipeline(state):
                 report = _review_report_without_decoration_formulas(result)
             return {"review_report": report}
         if node_id == "plan_visuals":
@@ -215,15 +215,16 @@ class AgentNodeHandler:
         node_run_id: str,
     ) -> dict[str, Any]:
         if skip_cover_pipeline(state):
+            reason = cover_skip_reason(state)
             if node["id"] == "plan_visuals":
-                return {"visual_plan": {"skipped": True, "skip_reason": COVER_SKIP_REASON}}
+                return {"visual_plan": {"skipped": True, "skip_reason": reason}}
             if node["id"] == "submit_cover_job":
-                return {"cover_job": {"skipped": True, "skip_reason": COVER_SKIP_REASON}}
+                return {"cover_job": {"skipped": True, "skip_reason": reason}}
             if node["id"] == "visual_review":
                 return {
                     "visual_review": {
                         "skipped": True,
-                        "skip_reason": COVER_SKIP_REASON,
+                        "skip_reason": reason,
                         "assets": [],
                     }
                 }
@@ -313,14 +314,14 @@ class AgentNodeHandler:
             skip_formula_lexicon_usage=skip_formula_lexicon_pipeline(state),
         )
         prohibited_actions = list(PROHIBITED_ACTIONS.get(node["id"], ()))
-        if skip_cover_pipeline(state) and node["id"] == "semantic_review":
+        if skip_formula_lexicon_pipeline(state) and node["id"] == "semantic_review":
             prohibited_actions.extend(
                 (
                     "不得按装修获客标题公式或正文公式阻断",
                     "不得要求细分人群+数字+结果或人设沉淀分段结构",
                 )
             )
-        if skip_cover_pipeline(state) and node["id"] == "generate_content":
+        if skip_formula_lexicon_pipeline(state) and node["id"] == "generate_content":
             prohibited_actions.append("不按装修获客标题公式或正文调用规则写作")
         delegation = AgentDelegationService(db)
         delegated = await delegation.execute(

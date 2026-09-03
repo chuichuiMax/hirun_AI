@@ -71,6 +71,10 @@ class HyCanvasClient:
             )
         return {"configured": True, "templates": templates, "total": len(templates)}
 
+    async def fetch_template_preview(self, template_id: str) -> tuple[bytes, str]:
+        response = await self._send("GET", f"/template-previews/{quote(template_id, safe='')}-p0.png")
+        return response.content, response.headers.get("content-type", "image/png")
+
     async def create_design(
         self,
         payload: HyCanvasDesignCreate,

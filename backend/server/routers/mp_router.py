@@ -33,11 +33,15 @@ from yuxi.services.mp_service import (
     get_task,
     list_contents,
     list_cover_templates,
+    list_mp_galleries,
+    list_mp_gallery_items,
     login_by_sms,
     login_by_wechat_code,
     logout,
     read_cover_file,
     read_cover_template_file,
+    read_hycanvas_template_preview,
+    read_mp_gallery_item_file,
     remove_favorite,
     resume_run,
     retry_run,
@@ -126,6 +130,43 @@ async def mp_cover_template_file(
     db: AsyncSession = Depends(get_db),
 ):
     data, content_type, file_name = await read_cover_template_file(db, cover_pk)
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{file_name}"'},
+    )
+
+
+@mp.get("/content/hycanvas-templates/{template_id}/preview")
+async def mp_hycanvas_template_preview(
+    template_id: str,
+    _ctx: MpContext = Depends(get_mp_context),
+):
+    data, content_type = await read_hycanvas_template_preview(template_id)
+    return Response(content=data, media_type=content_type)
+
+
+@mp.get("/content/galleries")
+async def mp_galleries(ctx: MpContext = Depends(get_mp_context), db: AsyncSession = Depends(get_db)):
+    return await list_mp_galleries(db, ctx)
+
+
+@mp.get("/content/gallery-items")
+async def mp_gallery_items(
+    category: str = Query(...),
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_mp_gallery_items(db, ctx, category)
+
+
+@mp.get("/content/gallery-items/{item_id}/file")
+async def mp_gallery_item_file(
+    item_id: str,
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    data, content_type, file_name = await read_mp_gallery_item_file(db, ctx, item_id)
     return Response(
         content=data,
         media_type=content_type,

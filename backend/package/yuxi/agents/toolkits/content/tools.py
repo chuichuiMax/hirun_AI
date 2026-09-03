@@ -455,7 +455,7 @@ async def create_content_cover_job(
                     idempotency_key=idempotency_key,
                 ),
             )
-        elif mode == "template":
+        elif mode == "template" and len(source_asset_ids) >= 2:
             result = await create_cover_compose_job(
                 db,
                 user,

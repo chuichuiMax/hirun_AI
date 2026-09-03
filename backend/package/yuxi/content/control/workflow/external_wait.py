@@ -11,6 +11,7 @@ from yuxi.services.run_queue_service import append_run_stream_event
 from yuxi.utils.datetime_utils import utc_now_naive
 
 COVER_SKIP_REASON = "好评笔记跳过封面生成"
+MISSING_VISUAL_COVER_SKIP_REASON = "未锁定图库图片，跳过封面生成"
 RESEARCH_SKIP_REASON = "好评笔记沿用简报已锁定事实，跳过获客调研"
 REVIEW_NOTES_SERVICE_ENTRY = "好评笔记"
 
@@ -23,26 +24,32 @@ def _brief_service_entry(state: dict[str, Any]) -> str:
     return str(values.get("mp_service_entry") or "")
 
 
-def skip_cover_pipeline(state: dict[str, Any]) -> bool:
+def skip_formula_lexicon_pipeline(state: dict[str, Any]) -> bool:
     return _brief_service_entry(state) == REVIEW_NOTES_SERVICE_ENTRY
 
 
-def skip_formula_lexicon_pipeline(state: dict[str, Any]) -> bool:
-    return skip_cover_pipeline(state)
-
-
 def skip_research_pipeline(state: dict[str, Any]) -> bool:
-    return skip_cover_pipeline(state)
+    return skip_formula_lexicon_pipeline(state)
+
+
+def skip_cover_pipeline(state: dict[str, Any]) -> bool:
+    if skip_formula_lexicon_pipeline(state):
+        return True
+    snapshot = state.get("runtime_config_snapshot")
+    if not isinstance(snapshot, dict):
+        return False
+    visual = snapshot.get("visual_material") or {}
+    return not bool(visual.get("image_asset_id"))
+
+
+def cover_skip_reason(state: dict[str, Any]) -> str:
+    if skip_formula_lexicon_pipeline(state):
+        return COVER_SKIP_REASON
+    return MISSING_VISUAL_COVER_SKIP_REASON
 
 
 def skip_content_correction_interrupt(state: dict[str, Any]) -> bool:
-    if skip_cover_pipeline(state):
-        return True
-    brief = state.get("content_brief") or {}
-    values = brief.get("form_values") if isinstance(brief, dict) else {}
-    if not isinstance(values, dict):
-        return False
-    return bool(str(values.get("mp_content_code") or "").strip())
+    return skip_formula_lexicon_pipeline(state)
 
 
 class ExternalWaitNodeHandler:
@@ -63,7 +70,7 @@ class ExternalWaitNodeHandler:
                     **(state.get("cover_job") or {}),
                     "status": "skipped",
                     "skipped": True,
-                    "skip_reason": COVER_SKIP_REASON,
+                    "skip_reason": cover_skip_reason(state),
                 },
                 "cover_assets": [],
                 "resume_parent_run_id": None,
@@ -159,8 +166,10 @@ class ExternalWaitNodeHandler:
 
 __all__ = [
     "COVER_SKIP_REASON",
+    "MISSING_VISUAL_COVER_SKIP_REASON",
     "RESEARCH_SKIP_REASON",
     "ExternalWaitNodeHandler",
+    "cover_skip_reason",
     "skip_cover_pipeline",
     "skip_formula_lexicon_pipeline",
     "skip_research_pipeline",

@@ -84,6 +84,12 @@ async def test_mp_sms_login_me_schema_and_pc_token_isolation(test_client, admin_
         assert "荷塘区" in zhuzhou["districts"]
         assert "云龙示范区" in zhuzhou["districts"]
         assert all(item["districts"] for item in data["region_tree"])
+        assert isinstance(data["hycanvas_templates"], list)
+        if data["hycanvas_templates"]:
+            assert data["hycanvas_templates"][0]["id"].startswith("xiaohongshu-")
+            assert data["hycanvas_templates"][0]["preview_urls"][0].startswith(
+                "/api/mp/content/hycanvas-templates/"
+            )
 
         review_schema = await test_client.get(
             "/api/mp/content/form-schema",
@@ -95,6 +101,7 @@ async def test_mp_sms_login_me_schema_and_pc_token_isolation(test_client, admin_
         assert review_data["service_entry"] == "好评笔记"
         assert review_data["regions"][0] == "长沙市"
         assert review_data["region_tree"] == data["region_tree"]
+        assert review_data["hycanvas_templates"] == []
 
         pricing = await test_client.get(
             "/api/mp/content/pricing",
@@ -148,6 +155,7 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
         )
         assert uploaded.status_code == 200, uploaded.text
         cover_asset_id = uploaded.json()["asset"]["id"]
+        assert uploaded.json()["library_item_id"]
 
         schema = await test_client.get(
             "/api/mp/content/form-schema",
@@ -155,8 +163,13 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
             params={"service_entry": "装修家居"},
         )
         assert schema.status_code == 200, schema.text
-        type_code = next(item["type_code"] for item in schema.json()["content_types"] if item["name"] == "工艺施工展示")
-        compiled = await test_client.post(
+        schema_data = schema.json()
+        type_code = next(item["type_code"] for item in schema_data["content_types"] if item["name"] == "工艺施工展示")
+        hycanvas_templates = schema_data["hycanvas_templates"]
+        assert hycanvas_templates, "装修家居表单应列出 HyCanvas 小红书模板"
+        hycanvas_template_id = hycanvas_templates[0]["id"]
+
+        missing_template = await test_client.post(
             "/api/mp/content/compile-brief",
             headers=mp_headers,
             json={
@@ -174,12 +187,50 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
                 },
             },
         )
+        assert missing_template.status_code == 422, missing_template.text
+        assert missing_template.json()["detail"]["error"]["code"] == "MP_HYCANVAS_TEMPLATE_REQUIRED"
+
+        compiled = await test_client.post(
+            "/api/mp/content/compile-brief",
+            headers=mp_headers,
+            json={
+                "service_entry": "装修家居",
+                "content_type_code": type_code,
+                "cover_asset_id": cover_asset_id,
+                "hycanvas_template_id": hycanvas_template_id,
+                "form_values": {
+                    "楼盘信息": "星河湾",
+                    "外框面积": "50-70㎡",
+                    "基础": "4-5万",
+                    "木制品": "2-3万",
+                    "主材": "2-3万",
+                    "设计风格": "北欧",
+                    "所在区域": "长沙市 岳麓区",
+                },
+            },
+        )
         assert compiled.status_code == 200, compiled.text
         payload = compiled.json()
         task_id = payload["task_id"]
         assert payload["status"] == "strategy_evidence_locked"
         assert payload["task_status"] == "brief_ready"
         assert payload["content_code"].startswith("NR")
+        visual = payload["task"]["runtime_config_snapshot"]["visual_material"]
+        assert visual["image_asset_id"] == cover_asset_id
+        assert visual["hycanvas_template_id"] == hycanvas_template_id
+        assert visual["image_item_id"] == uploaded.json()["library_item_id"]
+
+        galleries = await test_client.get("/api/mp/content/galleries", headers=mp_headers)
+        assert galleries.status_code == 200, galleries.text
+        gallery_items = galleries.json()["galleries"]
+        assert any(item["count"] >= 1 for item in gallery_items)
+        picked = await test_client.get(
+            "/api/mp/content/gallery-items",
+            headers=mp_headers,
+            params={"category": "uncategorized"},
+        )
+        assert picked.status_code == 200, picked.text
+        assert any(item["id"] == uploaded.json()["library_item_id"] for item in picked.json()["items"])
 
         task = await test_client.get(f"/api/mp/content/tasks/{task_id}", headers=mp_headers)
         assert task.status_code == 200, task.text

@@ -14,6 +14,7 @@ from yuxi.content.control.workflow.agent_node import AgentNodeHandler, AgentNode
 from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
 from yuxi.content.control.workflow.external_wait import (
     COVER_SKIP_REASON,
+    MISSING_VISUAL_COVER_SKIP_REASON,
     RESEARCH_SKIP_REASON,
     ExternalWaitNodeHandler,
     skip_content_correction_interrupt,
@@ -341,6 +342,75 @@ async def test_cover_tool_uses_locked_plan_and_persists_event_resume_metadata(mo
 
 
 @pytest.mark.asyncio
+async def test_cover_tool_does_not_compose_template_mode_with_fewer_than_two_assets(monkeypatch):
+    captured = []
+    visual_plan = {**_visual_plan(), "mode": "template", "plan_hash": "a" * 64}
+    node_input = SimpleNamespace(task_id="task-1", parent_run_id="run-parent")
+    context = SimpleNamespace(
+        uid="user-1",
+        _content_node_output_contract="CoverJobSubmissionResultV1",
+        _content_node_result_collector=SimpleNamespace(
+            domain_context=SimpleNamespace(
+                visual_plan_hash="a" * 64,
+                allowed_asset_ids=frozenset({"source-1"}),
+            )
+        ),
+        _content_node_input=node_input,
+        _content_node_governance={
+            "locked_values": {
+                "state_version": 7,
+                "visual_plan_hash": "a" * 64,
+                "visual_plan": visual_plan,
+            }
+        },
+    )
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return SimpleNamespace(uid="user-1")
+
+    class FakeDB:
+        async def execute(self, query):
+            del query
+            return FakeResult()
+
+    @asynccontextmanager
+    async def fake_session():
+        yield FakeDB()
+
+    async def fake_generate(db, user, payload):
+        del db, user
+        captured.append(payload)
+        return {"job": {"id": "job-1", "mode": payload.mode}, "deduplicated": False}
+
+    async def fail_compose(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("单张图库图片不应走九宫格合成")
+
+    async def fake_event(*args, **kwargs):
+        del args, kwargs
+
+    async def fake_get_task_for_user(repo, task_id, user):
+        del repo, task_id, user
+        return SimpleNamespace(runtime_config_snapshot_json={})
+
+    monkeypatch.setattr(content_tools.pg_manager, "get_async_session_context", fake_session)
+    monkeypatch.setattr(content_tools.ContentRepository, "get_task_for_user", fake_get_task_for_user)
+    monkeypatch.setattr(content_tools, "create_cover_generate_job", fake_generate)
+    monkeypatch.setattr(content_tools, "create_cover_compose_job", fail_compose)
+    monkeypatch.setattr(content_tools, "_emit_content_tool_event", fake_event)
+
+    result = await content_tools.create_content_cover_job.coroutine(
+        task_id="task-1",
+        runtime=SimpleNamespace(context=context),
+    )
+
+    assert result["cover_job_id"] == "job-1"
+    assert captured[0].mode == "image_to_image"
+    assert captured[0].source_asset_ids == ["source-1"]
+
+
+@pytest.mark.asyncio
 async def test_cover_tool_routes_locked_gallery_image_and_template_to_poster_billboard(monkeypatch):
     visual_plan = {**_visual_plan(), "plan_hash": "a" * 64}
     node_input = SimpleNamespace(
@@ -479,15 +549,40 @@ def test_cover_tool_only_accepts_task_id_from_agent():
     assert set(content_tools.CreateContentCoverJobInput.model_fields) == {"task_id"}
 
 
-def test_skip_cover_pipeline_only_for_review_notes():
+def test_skip_cover_pipeline_for_review_notes_or_missing_gallery_image():
     assert skip_cover_pipeline({"content_brief": {"form_values": {"mp_service_entry": "好评笔记"}}})
+    assert skip_cover_pipeline(
+        {
+            "content_brief": {"form_values": {"mp_service_entry": "装修家居"}},
+            "runtime_config_snapshot": {"visual_material": None},
+        }
+    )
+    assert not skip_cover_pipeline(
+        {
+            "content_brief": {"form_values": {"mp_service_entry": "装修家居"}},
+            "runtime_config_snapshot": {"visual_material": {"image_asset_id": "img-1"}},
+        }
+    )
     assert not skip_cover_pipeline({"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}})
     assert not skip_cover_pipeline({"content_brief": {}})
     assert not skip_cover_pipeline({})
 
 
-def test_mp_decoration_skips_content_correction_interrupt():
+def test_missing_gallery_image_does_not_skip_review_notes_only_gates():
+    state = {
+        "content_brief": {"form_values": {"mp_service_entry": "装修家居"}},
+        "runtime_config_snapshot": {"visual_material": None},
+    }
+    assert skip_cover_pipeline(state)
+    assert not skip_formula_lexicon_pipeline(state)
+    assert not skip_content_correction_interrupt(state)
+
+
+def test_content_correction_interrupt_only_skipped_for_review_notes():
     assert skip_content_correction_interrupt(
+        {"content_brief": {"form_values": {"mp_service_entry": "好评笔记"}}}
+    )
+    assert not skip_content_correction_interrupt(
         {"content_brief": {"form_values": {"mp_service_entry": "装修家居", "mp_content_code": "ZX-1"}}}
     )
     assert not skip_content_correction_interrupt(
@@ -641,6 +736,37 @@ async def test_review_notes_skip_cover_agent_nodes_without_delegation(node_id: s
     assert result[state_key]["skip_reason"] == COVER_SKIP_REASON
     if node_id == "visual_review":
         assert result[state_key]["assets"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("node_id", "state_key"),
+    [
+        ("plan_visuals", "visual_plan"),
+        ("submit_cover_job", "cover_job"),
+        ("visual_review", "visual_review"),
+    ],
+)
+async def test_decoration_without_gallery_image_skips_cover_agent_nodes(node_id: str, state_key: str):
+    class ForbiddenDB:
+        async def get(self, *args, **kwargs):
+            raise AssertionError("未锁定图库图片时不应查询封面 Agent 节点依赖")
+
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("未锁定图库图片时不应查询封面 Agent 节点依赖")
+
+    result = await AgentNodeHandler().execute(
+        db=ForbiddenDB(),
+        node={"id": node_id},
+        state=_review_notes_state(
+            service_entry="装修家居",
+            runtime_config_snapshot={"visual_material": None},
+        ),
+        node_run_id="node-run-1",
+    )
+
+    assert result[state_key]["skipped"] is True
+    assert result[state_key]["skip_reason"] == MISSING_VISUAL_COVER_SKIP_REASON
 
 
 @pytest.mark.asyncio

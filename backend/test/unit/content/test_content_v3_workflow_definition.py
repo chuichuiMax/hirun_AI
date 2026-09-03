@@ -100,6 +100,18 @@ def test_creation_research_runs_with_business_and_viral_retrieval_budget():
 
 
 @pytest.mark.unit
+def test_generation_and_review_have_budget_for_multi_skill_nodes():
+    generation = _node(WORKFLOW_V3, "generate_content")
+    review = _node(WORKFLOW_V3, "semantic_review")
+
+    assert generation["timeout_seconds"] == 240
+    assert generation["max_execution_steps"] == 30
+    assert generation["max_execution_steps"] > 2 * (generation["max_tool_calls"] + len(generation["required_skills"]))
+    assert review["timeout_seconds"] == 180
+    assert review["max_execution_steps"] == 20
+
+
+@pytest.mark.unit
 def test_strategy_and_generation_are_single_agent_calls():
     strategy = _node(WORKFLOW_V3, "select_creation_strategy")
     generation = _node(WORKFLOW_V3, "generate_content")
@@ -127,7 +139,7 @@ def test_strategy_and_generation_are_single_agent_calls():
 
 
 @pytest.mark.unit
-def test_system_seed_upgrades_to_content_and_cover_version_12():
+def test_system_seed_upgrades_to_content_and_cover_version_13():
     stale = SimpleNamespace(
         created_by="system",
         schema_version=3,
@@ -137,7 +149,7 @@ def test_system_seed_upgrades_to_content_and_cover_version_12():
         output_schema={},
     )
     assert _upgrade_system_workflow_v3(stale) is True
-    assert stale.version == 12
+    assert stale.version == 13
     assert stale.definition_json == WORKFLOW_V3
 
 

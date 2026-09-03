@@ -17,13 +17,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content.catalog import CONTENT_TYPES
-from yuxi.content.schemas import ContentBriefPayload, ContentRunCreate, ContentRunResume, ContentTaskCreate
+from yuxi.content.schemas import (
+    ContentBriefPayload,
+    ContentRunCreate,
+    ContentRunResume,
+    ContentTaskCreate,
+    ContentVisualMaterialSelection,
+)
 from yuxi.content.service_entry_form import BRAND_NAME, map_service_entry_form_values
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.cover_repository import CoverRepository
 from yuxi.repositories.employee_repository import EmployeeRepository
+from yuxi.repositories.material_library_repository import MaterialLibraryRepository
 from yuxi.services.agent_run_service import stream_agent_run_events
 from yuxi.services.content_cover_service import create_cover_asset, get_cover_asset_file
+from yuxi.services.material_library_service import get_material_file, list_image_galleries, list_material_items
 from yuxi.services.content_service import (
     create_content_run,
     create_content_task,
@@ -89,6 +97,7 @@ FRAME_AREA_PRICING: tuple[dict[str, Any], ...] = (
 )
 _QUOTE_RANGE = re.compile(r"^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)万$")
 _QUOTE_FLOOR = re.compile(r"^(\d+(?:\.\d+)?)万以上$")
+_HYCANVAS_TEMPLATE_ID = re.compile(r"^xiaohongshu-[a-z0-9-]+$")
 _OPEN_QUOTE_SPAN = 10
 DESIGN_STYLES: tuple[str, ...] = ("现代简约", "轻奢", "新中式", "北欧", "奶油风", "原木风")
 REGION_TREE: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -243,9 +252,11 @@ class MpCompileBriefPayload(BaseModel):
     service_entry: ServiceEntry
     content_type_code: str | None = None
     form_values: dict[str, Any] = Field(default_factory=dict)
-    cover_asset_id: str = Field(min_length=1, max_length=64)
+    cover_asset_id: str | None = Field(default=None, max_length=64)
     cover_asset_ids: list[str] = Field(default_factory=list, max_length=3)
     cover_template_id: str | None = None
+    hycanvas_template_id: str | None = None
+    image_item_id: str | None = Field(default=None, max_length=64)
 
 
 class MpRunCreatePayload(BaseModel):
@@ -397,6 +408,7 @@ def build_mp_brief_payload(
     cover_template_id: str | None,
     content_code: str,
     cover_asset_ids: list[str] | None = None,
+    visual_material: ContentVisualMaterialSelection | None = None,
 ) -> ContentBriefPayload:
     photo_ids = _cover_asset_ids(cover_asset_id, cover_asset_ids)
     values = {str(key): value for key, value in form_values.items()}
@@ -407,6 +419,8 @@ def build_mp_brief_payload(
     values["cover_asset_ids"] = photo_ids
     if cover_template_id:
         values["cover_template_id"] = cover_template_id
+    if visual_material is not None:
+        values["hycanvas_template_id"] = visual_material.hycanvas_template_id
 
     mapped = map_service_entry_form_values(service_entry, values)
     persona_text = str(mapped.get("persona") or "")
@@ -420,6 +434,7 @@ def build_mp_brief_payload(
         attachments=[
             {"asset_id": item, "role": "cover" if index == 0 else "photo"} for index, item in enumerate(photo_ids)
         ],
+        visual_material=visual_material,
     )
 
 
@@ -690,6 +705,51 @@ def _cover_template_item(cover) -> dict[str, Any]:
     return data
 
 
+def _mp_hycanvas_template_item(item: dict[str, Any]) -> dict[str, Any]:
+    template_id = str(item["id"])
+    return {
+        **item,
+        "preview_urls": [f"/api/mp/content/hycanvas-templates/{template_id}/preview"],
+    }
+
+
+async def _list_mp_hycanvas_templates() -> list[dict[str, Any]]:
+    from yuxi.services.hycanvas_service import HyCanvasClient
+
+    try:
+        catalog = await HyCanvasClient.from_env().list_xiaohongshu_templates()
+    except HTTPException:
+        return []
+    return [_mp_hycanvas_template_item(item) for item in catalog.get("templates") or []]
+
+
+async def _lock_decoration_visual_material(
+    db: AsyncSession,
+    user: User,
+    *,
+    image_item_id: str | None = None,
+    cover_asset_id: str | None = None,
+    hycanvas_template_id: str | None = None,
+) -> tuple[ContentVisualMaterialSelection, str]:
+    template_id = str(hycanvas_template_id or "").strip()
+    if not _HYCANVAS_TEMPLATE_ID.fullmatch(template_id):
+        raise _mp_error(422, "MP_HYCANVAS_TEMPLATE_REQUIRED", "请选择小红书封面模板")
+    repo = MaterialLibraryRepository(db)
+    owner_uid = str(user.uid)
+    item = None
+    if str(image_item_id or "").strip():
+        item = await repo.get_item_for_user(str(image_item_id).strip(), owner_uid)
+    elif str(cover_asset_id or "").strip():
+        item = await repo.get_item_by_asset(str(cover_asset_id).strip())
+        if item is not None and item.owner_uid != owner_uid:
+            item = None
+    else:
+        raise _mp_error(422, "MP_COVER_REQUIRED", "请选择图库图片或上传封面图")
+    if item is None or item.material_type != "image" or item.status != "enabled":
+        raise _mp_error(422, "MP_COVER_LIBRARY_ITEM_MISSING", "封面图不存在、已停用或不在当前账号图库中")
+    return ContentVisualMaterialSelection(image_item_id=item.id, hycanvas_template_id=template_id), item.asset_id
+
+
 async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any]:
     if service_entry not in SERVICE_ENTRIES:
         raise _mp_error(422, "MP_SERVICE_ENTRY_INVALID", "服务入口不存在")
@@ -707,6 +767,7 @@ async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any
         )
     ]
     covers = [_cover_template_item(item) for item in await CoverRepository(db).list_enabled()]
+    hycanvas_templates = await _list_mp_hycanvas_templates() if service_entry == "装修家居" else []
     return {
         "service_entry": service_entry,
         "service_entries": [
@@ -722,6 +783,7 @@ async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any
         "regions": list(REGIONS),
         "region_tree": [{"city": city, "districts": list(districts)} for city, districts in REGION_TREE],
         "cover_templates": covers,
+        "hycanvas_templates": hycanvas_templates,
     }
 
 
@@ -735,11 +797,54 @@ async def list_cover_templates(db: AsyncSession) -> dict[str, Any]:
     return {"cover_templates": covers, "total": len(covers)}
 
 
+def _mp_gallery_item(item: dict[str, Any]) -> dict[str, Any]:
+    item_id = str(item["id"])
+    return {**item, "file_url": f"/api/mp/content/gallery-items/{item_id}/file"}
+
+
+async def list_mp_galleries(db: AsyncSession, ctx: MpContext) -> dict[str, Any]:
+    result = await list_image_galleries(db, ctx.user)
+    galleries = []
+    for item in result.get("galleries") or []:
+        cover_item_id = item.get("cover_item_id")
+        galleries.append(
+            {
+                **item,
+                "cover_file_url": f"/api/mp/content/gallery-items/{cover_item_id}/file" if cover_item_id else None,
+            }
+        )
+    return {"galleries": galleries}
+
+
+async def list_mp_gallery_items(db: AsyncSession, ctx: MpContext, category: str) -> dict[str, Any]:
+    result = await list_material_items(
+        db,
+        ctx.user,
+        material_type="image",
+        category=category,
+        status="enabled",
+        query=None,
+        page=1,
+        page_size=100,
+        sort="newest",
+    )
+    items = [_mp_gallery_item(item) for item in result.get("items") or []]
+    return {"items": items, "total": result.get("total") or 0}
+
+
+async def read_mp_gallery_item_file(db: AsyncSession, ctx: MpContext, item_id: str) -> tuple[bytes, str, str]:
+    return await get_material_file(db, ctx.user, item_id)
+
+
 async def upload_cover(db: AsyncSession, ctx: MpContext, file: UploadFile) -> dict[str, Any]:
     result = await create_cover_asset(db, ctx.user, file, role="source", content_task_id=None)
     asset = result["asset"]
     asset["file_url"] = f"/api/mp/content/covers/{asset['id']}/file"
-    return {"asset": asset}
+    library_item = await MaterialLibraryRepository(db).get_item_by_asset(asset["id"])
+    payload = {"asset": asset}
+    if library_item is not None:
+        payload["library_item_id"] = library_item.id
+    return payload
 
 
 async def read_cover_file(db: AsyncSession, ctx: MpContext, asset_id: str) -> tuple[bytes, str, str]:
@@ -760,6 +865,19 @@ async def read_cover_template_file(db: AsyncSession, cover_pk: str) -> tuple[byt
         raise _mp_error(404, "COVER_TEMPLATE_FILE_MISSING", "封面模板文件不可用") from exc
     content_type = "image/png" if object_name.lower().endswith(".png") else "image/jpeg"
     return data, content_type, cover.image_name
+
+
+async def read_hycanvas_template_preview(template_id: str) -> tuple[bytes, str]:
+    if not _HYCANVAS_TEMPLATE_ID.fullmatch(template_id):
+        raise _mp_error(404, "HYCANVAS_TEMPLATE_NOT_FOUND", "封面模板不存在")
+    from yuxi.services.hycanvas_service import HyCanvasClient
+
+    try:
+        return await HyCanvasClient.from_env().fetch_template_preview(template_id)
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            raise _mp_error(503, "HYCANVAS_NOT_CONFIGURED", "封面模板服务尚未配置") from exc
+        raise _mp_error(404, "HYCANVAS_TEMPLATE_PREVIEW_MISSING", "封面模板预览不可用") from exc
 
 
 async def _next_code_for_user(db: AsyncSession, user: User) -> str:
@@ -809,6 +927,18 @@ async def compile_brief(db: AsyncSession, ctx: MpContext, payload: MpCompileBrie
     ct_code = map_nrlx_to_ct_code(selected_type["type_code"], selected_type["name"])
     goal = resolve_content_goal(payload.service_entry, ct_code)
     template = await _decoration_template(db)
+    visual_material = None
+    cover_asset_id = payload.cover_asset_id
+    if payload.service_entry == "装修家居":
+        visual_material, cover_asset_id = await _lock_decoration_visual_material(
+            db,
+            ctx.user,
+            image_item_id=payload.image_item_id,
+            cover_asset_id=payload.cover_asset_id,
+            hycanvas_template_id=payload.hycanvas_template_id,
+        )
+    elif not str(payload.cover_asset_id or "").strip():
+        raise _mp_error(422, "MP_COVER_REQUIRED", "请上传照片")
     content_code = await _next_code_for_user(db, ctx.user)
     created = await create_content_task(
         db,
@@ -826,10 +956,11 @@ async def compile_brief(db: AsyncSession, ctx: MpContext, payload: MpCompileBrie
         service_entry=payload.service_entry,
         form_values=payload.form_values,
         content_type_name=selected_type["name"],
-        cover_asset_id=payload.cover_asset_id,
+        cover_asset_id=cover_asset_id,
         cover_asset_ids=payload.cover_asset_ids,
         cover_template_id=payload.cover_template_id,
         content_code=content_code,
+        visual_material=visual_material,
     )
     saved = await save_content_brief(db, ctx.user, task_id, brief, compile_now=True)
     result = {

@@ -8,6 +8,7 @@ from yuxi.services.mp_service import (
     REGIONS,
     _compact_run,
     _cover_asset_ids,
+    _lock_decoration_visual_material,
     build_mp_brief_payload,
     expand_quote_range,
     has_mp_content_code,
@@ -136,6 +137,91 @@ def test_build_mp_brief_payload_maps_decoration_fields_to_v3_variables():
     assert values["audience"] == ["长沙市 岳麓区"]
     assert "基础 4-5万" in values["craft_and_materials"]
     assert brief.attachments[0]["asset_id"] == "cca_demo"
+    assert brief.visual_material is None
+
+
+def test_build_mp_brief_payload_locks_hycanvas_visual_material():
+    from yuxi.content.schemas import ContentVisualMaterialSelection
+
+    brief = build_mp_brief_payload(
+        service_entry="装修家居",
+        form_values={
+            "楼盘信息": "星河湾",
+            "外框面积": "50-70㎡",
+            "基础": "4-5万",
+            "木制品": "2-3万",
+            "主材": "2-3万",
+            "设计风格": "北欧",
+            "所在区域": "长沙市 岳麓区",
+        },
+        content_type_name="工艺施工展示",
+        cover_asset_id="cca_demo",
+        cover_template_id=None,
+        content_code="NR20260902001",
+        visual_material=ContentVisualMaterialSelection(
+            image_item_id="mli_demo",
+            hycanvas_template_id="xiaohongshu-home-renovation",
+        ),
+    )
+    assert brief.visual_material is not None
+    assert brief.visual_material.image_item_id == "mli_demo"
+    assert brief.visual_material.hycanvas_template_id == "xiaohongshu-home-renovation"
+    assert brief.form_values["hycanvas_template_id"] == "xiaohongshu-home-renovation"
+
+
+@pytest.mark.asyncio
+async def test_lock_decoration_visual_material_requires_hycanvas_template():
+    with pytest.raises(HTTPException) as exc:
+        await _lock_decoration_visual_material(
+            None,
+            type("User", (), {"uid": "u1"})(),
+            cover_asset_id="cca_1",
+            hycanvas_template_id=None,
+        )
+    assert exc.value.status_code == 422
+    assert exc.value.detail["error"]["code"] == "MP_HYCANVAS_TEMPLATE_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_lock_decoration_visual_material_requires_image_or_upload():
+    with pytest.raises(HTTPException) as exc:
+        await _lock_decoration_visual_material(
+            None,
+            type("User", (), {"uid": "u1"})(),
+            hycanvas_template_id="xiaohongshu-home-renovation",
+        )
+    assert exc.value.status_code == 422
+    assert exc.value.detail["error"]["code"] == "MP_COVER_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_lock_decoration_visual_material_accepts_gallery_item(monkeypatch):
+    class Item:
+        id = "mli_1"
+        asset_id = "cca_1"
+        owner_uid = "u1"
+        material_type = "image"
+        status = "enabled"
+
+    class Repo:
+        def __init__(self, db):
+            pass
+
+        async def get_item_for_user(self, item_id, owner_uid, for_update=False):
+            assert item_id == "mli_1"
+            assert owner_uid == "u1"
+            return Item()
+
+    monkeypatch.setattr("yuxi.services.mp_service.MaterialLibraryRepository", Repo)
+    selection, asset_id = await _lock_decoration_visual_material(
+        None,
+        type("User", (), {"uid": "u1"})(),
+        image_item_id="mli_1",
+        hycanvas_template_id="xiaohongshu-home-renovation",
+    )
+    assert selection.image_item_id == "mli_1"
+    assert selection.hycanvas_template_id == "xiaohongshu-home-renovation"
+    assert asset_id == "cca_1"
 
 
 def test_cover_asset_ids_keep_order_and_reject_more_than_three():

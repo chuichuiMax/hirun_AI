@@ -976,7 +976,7 @@ async def test_channel_title_too_long_routes_to_generation_instead_of_contract_e
             "state_version": 1,
             "retry_counts": {},
             "content_brief": {
-                "form_values": {"mp_service_entry": "装修家居", "mp_content_code": "ZX-001"}
+                "form_values": {"mp_service_entry": "好评笔记", "mp_content_code": "ZX-001"}
             },
             "review_report": {
                 "status": "blocked",

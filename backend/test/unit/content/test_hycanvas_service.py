@@ -63,6 +63,26 @@ async def test_lists_only_xiaohongshu_templates_and_keeps_fillable_fields():
 
 
 @pytest.mark.asyncio
+async def test_fetches_xiaohongshu_template_preview_png():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/template-previews/xiaohongshu-checklist-p0.png"
+        return httpx.Response(200, content=b"png-bytes", headers={"content-type": "image/png"})
+
+    client = HyCanvasClient(
+        base_url="http://hycanvas",
+        public_url="http://canvas.example",
+        api_key="hyk_test",
+        workspace_id="ws-1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    data, content_type = await client.fetch_template_preview("xiaohongshu-checklist")
+
+    assert data == b"png-bytes"
+    assert content_type == "image/png"
+
+
+@pytest.mark.asyncio
 async def test_creates_design_in_configured_workspace_and_returns_urls():
     async def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
