@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { Plus, Search, Zap } from 'lucide-vue-next'
 
@@ -27,6 +27,8 @@ const saving = ref(false)
 const togglingId = ref('')
 const keywordInput = ref('')
 const keyword = ref('')
+const page = ref(1)
+const pageSize = ref(20)
 const accounts = ref([])
 const modalOpen = ref(false)
 const dataModalOpen = ref(false)
@@ -35,6 +37,13 @@ const viewingAccount = ref(null)
 const form = reactive(emptyForm())
 
 const modalTitle = computed(() => (editingId.value ? '编辑账号' : '新增账号'))
+const tablePagination = computed(() => ({
+  current: page.value,
+  pageSize: pageSize.value,
+  showSizeChanger: true,
+  showTotal: (total) => `共 ${total} 条`,
+  pageSizeOptions: ['10', '20', '50']
+}))
 
 const accountTypeLabel = (type) =>
   ACCOUNT_TYPE_OPTIONS.find((item) => item.value === type)?.label || type || '-'
@@ -53,7 +62,13 @@ const loadAccounts = async () => {
 
 const handleSearch = () => {
   keyword.value = keywordInput.value.trim()
+  page.value = 1
   void loadAccounts()
+}
+
+const handleTableChange = (pagination) => {
+  page.value = pagination.current
+  pageSize.value = pagination.pageSize
 }
 
 const resetForm = (account) => {
@@ -153,6 +168,11 @@ const removeAccount = (account) => {
 }
 
 onMounted(loadAccounts)
+
+watch(accounts, (list) => {
+  const maxPage = Math.max(1, Math.ceil(list.length / pageSize.value))
+  if (page.value > maxPage) page.value = maxPage
+})
 </script>
 
 <template>
@@ -188,11 +208,12 @@ onMounted(loadAccounts)
         class="account-table"
         :data-source="accounts"
         :loading="loading"
-        :pagination="false"
+        :pagination="tablePagination"
         row-key="id"
+        @change="handleTableChange"
       >
         <a-table-column title="序号" key="index" :width="72">
-          <template #default="{ index }">{{ index + 1 }}</template>
+          <template #default="{ index }">{{ (page - 1) * pageSize + index + 1 }}</template>
         </a-table-column>
         <a-table-column title="账号名称" data-index="name" key="name" />
         <a-table-column title="ID" data-index="account_id" key="account_id" />
@@ -368,6 +389,10 @@ onMounted(loadAccounts)
     background: var(--gray-10);
     color: var(--gray-700);
     font-weight: 600;
+  }
+
+  :deep(.ant-table-pagination) {
+    margin: 16px 0 0;
   }
 }
 

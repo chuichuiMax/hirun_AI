@@ -115,3 +115,75 @@ async def test_v3_strategy_preview_permissions_and_removed_v2_route(test_client,
             f"/api/material-library/items/{material['id']}", headers=admin_headers
         )
         assert material_delete.status_code == 200, material_delete.text
+
+
+async def test_gallery_image_cannot_be_selected_by_a_second_task(test_client, admin_headers):
+    material_response = await test_client.post(
+        "/api/material-library/images/import",
+        headers=admin_headers,
+        data={"category": "product"},
+        files=[("files", (f"content-image-in-use-{uuid.uuid4().hex}.png", _png(), "image/png"))],
+    )
+    assert material_response.status_code == 201, material_response.text
+    material = material_response.json()["items"][0]
+    bootstrap_response = await test_client.get("/api/content/bootstrap", headers=admin_headers)
+    assert bootstrap_response.status_code == 200, bootstrap_response.text
+    template = next(item for item in bootstrap_response.json()["industry_templates"] if item["slug"] == "decoration")
+    task_ids = []
+    try:
+        for suffix in ("a", "b"):
+            created = await test_client.post(
+                "/api/content/tasks",
+                headers=admin_headers,
+                json={
+                    "industry_template_id": template["id"],
+                    "mode": "quick",
+                    "content_goal": "brand",
+                    "content_type_code": "CT05",
+                    "name": f"pytest_image_in_use_{suffix}_{uuid.uuid4().hex[:8]}",
+                },
+            )
+            assert created.status_code == 200, created.text
+            task_ids.append(created.json()["task"]["id"])
+
+        first = await test_client.put(
+            f"/api/content/tasks/{task_ids[0]}/brief",
+            headers=admin_headers,
+            json={"brief": {"visual_material": {"image_item_id": material["id"]}}},
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["task"]["selected_image_item_id"] == material["id"]
+
+        listed = await test_client.get(
+            f"/api/material-library/items?material_type=image&category={material['category']}&query={material['name']}",
+            headers=admin_headers,
+        )
+        assert listed.status_code == 200, listed.text
+        used_item = next(item for item in listed.json()["items"] if item["id"] == material["id"])
+        assert used_item["in_use"] is True
+
+        excluded = await test_client.get(
+            "/api/material-library/items"
+            f"?material_type=image&category={material['category']}&query={material['name']}"
+            f"&exclude_task_id={task_ids[0]}",
+            headers=admin_headers,
+        )
+        assert excluded.status_code == 200, excluded.text
+        current_item = next(item for item in excluded.json()["items"] if item["id"] == material["id"])
+        assert current_item["in_use"] is False
+
+        second = await test_client.put(
+            f"/api/content/tasks/{task_ids[1]}/brief",
+            headers=admin_headers,
+            json={"brief": {"visual_material": {"image_item_id": material["id"]}}},
+        )
+        assert second.status_code == 409, second.text
+        assert second.json()["detail"]["error"]["code"] == "CONTENT_IMAGE_MATERIAL_IN_USE"
+    finally:
+        for task_id in task_ids:
+            deleted = await test_client.delete(f"/api/content/tasks/{task_id}", headers=admin_headers)
+            assert deleted.status_code == 200, deleted.text
+        material_delete = await test_client.delete(
+            f"/api/material-library/items/{material['id']}", headers=admin_headers
+        )
+        assert material_delete.status_code == 200, material_delete.text

@@ -260,6 +260,128 @@ async def test_failed_node_retry_continues_from_checkpoint(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failed_revision_retry_resets_exhausted_counts(monkeypatch):
+    graph = FakeGraph()
+    graph.pending_node = "revise_if_needed"
+    graph.values = {"retry_counts": {"generate_content": 2}}
+    workflow = SimpleNamespace(
+        definition_json={
+            "schema_version": 3,
+            "revision_routes": [{"from": "revise_if_needed", "to": "generate_content", "max_attempts": 2}],
+        }
+    )
+    run = SimpleNamespace(
+        id="run-revision-retry",
+        status="pending",
+        uid="user-1",
+        request_id="request-revision-retry",
+        checkpoint_thread_id="content:task-1",
+        input_payload={"action": "retry", "node_id": "revise_if_needed", "model_spec": None},
+    )
+    task = SimpleNamespace(
+        id="task-1",
+        workflow_version_id="workflow-v3",
+        rule_version_id="rules-v3",
+        industry_template_version_id="industry-v3",
+        runtime_config_snapshot_json={"schema_version": 3},
+        brief_json={},
+        strategy_json={},
+        evidence_json={"items": []},
+    )
+
+    async def load_run(run_id):
+        return run, task, workflow, {"version": {"id": "rules-v3"}}
+
+    async def set_status(run_id, *, status, **kwargs):
+        return None
+
+    async def no_event(*args, **kwargs):
+        return None
+
+    async def no_cancel(*args, **kwargs):
+        return False
+
+    async def get_graph(*args, **kwargs):
+        return graph
+
+    monkeypatch.setattr(content_run_worker, "_load_content_run", load_run)
+    monkeypatch.setattr(content_run_worker, "_set_content_run_status", set_status)
+    monkeypatch.setattr(content_run_worker, "append_run_stream_event", no_event)
+    monkeypatch.setattr(content_run_worker, "clear_cancel_signal", no_event)
+    monkeypatch.setattr(content_run_worker, "has_cancel_signal", no_cancel)
+    monkeypatch.setattr(
+        content_run_worker.agent_manager,
+        "get_agent",
+        lambda agent_id: SimpleNamespace(get_graph=get_graph),
+    )
+
+    await content_run_worker.process_content_run({"job_try": 1}, run.id)
+
+    assert graph.updated_state["retry_counts"] == {"generate_content": 0}
+
+
+@pytest.mark.asyncio
+async def test_mp_retry_without_node_id_resets_exhausted_revision_counts(monkeypatch):
+    graph = FakeGraph()
+    graph.pending_node = "revise_if_needed"
+    graph.values = {"retry_counts": {"generate_content": 2}}
+    workflow = SimpleNamespace(
+        definition_json={
+            "schema_version": 3,
+            "revision_routes": [{"from": "revise_if_needed", "to": "generate_content", "max_attempts": 2}],
+        }
+    )
+    run = SimpleNamespace(
+        id="run-mp-revision-retry",
+        status="pending",
+        uid="user-1",
+        request_id="request-mp-revision-retry",
+        checkpoint_thread_id="content:task-1",
+        input_payload={"action": "retry", "model_spec": None},
+    )
+    task = SimpleNamespace(
+        id="task-1",
+        workflow_version_id="workflow-v3",
+        rule_version_id="rules-v3",
+        industry_template_version_id="industry-v3",
+        runtime_config_snapshot_json={"schema_version": 3},
+        brief_json={},
+        strategy_json={},
+        evidence_json={"items": []},
+    )
+
+    async def load_run(run_id):
+        return run, task, workflow, {"version": {"id": "rules-v3"}}
+
+    async def set_status(run_id, *, status, **kwargs):
+        return None
+
+    async def no_event(*args, **kwargs):
+        return None
+
+    async def no_cancel(*args, **kwargs):
+        return False
+
+    async def get_graph(*args, **kwargs):
+        return graph
+
+    monkeypatch.setattr(content_run_worker, "_load_content_run", load_run)
+    monkeypatch.setattr(content_run_worker, "_set_content_run_status", set_status)
+    monkeypatch.setattr(content_run_worker, "append_run_stream_event", no_event)
+    monkeypatch.setattr(content_run_worker, "clear_cancel_signal", no_event)
+    monkeypatch.setattr(content_run_worker, "has_cancel_signal", no_cancel)
+    monkeypatch.setattr(
+        content_run_worker.agent_manager,
+        "get_agent",
+        lambda agent_id: SimpleNamespace(get_graph=get_graph),
+    )
+
+    await content_run_worker.process_content_run({"job_try": 1}, run.id)
+
+    assert graph.updated_state["retry_counts"] == {"generate_content": 0}
+
+
+@pytest.mark.asyncio
 async def test_failed_cover_wait_retry_requeues_cover_and_updates_checkpoint(monkeypatch):
     graph = FakeGraph()
     graph.pending_node = "wait_cover_job"

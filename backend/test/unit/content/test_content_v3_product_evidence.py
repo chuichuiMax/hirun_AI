@@ -526,6 +526,43 @@ async def test_body_validation_requires_available_business_knowledge_evidence(mo
     assert result["validation_report"]["checks"][-1]["code"] == "KNOWLEDGE_EVIDENCE_UNUSED"
 
 
+def test_knowledge_body_evidence_ids_ignore_style_and_rule_materials():
+    from yuxi.content.model.contracts import knowledge_body_evidence_ids
+
+    ids = knowledge_body_evidence_ids(
+        {
+            "items": [
+                {
+                    "id": "ev-craft",
+                    "source_type": "knowledge_base",
+                    "allowed_usage": ["body"],
+                    "metadata": {"material_type": "craft"},
+                },
+                {
+                    "id": "ev-viral",
+                    "source_type": "knowledge_base",
+                    "allowed_usage": ["body"],
+                    "metadata": {"material_type": "viral_example"},
+                },
+                {
+                    "id": "ev-rule",
+                    "source_type": "knowledge_base",
+                    "allowed_usage": ["body"],
+                    "metadata": {"material_type": "platform_rule"},
+                },
+                {
+                    "id": "ev-title-only",
+                    "source_type": "knowledge_base",
+                    "allowed_usage": ["title"],
+                    "metadata": {"material_type": "craft"},
+                },
+            ]
+        }
+    )
+
+    assert ids == frozenset({"ev-craft"})
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_body_validation_blocks_mechanical_outline_narration(monkeypatch):

@@ -1,7 +1,7 @@
 ---
 name: content-body-generator
 description: 使用人工锁定标题和同一份 ContentBrief、StrategyPlan、EvidenceBundle 生成正文与话题。仅在 Yuxi 内容工作流的正文生成或定向重写节点使用。
-version: 2.0.0
+version: 2.2.0
 ---
 
 # 正文与话题生成
@@ -17,7 +17,8 @@ version: 2.0.0
 5. 只使用 `payload.evidence_bundle` 中允许用于正文的事实；不得调用业务事实或知识库工具，不得补造客户、价格、参数、统计或效果。
 6. 正文和话题中的每个阿拉伯数字都必须来自运行时提供的数字白名单。不得编造数字示例、对比数字或统计数字，也不得使用阿拉伯数字或数字 emoji 作为段落编号；改用项目符号。
 7. 输出前逐项核对正文和话题里的数字；发现白名单外数字时，删除数字或把句子改为不含数字的事实表达。
-8. 正文控制在 200～650 字；每个事实段落通过 `paragraph_evidence` 关联实际使用的 Evidence ID。关联价格知识证据的段落必须真实出现该证据中的至少一个具体价格值，不能只挂 Evidence ID。
-9. 简化工作流严格提交 `GeneratedContentResultV1`，正文放入 `draft`；旧工作流仍提交 `ContentDraftResultV1`。
+8. 正文控制在 200～650 字；每个事实段落通过 `paragraph_evidence` 关联实际使用的 Evidence ID。若 EvidenceBundle 中存在允许用于正文的业务知识证据，必须至少引用其中一条，不能只写事实不挂 ID。关联价格知识证据的段落必须真实出现该证据中的至少一个具体价格值，不能只挂 Evidence ID。
+9. 如果 `payload.validation_report.status=blocked` 或 `payload.review_report.status=blocked`，读取全部阻断检查并在上一稿 `payload.content_draft` / `payload.content_outline` 上定点修改；保留仍然有效的 `paragraph_evidence`，不得为了绕开审核而清空知识库证据引用。
+10. 简化工作流严格提交 `GeneratedContentResultV1`，正文放入 `draft`；旧工作流仍提交 `ContentDraftResultV1`。
 
 保持平台无关正文；话题提供 3～8 个，不执行发布。

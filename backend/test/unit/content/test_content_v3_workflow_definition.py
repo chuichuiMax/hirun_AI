@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from yuxi.content.control.workflow.revision import RevisionRouteController
+from yuxi.content.control.workflow.revision import RevisionRouteController, reset_exhausted_revision_counts
 from yuxi.content.model.workflows.definition import DEFAULT_CONTRACTS, WorkflowCatalog, WorkflowDefinitionPolicy
 from yuxi.content.v3.seed import _upgrade_system_workflow_v3
 from yuxi.content.v3.workflow import WORKFLOW_V3
@@ -229,6 +229,26 @@ def test_revision_controller_routes_generation_failures_to_unified_agent():
 
     persona = controller.decide(definition=WORKFLOW_V3, reason_code="PERSONA_STYLE_FAILED", retry_counts={})
     assert persona.target_node_id == "generate_content"
+
+    reset = reset_exhausted_revision_counts(
+        definition=WORKFLOW_V3, retry_counts=stopped.retry_counts
+    )
+    retried = controller.decide(definition=WORKFLOW_V3, reason_code="BODY_EVIDENCE_FAILED", retry_counts=reset)
+    assert reset == {"generate_content": 0}
+    assert retried.status == "route"
+    assert retried.retry_counts == {"generate_content": 1}
+
+
+@pytest.mark.unit
+def test_generate_content_receives_blocked_reports_and_previous_draft():
+    generation = _node(WORKFLOW_V3, "generate_content")
+    assert generation["optional_state_inputs"] == [
+        "validation_report",
+        "review_report",
+        "selected_title",
+        "content_outline",
+        "content_draft",
+    ]
 
 
 @pytest.mark.unit

@@ -312,6 +312,7 @@ class AgentNodeHandler:
             product_material_requirements=state.get("product_material_requirements") or {},
             strategy_snapshot=state.get("strategy_snapshot") or {},
             skip_formula_lexicon_usage=skip_formula_lexicon_pipeline(state),
+            channel_profile=state.get("channel_profile") or {},
         )
         prohibited_actions = list(PROHIBITED_ACTIONS.get(node["id"], ()))
         if skip_formula_lexicon_pipeline(state) and node["id"] == "semantic_review":

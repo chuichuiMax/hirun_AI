@@ -775,11 +775,24 @@ async def duplicate_content_task(db: AsyncSession, user: User, task_id: str) -> 
         runtime_config_snapshot=deepcopy(source.runtime_config_snapshot_json or {}),
     )
     copy_task.brief_json = deepcopy(source.brief_json or {})
+    copy_visual = dict((copy_task.brief_json or {}).get("visual_material") or {})
+    if copy_visual:
+        for key in (
+            "image_item_id",
+            "image_asset_id",
+            "image_name",
+            "image_category_id",
+            "image_sha256",
+            "image_width",
+            "image_height",
+        ):
+            copy_visual.pop(key, None)
+        copy_task.brief_json["visual_material"] = copy_visual or None
     copy_task.strategy_json = {}
     copy_task.evidence_json = deepcopy(source.evidence_json or {})
     copy_task.selected_angle_json = {}
     copy_task.primary_narrative_axis = None
-    copy_task.selected_image_item_id = source.selected_image_item_id
+    copy_task.selected_image_item_id = None
     copy_task.selected_poster_template_id = source.selected_poster_template_id
     copy_task.current_stage = "generation" if copy_task.brief_json else "brief"
     await db.commit()
@@ -834,6 +847,12 @@ async def save_content_brief(
                 422,
                 "CONTENT_IMAGE_MATERIAL_INVALID",
                 "所选图库图片不存在、已停用或无权访问",
+            )
+        if await material_repo.item_is_selected_by_task(image_item.id, owner_uid, exclude_task_id=task.id):
+            raise _content_error(
+                409,
+                "CONTENT_IMAGE_MATERIAL_IN_USE",
+                "该图库图片已被其他内容任务使用，请选择其他图片",
             )
         image_asset = await material_repo.get_asset(image_item.asset_id, owner_uid, for_update=True)
         if image_asset is None or image_asset.role not in {"source", "library_image"}:

@@ -129,18 +129,30 @@ class MaterialLibraryRepository:
             ).scalars()
         )
 
-    async def item_is_selected_by_task(self, item_id: str, owner_uid: str) -> bool:
-        return bool(
-            (
-                await self.db.execute(
-                    select(func.count(ContentTask.id)).where(
-                        ContentTask.created_by == owner_uid,
-                        ContentTask.selected_image_item_id == item_id,
-                        ContentTask.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one()
-        )
+    async def item_is_selected_by_task(
+        self, item_id: str, owner_uid: str, *, exclude_task_id: str | None = None
+    ) -> bool:
+        filters = [
+            ContentTask.created_by == owner_uid,
+            ContentTask.selected_image_item_id == item_id,
+            ContentTask.deleted_at.is_(None),
+        ]
+        if exclude_task_id:
+            filters.append(ContentTask.id != exclude_task_id)
+        return bool((await self.db.execute(select(func.count(ContentTask.id)).where(*filters))).scalar_one())
+
+    async def list_selected_image_item_ids(
+        self, owner_uid: str, *, exclude_task_id: str | None = None
+    ) -> set[str]:
+        filters = [
+            ContentTask.created_by == owner_uid,
+            ContentTask.selected_image_item_id.is_not(None),
+            ContentTask.deleted_at.is_(None),
+        ]
+        if exclude_task_id:
+            filters.append(ContentTask.id != exclude_task_id)
+        rows = await self.db.execute(select(ContentTask.selected_image_item_id).where(*filters))
+        return {item_id for item_id in rows.scalars().all() if item_id}
 
     async def list_items(
         self,

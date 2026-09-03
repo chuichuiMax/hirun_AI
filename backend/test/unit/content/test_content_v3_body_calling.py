@@ -160,3 +160,61 @@ def test_generated_content_must_report_formula_lexicon_usage() -> None:
     payload["title"]["lexicon_usage"].pop()
     with pytest.raises(ContractDomainValidationError, match="标题必须使用"):
         validate_content_node_result("GeneratedContentResultV1", payload, context)
+
+
+def test_generated_content_must_cite_body_knowledge_evidence() -> None:
+    context = ContractDomainContext(
+        locked_title_formula_code="T01",
+        locked_body_formula_code="C02",
+        skip_formula_lexicon_usage=True,
+        allowed_evidence_by_usage={"title": frozenset(), "body": frozenset({"ev-kb"})},
+        body_knowledge_evidence_ids=frozenset({"ev-kb"}),
+    )
+    payload = {
+        "title": {"text": "标题", "formula_code": "T01", "evidence_ids": []},
+        "outline": {
+            "body_formula_code": "C02",
+            "sections": [{"section_id": "opening", "goal": "开篇", "evidence_ids": []}],
+        },
+        "draft": {
+            "body": "正文",
+            "topics": [],
+            "paragraph_evidence": [],
+            "body_formula_code": "C02",
+        },
+    }
+    with pytest.raises(ContractDomainValidationError, match="必须在 paragraph_evidence 中引用"):
+        validate_content_node_result("GeneratedContentResultV1", payload, context)
+
+    payload["draft"]["paragraph_evidence"] = [{"paragraph_id": "p1", "evidence_ids": ["ev-kb"]}]
+    result = validate_content_node_result("GeneratedContentResultV1", payload, context)
+    assert result.draft.paragraph_evidence[0].evidence_ids == ["ev-kb"]
+
+
+def test_generated_content_must_fit_channel_title_length() -> None:
+    context = ContractDomainContext(
+        locked_title_formula_code="T01",
+        locked_body_formula_code="C02",
+        skip_formula_lexicon_usage=True,
+        allowed_evidence_by_usage={"title": frozenset(), "body": frozenset()},
+        title_min_length=6,
+        title_max_length=20,
+    )
+    payload = {
+        "title": {
+            "text": "长沙老房装修闭眼入不踩雷五十到七十平照着做",
+            "formula_code": "T01",
+            "evidence_ids": [],
+        },
+        "outline": {
+            "body_formula_code": "C02",
+            "sections": [{"section_id": "opening", "goal": "开篇", "evidence_ids": []}],
+        },
+        "draft": {"body": "正文", "topics": [], "paragraph_evidence": [], "body_formula_code": "C02"},
+    }
+    with pytest.raises(ContractDomainValidationError, match="标题超过 20 字"):
+        validate_content_node_result("GeneratedContentResultV1", payload, context)
+
+    payload["title"]["text"] = "老房改造更省心"
+    result = validate_content_node_result("GeneratedContentResultV1", payload, context)
+    assert result.title.text == "老房改造更省心"

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { Search } from 'lucide-vue-next'
 
@@ -31,6 +31,8 @@ const saving = ref(false)
 const togglingId = ref('')
 const keywordInput = ref('')
 const keyword = ref('')
+const page = ref(1)
+const pageSize = ref(20)
 const variables = ref([])
 const modalOpen = ref(false)
 const editingId = ref('')
@@ -40,6 +42,13 @@ const modalTitle = computed(() => (editingId.value ? '编辑变量' : '新增变
 const displayedVariables = computed(() =>
   variables.value.filter((item) => item.service_entry === activeServiceEntry.value)
 )
+const tablePagination = computed(() => ({
+  current: page.value,
+  pageSize: pageSize.value,
+  showSizeChanger: true,
+  showTotal: (total) => `共 ${total} 条`,
+  pageSizeOptions: ['10', '20', '50']
+}))
 
 const optionLabels = (options, values) => {
   const selected = Array.isArray(values) ? values : []
@@ -71,7 +80,18 @@ const loadVariables = async () => {
 
 const handleSearch = () => {
   keyword.value = keywordInput.value.trim()
+  page.value = 1
   void loadVariables()
+}
+
+const handleTableChange = (pagination) => {
+  page.value = pagination.current
+  pageSize.value = pagination.pageSize
+}
+
+const selectServiceEntry = (entry) => {
+  activeServiceEntry.value = entry
+  page.value = 1
 }
 
 const openCreate = () => {
@@ -176,6 +196,11 @@ const removeVariable = (item) => {
 }
 
 onMounted(loadVariables)
+
+watch([displayedVariables, pageSize], () => {
+  const maxPage = Math.max(1, Math.ceil(displayedVariables.value.length / pageSize.value))
+  if (page.value > maxPage) page.value = maxPage
+})
 </script>
 
 <template>
@@ -208,7 +233,7 @@ onMounted(loadVariables)
           type="button"
           class="service-entry-tab"
           :class="{ active: activeServiceEntry === entry }"
-          @click="activeServiceEntry = entry"
+          @click="selectServiceEntry(entry)"
         >
           {{ entry }}
         </button>
@@ -218,12 +243,13 @@ onMounted(loadVariables)
         class="variable-table"
         :data-source="displayedVariables"
         :loading="loading"
-        :pagination="false"
+        :pagination="tablePagination"
         :bordered="true"
         row-key="id"
+        @change="handleTableChange"
       >
         <a-table-column title="序号" key="index" :width="80" align="center">
-          <template #default="{ index }">{{ index + 1 }}</template>
+          <template #default="{ index }">{{ (page - 1) * pageSize + index + 1 }}</template>
         </a-table-column>
         <a-table-column title="编码" data-index="variable_code" key="variable_code" :width="128" />
         <a-table-column title="变量" key="name" :width="160">
@@ -436,6 +462,10 @@ onMounted(loadVariables)
 
   :deep(.ant-switch-checked) {
     background: var(--color-success-500);
+  }
+
+  :deep(.ant-table-pagination) {
+    margin: 16px 0 0;
   }
 }
 

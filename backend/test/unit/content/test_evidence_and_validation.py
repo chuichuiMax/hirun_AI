@@ -59,3 +59,65 @@ def test_deterministic_review_accepts_numbers_in_shared_evidence_bundle():
     )
 
     assert report == {"status": "passed", "checks": []}
+
+
+def test_compliance_engine_uses_shared_code_for_named_block_rules():
+    from yuxi.content.validation import ComplianceEngine
+
+    result = ComplianceEngine().validate_and_adapt(
+        title="全屋百分百保证",
+        body="联系方式见官网",
+        topics=[],
+        channel_profile={},
+        policies=[
+            {
+                "rules": [
+                    {
+                        "id": "replacement-absolute_guarantee",
+                        "rule_code": "ABSOLUTE_GUARANTEE",
+                        "pattern": "百分百保证",
+                        "match_type": "literal",
+                        "action": "block",
+                        "enabled": True,
+                        "explanation": "禁止无证据的绝对承诺",
+                    }
+                ]
+            }
+        ],
+    )
+
+    assert result["status"] == "blocked"
+    assert result["checks"][0]["code"] == "COMPLIANCE_RULE_MATCH"
+    assert result["checks"][0]["rule_code"] == "ABSOLUTE_GUARANTEE"
+
+
+def test_compliance_confirm_rule_does_not_block_generation():
+    from yuxi.content.validation import ComplianceEngine
+
+    result = ComplianceEngine().validate_and_adapt(
+        title="全屋零增项落地",
+        body="合同范围内零增项",
+        topics=[],
+        channel_profile={"title_constraints": {"min_length": 6, "max_length": 20}},
+        policies=[
+            {
+                "rules": [
+                    {
+                        "id": "replacement-zero_addition",
+                        "rule_code": "ZERO_ADDITION",
+                        "pattern": "零增项",
+                        "match_type": "literal",
+                        "action": "confirm",
+                        "enabled": True,
+                        "human_confirmation_required": True,
+                        "explanation": "零增项必须明确合同范围并人工确认",
+                    }
+                ]
+            }
+        ],
+    )
+
+    assert result["status"] == "warning"
+    assert result["checks"][0]["code"] == "COMPLIANCE_RULE_MATCH"
+    assert result["checks"][0]["level"] == "warning"
+    assert result["checks"][0]["human_confirmation_required"] is True

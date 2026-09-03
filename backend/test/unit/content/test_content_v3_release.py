@@ -11,7 +11,7 @@ from yuxi.agents.middlewares.skills import SkillsMiddleware
 from yuxi.agents.middlewares.token_usage import TokenUsageMiddleware
 from yuxi.content.catalog import CONTENT_TYPES
 from yuxi.content.rules import BODY_FORMULAS, METHODS, TITLE_FORMULAS
-from yuxi.content.schemas import ContentBriefPayload, ContentRunCreate, ContentTaskCreate
+from yuxi.content.schemas import ContentBriefPayload, ContentRunCreate, ContentTaskCreate, ContentVisualMaterialSelection
 from yuxi.content.v3.fixtures import load_decoration_matrix
 from yuxi.content.v3.workflow import LEGACY_PLATFORM_WORKFLOW_V3_ID, PLATFORM_WORKFLOW_V3_ID
 
@@ -110,6 +110,70 @@ async def test_v34_brief_compiles_without_visual_material(monkeypatch):
     assert result["compiled"] is True
     assert task.selected_image_item_id is None
     assert task.runtime_config_snapshot_json["visual_material"] is None
+
+
+@pytest.mark.asyncio
+async def test_save_brief_rejects_image_selected_by_another_task(monkeypatch):
+    task = SimpleNamespace(
+        id="task-v3-in-use",
+        workflow_version_id=PLATFORM_WORKFLOW_V3_ID,
+        industry_template_version_id="industry-decoration-v3",
+        current_stage="brief",
+        selected_image_item_id=None,
+        selected_poster_template_id=None,
+        brief_json={},
+        runtime_config_snapshot_json={"schema_version": 3},
+        to_dict=lambda: {"id": "task-v3-in-use"},
+    )
+
+    class FakeContentRepo:
+        def __init__(self, db):
+            del db
+
+        async def get_task_for_user(self, task_id, user, for_update=False):
+            del user, for_update
+            return task if task_id == task.id else None
+
+        async def get_template(self, template_id):
+            return SimpleNamespace(id=template_id)
+
+    class FakeMaterialRepo:
+        def __init__(self, db):
+            del db
+
+        async def get_item_for_user(self, item_id, owner_uid, for_update=False):
+            del owner_uid, for_update
+            return SimpleNamespace(id=item_id, material_type="image", status="enabled", asset_id="asset-1")
+
+        async def item_is_selected_by_task(self, item_id, owner_uid, exclude_task_id=None):
+            assert item_id == "img-used"
+            assert owner_uid == "user-1"
+            assert exclude_task_id == task.id
+            return True
+
+    class FakeDB:
+        async def commit(self):
+            return None
+
+    monkeypatch.setattr(content_service, "ContentRepository", FakeContentRepo)
+    monkeypatch.setattr(content_service, "MaterialLibraryRepository", FakeMaterialRepo)
+    monkeypatch.setattr(
+        content_service,
+        "compile_content_brief",
+        lambda **kwargs: ({"form_values": kwargs["brief"].form_values}, []),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await content_service.save_content_brief(
+            FakeDB(),
+            SimpleNamespace(uid="user-1"),
+            task.id,
+            ContentBriefPayload(visual_material=ContentVisualMaterialSelection(image_item_id="img-used")),
+            compile_now=False,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"]["code"] == "CONTENT_IMAGE_MATERIAL_IN_USE"
 
 
 @pytest.mark.asyncio

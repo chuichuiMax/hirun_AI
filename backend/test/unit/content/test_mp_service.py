@@ -9,9 +9,11 @@ from yuxi.services.mp_service import (
     _compact_run,
     _cover_asset_ids,
     _lock_decoration_visual_material,
+    _mp_gallery_item,
     build_mp_brief_payload,
     expand_quote_range,
     has_mp_content_code,
+    list_mp_gallery_items,
     lookup_frame_area_pricing,
     map_nrlx_to_ct_code,
     mask_phone,
@@ -212,6 +214,9 @@ async def test_lock_decoration_visual_material_accepts_gallery_item(monkeypatch)
             assert owner_uid == "u1"
             return Item()
 
+        async def item_is_selected_by_task(self, item_id, owner_uid, exclude_task_id=None):
+            return False
+
     monkeypatch.setattr("yuxi.services.mp_service.MaterialLibraryRepository", Repo)
     selection, asset_id = await _lock_decoration_visual_material(
         None,
@@ -222,6 +227,65 @@ async def test_lock_decoration_visual_material_accepts_gallery_item(monkeypatch)
     assert selection.image_item_id == "mli_1"
     assert selection.hycanvas_template_id == "xiaohongshu-home-renovation"
     assert asset_id == "cca_1"
+
+
+@pytest.mark.asyncio
+async def test_lock_decoration_visual_material_rejects_image_in_use(monkeypatch):
+    class Item:
+        id = "mli_1"
+        asset_id = "cca_1"
+        owner_uid = "u1"
+        material_type = "image"
+        status = "enabled"
+
+    class Repo:
+        def __init__(self, db):
+            pass
+
+        async def get_item_for_user(self, item_id, owner_uid, for_update=False):
+            return Item()
+
+        async def item_is_selected_by_task(self, item_id, owner_uid, exclude_task_id=None):
+            return True
+
+    monkeypatch.setattr("yuxi.services.mp_service.MaterialLibraryRepository", Repo)
+    with pytest.raises(HTTPException) as exc:
+        await _lock_decoration_visual_material(
+            None,
+            type("User", (), {"uid": "u1"})(),
+            image_item_id="mli_1",
+            hycanvas_template_id="xiaohongshu-home-renovation",
+        )
+    assert exc.value.status_code == 409
+    assert exc.value.detail["error"]["code"] == "MP_COVER_IN_USE"
+
+
+def test_mp_gallery_item_always_exposes_in_use():
+    used = _mp_gallery_item({"id": "mli_1", "name": "客厅", "in_use": True})
+    unused = _mp_gallery_item({"id": "mli_2", "name": "上传图片"})
+    assert used["in_use"] is True
+    assert used["file_url"] == "/api/mp/content/gallery-items/mli_1/file"
+    assert unused["in_use"] is False
+    assert unused["file_url"] == "/api/mp/content/gallery-items/mli_2/file"
+
+
+@pytest.mark.asyncio
+async def test_list_mp_gallery_items_forwards_in_use(monkeypatch):
+    async def fake_list_material_items(*args, **kwargs):
+        return {
+            "items": [
+                {"id": "mli_used", "name": "已占用", "in_use": True},
+                {"id": "mli_free", "name": "可选用"},
+            ],
+            "total": 2,
+        }
+
+    monkeypatch.setattr("yuxi.services.mp_service.list_material_items", fake_list_material_items)
+    result = await list_mp_gallery_items(None, type("Ctx", (), {"user": object()})(), "uncategorized")
+    assert result["total"] == 2
+    assert result["items"][0]["in_use"] is True
+    assert result["items"][1]["in_use"] is False
+    assert result["items"][0]["file_url"].endswith("/mli_used/file")
 
 
 def test_cover_asset_ids_keep_order_and_reject_more_than_three():

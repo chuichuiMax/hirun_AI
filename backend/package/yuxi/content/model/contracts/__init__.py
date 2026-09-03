@@ -14,6 +14,7 @@ from yuxi.content.model.contracts.content_nodes import (
     get_contract_model,
     get_input_contract_model,
     validate_content_node_result,
+    knowledge_body_evidence_ids,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "get_contract_model",
     "get_input_contract_model",
     "validate_content_node_result",
+    "knowledge_body_evidence_ids",
 ]

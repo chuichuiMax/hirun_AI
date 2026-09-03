@@ -101,6 +101,7 @@ async def material_items(
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
     sort: str = Query("newest"),
+    exclude_task_id: str | None = Query(None),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -114,6 +115,7 @@ async def material_items(
         page=page,
         page_size=page_size,
         sort=sort,
+        exclude_task_id=exclude_task_id,
     )
 
 

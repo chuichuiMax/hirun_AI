@@ -747,6 +747,8 @@ async def _lock_decoration_visual_material(
         raise _mp_error(422, "MP_COVER_REQUIRED", "请选择图库图片或上传封面图")
     if item is None or item.material_type != "image" or item.status != "enabled":
         raise _mp_error(422, "MP_COVER_LIBRARY_ITEM_MISSING", "封面图不存在、已停用或不在当前账号图库中")
+    if await repo.item_is_selected_by_task(item.id, owner_uid):
+        raise _mp_error(409, "MP_COVER_IN_USE", "该图库图片已被其他内容任务使用")
     return ContentVisualMaterialSelection(image_item_id=item.id, hycanvas_template_id=template_id), item.asset_id
 
 
@@ -799,7 +801,11 @@ async def list_cover_templates(db: AsyncSession) -> dict[str, Any]:
 
 def _mp_gallery_item(item: dict[str, Any]) -> dict[str, Any]:
     item_id = str(item["id"])
-    return {**item, "file_url": f"/api/mp/content/gallery-items/{item_id}/file"}
+    return {
+        **item,
+        "in_use": bool(item.get("in_use")),
+        "file_url": f"/api/mp/content/gallery-items/{item_id}/file",
+    }
 
 
 async def list_mp_galleries(db: AsyncSession, ctx: MpContext) -> dict[str, Any]:

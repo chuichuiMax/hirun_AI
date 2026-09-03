@@ -140,7 +140,7 @@ WORKFLOW_V3_NODES = [
             "channel_profile",
             "persona_profile",
         ),
-        optional_state_inputs=("validation_report",),
+        optional_state_inputs=("validation_report", "review_report", "selected_title", "content_outline", "content_draft"),
         token_budget=12000,
         timeout_seconds=240,
         max_execution_steps=30,

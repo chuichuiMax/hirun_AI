@@ -230,7 +230,32 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
             params={"category": "uncategorized"},
         )
         assert picked.status_code == 200, picked.text
-        assert any(item["id"] == uploaded.json()["library_item_id"] for item in picked.json()["items"])
+        used_item = next(
+            item for item in picked.json()["items"] if item["id"] == uploaded.json()["library_item_id"]
+        )
+        assert used_item["in_use"] is True
+
+        reuse = await test_client.post(
+            "/api/mp/content/compile-brief",
+            headers=mp_headers,
+            json={
+                "service_entry": "装修家居",
+                "content_type_code": type_code,
+                "cover_asset_id": cover_asset_id,
+                "hycanvas_template_id": hycanvas_template_id,
+                "form_values": {
+                    "楼盘信息": "星河湾",
+                    "外框面积": "50-70㎡",
+                    "基础": "4-5万",
+                    "木制品": "2-3万",
+                    "主材": "2-3万",
+                    "设计风格": "北欧",
+                    "所在区域": "长沙市 岳麓区",
+                },
+            },
+        )
+        assert reuse.status_code == 409, reuse.text
+        assert reuse.json()["detail"]["error"]["code"] == "MP_COVER_IN_USE"
 
         task = await test_client.get(f"/api/mp/content/tasks/{task_id}", headers=mp_headers)
         assert task.status_code == 200, task.text

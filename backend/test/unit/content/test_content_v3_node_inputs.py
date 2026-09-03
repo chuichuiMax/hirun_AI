@@ -165,6 +165,10 @@ def test_generate_body_input_contains_locked_title_and_outline():
 def test_unified_generation_input_exposes_locked_strategy_and_previous_validation_report():
     state = {**_state(), "channel_profile": {}, "persona_profile": {}}
     state["validation_report"] = {"status": "blocked", "checks": [{"code": "BODY_EVIDENCE_FAILED"}]}
+    state["review_report"] = {
+        "status": "blocked",
+        "checks": [{"code": "FACT_CHECK_FAILED", "status": "blocked", "message": "事实不一致"}],
+    }
     node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "generate_content")
 
     assembly = ContentNodeInputAssembler.build(node=node, state=state)
@@ -172,6 +176,10 @@ def test_unified_generation_input_exposes_locked_strategy_and_previous_validatio
     assert assembly.payload["strategy_snapshot"]["title_formula"]["code"] == "T03"
     assert assembly.payload["strategy_snapshot"]["body_formula"]["code"] == "C03"
     assert assembly.payload["validation_report"]["status"] == "blocked"
+    assert assembly.payload["review_report"]["status"] == "blocked"
+    assert assembly.payload["selected_title"]["text"] == "锁定标题"
+    assert assembly.payload["content_outline"]["body_formula_code"] == "C03"
+    assert assembly.payload["content_draft"]["body"] == "正文"
 
 
 @pytest.mark.unit

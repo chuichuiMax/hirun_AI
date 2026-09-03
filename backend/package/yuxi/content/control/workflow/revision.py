@@ -25,6 +25,22 @@ class RevisionDecision:
     retry_counts: dict[str, int]
 
 
+def reset_exhausted_revision_counts(
+    *,
+    definition: dict[str, Any],
+    retry_counts: dict[str, int] | None,
+) -> dict[str, int]:
+    """人工从失败回修节点重试时，清掉已经用尽的定点回修计数。"""
+
+    counts = dict(retry_counts or {})
+    for route in definition.get("revision_routes") or []:
+        target = route.get("to")
+        max_attempts = int(route.get("max_attempts") or 0)
+        if target and max_attempts and int(counts.get(target, 0)) >= max_attempts:
+            counts[target] = 0
+    return counts
+
+
 class RevisionRouteController:
     """只解释发布定义中的 revision_routes，不允许 Agent 自由 goto。"""
 
@@ -135,7 +151,15 @@ def resolve_revision_reason(
         ):
             if preferred in reasons:
                 return preferred
+    if blocked_codes:
+        return "BODY_STRUCTURE_FAILED"
     return "REVIEW_CONTRACT_VIOLATION"
 
 
-__all__ = ["RevisionDecision", "RevisionRouteController", "resolve_revision_reason", "revision_reason_label"]
+__all__ = [
+    "RevisionDecision",
+    "RevisionRouteController",
+    "reset_exhausted_revision_counts",
+    "resolve_revision_reason",
+    "revision_reason_label",
+]

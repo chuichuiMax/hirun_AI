@@ -364,6 +364,7 @@ async def list_material_items(
     page: int,
     page_size: int,
     sort: str,
+    exclude_task_id: str | None = None,
 ) -> dict[str, Any]:
     if material_type not in {"image", "cover_template"}:
         raise _error(422, "MATERIAL_TYPE_INVALID", "素材类型不存在")
@@ -386,7 +387,8 @@ async def list_material_items(
         if category
         else None
     )
-    rows, total = await MaterialLibraryRepository(db).list_items(
+    repo = MaterialLibraryRepository(db)
+    rows, total = await repo.list_items(
         _owner_uid(user),
         material_type=material_type,
         category=resolved_category.id if resolved_category else None,
@@ -397,18 +399,26 @@ async def list_material_items(
         sort=sort,
     )
     posters_by_asset: dict[str, ContentCoverPosterTemplate] = {}
+    used_image_ids: set[str] = set()
     if material_type == "cover_template":
-        posters = await MaterialLibraryRepository(db).list_poster_templates_by_asset_ids(
+        posters = await repo.list_poster_templates_by_asset_ids(
             _owner_uid(user),
             [asset.id for _, asset, _ in rows],
         )
         posters_by_asset = {poster.asset_id: poster for poster in posters}
+    elif material_type == "image":
+        used_image_ids = await repo.list_selected_image_item_ids(
+            _owner_uid(user), exclude_task_id=exclude_task_id
+        )
     await db.commit()
+    items = []
+    for item, asset, item_category in rows:
+        payload = serialize_item(item, asset, item_category, posters_by_asset.get(asset.id))
+        if material_type == "image":
+            payload["in_use"] = item.id in used_image_ids
+        items.append(payload)
     return {
-        "items": [
-            serialize_item(item, asset, item_category, posters_by_asset.get(asset.id))
-            for item, asset, item_category in rows
-        ],
+        "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,

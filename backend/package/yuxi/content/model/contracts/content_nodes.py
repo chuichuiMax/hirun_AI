@@ -286,6 +286,10 @@ class GenerateContentInputV1(StrictContract):
     channel_profile: dict[str, Any]
     persona_profile: dict[str, Any]
     validation_report: dict[str, Any] | None = None
+    review_report: dict[str, Any] | None = None
+    selected_title: dict[str, Any] | None = None
+    content_outline: dict[str, Any] | None = None
+    content_draft: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def verify_formula_lexicon_bundle(self) -> GenerateContentInputV1:
@@ -677,6 +681,23 @@ def _extract_supported_numbers(value: Any) -> set[str]:
     return set()
 
 
+_KNOWLEDGE_BODY_EXCLUDED_MATERIAL_TYPES = frozenset(
+    {"viral_example", "platform_rule", "compliance_rule", "forbidden_terms", "forbidden_term"}
+)
+
+
+def knowledge_body_evidence_ids(evidence_bundle: dict[str, Any] | None) -> frozenset[str]:
+    return frozenset(
+        str(item["id"])
+        for item in (evidence_bundle or {}).get("items") or []
+        if isinstance(item, dict)
+        and item.get("id")
+        and item.get("source_type") == "knowledge_base"
+        and "body" in (item.get("allowed_usage") or [])
+        and (item.get("metadata") or {}).get("material_type") not in _KNOWLEDGE_BODY_EXCLUDED_MATERIAL_TYPES
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ContractDomainContext:
     locked_group_id: str | None = None
@@ -702,6 +723,9 @@ class ContractDomainContext:
     product_material_slots: frozenset[str] = frozenset()
     product_material_slot_usages: dict[str, frozenset[str]] = field(default_factory=dict)
     product_material_slot_types: dict[str, str] = field(default_factory=dict)
+    body_knowledge_evidence_ids: frozenset[str] = frozenset()
+    title_min_length: int | None = None
+    title_max_length: int | None = None
 
     @classmethod
     def from_node_input(cls, node_input: ContentAgentNodeInputV1) -> ContractDomainContext:
@@ -725,6 +749,7 @@ class ContractDomainContext:
         product_material_requirements: dict[str, Any] | None = None,
         strategy_snapshot: dict[str, Any] | None = None,
         skip_formula_lexicon_usage: bool = False,
+        channel_profile: dict[str, Any] | None = None,
     ) -> ContractDomainContext:
         versions = (
             locked_versions
@@ -767,6 +792,9 @@ class ContractDomainContext:
             for requirement in (product_material_requirements or {}).get("requirements") or []
             if isinstance(requirement, dict) and requirement.get("requirement_id")
         ]
+        title_constraints = (channel_profile or {}).get("title_constraints") or {}
+        title_min_length = title_constraints.get("min_length")
+        title_max_length = title_constraints.get("max_length")
         return cls(
             locked_group_id=match.get("selected_group_id") or formula.get("combination_group_id"),
             title_formula_pool=frozenset(
@@ -826,6 +854,9 @@ class ContractDomainContext:
                 requirement["requirement_id"]: str(requirement.get("material_type") or requirement["requirement_id"])
                 for requirement in material_requirements
             },
+            body_knowledge_evidence_ids=knowledge_body_evidence_ids(evidence_bundle),
+            title_min_length=int(title_min_length) if title_min_length is not None else None,
+            title_max_length=int(title_max_length) if title_max_length is not None else None,
         )
 
 
@@ -1145,6 +1176,19 @@ def validate_content_node_result(
         _require_equal(result.title.formula_code, context.locked_title_formula_code, "title.formula_code")
         _validate_evidence_ids(result.title.evidence_ids, "title", context, "title.evidence_ids")
         _validate_numbers(result.title.text, context, "title.text", "title")
+        title_length = len(result.title.text)
+        if context.title_min_length is not None and title_length < context.title_min_length:
+            raise ContractDomainValidationError(
+                "channel_title_short",
+                "title.text",
+                f"标题少于 {context.title_min_length} 字",
+            )
+        if context.title_max_length is not None and title_length > context.title_max_length:
+            raise ContractDomainValidationError(
+                "channel_title_long",
+                "title.text",
+                f"标题超过 {context.title_max_length} 字",
+            )
         _require_equal(result.outline.body_formula_code, context.locked_body_formula_code, "outline.body_formula_code")
         _validate_outline_calling_contract(result.outline, context)
         for index, item in enumerate(result.outline.sections):
@@ -1152,6 +1196,19 @@ def validate_content_node_result(
         _require_equal(result.draft.body_formula_code, context.locked_body_formula_code, "draft.body_formula_code")
         for index, item in enumerate(result.draft.paragraph_evidence):
             _validate_evidence_ids(item.evidence_ids, "body", context, f"draft.paragraph_evidence.{index}.evidence_ids")
+        used_body_evidence = {
+            evidence_id
+            for item in result.draft.paragraph_evidence
+            for evidence_id in item.evidence_ids
+        }
+        if context.body_knowledge_evidence_ids and not used_body_evidence.intersection(
+            context.body_knowledge_evidence_ids
+        ):
+            raise ContractDomainValidationError(
+                "knowledge_evidence_unused",
+                "draft.paragraph_evidence",
+                "已取得可用于正文的业务知识证据，必须在 paragraph_evidence 中引用至少一条",
+            )
         _validate_numbers("\n".join([result.draft.body, *result.draft.topics]), context, "draft.body", "body")
     elif isinstance(result, PersonaPolishResultV1):
         for index, item in enumerate(result.preserved_fact_checks):
@@ -1362,4 +1419,5 @@ __all__ = [
     "get_contract_model",
     "get_input_contract_model",
     "validate_content_node_result",
+    "knowledge_body_evidence_ids",
 ]

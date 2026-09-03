@@ -36,6 +36,8 @@ from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
         ("CHANNEL_TITLE_LONG", "TITLE_VALIDATION_FAILED"),
         ("CHANNEL_BODY_LONG", "BODY_STRUCTURE_FAILED"),
         ("CHANNEL_TOPIC_COUNT", "BODY_STRUCTURE_FAILED"),
+        ("COMPLIANCE_RULE_MATCH", "BODY_STRUCTURE_FAILED"),
+        ("ABSOLUTE_GUARANTEE", "BODY_STRUCTURE_FAILED"),
     ],
 )
 def test_revision_reason_is_deterministic(code: str, expected: str):
@@ -58,6 +60,19 @@ def test_revision_reason_is_empty_when_all_checks_pass():
         )
         is None
     )
+
+
+@pytest.mark.unit
+def test_unknown_blocked_check_routes_to_body_structure_instead_of_contract_error():
+    result = resolve_revision_reason(
+        title_validation_report=None,
+        validation_report={
+            "status": "blocked",
+            "checks": [{"code": "ABSOLUTE_GUARANTEE", "level": "error", "message": "禁止无证据的绝对承诺"}],
+        },
+        review_report=None,
+    )
+    assert result == "BODY_STRUCTURE_FAILED"
 
 
 @pytest.mark.unit
@@ -987,6 +1002,38 @@ async def test_channel_title_too_long_routes_to_generation_instead_of_contract_e
     )
 
     assert result["revision_reason_code"] == "TITLE_VALIDATION_FAILED"
+    assert result["revision_target"] == "generate_content"
+
+
+@pytest.mark.asyncio
+async def test_named_compliance_block_routes_to_generation_instead_of_contract_error():
+    agent = ContentWorkflowAgent()
+    result = await agent._execute_node(
+        {"id": "revise_if_needed", "type": "revision_router"},
+        {
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "current_node": "deterministic_validate",
+            "state_version": 1,
+            "retry_counts": {},
+            "content_brief": {
+                "form_values": {"mp_service_entry": "好评笔记", "mp_content_code": "ZX-001"}
+            },
+            "validation_report": {
+                "status": "blocked",
+                "checks": [
+                    {
+                        "code": "ABSOLUTE_GUARANTEE",
+                        "level": "error",
+                        "message": "禁止无证据的绝对承诺",
+                    }
+                ],
+            },
+        },
+        WORKFLOW_V3,
+    )
+
+    assert result["revision_reason_code"] == "BODY_STRUCTURE_FAILED"
     assert result["revision_target"] == "generate_content"
 
 

@@ -73,6 +73,20 @@ def _report_is_blocked(report: dict[str, Any]) -> bool:
     )
 
 
+def _blocked_check_summary(*reports: dict[str, Any]) -> str:
+    messages = []
+    seen = set()
+    for report in reports:
+        for item in report.get("checks") or []:
+            if item.get("status") != "blocked" and item.get("level") != "error":
+                continue
+            text = str(item.get("message") or item.get("code") or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                messages.append(text)
+    return "；".join(messages)
+
+
 class ContentWorkflowAgent(BaseAgent):
     name = "通用内容生产工作流"
     description = "仅装配 V3 内容工作流，执行固定节点、正式 Agent、Skill 和人工关口。"
@@ -227,6 +241,8 @@ class ContentWorkflowAgent(BaseAgent):
                     output_snapshot = {"updated_fields": sorted(result.keys())}
                     if node_id == "validate_title_candidates":
                         output_snapshot["title_validation_report"] = result.get("title_validation_report") or {}
+                    if node_id == "deterministic_validate":
+                        output_snapshot["validation_report"] = result.get("validation_report") or {}
                     await repo.finish_node_run(
                         persisted,
                         status="completed",
@@ -302,9 +318,17 @@ class ContentWorkflowAgent(BaseAgent):
                 review_report=review_report if previous_node == "semantic_review" else None,
             )
             if reason_code in {"SYSTEM_CONFIGURATION_FAILED", "REVIEW_CONTRACT_VIOLATION"}:
+                detail = _blocked_check_summary(
+                    title_validation_report,
+                    validation_report,
+                    review_report if previous_node == "semantic_review" else {},
+                )
                 raise ContentApplicationError(
                     code=reason_code.lower(),
-                    message=("内容校验发现系统配置或审核契约错误，已停止执行；不会交给语义 Agent 猜测修复"),
+                    message=(
+                        "内容校验发现系统配置或审核契约错误，已停止执行；不会交给语义 Agent 猜测修复"
+                        + (f"：{detail}" if detail else "")
+                    ),
                     kind="conflict",
                 )
             decision = RevisionRouteController().decide(

@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from yuxi.agents.buildin import agent_manager
 from yuxi.agents.buildin.content_workflow.context import ContentWorkflowContext
 from yuxi.content_cover.schemas import CoverRetryCreate
+from yuxi.content.control.workflow.revision import reset_exhausted_revision_counts
 from yuxi.content.v3.workflow import LEGACY_PLATFORM_WORKFLOW_V3_IDS
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
@@ -180,6 +181,11 @@ async def process_content_run(ctx, run_id: str):
                 "model_spec": payload.get("model_spec"),
                 "resume_parent_run_id": None,
             }
+            if requested_node == "revise_if_needed" or "revise_if_needed" in pending_nodes:
+                state_update["retry_counts"] = reset_exhausted_revision_counts(
+                    definition=workflow.definition_json or {},
+                    retry_counts=state_values.get("retry_counts") or {},
+                )
             retry_from_node = None
             if requested_node == "wait_cover_job":
                 retried_cover = await _retry_failed_cover_job(run, state_values)

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { Plus, Search } from 'lucide-vue-next'
 
@@ -32,6 +32,9 @@ const saving = ref(false)
 const togglingId = ref('')
 const keywordInput = ref('')
 const keyword = ref('')
+const roleFilter = ref()
+const page = ref(1)
+const pageSize = ref(20)
 const employees = ref([])
 const roleOptions = ref([])
 const modalOpen = ref(false)
@@ -44,6 +47,24 @@ const roleSelectOptions = computed(() => {
   if (form.role && !names.includes(form.role)) names.unshift(form.role)
   return names
 })
+const roleFilterOptions = computed(() => {
+  const names = new Set(roleOptions.value)
+  for (const item of employees.value) {
+    if (item.role) names.add(item.role)
+  }
+  return [...names]
+})
+const displayedEmployees = computed(() => {
+  if (!roleFilter.value) return employees.value
+  return employees.value.filter((item) => item.role === roleFilter.value)
+})
+const tablePagination = computed(() => ({
+  current: page.value,
+  pageSize: pageSize.value,
+  showSizeChanger: true,
+  showTotal: (total) => `共 ${total} 条`,
+  pageSizeOptions: ['10', '20', '50']
+}))
 
 const optionLabel = (options, value) =>
   options.find((item) => item.value === value)?.label || value || '-'
@@ -87,7 +108,17 @@ const loadEmployees = async () => {
 
 const handleSearch = () => {
   keyword.value = keywordInput.value.trim()
+  page.value = 1
   void loadEmployees()
+}
+
+const handleRoleFilterChange = () => {
+  page.value = 1
+}
+
+const handleTableChange = (pagination) => {
+  page.value = pagination.current
+  pageSize.value = pagination.pageSize
 }
 
 const resetForm = (employee) => {
@@ -190,6 +221,11 @@ const removeEmployee = (employee) => {
   })
 }
 
+watch([displayedEmployees, pageSize], () => {
+  const maxPage = Math.max(1, Math.ceil(displayedEmployees.value.length / pageSize.value))
+  if (page.value > maxPage) page.value = maxPage
+})
+
 onMounted(async () => {
   await loadRoles()
   await loadEmployees()
@@ -201,8 +237,8 @@ onMounted(async () => {
     <PageHeader title="员工管理" :show-border="true">
       <template #info>
         <div class="summary-strip">
-          <span>{{ employees.length }} 名员工</span>
-          <span>{{ employees.filter((item) => item.enabled).length }} 名启用</span>
+          <span>{{ displayedEmployees.length }} 名员工</span>
+          <span>{{ displayedEmployees.filter((item) => item.enabled).length }} 名启用</span>
         </div>
       </template>
     </PageHeader>
@@ -220,6 +256,17 @@ onMounted(async () => {
           >
             <template #prefix><Search :size="14" /></template>
           </a-input>
+          <a-select
+            v-model:value="roleFilter"
+            class="role-filter"
+            placeholder="全部角色"
+            allow-clear
+            @change="handleRoleFilterChange"
+          >
+            <a-select-option v-for="role in roleFilterOptions" :key="role" :value="role">
+              {{ role }}
+            </a-select-option>
+          </a-select>
           <a-button type="primary" @click="handleSearch">查询</a-button>
         </div>
         <a-button type="primary" class="lucide-icon-btn" @click="openCreate">
@@ -230,13 +277,14 @@ onMounted(async () => {
 
       <a-table
         class="employee-table"
-        :data-source="employees"
+        :data-source="displayedEmployees"
         :loading="loading"
-        :pagination="false"
+        :pagination="tablePagination"
         row-key="id"
+        @change="handleTableChange"
       >
         <a-table-column title="序号" key="index" :width="72">
-          <template #default="{ index }">{{ index + 1 }}</template>
+          <template #default="{ index }">{{ (page - 1) * pageSize + index + 1 }}</template>
         </a-table-column>
         <a-table-column title="员工编码" data-index="employee_code" key="employee_code" />
         <a-table-column title="姓名" data-index="name" key="name" />
@@ -386,6 +434,10 @@ onMounted(async () => {
     width: 280px;
   }
 
+  .role-filter {
+    width: 160px;
+  }
+
   :deep(.ant-btn) {
     display: inline-flex;
     align-items: center;
@@ -402,6 +454,10 @@ onMounted(async () => {
     background: var(--gray-10);
     color: var(--gray-700);
     font-weight: 600;
+  }
+
+  :deep(.ant-table-pagination) {
+    margin: 16px 0 0;
   }
 }
 

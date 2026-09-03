@@ -47,7 +47,7 @@ class ComplianceEngine:
                     if not self._find_matches(source, rule):
                         continue
                     action = rule.get("action", "warn")
-                    level = "error" if action in {"block", "confirm"} else "warning"
+                    level = "error" if action == "block" else "warning"
                     if action == "replace" and rule.get("replacement") is not None:
                         replaced = self._replace(source, rule)
                         if self._numeric_meaning_changed(source, replaced):
@@ -73,11 +73,12 @@ class ComplianceEngine:
                     else:
                         checks.append(
                             {
-                                "code": rule.get("rule_code") or "COMPLIANCE_RULE_MATCH",
+                                "code": "COMPLIANCE_RULE_MATCH",
                                 "level": level,
                                 "location": location,
                                 "message": rule.get("explanation") or f"命中合规规则：{rule.get('pattern')}",
                                 "rule_id": rule.get("id"),
+                                "rule_code": rule.get("rule_code"),
                                 "human_confirmation_required": bool(rule.get("human_confirmation_required"))
                                 or action == "confirm",
                             }

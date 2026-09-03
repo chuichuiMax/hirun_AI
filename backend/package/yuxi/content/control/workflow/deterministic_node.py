@@ -12,7 +12,7 @@ from yuxi.content.control.evidence import EvidenceApplicationService
 from yuxi.content.control.strategy.recommend_v3 import StrategyPreviewActor
 from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
 from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
-from yuxi.content.model.contracts import StrategySnapshotV1
+from yuxi.content.model.contracts import StrategySnapshotV1, knowledge_body_evidence_ids
 from yuxi.content.model.evidence import (
     EvidenceBundleV1,
     EvidenceGovernanceError,
@@ -1219,14 +1219,7 @@ class V3DeterministicNodeHandler:
             for paragraph in draft.get("paragraph_evidence") or []
             for evidence_id in paragraph.get("evidence_ids") or []
         }
-        knowledge_body_evidence = {
-            str(item["id"])
-            for item in (state.get("evidence_bundle") or {}).get("items") or []
-            if item.get("source_type") == "knowledge_base"
-            and "body" in (item.get("allowed_usage") or [])
-            and item.get("metadata", {}).get("material_type")
-            not in {"viral_example", "platform_rule", "compliance_rule", "forbidden_terms"}
-        }
+        knowledge_body_evidence = knowledge_body_evidence_ids(state.get("evidence_bundle"))
         if knowledge_body_evidence and not used_body_evidence.intersection(knowledge_body_evidence):
             report["checks"].append(
                 {

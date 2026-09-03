@@ -296,16 +296,10 @@ const availableContentGoals = computed(() => {
   const goals = store.contentGoals
   if (creation.service_entry === '好评笔记') {
     return goals.filter((goal) => ['brand', 'educate'].includes(goal.code))
-const selectedIndustrySlug = computed(() => store.template?.slug || selectedTemplate.value?.slug || '')
-const activeFields = computed(() => {
-  if (!store.task) {
-    if (!selectedTemplate.value) return []
-    return creation.mode === 'quick'
-      ? selectedTemplate.value.quick_form_schema
-      : selectedTemplate.value.pro_form_schema
   }
   return goals
 })
+const selectedIndustrySlug = computed(() => store.template?.slug || selectedTemplate.value?.slug || '')
 const studioServiceEntry = computed(
   () => store.task?.brief?.form_values?.mp_service_entry || creation.service_entry
 )
@@ -606,7 +600,8 @@ const loadGalleryImages = async () => {
       status: 'enabled',
       page: 1,
       page_size: 100,
-      sort: 'newest'
+      sort: 'newest',
+      exclude_task_id: store.task?.id
     })
     if (generation !== materialPreviewGeneration) return
     galleryImages.value = response.items || []
@@ -647,9 +642,27 @@ const openGallery = async (galleryId) => {
   await loadGalleryImages()
 }
 
+const isGalleryImageUsed = (item) => Boolean(item?.in_use)
+const pendingGalleryImageUsed = computed(() => {
+  const item = galleryImages.value.find((row) => row.id === pendingImageItemId.value)
+  return Boolean(item && isGalleryImageUsed(item))
+})
+
+const selectGalleryImage = (item) => {
+  if (isGalleryImageUsed(item)) {
+    message.warning('该图片已被其他内容任务使用')
+    return
+  }
+  pendingImageItemId.value = item.id
+}
+
 const confirmGalleryImage = () => {
-  selectedImageItemId.value = pendingImageItemId.value
   const selectedItem = galleryImages.value.find((item) => item.id === pendingImageItemId.value)
+  if (selectedItem && isGalleryImageUsed(selectedItem)) {
+    message.warning('该图片已被其他内容任务使用')
+    return
+  }
+  selectedImageItemId.value = pendingImageItemId.value
   if (selectedItem) {
     selectedImageGalleryId.value = activeGalleryId.value
     selectedImageSummary.value = selectedItem
@@ -1519,7 +1532,7 @@ const openVersions = async () => {
               <div class="material-selector-block">
                 <div class="material-selector-title">
                   <div><Image :size="18" /><strong>选择图库图片</strong><em>可选 · 单选</em></div>
-                  <small>可从当前账号的图库中选择一张已启用图片；不选择也可以进入内容生产。</small>
+                  <small>可从当前账号的图库中选择一张已启用且未被其他内容占用的图片；不选择也可以进入内容生产。</small>
                 </div>
                 <div v-if="rootMaterialGalleries.length" class="gallery-folder-grid" aria-label="素材图库">
                   <button
@@ -2211,7 +2224,7 @@ const openVersions = async () => {
           </div>
         </section>
         <div class="gallery-modal-heading">
-          <p>{{ activeMaterialGalleryChildren.length ? '当前一级图库中的图片' : '从当前图库中选择一张图片；选择将在点击“确认选择”后保存到业务简报。' }}</p>
+          <p>{{ activeMaterialGalleryChildren.length ? '当前一级图库中的图片' : '从当前图库中选择一张图片；已被其他内容任务使用的图片会标记为已使用且不能再选。选择将在点击“确认选择”后保存到业务简报。' }}</p>
           <span>{{ galleryImages.length }} 张图片</span>
         </div>
         <div v-if="galleryImagesLoading" class="material-loading-row">
@@ -2223,14 +2236,17 @@ const openVersions = async () => {
             :key="item.id"
             type="button"
             class="image-choice"
-            :class="{ selected: pendingImageItemId === item.id }"
+            :class="{ selected: pendingImageItemId === item.id, used: isGalleryImageUsed(item) }"
+            :disabled="isGalleryImageUsed(item)"
             :aria-pressed="pendingImageItemId === item.id"
-            @click="pendingImageItemId = item.id"
+            :aria-disabled="isGalleryImageUsed(item)"
+            @click="selectGalleryImage(item)"
           >
             <span class="choice-preview">
               <img v-if="materialImageUrls[item.id]" :src="materialImageUrls[item.id]" :alt="item.name" />
               <Image v-else :size="22" />
-              <CheckCircle2 v-if="pendingImageItemId === item.id" class="choice-check" :size="20" />
+              <span v-if="isGalleryImageUsed(item)" class="image-used-badge">已使用</span>
+              <CheckCircle2 v-else-if="pendingImageItemId === item.id" class="choice-check" :size="20" />
             </span>
             <strong :title="item.name">{{ item.name }}</strong>
           </button>
@@ -2242,7 +2258,12 @@ const openVersions = async () => {
           </a-button>
           <span />
           <a-button @click="galleryModalOpen = false">取消</a-button>
-          <a-button type="primary" :loading="galleryImagesLoading" @click="confirmGalleryImage">
+          <a-button
+            type="primary"
+            :loading="galleryImagesLoading"
+            :disabled="pendingGalleryImageUsed"
+            @click="confirmGalleryImage"
+          >
             确认选择
           </a-button>
         </div>
@@ -2360,8 +2381,8 @@ const openVersions = async () => {
 .image-choice, .poster-choice { position: relative; min-width: 0; padding: 7px; border: 1px solid var(--gray-150); border-radius: 8px; color: var(--color-text); background: var(--gray-0); text-align: left; cursor: pointer; }
 .image-choice:hover, .poster-choice:hover { border-color: var(--main-300); transform: translateY(-1px); }
 .image-choice.selected, .poster-choice.selected { border-color: var(--main-color); box-shadow: 0 0 0 2px var(--main-30); }
-.poster-choice.unavailable { opacity: 0.64; cursor: not-allowed; }
-.poster-choice.unavailable:hover { border-color: var(--gray-150); transform: none; }
+.image-choice.used, .poster-choice.unavailable { opacity: 0.64; cursor: not-allowed; }
+.image-choice.used:hover, .poster-choice.unavailable:hover { border-color: var(--gray-150); transform: none; }
 .choice-preview, .poster-preview, .poster-auto-preview { position: relative; display: grid; place-items: center; width: 100%; overflow: hidden; border-radius: 6px; color: var(--color-text-tertiary); background: var(--gray-25); }
 .choice-preview { aspect-ratio: 1 / 1; }
 .poster-preview, .poster-auto-preview { aspect-ratio: 3 / 4; }
@@ -2370,6 +2391,18 @@ const openVersions = async () => {
 .image-choice > strong, .poster-choice > strong { font-size: 13px; }
 .poster-choice > small { margin-top: 2px; color: var(--color-text-tertiary); font-size: 11px; }
 .choice-check { position: absolute; z-index: 1; top: 9px; right: 9px; padding: 2px; border-radius: 50%; color: var(--main-color); background: var(--gray-0); }
+.image-used-badge {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--color-warning-700);
+  background: var(--color-warning-50);
+  font-size: 10px;
+  line-height: 16px;
+}
 .poster-auto-preview { color: var(--main-700); background: linear-gradient(145deg, var(--main-10), var(--main-50)); }
 .material-loading-row { min-height: 140px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-secondary); }
 .template-manage-link { margin-top: 8px; padding-left: 0; }
