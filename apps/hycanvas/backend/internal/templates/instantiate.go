@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 type InstantiateImage struct {
@@ -26,7 +27,7 @@ type InstantiateInput struct {
 // Instantiate fills a template's declared text fields and creates a decoupled
 // design in the requested workspace.
 func (s *Service) Instantiate(ctx context.Context, userID, templateID string, in InstantiateInput) (string, error) {
-	if in.WorkspaceID == "" || len(in.Fields) == 0 {
+	if in.WorkspaceID == "" {
 		return "", ErrBadRequest
 	}
 	if err := s.access.AssertMember(ctx, userID, in.WorkspaceID, "member"); err != nil {
@@ -150,7 +151,16 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 	for _, raw := range declarations {
 		field := asObj(raw)
 		if asStr(field["kind"]) == "text" {
-			fieldNodes[asStr(field["label"])] = asStr(field["nodeId"])
+			label := asStr(field["label"])
+			fieldNodes[label] = asStr(field["nodeId"])
+			constraints := asObj(field["constraints"])
+			value, present := values[label]
+			if required, _ := constraints["required"].(bool); required && (!present || strings.TrimSpace(value) == "") {
+				return ErrBadRequest
+			}
+			if maxChars := int(asNum(constraints["maxChars"])); maxChars > 0 && present && utf8.RuneCountInString(value) > maxChars {
+				return ErrBadRequest
+			}
 		}
 	}
 	for label := range values {

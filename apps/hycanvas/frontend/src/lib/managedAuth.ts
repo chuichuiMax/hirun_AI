@@ -1,8 +1,25 @@
 export const isContentSwarmManaged = true;
 
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+}
+
+export function normalizeManagedLoopbackURL(rawURL: string, currentHostname: string): string {
+  const target = new URL(rawURL);
+  if (isLoopbackHostname(target.hostname) && isLoopbackHostname(currentHostname)) {
+    target.hostname = currentHostname;
+  }
+  const normalized = target.toString();
+  return rawURL.endsWith("/") ? normalized : normalized.replace(/\/$/, "");
+}
+
 function contentSwarmOrigin(): string | null {
   const configured = process.env.NEXT_PUBLIC_CONTENTSWARM_URL?.trim().replace(/\/$/, "");
-  if (configured) return configured;
+  if (configured) {
+    return typeof window === "undefined"
+      ? configured
+      : normalizeManagedLoopbackURL(configured, window.location.hostname);
+  }
   if (typeof document === "undefined" || !document.referrer) return null;
   return new URL(document.referrer).origin;
 }

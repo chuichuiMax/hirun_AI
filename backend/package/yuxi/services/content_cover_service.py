@@ -1957,7 +1957,7 @@ async def retry_cover_job(
     if old.status not in {"failed", "cancelled", "succeeded"}:
         raise _error(409, "COVER_JOB_NOT_RETRYABLE", "任务结束后才能重新生成")
     image2_config = None
-    requires_image2 = old.mode not in {"compose", "poster_billboard"} or (
+    requires_image2 = old.mode not in {"compose", "hycanvas", "editor_render", "poster_billboard"} or (
         old.mode == "poster_billboard" and bool((old.request_json or {}).get("enhance_with_image2"))
     )
     if requires_image2:
@@ -1996,7 +1996,7 @@ async def retry_cover_job(
         parent_job_id=old.id,
         provider_task_id=recoverable_provider_task_id,
         initial_result_json=retry_result_json,
-        model=image2_config.model if image2_config else None,
+        model=image2_config.model if image2_config else old.model,
     )
     return {"job": serialize_job(job), "deduplicated": deduplicated}
 

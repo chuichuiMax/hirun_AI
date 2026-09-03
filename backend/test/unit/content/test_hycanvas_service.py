@@ -26,19 +26,35 @@ def test_from_env_requires_complete_configuration(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lists_only_xiaohongshu_templates_and_keeps_fillable_fields():
+async def test_lists_three_by_four_fillable_templates_and_keeps_metadata():
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer hyk_test"
-        assert request.url.params["q"] == "小红书"
+        assert "q" not in request.url.params
         return httpx.Response(
             200,
             json=[
                 {
                     "id": "xiaohongshu-checklist",
                     "title": "小红书干货清单",
+                    "tags": ["小红书", "干货"],
                     "format": {"width": 1080, "height": 1440, "unit": "px"},
                     "fillableFields": [{"nodeId": "n1", "kind": "text", "label": "主标题"}],
                     "previewUrls": ["/template-previews/xiaohongshu-checklist-p0.png"],
+                },
+                {
+                    "id": "8bc32ed9-f80a-47e2-8e2b-913e35c125c8",
+                    "title": "鸿扬项目案例封面",
+                    "tags": ["小红书", "团队模板"],
+                    "format": {"width": 1080, "height": 1440, "unit": "px"},
+                    "fillableFields": [],
+                },
+                {
+                    "id": "landscape-template",
+                    "title": "横版封面",
+                    "format": {"width": 1200, "height": 628, "unit": "px"},
+                    "fillableFields": [
+                        {"nodeId": "title", "kind": "text", "label": "标题"}
+                    ],
                 },
                 {"id": "generic-poster", "title": "普通海报"},
             ],
@@ -54,12 +70,37 @@ async def test_lists_only_xiaohongshu_templates_and_keeps_fillable_fields():
 
     result = await client.list_xiaohongshu_templates()
 
-    assert result["total"] == 1
+    assert result["total"] == 2
     assert result["templates"][0]["id"] == "xiaohongshu-checklist"
+    assert result["templates"][1]["id"] == "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
     assert result["templates"][0]["fillable_fields"][0]["label"] == "主标题"
-    assert result["templates"][0]["preview_urls"] == [
-        "/hycanvas-template-previews/xiaohongshu-checklist-p0.png"
+    assert result["templates"][0]["preview_urls"] == ["/hycanvas-template-previews/xiaohongshu-checklist-p0.png"]
+    assert result["templates"][1]["preview_urls"] == [
+        "/api/content/covers/hycanvas/templates/8bc32ed9-f80a-47e2-8e2b-913e35c125c8/render.png"
     ]
+
+
+@pytest.mark.asyncio
+async def test_renders_custom_template_preview_through_hycanvas():
+    template_id = "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/api/v1/templates/{template_id}/render.png"
+        assert request.headers["Authorization"] == "Bearer hyk_test"
+        return httpx.Response(200, content=b"png", headers={"content-type": "image/png"})
+
+    client = HyCanvasClient(
+        base_url="http://hycanvas",
+        public_url="http://canvas.example",
+        api_key="hyk_test",
+        workspace_id="ws-1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    content, content_type = await client.render_template_png(template_id)
+
+    assert content == b"png"
+    assert content_type == "image/png"
 
 
 @pytest.mark.asyncio
@@ -118,6 +159,38 @@ async def test_creates_design_in_configured_workspace_and_returns_urls():
         "editor_url": "http://canvas.example/editor/?id=design-1",
         "render_url": "/api/content/covers/hycanvas/designs/design-1/render.png",
     }
+
+
+@pytest.mark.asyncio
+async def test_creates_design_from_custom_template_without_fillable_fields():
+    template_id = "01c7f0bc-3ce5-431b-82e5-7390e9bc246e"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert request.url.path == f"/api/v1/templates/{template_id}/instantiate"
+        assert body["fields"] == {}
+        assert body["backgroundImage"]["dataBase64"] == "cG5n"
+        return httpx.Response(201, json={"designId": "custom-design"})
+
+    client = HyCanvasClient(
+        base_url="http://hycanvas",
+        public_url="http://canvas.example",
+        api_key="hyk_test",
+        workspace_id="ws-1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = await client.create_design(
+        HyCanvasDesignCreate(
+            artifact_id="artifact-1",
+            template_id=template_id,
+            title="自定义模板封面",
+            fields={},
+        ),
+        image=(b"png", "image/png", "product.png"),
+    )
+
+    assert result["design_id"] == "custom-design"
 
 
 @pytest.mark.asyncio

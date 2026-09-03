@@ -7,7 +7,9 @@ package httpapi
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -112,9 +114,23 @@ func NewRouter(d Deps) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 	if d.ManagedAuth {
-		target := strings.TrimRight(d.ContentSwarmURL, "/") + "/hycanvas"
+		target, err := url.Parse(strings.TrimRight(d.ContentSwarmURL, "/") + "/hycanvas")
+		if err != nil {
+			panic(err)
+		}
 		redirect := func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, target, http.StatusFound)
+			requestHostname := r.Host
+			if hostname, _, splitErr := net.SplitHostPort(r.Host); splitErr == nil {
+				requestHostname = hostname
+			}
+			resolvedTarget := *target
+			if isLoopbackHostname(target.Hostname()) && isLoopbackHostname(requestHostname) {
+				resolvedTarget.Host = requestHostname
+				if port := target.Port(); port != "" {
+					resolvedTarget.Host = net.JoinHostPort(requestHostname, port)
+				}
+			}
+			http.Redirect(w, r, resolvedTarget.String(), http.StatusFound)
 		}
 		for _, path := range []string{"/login", "/signup", "/reset-password", "/verify-email", "/accept-invite"} {
 			r.Get(path, redirect)
@@ -233,7 +249,7 @@ func NewRouter(d Deps) http.Handler {
 			mountUploads(api, d.Uploads, d.Accounts)
 		}
 		if d.Accounts != nil && d.Templates != nil {
-			mountTemplates(api, d.Templates, d.Accounts)
+			mountTemplates(api, d.Templates, d.Accounts, d.Uploads)
 		}
 		if d.Accounts != nil && d.Stock != nil {
 			mountStock(api, d.Stock, d.Accounts)
@@ -268,6 +284,14 @@ func NewRouter(d Deps) http.Handler {
 	}
 
 	return r
+}
+
+func isLoopbackHostname(hostname string) bool {
+	if strings.EqualFold(hostname, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(hostname, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // accessLog emits one structured line per request.

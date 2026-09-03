@@ -35,6 +35,7 @@ type HomeItem struct {
 	Title        string  `json:"title"`
 	ThumbnailURL *string `json:"thumbnailUrl,omitempty"`
 	WorkspaceID  string  `json:"workspaceId"`
+	TemplateZone *string `json:"templateZone,omitempty"`
 	UpdatedAt    string  `json:"updatedAt"`
 	Starred      bool    `json:"starred"`
 	SharedWithMe bool    `json:"sharedWithMe"`
@@ -52,13 +53,14 @@ func NewService(db DBTX, persist *persistence.Service, access Access) *Service {
 
 func designToItem(d persistence.DesignRecord, starred bool) HomeItem {
 	return HomeItem{
-		Kind:        "design",
-		DocKind:     d.DocKind,
-		ID:          d.ID,
-		Title:       d.Title,
-		WorkspaceID: d.WorkspaceID,
-		UpdatedAt:   d.UpdatedAt,
-		Starred:     starred,
+		Kind:         "design",
+		DocKind:      d.DocKind,
+		ID:           d.ID,
+		Title:        d.Title,
+		WorkspaceID:  d.WorkspaceID,
+		TemplateZone: d.TemplateZone,
+		UpdatedAt:    d.UpdatedAt,
+		Starred:      starred,
 	}
 }
 

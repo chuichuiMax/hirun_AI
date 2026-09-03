@@ -84,6 +84,14 @@ func TestHome_DB(t *testing.T) {
 	}
 }
 
+func TestDesignToItemCarriesTemplateZone(t *testing.T) {
+	zone := "xiaohongshu"
+	item := designToItem(persistence.DesignRecord{ID: "d1", TemplateZone: &zone}, false)
+	if item.TemplateZone == nil || *item.TemplateZone != zone {
+		t.Fatalf("template zone missing from home item: %+v", item)
+	}
+}
+
 func stripSchema(dsn string) string {
 	for _, sep := range []string{"?schema=", "&schema="} {
 		if i := strings.Index(dsn, sep); i >= 0 {

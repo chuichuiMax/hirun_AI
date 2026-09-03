@@ -17,6 +17,7 @@ def _png() -> bytes:
 
 
 async def test_v3_strategy_preview_permissions_and_removed_v2_route(test_client, admin_headers, standard_user):
+    hycanvas_template_id = "01c7f0bc-3ce5-431b-82e5-7390e9bc246e"
     material_response = await test_client.post(
         "/api/material-library/images/import",
         headers=admin_headers,
@@ -51,7 +52,10 @@ async def test_v3_strategy_preview_permissions_and_removed_v2_route(test_client,
             headers=admin_headers,
             json={
                 "brief": {
-                    "visual_material": {"image_item_id": material["id"]},
+                    "visual_material": {
+                        "image_item_id": material["id"],
+                        "hycanvas_template_id": hycanvas_template_id,
+                    },
                     "audience": ["准备装修的业主"],
                     "form_values": {
                         "brand_name": "V3 测试品牌",
@@ -66,6 +70,10 @@ async def test_v3_strategy_preview_permissions_and_removed_v2_route(test_client,
             },
         )
         assert compile_response.status_code == 200, compile_response.text
+        assert (
+            compile_response.json()["task"]["runtime_config_snapshot"]["visual_material"]["hycanvas_template_id"]
+            == hycanvas_template_id
+        )
 
         denied_response = await test_client.post(
             f"/api/content/tasks/{task_id}/strategy/recommend-v3",

@@ -257,7 +257,7 @@ async def test_image_gallery_supports_exactly_one_nested_level(test_client, mate
     parent_response = await test_client.post(
         "/api/material-library/categories",
         headers=headers,
-        json={"material_type": "image", "name": "项目案例"},
+        json={"material_type": "image", "name": "项目案例", "industry_slug": "decoration"},
     )
     assert parent_response.status_code == 201, parent_response.text
     parent = parent_response.json()["category"]
@@ -275,6 +275,20 @@ async def test_image_gallery_supports_exactly_one_nested_level(test_client, mate
     child = child_response.json()["category"]
     assert child["parent_id"] == parent["id"]
     assert child["level"] == 2
+    assert child["industry_slug"] == "decoration"
+
+    mismatched_child = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={
+            "material_type": "image",
+            "name": "跨行业子图库",
+            "parent_id": parent["id"],
+            "industry_slug": "education",
+        },
+    )
+    assert mismatched_child.status_code == 422, mismatched_child.text
+    assert mismatched_child.json()["detail"]["error"]["code"] == "MATERIAL_INDUSTRY_INHERITED"
 
     grandchild = await test_client.post(
         "/api/material-library/categories",
@@ -314,6 +328,28 @@ async def test_image_gallery_supports_exactly_one_nested_level(test_client, mate
         assert galleries[parent["id"]]["direct_count"] == 0
         assert galleries[parent["id"]]["child_count"] == 1
         assert galleries[child["id"]]["count"] == 1
+        assert galleries[parent["id"]]["industry_name"] == "装修与家居"
+        assert galleries[child["id"]]["industry_slug"] == "decoration"
+
+        decoration_response = await test_client.get(
+            "/api/material-library/galleries?industry_slug=decoration", headers=headers
+        )
+        assert decoration_response.status_code == 200, decoration_response.text
+        decoration_ids = {entry["id"] for entry in decoration_response.json()["galleries"]}
+        assert {parent["id"], child["id"], "uncategorized"} <= decoration_ids
+
+        changed = await test_client.patch(
+            f"/api/material-library/categories/{parent['id']}?material_type=image",
+            headers=headers,
+            json={"industry_slug": "professional-services"},
+        )
+        assert changed.status_code == 200, changed.text
+        assert changed.json()["category"]["industry_slug"] == "professional-services"
+        categories_response = await test_client.get(
+            "/api/material-library/categories?material_type=image", headers=headers
+        )
+        categories = {entry["id"]: entry for entry in categories_response.json()["categories"]}
+        assert categories[child["id"]]["industry_slug"] == "professional-services"
 
         blocked = await test_client.request(
             "DELETE",

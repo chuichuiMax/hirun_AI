@@ -130,6 +130,14 @@ func (s *Service) setCollection(ctx context.Context, id string, collectionID *st
 	return t, err
 }
 
+func (s *Service) renameRow(ctx context.Context, id, title string) (TemplateRow, error) {
+	t, err := scanTemplate(s.db.QueryRow(ctx, `UPDATE "templates" SET title = $2, "updated_at" = now() WHERE id = $1 RETURNING `+tmplCols, id, title))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TemplateRow{}, ErrNotFound
+	}
+	return t, err
+}
+
 // --- collections ---------------------------------------------------------
 
 type collectionRow struct {

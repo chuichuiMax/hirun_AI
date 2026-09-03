@@ -2,9 +2,11 @@ package templates
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -52,6 +54,33 @@ func TestSearchTemplates(t *testing.T) {
 	res2 := searchTemplates(pool, TemplateQuery{Categories: []string{"doc"}})
 	if len(res2) != 1 || res2[0].ID != "2" {
 		t.Fatalf("category filter wrong: %+v", res2)
+	}
+}
+
+func TestRowToTemplateUsesDeclaredFieldsFromDesignMeta(t *testing.T) {
+	file, err := json.Marshal(map[string]any{
+		"pages": []any{map[string]any{"width": 1080, "height": 1440}},
+		"meta": map[string]any{"brandEditableFields": []any{map[string]any{
+			"nodeId": "project-name", "kind": "text", "label": "项目名称",
+			"key": "project_name", "semanticRole": "project_name",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("marshal design: %v", err)
+	}
+	now := time.Now()
+	template := rowToTemplate(TemplateRow{
+		ID: "custom-template", Title: "项目案例封面", Visibility: "workspace",
+		File: file, Style: json.RawMessage(`{}`), FillableFields: json.RawMessage(`[]`),
+		Attributions: json.RawMessage(`[]`), CreatedAt: now, UpdatedAt: now,
+	})
+
+	if len(template.FillableFields) != 1 {
+		t.Fatalf("fillable fields = %+v", template.FillableFields)
+	}
+	field := asObj(template.FillableFields[0])
+	if asStr(field["semanticRole"]) != "project_name" || asStr(field["nodeId"]) != "project-name" {
+		t.Fatalf("declared field = %+v", field)
 	}
 }
 
@@ -128,6 +157,20 @@ func TestFillTextFieldsRejectsUnknownLabel(t *testing.T) {
 	}
 }
 
+func TestFillTextFieldsEnforcesRequiredAndMaxChars(t *testing.T) {
+	file := map[string]any{"pages": []any{}}
+	fields := []any{map[string]any{
+		"nodeId": "title-node", "kind": "text", "label": "项目名称",
+		"constraints": map[string]any{"required": true, "maxChars": 4.0},
+	}}
+	if err := fillTextFields(file, fields, map[string]string{}); err != ErrBadRequest {
+		t.Fatalf("missing required field: expected ErrBadRequest, got %v", err)
+	}
+	if err := fillTextFields(file, fields, map[string]string{"项目名称": "岳阳杏林小区"}); err != ErrBadRequest {
+		t.Fatalf("oversized field: expected ErrBadRequest, got %v", err)
+	}
+}
+
 func TestFillImageFieldsReplacesDeclaredNode(t *testing.T) {
 	file := map[string]any{
 		"pages": []any{map[string]any{"children": []any{map[string]any{
@@ -168,7 +211,7 @@ func TestApplyBackgroundImageKeepsTemplateLayersAboveSelectedMaterial(t *testing
 		"pages": []any{map[string]any{
 			"width": 1080.0, "height": 1440.0,
 			"background": map[string]any{"type": "solid"},
-			"children": []any{map[string]any{"id": "title", "type": "text"}},
+			"children":   []any{map[string]any{"id": "title", "type": "text"}},
 		}},
 	}
 	err := applyBackgroundImage(file, InstantiateImage{ContentType: "image/png", DataBase64: "cG5n"})
@@ -200,6 +243,13 @@ func (a tPersist) CreateDesign(ctx context.Context, ws, title string, from map[s
 }
 func (a tPersist) GetWorkspaceID(ctx context.Context, id string) (string, error) {
 	return a.p.GetWorkspaceID(ctx, id)
+}
+func (a tPersist) GetTemplateZone(ctx context.Context, id string) (string, error) {
+	rec, err := a.p.GetRecord(ctx, id)
+	if err != nil || rec.TemplateZone == nil {
+		return "", err
+	}
+	return *rec.TemplateZone, nil
 }
 func (a tPersist) LoadDesignFile(ctx context.Context, id, ws string) (map[string]any, error) {
 	l, err := a.p.LoadFile(ctx, id, ws)
@@ -272,6 +322,31 @@ func TestTemplates_DB(t *testing.T) {
 		t.Fatalf("design should load: %v", err)
 	}
 
+	// Historical Xiaohongshu drafts may have no zone marker in the snapshot;
+	// saving by design id must inherit the persisted design summary instead.
+	zoneDesign := map[string]any{
+		"id": uuid.NewString(), "schemaVersion": 24, "title": "小红书模板专区",
+		"unit": "px", "dpi": 96,
+		"pages":  []any{map[string]any{"id": "p-zone", "name": "Page 1", "width": 1080, "height": 1440, "children": []any{}}},
+		"assets": []any{}, "fonts": []any{}, "meta": map[string]any{"templateZone": "xiaohongshu"},
+	}
+	zoneRec, err := persist.Create(ctx, ws.ID, "小红书模板专区", persistence.DesignFile(zoneDesign), &owner.ID)
+	if err != nil {
+		t.Fatalf("create zone design: %v", err)
+	}
+	zoneSaved, err := svc.SaveAsTemplate(ctx, owner.ID, SaveInput{WorkspaceID: ws.ID, DesignID: zoneRec.ID, Title: "Zone Template", Visibility: "workspace"})
+	if err != nil || !contains(zoneSaved.Tags, "小红书") || len(zoneSaved.Categories) != 1 || zoneSaved.Categories[0] != "小红书" {
+		t.Fatalf("zone tag not inherited: %+v err=%v", zoneSaved, err)
+	}
+	appliedZoneID, err := svc.Apply(ctx, owner.ID, zoneSaved.ID, ws.ID)
+	if err != nil {
+		t.Fatalf("apply zone template: %v", err)
+	}
+	appliedZone, err := persist.GetRecord(ctx, appliedZoneID)
+	if err != nil || appliedZone.TemplateZone == nil || *appliedZone.TemplateZone != "xiaohongshu" {
+		t.Fatalf("applied design should remain in Xiaohongshu zone: %+v err=%v", appliedZone, err)
+	}
+
 	// Save the design as a private template; it then appears in the list.
 	loaded, _ := persist.LoadFile(ctx, designID, ws.ID)
 	saved, err := svc.SaveAsTemplate(ctx, owner.ID, SaveInput{WorkspaceID: ws.ID, File: loaded.File, Title: "My Template", Visibility: "private"})
@@ -281,14 +356,53 @@ func TestTemplates_DB(t *testing.T) {
 	if saved.Visibility != "personal" {
 		t.Fatalf("private template should map to personal visibility: %s", saved.Visibility)
 	}
+	instantiatedID, err := svc.Instantiate(ctx, owner.ID, saved.ID, InstantiateInput{
+		WorkspaceID: ws.ID,
+		Title:       "Custom template cover",
+		Fields:      map[string]string{},
+		Background:  &InstantiateImage{ContentType: "image/png", DataBase64: "cG5n"},
+	})
+	if err != nil {
+		t.Fatalf("instantiate custom template without fillable fields: %v", err)
+	}
+	instantiated, err := persist.LoadFile(ctx, instantiatedID, ws.ID)
+	if err != nil {
+		t.Fatalf("load instantiated custom template: %v", err)
+	}
+	instantiatedPage := asObj(asArr(instantiated.File["pages"])[0])
+	instantiatedChildren := asArr(instantiatedPage["children"])
+	if len(instantiatedChildren) == 0 || asStr(asObj(instantiatedChildren[0])["src"]) != "data:image/png;base64,cG5n" {
+		t.Fatalf("selected material background missing: %+v", instantiatedChildren)
+	}
 	got, err := svc.Get(ctx, owner.ID, saved.ID)
 	if err != nil || got.ID != saved.ID {
 		t.Fatalf("Get saved: %+v err=%v", got, err)
+	}
+	var templateCountBefore int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM "templates"`).Scan(&templateCountBefore); err != nil {
+		t.Fatalf("count templates before rename: %v", err)
+	}
+	renamed, err := svc.Rename(ctx, owner.ID, saved.ID, "  Renamed Template  ")
+	if err != nil || renamed.ID != saved.ID || renamed.Title != "Renamed Template" {
+		t.Fatalf("rename should update the same template: %+v err=%v", renamed, err)
+	}
+	var templateCountAfter int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM "templates"`).Scan(&templateCountAfter); err != nil {
+		t.Fatalf("count templates after rename: %v", err)
+	}
+	if templateCountAfter != templateCountBefore {
+		t.Fatalf("rename created a template: before=%d after=%d", templateCountBefore, templateCountAfter)
+	}
+	if _, err := svc.Rename(ctx, owner.ID, saved.ID, "  "); err != ErrBadRequest {
+		t.Fatalf("blank template title should be rejected, got %v", err)
 	}
 	// A different user cannot see the private template.
 	other, _, _, _ := acct.Signup(ctx, "tpl-other+"+uuid.NewString()+"@example.com", "a-strong-password", "Other")
 	if _, err := svc.Get(ctx, other.ID, saved.ID); err != ErrNotFound {
 		t.Fatalf("private template should be hidden from others, got %v", err)
+	}
+	if _, err := svc.Rename(ctx, other.ID, saved.ID, "Unauthorized"); err != ErrForbidden {
+		t.Fatalf("non-owner should not rename a private template, got %v", err)
 	}
 
 	// Collections: create, assign, list, delete.

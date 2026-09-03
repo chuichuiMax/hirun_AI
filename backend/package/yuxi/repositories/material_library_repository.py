@@ -278,6 +278,24 @@ class MaterialLibraryRepository:
                 .values(category=target_category_id)
             )
 
+    async def update_child_category_industry(
+        self,
+        owner_uid: str,
+        material_type: str,
+        parent_id: str,
+        industry_slug: str | None,
+    ) -> None:
+        await self.db.execute(
+            update(ContentMaterialCategory)
+            .where(
+                ContentMaterialCategory.owner_uid == owner_uid,
+                ContentMaterialCategory.material_type == material_type,
+                ContentMaterialCategory.parent_id == parent_id,
+                ContentMaterialCategory.deleted_at.is_(None),
+            )
+            .values(industry_slug=industry_slug)
+        )
+
     async def normalize_orphan_categories(
         self,
         owner_uid: str,

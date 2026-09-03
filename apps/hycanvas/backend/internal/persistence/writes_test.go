@@ -39,6 +39,12 @@ func TestPersistenceLifecycle_DB(t *testing.T) {
 		t.Fatalf("signup: %v", err)
 	}
 	svc := NewService(tx).WithStorage(store)
+	zoneFile := createBlankDesign("zone-probe", "小红书模板专区")
+	zoneFile["meta"] = map[string]any{"templateZone": "xiaohongshu"}
+	zoneRec, err := svc.Create(ctx, ws.ID, "小红书模板专区", zoneFile, &owner.ID)
+	if err != nil || zoneRec.TemplateZone == nil || *zoneRec.TemplateZone != "xiaohongshu" {
+		t.Fatalf("template zone not persisted: %+v err=%v", zoneRec, err)
+	}
 
 	// Create a blank design.
 	rec, err := svc.Create(ctx, ws.ID, "My Design", nil, &owner.ID)

@@ -55,18 +55,33 @@ class HyCanvasClient:
         )
 
     async def list_xiaohongshu_templates(self) -> dict:
-        data = await self._request("GET", "/api/v1/templates", params={"q": "小红书"})
+        data = await self._request("GET", "/api/v1/templates")
         templates = []
         for item in data:
-            if not str(item.get("id", "")).startswith("xiaohongshu-"):
+            if "小红书" not in (item.get("tags") or []):
                 continue
+            fillable_fields = item.get("fillableFields") or []
+            format_ = item.get("format") or {}
+            width = float(format_.get("width") or 0)
+            height = float(format_.get("height") or 0)
+            if height <= 0 or abs(width / height - 0.75) > 0.02:
+                continue
+            preview_urls = []
+            for preview_url in item.get("previewUrls") or []:
+                if preview_url.startswith("/template-previews/"):
+                    preview_urls.append(f"/hycanvas-template-previews/{preview_url.removeprefix('/template-previews/')}")
+                else:
+                    preview_urls.append(preview_url)
+            if not preview_urls:
+                template_id = quote(item["id"], safe="")
+                preview_urls = [f"/api/content/covers/hycanvas/templates/{template_id}/render.png"]
             templates.append(
                 {
                     "id": item["id"],
                     "title": item["title"],
-                    "format": item.get("format") or {},
-                    "fillable_fields": item.get("fillableFields") or [],
-                    "preview_urls": [f"/hycanvas-template-previews/{quote(item['id'], safe='')}-p0.png"],
+                    "format": format_,
+                    "fillable_fields": fillable_fields,
+                    "preview_urls": preview_urls,
                 }
             )
         return {"configured": True, "templates": templates, "total": len(templates)}
@@ -266,6 +281,10 @@ class HyCanvasClient:
 
     async def render_png(self, design_id: str) -> tuple[bytes, str]:
         response = await self._send("GET", f"/api/v1/designs/{quote(design_id, safe='')}/render.png")
+        return response.content, response.headers.get("content-type", "image/png")
+
+    async def render_template_png(self, template_id: str) -> tuple[bytes, str]:
+        response = await self._send("GET", f"/api/v1/templates/{quote(template_id, safe='')}/render.png")
         return response.content, response.headers.get("content-type", "image/png")
 
     async def _request(self, method: str, path: str, **kwargs):

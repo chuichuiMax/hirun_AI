@@ -44,6 +44,7 @@ type DesignRecord struct {
 	Title           string  `json:"title"`
 	SchemaVersion   int     `json:"schemaVersion"`
 	DocKind         *string `json:"docKind"`
+	TemplateZone    *string `json:"templateZone,omitempty"`
 	CurrentSnapshot *string `json:"currentSnapshotId"`
 	CreatedAt       string  `json:"createdAt"`
 	UpdatedAt       string  `json:"updatedAt"`
@@ -91,7 +92,7 @@ func isoPtr(t *time.Time) *string {
 
 // GetRecord returns the design metadata record.
 func (s *Service) GetRecord(ctx context.Context, designID string) (*DesignRecord, error) {
-	const q = `SELECT id, "workspace_id", title, "schema_version", "doc_kind", "current_snapshot_id",
+	const q = `SELECT id, "workspace_id", title, "schema_version", "doc_kind", "template_zone", "current_snapshot_id",
 		"created_at", "updated_at", "deleted_at", "purge_after", "source_design_id", "source_version_id"
 		FROM "designs" WHERE id = $1`
 	var (
@@ -100,7 +101,7 @@ func (s *Service) GetRecord(ctx context.Context, designID string) (*DesignRecord
 		deletedAt, purgeAt *time.Time
 	)
 	if err := s.db.QueryRow(ctx, q, designID).Scan(
-		&r.ID, &r.WorkspaceID, &r.Title, &r.SchemaVersion, &r.DocKind, &r.CurrentSnapshot,
+		&r.ID, &r.WorkspaceID, &r.Title, &r.SchemaVersion, &r.DocKind, &r.TemplateZone, &r.CurrentSnapshot,
 		&created, &updated, &deletedAt, &purgeAt, &r.SourceDesignID, &r.SourceVersionID,
 	); err != nil {
 		return nil, err
@@ -118,7 +119,7 @@ func (s *Service) ListByWorkspace(ctx context.Context, workspaceID string, limit
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	const q = `SELECT id, "workspace_id", title, "schema_version", "doc_kind", "current_snapshot_id",
+	const q = `SELECT id, "workspace_id", title, "schema_version", "doc_kind", "template_zone", "current_snapshot_id",
 		"created_at", "updated_at", "deleted_at", "purge_after", "source_design_id", "source_version_id"
 		FROM "designs" WHERE "workspace_id" = $1 AND "deleted_at" IS NULL
 		ORDER BY "updated_at" DESC LIMIT $2`
@@ -135,7 +136,7 @@ func (s *Service) ListByWorkspace(ctx context.Context, workspaceID string, limit
 			deletedAt, purgeAt *time.Time
 		)
 		if err := rows.Scan(
-			&r.ID, &r.WorkspaceID, &r.Title, &r.SchemaVersion, &r.DocKind, &r.CurrentSnapshot,
+			&r.ID, &r.WorkspaceID, &r.Title, &r.SchemaVersion, &r.DocKind, &r.TemplateZone, &r.CurrentSnapshot,
 			&created, &updated, &deletedAt, &purgeAt, &r.SourceDesignID, &r.SourceVersionID,
 		); err != nil {
 			return nil, err

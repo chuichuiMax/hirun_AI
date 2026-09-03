@@ -85,10 +85,11 @@ async def remove_material_category(
 
 @material_library.get("/galleries")
 async def image_galleries(
+    industry_slug: str | None = Query(None, max_length=80),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_image_galleries(db, current_user)
+    return await list_image_galleries(db, current_user, industry_slug=industry_slug)
 
 
 @material_library.get("/items")

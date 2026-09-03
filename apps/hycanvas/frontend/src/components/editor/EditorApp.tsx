@@ -46,6 +46,7 @@ import { InsightsPanel } from "./InsightsPanel";
 import { ApprovalBanner } from "./ApprovalBanner";
 import { NotificationsBell } from "@/components/notifications/NotificationsBell";
 import { PromptHost } from "@/components/ui/PromptHost";
+import { isContentSwarmManaged } from "@/lib/managedAuth";
 import { useRealtime, getDesignDoc, resyncFromLiveDoc } from "@/lib/useRealtime";
 import { useAutoSnapshot, checkpointMaxBytes } from "@/lib/useAutoSnapshot";
 import { onCommentChanged, onRoleChanged } from "@/lib/realtime";
@@ -935,6 +936,13 @@ export function EditorApp() {
     if (await save()) returnToIntegration();
   }, [integrationReturnUrl, returnToIntegration, save]);
 
+  const saveAndConfigureTemplate = useCallback(async () => {
+    if (!(await save())) return;
+    if (!isContentSwarmManaged) return;
+    const fields = (useEditor.getState().doc.meta as { brandEditableFields?: unknown[] } | undefined)?.brandEditableFields;
+    if (!Array.isArray(fields) || fields.length === 0) setTemplateOpen(true);
+  }, [save]);
+
   async function commitTitle() {
     const value = titleRef.current?.value.trim();
     if (!value || value === title) return;
@@ -1157,7 +1165,7 @@ export function EditorApp() {
               <Share2 size={16} /> {tr("editor.share")}
             </Button>
           )}
-          <Button size="sm" onClick={() => void save()} disabled={!designId || saving || accessMode !== "edit"} title={accessMode !== "edit" ? tr("editor.you_do_not_have_edit_access") : designId ? tr("editor.save_a_snapshot") : tr("editor.open_from_the_dashboard_to_save")}>
+          <Button size="sm" onClick={() => void saveAndConfigureTemplate()} disabled={!designId || saving || accessMode !== "edit"} title={accessMode !== "edit" ? tr("editor.you_do_not_have_edit_access") : designId ? "保存设计；首次保存时设置模板字段" : tr("editor.open_from_the_dashboard_to_save")}>
             {saving ? tr("editor.saving") : tr("editor.save")}
           </Button>
           {integrationReturnUrl && (
@@ -1194,7 +1202,14 @@ export function EditorApp() {
       {shareOpen && designId && (
         <ShareDialog key={designId} open onClose={() => { setShareOpen(false); setShareFocusRequests(false); }} designId={designId} focusRequests={shareFocusRequests} />
       )}
-      <SaveAsTemplateDialog open={templateOpen} onClose={() => setTemplateOpen(false)} designId={designId} workspaceId={workspaceId} />
+      <SaveAsTemplateDialog
+        key={designId ?? "unsaved"}
+        open={templateOpen}
+        onClose={() => setTemplateOpen(false)}
+        onSaved={async () => { await save(); }}
+        designId={designId}
+        workspaceId={workspaceId}
+      />
       {publishOpen && <PublishDialog open onClose={() => setPublishOpen(false)} designId={designId ?? undefined} workspaceId={workspaceId ?? undefined} />}
       {websiteOpen && <WebsiteDialog open onClose={() => setWebsiteOpen(false)} designId={designId ?? undefined} workspaceId={workspaceId ?? undefined} />}
       {printOpen && <PrintDialog open onClose={() => setPrintOpen(false)} />}
