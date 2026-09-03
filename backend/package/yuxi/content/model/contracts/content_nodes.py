@@ -128,6 +128,33 @@ class CollectSelectedStrategyEvidenceInputV1(StrictContract):
     strategy_snapshot: dict[str, Any] = Field(min_length=1)
     evidence_gap_analysis: dict[str, Any] = Field(min_length=1)
     evidence_bundle: dict[str, Any] = Field(min_length=1)
+    runtime_config_snapshot: dict[str, Any]
+
+
+class CollectBusinessRuleEvidenceInputV1(CollectSelectedStrategyEvidenceInputV1):
+    pass
+
+
+class CollectPriceEvidenceInputV1(StrictContract):
+    content_brief: dict[str, Any] = Field(min_length=1)
+    strategy_snapshot: dict[str, Any] = Field(min_length=1)
+    evidence_gap_analysis: dict[str, Any] = Field(min_length=1)
+    runtime_config_snapshot: dict[str, Any]
+
+
+class CollectComplianceEvidenceInputV1(CollectSelectedStrategyEvidenceInputV1):
+    pass
+
+
+class CollectViralCandidatesInputV1(CollectSelectedStrategyEvidenceInputV1):
+    pass
+
+
+class SelectViralReferenceInputV1(StrictContract):
+    content_brief: dict[str, Any] = Field(min_length=1)
+    strategy_snapshot: dict[str, Any] = Field(min_length=1)
+    runtime_config_snapshot: dict[str, Any]
+    viral_candidate_collection: dict[str, Any]
 
 
 class RankFormulaCandidatesInputV1(CollectMissingEvidenceInputV1):
@@ -285,7 +312,12 @@ class GenerateContentInputV1(StrictContract):
     evidence_bundle: dict[str, Any] = Field(min_length=1)
     channel_profile: dict[str, Any]
     persona_profile: dict[str, Any]
+    runtime_config_snapshot: dict[str, Any]
     validation_report: dict[str, Any] | None = None
+    review_report: dict[str, Any] | None = None
+    selected_title: dict[str, Any] | None = None
+    content_outline: dict[str, Any] | None = None
+    content_draft: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def verify_formula_lexicon_bundle(self) -> GenerateContentInputV1:
@@ -382,6 +414,11 @@ INPUT_CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         CollectMissingEvidenceInputV1,
         CollectMissingEvidenceInputV2,
         CollectSelectedStrategyEvidenceInputV1,
+        CollectBusinessRuleEvidenceInputV1,
+        CollectPriceEvidenceInputV1,
+        CollectComplianceEvidenceInputV1,
+        CollectViralCandidatesInputV1,
+        SelectViralReferenceInputV1,
         RankFormulaCandidatesInputV1,
         RankFormulaCandidatesInputV2,
         CollectStrategyProductEvidenceInputV1,
@@ -459,6 +496,38 @@ class EvidenceCollectionResultV1(StrictContract):
     evidence_items: list[EvidenceDraftV1]
     citations: list[str]
     unresolved_questions: list[str]
+
+
+class BusinessRuleEvidenceCollectionResultV1(EvidenceCollectionResultV1):
+    pass
+
+
+class PriceEvidenceCollectionResultV1(EvidenceCollectionResultV1):
+    pass
+
+
+class ComplianceEvidenceCollectionResultV1(EvidenceCollectionResultV1):
+    pass
+
+
+class ViralCandidateCollectionResultV1(EvidenceCollectionResultV1):
+    pass
+
+
+class ViralReferenceSelectionResultV1(StrictContract):
+    selected_candidate_id: str | None = None
+    selection_reason: str = Field(min_length=1)
+    selection_basis: dict[str, Any] = Field(default_factory=dict)
+    reference_blueprint: dict[str, Any] | None = None
+    unresolved_questions: list[str]
+
+    @model_validator(mode="after")
+    def require_complete_selection(self) -> ViralReferenceSelectionResultV1:
+        if self.selected_candidate_id and not self.reference_blueprint:
+            raise ValueError("选中爆款候选时必须提交结构蓝图")
+        if not self.selected_candidate_id and (self.selection_basis or self.reference_blueprint):
+            raise ValueError("未选爆款候选时不得提交选择依据或结构蓝图")
+        return self
 
 
 class FormulaSlotEvidenceMappingV1(StrictContract):
@@ -636,6 +705,11 @@ CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         DirectionSelectionResultV1,
         StrategyExplanationResultV1,
         EvidenceCollectionResultV1,
+        BusinessRuleEvidenceCollectionResultV1,
+        PriceEvidenceCollectionResultV1,
+        ComplianceEvidenceCollectionResultV1,
+        ViralCandidateCollectionResultV1,
+        ViralReferenceSelectionResultV1,
         ProductEvidenceCollectionResultV1,
         FormulaRankingResultV1,
         TitleCandidatesResultV1,
@@ -697,6 +771,9 @@ class ContractDomainContext:
     product_material_slots: frozenset[str] = frozenset()
     product_material_slot_usages: dict[str, frozenset[str]] = field(default_factory=dict)
     product_material_slot_types: dict[str, str] = field(default_factory=dict)
+    creation_mode: Literal["original", "viral_rewrite"] = "original"
+    selected_viral_reference_ids: tuple[str, ...] = ()
+    viral_candidate_ids: frozenset[str] = frozenset()
 
     @classmethod
     def from_node_input(cls, node_input: ContentAgentNodeInputV1) -> ContractDomainContext:
@@ -719,6 +796,7 @@ class ContractDomainContext:
         locked_values: dict[str, Any],
         product_material_requirements: dict[str, Any] | None = None,
         strategy_snapshot: dict[str, Any] | None = None,
+        viral_candidate_collection: dict[str, Any] | None = None,
     ) -> ContractDomainContext:
         versions = (
             locked_versions
@@ -819,6 +897,20 @@ class ContractDomainContext:
                 requirement["requirement_id"]: str(requirement.get("material_type") or requirement["requirement_id"])
                 for requirement in material_requirements
             },
+            creation_mode="viral_rewrite" if locks.get("creation_mode") == "viral_rewrite" else "original",
+            selected_viral_reference_ids=tuple(
+                str(item["id"])
+                for item in evidence_bundle.get("items") or []
+                if isinstance(item, dict)
+                and item.get("id")
+                and item.get("metadata", {}).get("material_type") == "viral_example"
+                and item.get("metadata", {}).get("selected_reference") is True
+            ),
+            viral_candidate_ids=frozenset(
+                str(item["id"])
+                for item in (viral_candidate_collection or {}).get("evidence_items") or []
+                if isinstance(item, dict) and item.get("id")
+            ),
         )
 
 
@@ -901,9 +993,7 @@ def _validate_formula_lexicon_usage(result: GeneratedContentResultV1, context: C
                 f"正文使用了锁定公式之外的词库: {', '.join(sorted(unexpected))}",
             )
         variant_codes = (
-            set().union(*context.body_variant_lexicon_codes.values())
-            if context.body_variant_lexicon_codes
-            else set()
+            set().union(*context.body_variant_lexicon_codes.values()) if context.body_variant_lexicon_codes else set()
         )
         required_codes = set(context.allowed_body_lexicon_codes) - variant_codes
         if result.outline.variant_key:
@@ -920,7 +1010,9 @@ def _validate_formula_lexicon_usage(result: GeneratedContentResultV1, context: C
 
 
 def _validate_numbers(text: str, context: ContractDomainContext, field_path: str, usage: str) -> None:
-    numbers = set(re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", text))
+    # 行首顺序编号只是结构导航，不是事实数字。正文中的其他数字仍必须有证据。
+    factual_text = re.sub(r"(?m)^\s*\d{1,2}[.、）)]\s*", "", text)
+    numbers = set(re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", factual_text))
     allowed = context.allowed_numbers_by_usage.get(usage, context.allowed_numbers)
     unknown = sorted(numbers - set(allowed))
     if unknown:
@@ -1027,6 +1119,225 @@ def validate_content_node_result(
                             context.locked_body_formula_sections,
                             f"evidence_items.{index}.metadata.formula_section",
                         )
+        if isinstance(result, BusinessRuleEvidenceCollectionResultV1):
+            forbidden_types = {"price", "viral_example", "forbidden_term", "compliance_rule"}
+            invalid = [
+                item.id for item in result.evidence_items if item.metadata.get("material_type") in forbidden_types
+            ]
+            if invalid:
+                raise ContractDomainValidationError(
+                    "business_evidence_scope_invalid",
+                    "evidence_items",
+                    f"业务与规则调研不得提交价格、封禁词或爆款资料: {', '.join(invalid)}",
+                )
+        elif isinstance(result, PriceEvidenceCollectionResultV1):
+            invalid = [item.id for item in result.evidence_items if item.metadata.get("material_type") != "price"]
+            if invalid:
+                raise ContractDomainValidationError(
+                    "price_evidence_scope_invalid",
+                    "evidence_items",
+                    f"价格调研只能提交价格资料: {', '.join(invalid)}",
+                )
+        elif isinstance(result, ComplianceEvidenceCollectionResultV1):
+            invalid = [
+                item.id
+                for item in result.evidence_items
+                if item.metadata.get("rule_kind") != "forbidden_replacement_map"
+            ]
+            if invalid:
+                raise ContractDomainValidationError(
+                    "compliance_evidence_scope_invalid",
+                    "evidence_items",
+                    f"封禁词调研只能提交问题词替换表: {', '.join(invalid)}",
+                )
+        elif isinstance(result, ViralCandidateCollectionResultV1):
+            invalid = [
+                item.id
+                for item in result.evidence_items
+                if item.metadata.get("material_type") != "viral_example"
+                or item.metadata.get("selected_reference") is True
+            ]
+            if invalid:
+                raise ContractDomainValidationError(
+                    "viral_candidate_scope_invalid",
+                    "evidence_items",
+                    f"爆款候选调研只能提交尚未选定的爆款样例: {', '.join(invalid)}",
+                )
+        viral_references = [
+            item
+            for item in result.evidence_items
+            if item.metadata.get("material_type") == "viral_example" and item.metadata.get("selected_reference") is True
+        ]
+        is_final_collection = result.__class__ is EvidenceCollectionResultV1
+        if is_final_collection and context.creation_mode == "viral_rewrite":
+            if len(viral_references) != 1:
+                raise ContractDomainValidationError(
+                    "viral_reference_required",
+                    "evidence_items",
+                    "爆款仿写模式必须且只能选择一篇爆款参考",
+                )
+            blueprint = viral_references[0].metadata.get("reference_blueprint")
+            required_blueprint_fields = {
+                "title_pattern",
+                "title_slot_sequence",
+                "opening_hook",
+                "content_block_sequence",
+                "narrative_structure",
+                "paragraph_rhythm",
+                "list_pattern",
+                "emoji_pattern",
+                "interaction_style",
+            }
+            if not isinstance(blueprint, dict) or not required_blueprint_fields.issubset(blueprint):
+                raise ContractDomainValidationError(
+                    "viral_reference_blueprint_invalid",
+                    "evidence_items",
+                    "选中的爆款参考缺少完整结构蓝图",
+                )
+            if not isinstance(blueprint.get("title_slot_sequence"), list) or not blueprint["title_slot_sequence"]:
+                raise ContractDomainValidationError(
+                    "viral_reference_blueprint_invalid",
+                    "evidence_items",
+                    "爆款结构蓝图缺少可执行的标题槽位顺序",
+                )
+            if not isinstance(blueprint.get("content_block_sequence"), list) or not blueprint["content_block_sequence"]:
+                raise ContractDomainValidationError(
+                    "viral_reference_blueprint_invalid",
+                    "evidence_items",
+                    "爆款结构蓝图缺少动态正文信息块顺序",
+                )
+            list_pattern = blueprint.get("list_pattern")
+            if not isinstance(list_pattern, dict) or list_pattern.get("type") not in {
+                "none",
+                "numbered",
+                "emoji",
+                "bulleted",
+                "mixed",
+            }:
+                raise ContractDomainValidationError(
+                    "viral_reference_blueprint_invalid",
+                    "evidence_items",
+                    "爆款结构蓝图必须声明真实列表类型",
+                )
+            selection_basis = viral_references[0].metadata.get("selection_basis")
+            if not isinstance(selection_basis, dict) or not {
+                "input_variable_paths",
+                "matched_dimensions",
+                "structure_fillability",
+                "candidate_comparison",
+            }.issubset(selection_basis):
+                raise ContractDomainValidationError(
+                    "viral_reference_selection_invalid",
+                    "evidence_items",
+                    "爆款参考缺少基于当前输入变量的可追溯选择依据",
+                )
+            if (
+                not isinstance(selection_basis.get("input_variable_paths"), list)
+                or not selection_basis["input_variable_paths"]
+            ):
+                raise ContractDomainValidationError(
+                    "viral_reference_selection_invalid",
+                    "evidence_items",
+                    "爆款参考选择必须记录实际使用的输入变量路径",
+                )
+            fillability = selection_basis.get("structure_fillability")
+            if not isinstance(fillability, dict) or fillability.get("unfilled_required_slots") != []:
+                raise ContractDomainValidationError(
+                    "viral_reference_unfillable",
+                    "evidence_items",
+                    "选中的爆款结构仍有当前输入无法承接的关键槽位",
+                )
+            if (
+                not isinstance(selection_basis.get("candidate_comparison"), list)
+                or not selection_basis["candidate_comparison"]
+            ):
+                raise ContractDomainValidationError(
+                    "viral_reference_selection_invalid",
+                    "evidence_items",
+                    "爆款参考选择必须保留候选比较结论",
+                )
+        elif is_final_collection and viral_references:
+            raise ContractDomainValidationError(
+                "viral_reference_forbidden",
+                "evidence_items",
+                "原创模式不得选用爆款参考",
+            )
+    elif isinstance(result, ViralReferenceSelectionResultV1):
+        if context.creation_mode == "original":
+            if result.selected_candidate_id is not None:
+                raise ContractDomainValidationError(
+                    "viral_reference_forbidden",
+                    "selected_candidate_id",
+                    "原创模式不得选择爆款参考",
+                )
+        else:
+            if not result.selected_candidate_id:
+                raise ContractDomainValidationError(
+                    "viral_reference_required",
+                    "selected_candidate_id",
+                    "爆款仿写模式必须从候选中选择一篇可填充参考",
+                )
+            _require_member(result.selected_candidate_id, context.viral_candidate_ids, "selected_candidate_id")
+            blueprint = result.reference_blueprint or {}
+            required_blueprint_fields = {
+                "title_pattern",
+                "title_slot_sequence",
+                "opening_hook",
+                "content_block_sequence",
+                "narrative_structure",
+                "paragraph_rhythm",
+                "list_pattern",
+                "emoji_pattern",
+                "interaction_style",
+            }
+            if not required_blueprint_fields.issubset(blueprint):
+                raise ContractDomainValidationError(
+                    "viral_reference_blueprint_invalid",
+                    "reference_blueprint",
+                    "选中的爆款参考缺少完整结构蓝图",
+                )
+            if not blueprint.get("title_slot_sequence") or not blueprint.get("content_block_sequence"):
+                raise ContractDomainValidationError(
+                    "viral_reference_blueprint_invalid",
+                    "reference_blueprint",
+                    "爆款结构蓝图缺少标题槽位或正文信息块顺序",
+                )
+            if (blueprint.get("list_pattern") or {}).get("type") not in {
+                "none",
+                "numbered",
+                "emoji",
+                "bulleted",
+                "mixed",
+            }:
+                raise ContractDomainValidationError(
+                    "viral_reference_blueprint_invalid",
+                    "reference_blueprint.list_pattern",
+                    "爆款结构蓝图必须声明真实列表类型",
+                )
+            selection_basis = result.selection_basis
+            if not {
+                "input_variable_paths",
+                "matched_dimensions",
+                "structure_fillability",
+                "candidate_comparison",
+            }.issubset(selection_basis):
+                raise ContractDomainValidationError(
+                    "viral_reference_selection_invalid",
+                    "selection_basis",
+                    "爆款参考缺少基于当前输入变量的可追溯选择依据",
+                )
+            if not selection_basis.get("input_variable_paths") or not selection_basis.get("candidate_comparison"):
+                raise ContractDomainValidationError(
+                    "viral_reference_selection_invalid",
+                    "selection_basis",
+                    "爆款参考选择必须记录输入变量和候选比较结论",
+                )
+            if (selection_basis.get("structure_fillability") or {}).get("unfilled_required_slots") != []:
+                raise ContractDomainValidationError(
+                    "viral_reference_unfillable",
+                    "selection_basis.structure_fillability",
+                    "选中的爆款结构仍有当前输入无法承接的关键槽位",
+                )
     elif isinstance(result, ProductEvidenceCollectionResultV1):
         new_ids = [item.id for item in result.evidence_items]
         if len(new_ids) != len(set(new_ids)):
@@ -1130,6 +1441,13 @@ def validate_content_node_result(
             _validate_evidence_ids(item.evidence_ids, "body", context, f"paragraph_evidence.{index}.evidence_ids")
         _validate_numbers("\n".join([result.body, *result.topics]), context, "body", "body")
     elif isinstance(result, GeneratedContentResultV1):
+        if context.creation_mode == "viral_rewrite":
+            if len(context.selected_viral_reference_ids) != 1:
+                raise ContractDomainValidationError(
+                    "viral_reference_not_frozen",
+                    "evidence_bundle",
+                    "爆款仿写模式生成前必须冻结唯一爆款结构参考",
+                )
         _validate_formula_lexicon_usage(result, context)
         _require_equal(result.title.formula_code, context.locked_title_formula_code, "title.formula_code")
         _validate_evidence_ids(result.title.evidence_ids, "title", context, "title.evidence_ids")
@@ -1192,7 +1510,15 @@ class ContentNodeResultCollector:
     result: dict[str, Any] | None = None
 
     def _with_verified_knowledge_provenance(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if self.contract_name not in {"EvidenceCollectionResultV1", "ProductEvidenceCollectionResultV1"}:
+        evidence_contracts = {
+            "EvidenceCollectionResultV1",
+            "ProductEvidenceCollectionResultV1",
+            "BusinessRuleEvidenceCollectionResultV1",
+            "PriceEvidenceCollectionResultV1",
+            "ComplianceEvidenceCollectionResultV1",
+            "ViralCandidateCollectionResultV1",
+        }
+        if self.contract_name not in evidence_contracts:
             return payload
 
         normalized = deepcopy(payload)
@@ -1252,14 +1578,21 @@ class ContentNodeResultCollector:
                 raise ContractDomainValidationError(
                     "required_skill_not_activated", "required_skills", "未激活全部必需 Skills，禁止提交"
                 )
-            if self.contract_name == "EvidenceCollectionResultV1":
+            required_knowledge_names = {
+                "EvidenceCollectionResultV1": {"价格库", "品牌知识库", "平台规则", "爆款库"},
+                "BusinessRuleEvidenceCollectionResultV1": {"品牌知识库", "平台规则"},
+                "PriceEvidenceCollectionResultV1": {"价格库"},
+                "ComplianceEvidenceCollectionResultV1": {"封禁词库"},
+                "ViralCandidateCollectionResultV1": {"爆款库"},
+            }.get(self.contract_name)
+            if required_knowledge_names is not None:
                 visible = {
                     str(item.get("kb_id") or ""): str(item.get("name") or "")
                     for item in (getattr(self.runtime_context, "_visible_knowledge_bases", []) or [])
                     if isinstance(item, dict) and item.get("kb_id")
                 }
                 required_knowledge_bases = {
-                    kb_id for kb_id, name in visible.items() if name in {"价格库", "品牌知识库", "平台规则", "爆款库"}
+                    kb_id for kb_id, name in visible.items() if name in required_knowledge_names
                 }
                 queried = set(getattr(self.runtime_context, "_content_queried_knowledge_bases", set()) or set())
                 missing_queries = sorted(required_knowledge_bases - queried)

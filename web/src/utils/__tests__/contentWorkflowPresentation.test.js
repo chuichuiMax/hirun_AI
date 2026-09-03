@@ -20,8 +20,8 @@ assert.deepEqual(buildContentNarrativeCodeLabels(null), {})
 
 const groupedNodeIds = CONTENT_WORKFLOW_GROUPS.flatMap((group) => group.nodes)
 assert.equal(CONTENT_WORKFLOW_GROUPS.length, 5)
-assert.equal(groupedNodeIds.length, 21)
-assert.equal(new Set(groupedNodeIds).size, 21)
+assert.equal(groupedNodeIds.length, 26)
+assert.equal(new Set(groupedNodeIds).size, 26)
 assert.ok(groupedNodeIds.every((nodeId) => CONTENT_WORKFLOW_NODE_LABELS[nodeId]))
 assert.equal(CONTENT_WORKFLOW_NODE_LABELS.load_formula_lexicons, '加载公式必选词库')
 assert.deepEqual(CONTENT_WORKFLOW_GROUPS.at(-1).nodes, [
@@ -48,7 +48,26 @@ assert.equal(groups[1].isOpen, true)
 assert.equal(groups[1].currentNode.id, 'select_creation_strategy')
 assert.equal(groups[1].currentText, '当前：Agent 匹配创作手法、标题公式和正文公式')
 assert.equal(groups[1].completedCount, 0)
-assert.equal(groups[1].totalCount, 4)
+assert.equal(groups[1].totalCount, 9)
+
+const parallelResearchGroups = buildContentWorkflowGroups([
+  { node_id: 'collect_business_rule_evidence', status: 'completed' },
+  { node_id: 'collect_price_evidence', status: 'running' },
+  { node_id: 'collect_compliance_evidence', status: 'running' },
+  { node_id: 'collect_viral_candidates', status: 'completed' }
+])
+const parallelSteps = parallelResearchGroups[1].nodes.filter((step) =>
+  step.id.startsWith('collect_')
+)
+assert.deepEqual(
+  parallelSteps.map((step) => [step.id, step.status]),
+  [
+    ['collect_business_rule_evidence', 'completed'],
+    ['collect_price_evidence', 'running'],
+    ['collect_compliance_evidence', 'running'],
+    ['collect_viral_candidates', 'completed']
+  ]
+)
 
 const failedGroups = buildContentWorkflowGroups([
   { node_id: 'compile_runtime_snapshot', status: 'completed' },

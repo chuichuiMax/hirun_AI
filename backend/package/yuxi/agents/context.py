@@ -180,6 +180,11 @@ class BaseContext:
         metadata={"name": "模型推理强度", "configurable": False, "hide": True},
     )
 
+    model_call_timeout_seconds: float | None = field(
+        default=None,
+        metadata={"name": "模型单次调用超时", "configurable": False, "hide": True},
+    )
+
     tools: list[str] | None = field(
         default=None,
         metadata={

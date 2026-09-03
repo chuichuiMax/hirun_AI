@@ -15,6 +15,7 @@ from yuxi.agents.context import (
 from yuxi.agents.middlewares import (
     ContentNodeResultMiddleware,
     ContentTokenBudgetExceeded,
+    ModelCallTimeoutMiddleware,
     TokenUsageMiddleware,
     create_summary_middleware,
     save_attachments_to_fs,
@@ -32,7 +33,7 @@ from .state import ChatBotState
 async def _build_middlewares(context):
     """构建中间件列表"""
     if getattr(context, "_content_node_result_collector", None) is not None:
-        return [
+        middlewares = [
             KnowledgeBaseMiddleware(),
             SkillsMiddleware(),
             ContentNodeResultMiddleware(),
@@ -41,8 +42,12 @@ async def _build_middlewares(context):
                 retry_on=lambda exc: not isinstance(exc, ContentTokenBudgetExceeded),
                 on_failure="error",
             ),
-            TokenUsageMiddleware(),
         ]
+        model_call_timeout = getattr(context, "model_call_timeout_seconds", None)
+        if model_call_timeout:
+            middlewares.append(ModelCallTimeoutMiddleware(model_call_timeout))
+        middlewares.append(TokenUsageMiddleware())
+        return middlewares
 
     # summary middleware
     # 主 Agent 上下文优化：默认 100k tokens 触发压缩，压缩后保留最近 10 条消息

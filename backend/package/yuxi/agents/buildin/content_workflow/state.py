@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
+
+
+def merge_delegated_agent_runs(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
+    return {**(left or {}), **(right or {})}
 
 
 class ContentWorkflowState(TypedDict, total=False):
@@ -46,6 +50,11 @@ class ContentWorkflowState(TypedDict, total=False):
     strategy_explanation: dict[str, Any]
     evidence_gap_analysis: dict[str, Any]
     evidence_collection: dict[str, Any]
+    business_rule_evidence_collection: dict[str, Any]
+    price_evidence_collection: dict[str, Any]
+    compliance_evidence_collection: dict[str, Any]
+    viral_candidate_collection: dict[str, Any]
+    viral_reference_selection: dict[str, Any]
     product_material_requirements: dict[str, Any]
     product_evidence_collection: dict[str, Any]
     product_evidence_pack: dict[str, Any]
@@ -54,7 +63,7 @@ class ContentWorkflowState(TypedDict, total=False):
     formula_selection_snapshot: dict[str, Any]
     strategy_snapshot: dict[str, Any]
     formula_lexicon_bundle: dict[str, Any]
-    delegated_agent_runs: dict[str, str]
+    delegated_agent_runs: Annotated[dict[str, str], merge_delegated_agent_runs]
     visual_plan: dict[str, Any]
     cover_job: dict[str, Any]
     cover_assets: list[dict[str, Any]]

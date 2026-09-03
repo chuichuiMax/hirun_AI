@@ -113,6 +113,65 @@ async def test_v34_brief_compiles_without_visual_material(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_v37_brief_rejects_hycanvas_template_without_image(monkeypatch):
+    task = SimpleNamespace(
+        id="task-v34-template-only",
+        workflow_version_id=PLATFORM_WORKFLOW_V3_ID,
+        industry_template_version_id="industry-decoration-v3",
+        current_stage="brief",
+        selected_image_item_id=None,
+        selected_poster_template_id=None,
+        runtime_config_snapshot_json={"schema_version": 3},
+        strategy_json={},
+        brief_json={},
+        to_dict=lambda: {
+            "id": "task-v34-template-only",
+            "selected_image_item_id": task.selected_image_item_id,
+            "runtime_config_snapshot": task.runtime_config_snapshot_json,
+        },
+    )
+
+    class FakeRepo:
+        def __init__(self, db):
+            del db
+
+        async def get_task_for_user(self, task_id, user, for_update=False):
+            del user, for_update
+            return task if task_id == task.id else None
+
+        async def get_template(self, template_id):
+            return SimpleNamespace(id=template_id)
+
+        async def track(self, *args, **kwargs):
+            del args, kwargs
+
+    class FakeDB:
+        async def commit(self):
+            return None
+
+    monkeypatch.setattr(content_service, "ContentRepository", FakeRepo)
+    monkeypatch.setattr(
+        content_service,
+        "compile_content_brief",
+        lambda **kwargs: ({"form_values": kwargs["brief"].form_values}, []),
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await content_service.save_content_brief(
+            FakeDB(),
+            SimpleNamespace(uid="user-1"),
+            task.id,
+            ContentBriefPayload(
+                form_values={"brand_name": "测试品牌"},
+                visual_material={"hycanvas_template_id": "xiaohongshu-home-renovation"},
+            ),
+            compile_now=True,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["error"]["code"] == "CONTENT_IMAGE_MATERIAL_REQUIRED"
+
+
+@pytest.mark.asyncio
 async def test_v3_run_starts_from_brief_without_legacy_strategy(monkeypatch):
     task = SimpleNamespace(
         id="task-v3",
@@ -278,6 +337,7 @@ async def test_new_tasks_only_lock_v3_rule_pack_and_workflow(monkeypatch):
     )
 
     assert result["task"]["runtime_config_snapshot"]["schema_version"] == 3
+    assert result["task"]["runtime_config_snapshot"]["creation_mode"] == "original"
     assert created[0]["rule_version_id"] == "rules-v3"
     assert created[0]["workflow_version"].id == "workflow-v3"
     assert created[0]["industry_pack_version_id"] == "industry-pack-decoration-v3"

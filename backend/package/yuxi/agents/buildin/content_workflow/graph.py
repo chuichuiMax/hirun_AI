@@ -250,6 +250,8 @@ class ContentWorkflowAgent(BaseAgent):
                 ),
                 thread_id=state["task_id"],
             )
+            if node.get("parallel_group"):
+                return result
             return {**result, "current_node": node_id}
 
         return run

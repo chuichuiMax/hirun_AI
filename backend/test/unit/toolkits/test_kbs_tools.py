@@ -170,6 +170,33 @@ async def test_query_kb_freezes_content_evidence_provenance(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_query_kb_truncates_content_node_chunks_before_freezing_provenance(monkeypatch) -> None:
+    async def _fake_retriever(query_text: str, **kwargs):
+        del query_text, kwargs
+        return [
+            {
+                "content": "abcdefghij",
+                "metadata": {"file_id": "file-1", "chunk_id": "chunk-1"},
+            }
+        ]
+
+    _patch_retrievers(monkeypatch, retriever=_fake_retriever)
+    monkeypatch.setattr(tools, "_resolve_visible_knowledge_bases_for_query", _fake_visible_kbs)
+    context = SimpleNamespace(
+        _content_node_output_contract="ViralCandidateCollectionResultV1",
+        _content_max_retrieval_rounds=1,
+        _content_max_knowledge_bases=1,
+        _content_max_chunks_per_knowledge_base=3,
+        _content_max_chars_per_knowledge_chunk=6,
+    )
+
+    result = await _run_query_kb(kb_id="db-1", query_text="viral", runtime=SimpleNamespace(context=context))
+
+    assert result["results"][0]["content"] == "abcdef"
+    assert context._content_retrieved_knowledge_results["chunk-1"][0]["content"] == "abcdef"
+
+
+@pytest.mark.asyncio
 async def test_query_kb_allows_dify_knowledge_base(monkeypatch) -> None:
     async def _fake_retriever(query_text: str, **kwargs):
         assert query_text == "auth"

@@ -12,6 +12,12 @@ export const CONTENT_WORKFLOW_NODE_LABELS = {
   explain_strategy: 'Agent 解释策略',
   resolve_formula_requirements: '解析公式所需事实',
   collect_missing_evidence: 'Agent 收集缺失证据',
+  collect_business_rule_evidence: '业务与规则调研 Agent',
+  collect_price_evidence: '价格调研 Agent',
+  collect_compliance_evidence: '封禁词调研 Agent',
+  collect_viral_candidates: '爆款候选检索 Agent',
+  select_viral_reference: '爆款匹配与结构解析 Agent',
+  merge_research_evidence: '汇总并校验调研证据',
   confirm_high_risk_facts: '人工确认高风险事实',
   freeze_evidence_bundle: '冻结证据包',
   prepare_formula_selection: '校验有效公式对',
@@ -145,6 +151,12 @@ const NODE_PROGRESS_NARRATIVES = {
   lock_creation_strategy: '正在核对所选方向与创作公式是否满足渠道和证据约束。',
   load_formula_lexicons: '正在按锁定的标题和正文公式，从对应知识库加载全部必选词库。',
   collect_missing_evidence: '正在检查创作所需事实，并补充影响内容可信度的资料。',
+  collect_business_rule_evidence: '正在检索与当前主题和锁定公式直接相关的业务事实与平台规则。',
+  collect_price_evidence: '正在独立核对价格、适用范围和计价口径。',
+  collect_compliance_evidence: '正在从封禁词库读取问题词与常用表达映射。',
+  collect_viral_candidates: '正在根据当前项目、场景、痛点和受众检索多篇爆款候选。',
+  select_viral_reference: '正在结合输入变量和真实证据淘汰不可填充候选，并解析选中文章的真实结构。',
+  merge_research_evidence: '正在合并四路调研结果并校验来源、口径和爆款选择。',
   confirm_high_risk_facts: '正在确认价格、效果和承诺类信息，避免使用未经确认的高风险表述。',
   freeze_evidence_bundle: '正在汇总本次可引用的事实，确保后续生成只使用已确认资料。',
   generate_content: '正在把已确认的策略和事实组织成标题、正文结构与发布话题。',
@@ -703,7 +715,12 @@ export const CONTENT_WORKFLOW_GROUPS = [
       'select_creation_strategy',
       'lock_creation_strategy',
       'load_formula_lexicons',
-      'collect_missing_evidence',
+      'collect_business_rule_evidence',
+      'collect_price_evidence',
+      'collect_compliance_evidence',
+      'collect_viral_candidates',
+      'select_viral_reference',
+      'merge_research_evidence',
       'confirm_high_risk_facts',
       'freeze_evidence_bundle'
     ],
@@ -724,9 +741,34 @@ export const CONTENT_WORKFLOW_GROUPS = [
         nodes: ['load_formula_lexicons']
       },
       {
-        id: 'supplement_evidence',
-        label: '按缺失情况补充证据',
-        nodes: ['collect_missing_evidence', 'confirm_high_risk_facts', 'freeze_evidence_bundle']
+        id: 'collect_business_rule_evidence',
+        label: '并发调研业务事实与平台规则',
+        nodes: ['collect_business_rule_evidence']
+      },
+      {
+        id: 'collect_price_evidence',
+        label: '并发调研价格证据',
+        nodes: ['collect_price_evidence']
+      },
+      {
+        id: 'collect_compliance_evidence',
+        label: '并发读取封禁词替换表',
+        nodes: ['collect_compliance_evidence']
+      },
+      {
+        id: 'collect_viral_candidates',
+        label: '并发检索爆款候选',
+        nodes: ['collect_viral_candidates']
+      },
+      {
+        id: 'select_viral_reference',
+        label: '按输入变量匹配爆款并解析结构',
+        nodes: ['select_viral_reference']
+      },
+      {
+        id: 'finalize_research_evidence',
+        label: '汇总、确认并冻结调研证据',
+        nodes: ['merge_research_evidence', 'confirm_high_risk_facts', 'freeze_evidence_bundle']
       }
     ]
   },

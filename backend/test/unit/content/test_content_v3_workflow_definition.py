@@ -14,6 +14,11 @@ from yuxi.content.v3.workflow import WORKFLOW_V3
 AGENTS = {
     "content-strategy-agent",
     "content-research-agent",
+    "content-business-rule-research-agent",
+    "content-price-research-agent",
+    "content-compliance-research-agent",
+    "content-viral-candidate-agent",
+    "content-viral-selection-agent",
     "content-generation-agent",
     "content-review-agent",
     "content-visual-agent",
@@ -22,9 +27,16 @@ SKILLS = {
     "content-value-analyzer",
     "content-strategy-planner",
     "content-evidence-researcher",
+    "content-business-rule-researcher",
+    "content-price-researcher",
+    "content-compliance-researcher",
+    "viral-candidate-researcher",
+    "viral-reference-selector",
     "content-title-generator",
     "content-outline-builder",
     "content-body-generator",
+    "viral-structure-rewriter",
+    "viral-layout-formatter",
     "content-human-expression",
     "content-reviewer",
     "content-visual-planner",
@@ -44,10 +56,10 @@ def _node(definition: dict, node_id: str) -> dict:
 
 
 @pytest.mark.unit
-def test_v3_has_exactly_21_nodes_and_passes_full_catalog_validation():
+def test_v37_has_26_nodes_and_passes_full_catalog_validation():
     WorkflowDefinitionPolicy.validate(WORKFLOW_V3, catalog=CATALOG)
-    assert len(WORKFLOW_V3["nodes"]) == 21
-    assert len(WORKFLOW_V3["edges"]) == 19
+    assert len(WORKFLOW_V3["nodes"]) == 26
+    assert len(WORKFLOW_V3["edges"]) == 27
 
 
 @pytest.mark.unit
@@ -57,9 +69,25 @@ def test_simplified_agent_nodes_receive_required_upstream_state():
             "SelectCreationStrategyInputV1",
             {"rule_version_id", "content_brief", "evidence_bundle"},
         ),
-        "collect_missing_evidence": (
-            "CollectSelectedStrategyEvidenceInputV1",
+        "collect_business_rule_evidence": (
+            "CollectBusinessRuleEvidenceInputV1",
             {"strategy_selection", "strategy_snapshot", "evidence_gap_analysis", "evidence_bundle"},
+        ),
+        "collect_price_evidence": (
+            "CollectPriceEvidenceInputV1",
+            {"content_brief", "strategy_snapshot", "evidence_gap_analysis", "runtime_config_snapshot"},
+        ),
+        "collect_compliance_evidence": (
+            "CollectComplianceEvidenceInputV1",
+            {"strategy_selection", "strategy_snapshot", "evidence_gap_analysis", "evidence_bundle"},
+        ),
+        "collect_viral_candidates": (
+            "CollectViralCandidatesInputV1",
+            {"strategy_selection", "strategy_snapshot", "evidence_gap_analysis", "evidence_bundle"},
+        ),
+        "select_viral_reference": (
+            "SelectViralReferenceInputV1",
+            {"content_brief", "strategy_snapshot", "runtime_config_snapshot", "viral_candidate_collection"},
         ),
         "generate_content": (
             "GenerateContentInputV1",
@@ -78,24 +106,45 @@ def test_simplified_agent_nodes_receive_required_upstream_state():
 
 
 @pytest.mark.unit
-def test_only_one_node_can_query_knowledge_base():
+def test_only_parallel_research_nodes_can_query_knowledge_base():
     assert {
         item["id"]
         for item in WORKFLOW_V3["nodes"]
         if item["type"] == "agent" and item["knowledge_policy"] == "agent_scope"
-    } == {"collect_missing_evidence"}
+    } == {
+        "collect_business_rule_evidence",
+        "collect_price_evidence",
+        "collect_compliance_evidence",
+        "collect_viral_candidates",
+    }
 
 
 @pytest.mark.unit
-def test_creation_research_runs_with_business_and_viral_retrieval_budget():
-    research = _node(WORKFLOW_V3, "collect_missing_evidence")
-
-    assert research["max_retrieval_rounds"] == 4
-    assert research["max_knowledge_bases"] == 5
-    assert research["max_chunks_per_knowledge_base"] == 6
-    assert research["max_tool_calls"] == 6
-    assert research["max_execution_steps"] == 12
-    assert research["timeout_seconds"] == 120
+def test_creation_research_is_split_into_bounded_parallel_nodes_before_selection():
+    research_ids = {
+        "collect_business_rule_evidence",
+        "collect_price_evidence",
+        "collect_compliance_evidence",
+        "collect_viral_candidates",
+    }
+    for node_id in research_ids:
+        node = _node(WORKFLOW_V3, node_id)
+        assert node["parallel_group"] == "research"
+        assert node["timeout_seconds"] <= 75
+        assert node["max_knowledge_bases"] <= 2
+        assert node["max_chars_per_knowledge_chunk"] <= 2400
+        assert "runtime_config_snapshot" in node["state_inputs"]
+        assert ["load_formula_lexicons", node_id] in WORKFLOW_V3["edges"]
+        assert [node_id, "select_viral_reference"] in WORKFLOW_V3["edges"]
+    selector = _node(WORKFLOW_V3, "select_viral_reference")
+    assert _node(WORKFLOW_V3, "collect_business_rule_evidence")["timeout_seconds"] == 75
+    assert _node(WORKFLOW_V3, "collect_viral_candidates")["max_chunks_per_knowledge_base"] == 2
+    assert _node(WORKFLOW_V3, "collect_viral_candidates")["max_chars_per_knowledge_chunk"] == 800
+    assert _node(WORKFLOW_V3, "collect_viral_candidates")["timeout_seconds"] == 75
+    assert selector["timeout_seconds"] == 75
+    assert selector["knowledge_policy"] == "frozen_evidence_only"
+    assert selector["required_skills"] == ["viral-reference-selector"]
+    assert ["select_viral_reference", "merge_research_evidence"] in WORKFLOW_V3["edges"]
 
 
 @pytest.mark.unit
@@ -108,6 +157,8 @@ def test_strategy_and_generation_are_single_agent_calls():
         "content-title-generator",
         "content-outline-builder",
         "content-body-generator",
+        "viral-structure-rewriter",
+        "viral-layout-formatter",
         "content-human-expression",
     ]
     assert node_ids.index("select_creation_strategy") < node_ids.index("lock_creation_strategy")
@@ -126,7 +177,7 @@ def test_strategy_and_generation_are_single_agent_calls():
 
 
 @pytest.mark.unit
-def test_system_seed_upgrades_to_content_and_cover_version_11():
+def test_system_seed_upgrades_to_content_and_cover_version_13():
     stale = SimpleNamespace(
         created_by="system",
         schema_version=3,
@@ -136,7 +187,7 @@ def test_system_seed_upgrades_to_content_and_cover_version_11():
         output_schema={},
     )
     assert _upgrade_system_workflow_v3(stale) is True
-    assert stale.version == 11
+    assert stale.version == 13
     assert stale.definition_json == WORKFLOW_V3
 
 
@@ -172,7 +223,7 @@ def test_fixed_strategy_lock_and_human_gates_are_required():
     missing_gate = deepcopy(WORKFLOW_V3)
     missing_gate["nodes"] = [item for item in missing_gate["nodes"] if item["id"] != "human_content_approval"]
     missing_gate["edges"] = [edge for edge in missing_gate["edges"] if "human_content_approval" not in edge]
-    with pytest.raises(ValueError, match="21 个节点|人工关口"):
+    with pytest.raises(ValueError, match="26 个节点|人工关口"):
         WorkflowDefinitionPolicy.validate(missing_gate)
 
 

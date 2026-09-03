@@ -20,6 +20,11 @@ PROHIBITED_ACTIONS = {
     "select_content_direction": ("不选择候选集外方向", "不锁定组合组", "不选公式", "不修改工作流"),
     "explain_strategy": ("不改变固定匹配结果", "不扩大候选池"),
     "collect_missing_evidence": ("不直接生成文章", "不编造事实"),
+    "collect_business_rule_evidence": ("不查询价格、封禁词或爆款资料", "不生成文章", "不编造事实"),
+    "collect_price_evidence": ("不查询价格库之外的资料", "不改变价格口径", "不生成文章"),
+    "collect_compliance_evidence": ("不查询封禁词库之外的资料", "不自行编造替换词", "不生成文章"),
+    "collect_viral_candidates": ("不选择最终爆款", "不把爆款事实当作业务事实", "不生成文章"),
+    "select_viral_reference": ("不查询知识库", "不复制爆款原句或事实", "不生成文章"),
     "collect_strategy_product_evidence": (
         "不生成标题或正文",
         "不修改锁定公式或创作手法",
@@ -107,6 +112,16 @@ class AgentNodeResultMapper:
             return {"strategy_explanation": result}
         if node_id == "collect_missing_evidence":
             return {"evidence_collection": result}
+        if node_id == "collect_business_rule_evidence":
+            return {"business_rule_evidence_collection": result}
+        if node_id == "collect_price_evidence":
+            return {"price_evidence_collection": result}
+        if node_id == "collect_compliance_evidence":
+            return {"compliance_evidence_collection": result}
+        if node_id == "collect_viral_candidates":
+            return {"viral_candidate_collection": result}
+        if node_id == "select_viral_reference":
+            return {"viral_reference_selection": result}
         if node_id == "collect_strategy_product_evidence":
             return {"product_evidence_collection": result}
         if node_id == "rank_formula_candidates":
@@ -202,6 +217,26 @@ class AgentNodeHandler:
                     }
                 }
 
+        creation_mode = (state.get("runtime_config_snapshot") or {}).get("creation_mode", "original")
+        if node["id"] == "collect_viral_candidates" and creation_mode != "viral_rewrite":
+            return {
+                "viral_candidate_collection": {
+                    "evidence_items": [],
+                    "citations": [],
+                    "unresolved_questions": [],
+                }
+            }
+        if node["id"] == "select_viral_reference" and creation_mode != "viral_rewrite":
+            return {
+                "viral_reference_selection": {
+                    "selected_candidate_id": None,
+                    "selection_reason": "原创模式跳过爆款参考选择",
+                    "selection_basis": {},
+                    "reference_blueprint": None,
+                    "unresolved_questions": [],
+                }
+            }
+
         evidence_bundle = state.get("evidence_bundle") or {"items": []}
         evidence_hash = str(evidence_bundle.get("bundle_hash") or "")
         if not evidence_hash:
@@ -221,6 +256,7 @@ class AgentNodeHandler:
         visual_material = (state.get("runtime_config_snapshot") or {}).get("visual_material") or {}
         required_source_asset_ids = [visual_material["image_asset_id"]] if visual_material.get("image_asset_id") else []
         locked_values = {
+            "creation_mode": (state.get("runtime_config_snapshot") or {}).get("creation_mode", "original"),
             "selected_title": (state.get("selected_title") or {}).get("text"),
             "source_asset_ids": [
                 *[item["id"] for item in media if item.get("id")],
@@ -241,6 +277,7 @@ class AgentNodeHandler:
             locked_values=locked_values,
             product_material_requirements=state.get("product_material_requirements") or {},
             strategy_snapshot=state.get("strategy_snapshot") or {},
+            viral_candidate_collection=state.get("viral_candidate_collection") or {},
         )
         delegation = AgentDelegationService(db)
         delegated = await delegation.execute(
@@ -274,6 +311,7 @@ class AgentNodeHandler:
                 max_retrieval_rounds=int(node.get("max_retrieval_rounds") or 0),
                 max_knowledge_bases=int(node.get("max_knowledge_bases") or 0),
                 max_chunks_per_knowledge_base=int(node.get("max_chunks_per_knowledge_base") or 0),
+                max_chars_per_knowledge_chunk=int(node.get("max_chars_per_knowledge_chunk") or 0),
                 prohibited_actions=PROHIBITED_ACTIONS.get(node["id"], ()),
             )
         )

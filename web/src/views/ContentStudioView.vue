@@ -61,6 +61,7 @@ const stage = ref(1)
 const creation = reactive({
   industry_template_id: '',
   mode: window.matchMedia('(max-width: 800px)').matches ? 'quick' : 'quick',
+  creation_mode: 'original',
   content_goal: '',
   name: ''
 })
@@ -1042,9 +1043,9 @@ const buildBrief = () => ({
   attachments: [],
   locked_fields: [],
   form_values: { ...formValues },
-  visual_material: selectedImageItemId.value
+  visual_material: selectedImageItemId.value || selectedHyCanvasTemplateId.value
     ? {
-        image_item_id: selectedImageItemId.value,
+        image_item_id: selectedImageItemId.value || null,
         poster_template_id: null,
         hycanvas_template_id: selectedHyCanvasTemplateId.value
       }
@@ -1083,7 +1084,7 @@ onBeforeUnmount(() => {
 
 const compileBrief = async () => {
   if (!selectedImageItemId.value) {
-    message.warning('请选择一张图库原图')
+    message.warning('请选择一张图库图片作为封面主图')
     return
   }
   if (!selectedHyCanvasTemplateId.value) {
@@ -1340,6 +1341,20 @@ const openVersions = async () => {
               <small>简化版由 V3 自动锁定公式；专业版会在人工节点确认公式对。</small>
             </label>
             <label class="field-block">
+              <span>创作模式</span>
+              <a-segmented
+                v-model:value="creation.creation_mode"
+                :options="[
+                  { label: '原创模式', value: 'original' },
+                  { label: '爆款仿写', value: 'viral_rewrite' }
+                ]"
+              />
+              <small v-if="creation.creation_mode === 'viral_rewrite'">
+                系统会从爆款库选择一篇最匹配内容，只仿写结构，业务事实仍来自真实知识库。
+              </small>
+              <small v-else>根据锁定公式原创内容，并使用真实知识库补充业务事实。</small>
+            </label>
+            <label class="field-block">
               <span>内容目标</span>
               <a-select v-model:value="creation.content_goal" placeholder="请选择内容目标">
                 <a-select-option v-for="goal in store.contentGoals" :key="goal.code" :value="goal.code">
@@ -1376,6 +1391,9 @@ const openVersions = async () => {
             <div class="form-card">
               <div class="mode-row">
                 <span class="mode-badge">{{ isQuickMode ? '简化版' : '专业版' }}</span>
+                <span class="mode-badge">
+                  {{ store.task?.runtime_config_snapshot?.creation_mode === 'viral_rewrite' ? '爆款仿写' : '原创模式' }}
+                </span>
                 <span>{{ store.template?.name }}</span>
                 <small v-if="saveStatusLabel" :class="{ 'save-error': store.saveStatus === 'error' }">{{ saveStatusLabel }}</small>
               </div>
@@ -1419,7 +1437,7 @@ const openVersions = async () => {
               <div>
                 <span class="section-kicker">视觉素材</span>
                 <h3>选择图库与封面模板</h3>
-                <p>可提前保存图库图片和封面模板；当前 V3.4 暂不执行封面生成与交付，不影响标题和正文生产。</p>
+                <p>图库图片将作为 HyCanvas 封面主图；内容生成并审核通过后，系统会按所选模板生成可继续编辑的封面。</p>
               </div>
               <a-button @click="router.push('/materials/images')">
                 <FolderOpen :size="15" />管理素材库
@@ -1429,8 +1447,8 @@ const openVersions = async () => {
             <a-spin :spinning="materialSelectorLoading">
               <div class="material-selector-block">
                 <div class="material-selector-title">
-                  <div><Image :size="18" /><strong>选择图库图片</strong><em>可选 · 单选</em></div>
-                  <small>可从当前账号的图库中选择一张已启用图片；不选择也可以进入内容生产。</small>
+                  <div><Image :size="18" /><strong>选择图库图片</strong><em>必选 · 单选</em></div>
+                  <small>从当前账号的图库中选择一张已启用图片，作为 HyCanvas 封面主图。</small>
                 </div>
                 <div v-if="rootMaterialGalleries.length" class="gallery-folder-grid" aria-label="素材图库">
                   <button

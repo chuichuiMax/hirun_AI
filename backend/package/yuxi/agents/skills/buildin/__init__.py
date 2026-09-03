@@ -40,9 +40,43 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="content-evidence-researcher",
         source_dir=_SKILLS_ROOT / "content-evidence-researcher",
-        description="按锁定策略检索真实业务资料与爆款结构参考。",
-        version="3.2.0",
+        description="按锁定策略检索真实业务资料、平台合规替换表与爆款结构参考。",
+        version="3.3.0",
         tool_dependencies=("get_business_facts", "query_kb", "open_kb_document", "find_kb_document"),
+    ),
+    BuiltinSkillSpec(
+        slug="content-business-rule-researcher",
+        source_dir=_SKILLS_ROOT / "content-business-rule-researcher",
+        description="只检索与锁定公式相关的品牌业务事实与平台业务规则。",
+        version="1.1.0",
+        tool_dependencies=("query_kb",),
+    ),
+    BuiltinSkillSpec(
+        slug="content-price-researcher",
+        source_dir=_SKILLS_ROOT / "content-price-researcher",
+        description="只检索价格库并保留适用范围、计价单位和价格口径。",
+        version="1.1.0",
+        tool_dependencies=("query_kb",),
+    ),
+    BuiltinSkillSpec(
+        slug="content-compliance-researcher",
+        source_dir=_SKILLS_ROOT / "content-compliance-researcher",
+        description="只从封禁词库读取完整问题词与常用表达映射。",
+        version="1.1.0",
+        tool_dependencies=("query_kb",),
+    ),
+    BuiltinSkillSpec(
+        slug="viral-candidate-researcher",
+        source_dir=_SKILLS_ROOT / "viral-candidate-researcher",
+        description="按当前任务变量检索多篇爆款候选，不在检索阶段决定最终参考。",
+        version="1.1.0",
+        tool_dependencies=("query_kb",),
+    ),
+    BuiltinSkillSpec(
+        slug="viral-reference-selector",
+        source_dir=_SKILLS_ROOT / "viral-reference-selector",
+        description="按当前输入变量选择唯一可填充的爆款参考，并动态提取结构蓝图。",
+        version="2.0.0",
     ),
     BuiltinSkillSpec(
         slug="strategy-product-researcher",
@@ -55,18 +89,33 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-title-generator",
         source_dir=_SKILLS_ROOT / "content-title-generator",
         description="按锁定标题公式生成候选，并从确定性校验通过的候选中选择最终标题。",
-        version="2.0.0",
+        version="2.1.0",
     ),
     BuiltinSkillSpec(
         slug="content-body-generator",
         source_dir=_SKILLS_ROOT / "content-body-generator",
         description="使用人工锁定标题、正文公式和同源证据生成正文与话题。",
-        version="2.1.0",
+        version="2.2.0",
     ),
     BuiltinSkillSpec(
         slug="content-human-expression",
         source_dir=_SKILLS_ROOT / "content-human-expression",
-        description="在不改变事实、公式和证据的前提下，为文章加入自然语气、情绪推进、稳定人设及适当的 emoji。",
+        description="在不改变事实、公式和证据的前提下，优化自然表达并按知识库映射替换封禁词。",
+        version="1.7.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-structure-rewriter",
+        source_dir=_SKILLS_ROOT / "viral-structure-rewriter",
+        description=(
+            "按已冻结的唯一爆款结构蓝图重构标题、大纲和正文，"
+            "保留真实 Emoji 的位置和功能，并使用真实业务证据替换原文内容。"
+        ),
+        version="1.4.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-layout-formatter",
+        source_dir=_SKILLS_ROOT / "viral-layout-formatter",
+        description="按已冻结爆款的真实信息块、列表类型和段落节奏排版正文。",
         version="1.3.0",
     ),
     BuiltinSkillSpec(
@@ -85,7 +134,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-reviewer",
         source_dir=_SKILLS_ROOT / "content-reviewer",
         description="审核公式执行、事实一致性、人设语气和内容风险。",
-        version="1.3.0",
+        version="1.7.0",
         tool_dependencies=(
             "query_kb",
             "open_kb_document",

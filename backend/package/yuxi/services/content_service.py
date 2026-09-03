@@ -599,6 +599,7 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
         "persona_profile_version_id": payload.persona_profile_version_id,
         "channel_profile_version_id": channel_profile_version_id,
         "content_type_code": content_type_code,
+        "creation_mode": payload.creation_mode,
     }
     task = await repo.create_task(
         task_id=f"ct_{uuid.uuid4().hex}",
@@ -626,6 +627,7 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
             "mode": task.mode,
             "content_goal": goal,
             "content_type_code": content_type_code,
+            "creation_mode": payload.creation_mode,
             "schema_version": runtime_snapshot["schema_version"],
         },
     )
@@ -784,6 +786,12 @@ async def save_content_brief(
     requested_image_item_id = selection.image_item_id if selection else None
     requested_poster_template_id = selection.poster_template_id if selection else None
     requested_hycanvas_template_id = selection.hycanvas_template_id if selection else None
+    if compile_now and requested_hycanvas_template_id and not requested_image_item_id:
+        raise _content_error(
+            422,
+            "CONTENT_IMAGE_MATERIAL_REQUIRED",
+            "请选择一张图库图片作为 HyCanvas 封面主图",
+        )
     current_visual_material = (getattr(task, "brief_json", None) or {}).get("visual_material") or {}
     if task.current_stage != "brief" and (
         task.selected_image_item_id != requested_image_item_id
@@ -796,7 +804,9 @@ async def save_content_brief(
             "视觉素材已随事实简报锁定，不能在 V3 生产开始后更换",
         )
 
-    visual_snapshot: dict[str, Any] | None = None
+    visual_snapshot: dict[str, Any] | None = (
+        {} if requested_image_item_id or requested_poster_template_id or requested_hycanvas_template_id else None
+    )
     if requested_image_item_id:
         owner_uid = str(user.uid)
         material_repo = MaterialLibraryRepository(db)
@@ -819,31 +829,6 @@ async def save_content_brief(
             "image_width": image_asset.image_width,
             "image_height": image_asset.image_height,
         }
-        if compile_now:
-            from yuxi.services.hycanvas_service import HyCanvasClient
-
-            template_catalog = await HyCanvasClient.from_env().list_xiaohongshu_templates()
-            hycanvas_template = next(
-                (
-                    item
-                    for item in template_catalog["templates"]
-                    if item["id"] == requested_hycanvas_template_id
-                ),
-                None,
-            )
-            if hycanvas_template is None:
-                raise _content_error(
-                    422,
-                    "CONTENT_HYCANVAS_TEMPLATE_INVALID",
-                    "所选 HyCanvas 小红书模板不存在或不可用",
-                )
-            visual_snapshot.update(
-                {
-                    "hycanvas_template_id": hycanvas_template["id"],
-                    "hycanvas_template_title": hycanvas_template["title"],
-                    "hycanvas_fillable_fields": hycanvas_template["fillable_fields"],
-                }
-            )
         if requested_poster_template_id:
             poster = await ContentCoverRepository(db).get_poster_template_for_user(
                 requested_poster_template_id, owner_uid, for_update=True
@@ -874,14 +859,35 @@ async def save_content_brief(
                     "poster_template_version": poster.version,
                 }
             )
+    if compile_now and requested_hycanvas_template_id:
+        from yuxi.services.hycanvas_service import HyCanvasClient
+
+        template_catalog = await HyCanvasClient.from_env().list_xiaohongshu_templates()
+        hycanvas_template = next(
+            (item for item in template_catalog["templates"] if item["id"] == requested_hycanvas_template_id),
+            None,
+        )
+        if hycanvas_template is None:
+            raise _content_error(
+                422,
+                "CONTENT_HYCANVAS_TEMPLATE_INVALID",
+                "所选 HyCanvas 小红书模板不存在或不可用",
+            )
+        visual_snapshot.update(
+            {
+                "hycanvas_template_id": hycanvas_template["id"],
+                "hycanvas_template_title": hycanvas_template["title"],
+                "hycanvas_fillable_fields": hycanvas_template["fillable_fields"],
+            }
+        )
     task.selected_image_item_id = requested_image_item_id
     task.selected_poster_template_id = requested_poster_template_id
     compiled["visual_material"] = (
         {
-            "image_item_id": visual_snapshot["image_item_id"],
-            "image_asset_id": visual_snapshot["image_asset_id"],
-            "image_name": visual_snapshot["image_name"],
-            "image_category_id": visual_snapshot["image_category_id"],
+            "image_item_id": visual_snapshot.get("image_item_id"),
+            "image_asset_id": visual_snapshot.get("image_asset_id"),
+            "image_name": visual_snapshot.get("image_name"),
+            "image_category_id": visual_snapshot.get("image_category_id"),
             "poster_template_id": visual_snapshot.get("poster_template_id"),
             "poster_template_name": visual_snapshot.get("poster_template_name"),
             "hycanvas_template_id": requested_hycanvas_template_id,

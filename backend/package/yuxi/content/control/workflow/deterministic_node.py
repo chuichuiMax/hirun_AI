@@ -12,7 +12,7 @@ from yuxi.content.control.evidence import EvidenceApplicationService
 from yuxi.content.control.strategy.recommend_v3 import StrategyPreviewActor
 from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
 from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
-from yuxi.content.model.contracts import StrategySnapshotV1
+from yuxi.content.model.contracts import ContractDomainContext, StrategySnapshotV1, validate_content_node_result
 from yuxi.content.model.evidence import (
     EvidenceBundleV1,
     EvidenceGovernanceError,
@@ -198,6 +198,7 @@ class V3DeterministicNodeHandler:
             "normalize_evidence": self._normalize_evidence,
             "lock_creation_strategy": self._lock_creation_strategy,
             "load_formula_lexicons": self._load_formula_lexicons,
+            "merge_research_evidence": self._merge_research_evidence,
             "match_combination_group": self._match_combination_group,
             "resolve_formula_requirements": self._resolve_formula_requirements,
             "freeze_evidence_bundle": self._freeze_evidence_bundle,
@@ -376,9 +377,7 @@ class V3DeterministicNodeHandler:
                 "compatible_methods": title_formula.compatible_methods or [],
                 "risk_rules": title_formula.risk_rules or [],
                 "lexicon_codes": (
-                    [item["code"] for item in formula_lexicons["title"]]
-                    if formula_lexicons is not None
-                    else []
+                    [item["code"] for item in formula_lexicons["title"]] if formula_lexicons is not None else []
                 ),
             },
             "body_formula": {
@@ -822,6 +821,84 @@ class V3DeterministicNodeHandler:
         return {"evidence_bundle": bundle.model_dump(mode="json")}
 
     @staticmethod
+    async def _merge_research_evidence(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
+        del db, node_run_id
+        collections = [
+            state.get("business_rule_evidence_collection") or {},
+            state.get("price_evidence_collection") or {},
+            state.get("compliance_evidence_collection") or {},
+        ]
+        evidence_items = [item for collection in collections for item in collection.get("evidence_items") or []]
+        selection = state.get("viral_reference_selection") or {}
+        candidate_id = selection.get("selected_candidate_id")
+        candidates = (state.get("viral_candidate_collection") or {}).get("evidence_items") or []
+        if candidate_id:
+            candidate = next((item for item in candidates if item.get("id") == candidate_id), None)
+            if candidate is None:
+                raise ValueError("爆款选择结果不属于当前候选集合")
+            evidence_items.append(
+                {
+                    **candidate,
+                    "value": "已选爆款的抽象结构参考",
+                    "metadata": {
+                        **(candidate.get("metadata") or {}),
+                        "selected_reference": True,
+                        "selection_reason": selection.get("selection_reason"),
+                        "selection_basis": selection.get("selection_basis") or {},
+                        "reference_blueprint": selection.get("reference_blueprint") or {},
+                    },
+                }
+            )
+
+        citations = list(
+            dict.fromkeys(
+                str(citation)
+                for collection in collections
+                for citation in collection.get("citations") or []
+                if citation
+            )
+        )
+        if candidate_id:
+            selected_candidate = next(item for item in candidates if item.get("id") == candidate_id)
+            if selected_candidate.get("source_id"):
+                citations.append(str(selected_candidate["source_id"]))
+                citations = list(dict.fromkeys(citations))
+        unresolved_questions = [
+            str(question)
+            for collection in [*collections, selection]
+            for question in collection.get("unresolved_questions") or []
+            if question
+        ]
+        task = state.get("runtime_config_snapshot") or {}
+        formula = state.get("formula_selection_snapshot") or {}
+        result = validate_content_node_result(
+            "EvidenceCollectionResultV1",
+            {
+                "evidence_items": evidence_items,
+                "citations": citations,
+                "unresolved_questions": unresolved_questions,
+            },
+            ContractDomainContext.from_governance(
+                match_decision_snapshot=state.get("match_decision_snapshot") or {},
+                formula_selection_snapshot=formula,
+                evidence_bundle=state.get("evidence_bundle") or {},
+                locked_versions={
+                    "industry_pack_version_id": str(task.get("industry_pack_version_id") or ""),
+                    "channel_profile_version_id": str(task.get("channel_profile_version_id") or ""),
+                    "persona_profile_version_id": task.get("persona_profile_version_id"),
+                    "rule_version_id": str(task.get("rule_version_id") or state.get("rule_version_id") or ""),
+                    "title_formula_code": formula.get("selected_title_formula_code"),
+                    "body_formula_code": formula.get("selected_body_formula_code"),
+                    "artifact_version_id": None,
+                },
+                locked_values={"creation_mode": task.get("creation_mode", "original")},
+                strategy_snapshot=state.get("strategy_snapshot") or {},
+                viral_candidate_collection=state.get("viral_candidate_collection") or {},
+            ),
+        )
+        return {"evidence_collection": result.model_dump(mode="json")}
+
+    @staticmethod
     async def _prepare_formula_selection(
         *, db: AsyncSession, state: dict[str, Any], node_run_id: str
     ) -> dict[str, Any]:
@@ -1256,8 +1333,10 @@ class V3DeterministicNodeHandler:
                     )
             elif isinstance(value, str):
                 concrete_price_values.update(re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", value))
-        if used_price_evidence and concrete_price_values and not any(
-            price_value in body for price_value in concrete_price_values
+        if (
+            used_price_evidence
+            and concrete_price_values
+            and not any(price_value in body for price_value in concrete_price_values)
         ):
             report["checks"].append(
                 {

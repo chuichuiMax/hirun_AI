@@ -785,6 +785,28 @@ async def test_successful_cover_creation_forces_structured_result_as_second_tool
 @pytest.mark.asyncio
 async def test_content_agent_uses_minimal_runtime_middlewares():
     middlewares = await _build_middlewares(
+        SimpleNamespace(
+            _content_node_result_collector=object(),
+            model_retry_times=1,
+            model_call_timeout_seconds=70,
+        )
+    )
+
+    assert [type(item).__name__ for item in middlewares] == [
+        "KnowledgeBaseMiddleware",
+        "SkillsMiddleware",
+        "ContentNodeResultMiddleware",
+        "ModelRetryMiddleware",
+        "ModelCallTimeoutMiddleware",
+        "TokenUsageMiddleware",
+    ]
+    assert middlewares[3].max_retries == 1
+    assert middlewares[4].timeout_seconds == 70
+
+
+@pytest.mark.asyncio
+async def test_content_agent_without_model_call_timeout_keeps_existing_middlewares():
+    middlewares = await _build_middlewares(
         SimpleNamespace(_content_node_result_collector=object(), model_retry_times=2)
     )
 
@@ -1104,11 +1126,43 @@ async def test_delegation_agent_resolution_fails_closed(monkeypatch, agent, acce
     assert exc_info.value.code == expected_code
 
 
+@pytest.mark.parametrize(
+    ("node_id", "expected_names"),
+    [
+        ("collect_business_rule_evidence", {"品牌知识库", "平台规则"}),
+        ("collect_price_evidence", {"价格库"}),
+        ("collect_compliance_evidence", {"封禁词库"}),
+        ("collect_viral_candidates", {"爆款库"}),
+    ],
+)
+def test_parallel_research_agents_receive_only_their_knowledge_scope(node_id, expected_names):
+    context = SimpleNamespace(
+        knowledges=["kb-brand", "kb-rules", "kb-price", "kb-forbidden", "kb-viral"],
+        _visible_knowledge_bases=[
+            {"kb_id": "kb-brand", "name": "品牌知识库"},
+            {"kb_id": "kb-rules", "name": "平台规则"},
+            {"kb_id": "kb-price", "name": "价格库"},
+            {"kb_id": "kb-forbidden", "name": "封禁词库"},
+            {"kb_id": "kb-viral", "name": "爆款库"},
+        ],
+    )
+
+    AgentDelegationService._restrict_research_knowledge_scope(context, node_id)
+
+    assert {item["name"] for item in context._visible_knowledge_bases} == expected_names
+    assert set(context.knowledges) == {item["kb_id"] for item in context._visible_knowledge_bases}
+
+
 def test_formal_content_agent_catalog_and_conflict_policy():
-    assert len(CONTENT_AGENT_SPECS) == 7
+    assert len(CONTENT_AGENT_SPECS) == 12
     assert {item.slug for item in CONTENT_AGENT_SPECS} == {
         "content-strategy-agent",
         "content-research-agent",
+        "content-business-rule-research-agent",
+        "content-price-research-agent",
+        "content-compliance-research-agent",
+        "content-viral-candidate-agent",
+        "content-viral-selection-agent",
         "content-title-agent",
         "content-body-agent",
         "content-generation-agent",
@@ -1120,15 +1174,38 @@ def test_formal_content_agent_catalog_and_conflict_policy():
     assert title_spec.config_version == 4
     strategy_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-strategy-agent")
     assert strategy_spec.reasoning_effort == "medium"
-    assert strategy_spec.config_version == 4
+    assert strategy_spec.model_call_timeout_seconds == 70
+    assert strategy_spec.model_retry_times == 1
+    assert strategy_spec.config_version == 5
+    research_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-research-agent")
+    assert "viral-reference-selector" in research_spec.skills
+    assert research_spec.reasoning_effort == "low"
+    assert research_spec.model_call_timeout_seconds == 60
+    assert research_spec.model_retry_times == 1
+    assert research_spec.config_version == 6
+    specialist_specs = [item for item in CONTENT_AGENT_SPECS if item.inherit_context_from == "content-research-agent"]
+    assert len(specialist_specs) == 5
+    assert all(item.reasoning_effort == "low" for item in specialist_specs)
+    assert all(item.model_call_timeout_seconds <= 65 for item in specialist_specs)
+    assert all(item.model_retry_times == 0 for item in specialist_specs)
+    business_spec = next(item for item in specialist_specs if item.slug == "content-business-rule-research-agent")
+    assert business_spec.config_version == 4
+    price_spec = next(item for item in specialist_specs if item.slug == "content-price-research-agent")
+    assert price_spec.model == ""
+    assert price_spec.config_version == 5
+    assert all(item.config_version >= 2 for item in specialist_specs)
+    research_collectors = [item for item in specialist_specs if item.slug != "content-viral-selection-agent"]
+    assert all(item.skill_tools == ("query_kb",) for item in research_collectors)
     generation_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-generation-agent")
     assert generation_spec.skills == (
         "content-title-generator",
         "content-outline-builder",
         "content-body-generator",
+        "viral-structure-rewriter",
+        "viral-layout-formatter",
         "content-human-expression",
     )
-    assert generation_spec.config_version == 2
+    assert generation_spec.config_version == 4
     spec = CONTENT_AGENT_SPECS[0]
     existing = Agent(
         slug=spec.slug,
@@ -1187,6 +1264,134 @@ def test_system_content_agent_migration_does_not_overwrite_user_changes():
     assert migrate_system_content_agent(existing, spec) is False
     assert existing.config_version == 1
     assert existing.updated_by == "user-1"
+
+
+def test_research_agent_additive_migration_preserves_user_configuration():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-research-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={
+            "context": {
+                "skills": ["content-evidence-researcher", "strategy-product-researcher", "user-extra-skill"],
+                "skill_tool_allowlist": list(spec.skill_tools),
+                "model": "provider:user-model",
+            }
+        },
+        enabled=True,
+        config_version=4,
+        is_subagent=False,
+        created_by="system",
+        updated_by="user-1",
+    )
+
+    assert migrate_system_content_agent(existing, spec) is True
+    assert existing.config_version == spec.config_version
+    assert existing.updated_by == "user-1"
+    assert existing.config_json["context"]["model"] == "provider:user-model"
+    assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}
+    assert existing.config_json["context"]["reasoning_effort"] == "low"
+    assert existing.config_json["context"]["model_call_timeout_seconds"] == 60
+    assert existing.config_json["context"]["model_retry_times"] == 1
+
+
+def test_research_agent_runtime_budget_migration_preserves_user_knowledge_bases():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-research-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={
+            "context": {
+                "skills": list(spec.skills),
+                "skill_tool_allowlist": list(spec.skill_tools),
+                "knowledges": ["kb-user-selected"],
+                "model": "provider:user-model",
+                "model_retry_times": 2,
+            }
+        },
+        enabled=True,
+        config_version=5,
+        is_subagent=False,
+        created_by="system",
+        updated_by="user-1",
+    )
+
+    assert migrate_system_content_agent(existing, spec) is True
+    assert existing.config_version == 6
+    assert existing.updated_by == "user-1"
+    assert existing.config_json["context"]["knowledges"] == ["kb-user-selected"]
+    assert existing.config_json["context"]["model"] == "provider:user-model"
+    assert existing.config_json["context"]["reasoning_effort"] == "low"
+    assert existing.config_json["context"]["model_call_timeout_seconds"] == 60
+    assert existing.config_json["context"]["model_retry_times"] == 1
+
+
+def test_generation_agent_additive_migration_installs_viral_skills():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-generation-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={
+            "context": {
+                "skills": [
+                    "content-title-generator",
+                    "content-outline-builder",
+                    "content-body-generator",
+                    "content-human-expression",
+                ],
+                "skill_tool_allowlist": [],
+                "model": "provider:user-model",
+            }
+        },
+        enabled=True,
+        config_version=2,
+        is_subagent=False,
+        created_by="system",
+        updated_by="user-1",
+    )
+
+    assert migrate_system_content_agent(existing, spec) is True
+    assert existing.config_version == 4
+    assert existing.updated_by == "user-1"
+    assert existing.config_json["context"]["model"] == "provider:user-model"
+    assert set(existing.config_json["context"]["skills"]) == set(spec.skills)
+
+
+def test_generation_agent_additive_migration_installs_viral_layout_formatter():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-generation-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={
+            "context": {
+                "skills": [
+                    "content-title-generator",
+                    "content-outline-builder",
+                    "content-body-generator",
+                    "viral-structure-rewriter",
+                    "content-human-expression",
+                    "user-extra-skill",
+                ],
+                "skill_tool_allowlist": [],
+                "model": "provider:user-model",
+            }
+        },
+        enabled=True,
+        config_version=3,
+        is_subagent=False,
+        created_by="system",
+        updated_by="user-1",
+    )
+
+    assert migrate_system_content_agent(existing, spec) is True
+    assert existing.config_version == 4
+    assert existing.updated_by == "user-1"
+    assert existing.config_json["context"]["model"] == "provider:user-model"
+    assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}
 
 
 def test_delegation_schema_has_unique_child_run_and_parent_node_index():

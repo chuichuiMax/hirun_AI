@@ -390,6 +390,14 @@ async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, ru
         maximum_chunks = int(getattr(context, "_content_max_chunks_per_knowledge_base", 0) or 0)
         if maximum_chunks and isinstance(output.get("results"), list):
             output["results"] = output["results"][:maximum_chunks]
+        maximum_chars = int(getattr(context, "_content_max_chars_per_knowledge_chunk", 0) or 0)
+        if maximum_chars and isinstance(output.get("results"), list):
+            for item in output["results"]:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if isinstance(content, str) and len(content) > maximum_chars:
+                    item["content"] = content[:maximum_chars]
         _attach_content_knowledge_provenance(
             runtime,
             kb_id=target_kb_id,
