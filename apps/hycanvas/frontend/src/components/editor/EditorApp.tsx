@@ -284,6 +284,17 @@ export function EditorApp() {
         "http://localhost:5173",
         ...(configuredOrigin ? [new URL(configuredOrigin).origin] : []),
       ]);
+      // LAN / same-host access: allow ContentFlow origin matching current host or iframe referrer
+      if (typeof window !== "undefined") {
+        allowedOrigins.add(`${window.location.protocol}//${window.location.hostname}:5173`);
+        if (document.referrer) {
+          try {
+            allowedOrigins.add(new URL(document.referrer).origin);
+          } catch {
+            /* ignore invalid referrer */
+          }
+        }
+      }
       if (allowedOrigins.has(parsed.origin)) integrationReturnUrl = parsed.toString();
     } catch {
       integrationReturnUrl = null;

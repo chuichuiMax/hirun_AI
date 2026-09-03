@@ -157,7 +157,7 @@ const selectedHyCanvasTemplate = computed(() =>
 
 const suggestedHyCanvasValue = (field) => {
   const label = field.label || ''
-  const body = String(editor.body || '').replace(/[#*_>`\n]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const body = String(editor.body || '').replace(new RegExp('[#*_>`\\n]+', 'g'), ' ').replace(/\s+/g, ' ').trim()
   const facts = store.task?.brief?.form_values || formValues
   const semanticValues = {
     title: editor.title || store.artifact?.title || '',
@@ -597,57 +597,46 @@ const initializeVisualSelection = () => {
   selectedHyCanvasTemplateId.value = saved.hycanvas_template_id || ''
 }
 
-const clearReviewNotePhotos = () => {
-  reviewNotePhotoLoadGeneration += 1
-  reviewNotePhotos.value.forEach((item) => {
+const revokeReviewNotePhotoUrls = (photos = reviewNotePhotos.value) => {
+  photos.forEach((item) => {
     if (item.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
   })
+}
+
+const clearReviewNotePhotos = () => {
+  reviewNotePhotoLoadGeneration += 1
+  revokeReviewNotePhotoUrls()
   reviewNotePhotos.value = []
 }
 
 const initializeReviewNotePhotos = async () => {
   const generation = ++reviewNotePhotoLoadGeneration
-  reviewNotePhotos.value.forEach((item) => {
-    if (item.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
-  })
+  revokeReviewNotePhotoUrls()
   reviewNotePhotos.value = []
   if (!isReviewNotes.value) return
   const saved = store.task?.brief?.form_values || {}
   const ids = []
   if (Array.isArray(saved.cover_asset_ids)) ids.push(...saved.cover_asset_ids)
-  if (saved.cover_asset_id && !ids.includes(saved.cover_asset_id)) ids.unshift(saved.cover_asset_id)
-  const unique = [...new Set(ids.filter(Boolean))].slice(0, REVIEW_NOTE_PHOTO_LIMIT)
-  const next = []
-  for (const assetId of unique) {
-    let previewUrl = ''
-    try {
-      const file = await contentApi.getCoverAssetFile(assetId)
-      previewUrl = URL.createObjectURL(await file.blob())
-    } catch {
-      previewUrl = ''
-    }
-    if (generation !== reviewNotePhotoLoadGeneration) {
-      if (previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
-      next.forEach((item) => {
-        if (item.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
-      })
-      return
-    }
-    next.push({ assetId, name: assetId, previewUrl })
-  }
-  if (generation !== reviewNotePhotoLoadGeneration) {
-    next.forEach((item) => {
-      if (item.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
+  if (saved.cover_asset_id) ids.unshift(saved.cover_asset_id)
+  const next = await Promise.all(
+    [...new Set(ids.filter(Boolean))].slice(0, REVIEW_NOTE_PHOTO_LIMIT).map(async (assetId) => {
+      try {
+        const file = await contentApi.getCoverAssetFile(assetId)
+        return { assetId, name: assetId, previewUrl: URL.createObjectURL(await file.blob()) }
+      } catch {
+        return { assetId, name: assetId, previewUrl: '' }
+      }
     })
+  )
+  if (generation !== reviewNotePhotoLoadGeneration) {
+    revokeReviewNotePhotoUrls(next)
     return
   }
   reviewNotePhotos.value = next
 }
 
-const isReviewNotePhotoFile = (file) => {
-  if (REVIEW_NOTE_PHOTO_TYPES.has(file.type)) return true
-  return /\.(png|jpe?g|webp)$/i.test(file.name)
-}
+const isReviewNotePhotoFile = (file) =>
+  REVIEW_NOTE_PHOTO_TYPES.has(file.type) || /\.(png|jpe?g|webp)$/i.test(file.name)
 
 const openReviewNotePhotoPicker = () => {
   if (reviewNotePhotos.value.length >= REVIEW_NOTE_PHOTO_LIMIT || reviewNotePhotoUploading.value) return
@@ -657,22 +646,16 @@ const openReviewNotePhotoPicker = () => {
 const onReviewNotePhotos = async (event) => {
   const selected = Array.from(event.target.files || [])
   event.target.value = ''
-  if (!selected.length || !store.task?.id) return
   const remaining = REVIEW_NOTE_PHOTO_LIMIT - reviewNotePhotos.value.length
-  if (remaining <= 0) {
-    message.warning('最多上传3张图片')
-    return
-  }
-  const invalid = selected.find((file) => !isReviewNotePhotoFile(file))
-  if (invalid) {
+  if (!selected.length || !store.task?.id || remaining <= 0) return
+  if (selected.some((file) => !isReviewNotePhotoFile(file))) {
     message.warning('仅支持 png/JPG/webp 格式')
     return
   }
-  const files = selected.slice(0, remaining)
   if (selected.length > remaining) message.warning('最多上传3张图片')
   reviewNotePhotoUploading.value = true
   try {
-    for (const file of files) {
+    for (const file of selected.slice(0, remaining)) {
       const uploaded = await contentApi.uploadCoverAsset(file, 'source', store.task.id)
       const assetId = uploaded.asset?.id
       if (!assetId) throw new Error('上传照片失败')
@@ -689,8 +672,7 @@ const onReviewNotePhotos = async (event) => {
 }
 
 const removeReviewNotePhoto = (index) => {
-  const current = reviewNotePhotos.value[index]
-  if (current?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(current.previewUrl)
+  revokeReviewNotePhotoUrls(reviewNotePhotos.value.slice(index, index + 1))
   reviewNotePhotos.value = reviewNotePhotos.value.filter((_, itemIndex) => itemIndex !== index)
 }
 
@@ -1236,10 +1218,8 @@ const buildBrief = () => ({
       : {})
   },
   visual_material: !isReviewNotes.value && selectedImageItemId.value
-  form_values: { ...formValues },
-  visual_material: selectedImageItemId.value || selectedHyCanvasTemplateId.value
     ? {
-        image_item_id: selectedImageItemId.value || null,
+        image_item_id: selectedImageItemId.value,
         poster_template_id: null,
         hycanvas_template_id: selectedHyCanvasTemplateId.value
       }
@@ -1300,13 +1280,6 @@ const compileBrief = async () => {
       message.warning('请选择一个 HyCanvas 小红书模板')
       return
     }
-  if (!selectedImageItemId.value) {
-    message.warning('请选择一张图库图片作为封面主图')
-    return
-  }
-  if (!selectedHyCanvasTemplateId.value) {
-    message.warning('请选择一个 HyCanvas 小红书模板')
-    return
   }
   try {
     window.clearTimeout(draftSaveTimer)

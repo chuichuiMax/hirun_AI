@@ -89,7 +89,7 @@ RELEASE_MANIFEST=/secure/release/image-digests-0.7.2-contentflow.txt \
 - API 健康检查：`curl http://localhost:${WEB_HOST_PORT:-8090}/api/system/health`
 - 浏览器网关健康检查：`docker exec xhs-browser-gateway curl -f http://127.0.0.1:5051/health`
 - 容器状态：`docker compose --env-file .env.prod -f docker-compose.prod.yml ps`
-- HyCanvas：浏览器不能直连容器的 `127.0.0.1:8005`。没有独立子域名时，把 `HYCANVAS_PUBLIC_URL` 设成与前端相同的 HTTPS 地址，在 Nginx 主站里用 `scripts/nginx/hycanvas-on-ai.hi-run.net.inc` 把 `/api/v1/`、`/editor`、`/dashboard`、`/_next/`、`/realtime` 反代到本机 `8005`，并设置 `HYCANVAS_COOKIE_SECURE=true`。有独立子域名时用 `scripts/nginx/hycanvas.hi-run.net.conf`。
+- HyCanvas：浏览器不能直连容器的 `127.0.0.1:8005`。没有独立子域名时，把 `HYCANVAS_PUBLIC_URL` 设成与前端相同的 HTTPS 地址，在 Nginx 主站里用 `scripts/nginx/hycanvas-on-ai.hi-run.net.inc` 把 `/api/v1/`、`/editor`、`/dashboard`、`/_next/`、`/locales/`、`/realtime` 反代到本机 `8005`，并设置 `HYCANVAS_COOKIE_SECURE=true`。漏反代 `/locales/` 时中文词条会 404，界面回退成英文。有独立子域名时用 `scripts/nginx/hycanvas.hi-run.net.conf`。
 
 ## 维护与更新
 

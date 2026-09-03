@@ -13,6 +13,17 @@ describe('normalizeHyCanvasSessionUrl', () => {
     )
   })
 
+  it('rewrites loopback HyCanvas URLs to the LAN host used by ContentFlow', () => {
+    const result = normalizeHyCanvasSessionUrl(
+      'http://127.0.0.1:8005/api/v1/auth/integration?ticket=test&next=%2Fdashboard%2F',
+      'http://10.80.18.218:5173/hycanvas'
+    )
+
+    expect(result).toBe(
+      'http://10.80.18.218:8005/api/v1/auth/integration?ticket=test&next=%2Fdashboard%2F'
+    )
+  })
+
   it('does not rewrite a configured remote HyCanvas host', () => {
     expect(
       normalizeHyCanvasSessionUrl(

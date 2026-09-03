@@ -6,7 +6,7 @@ function isLoopbackHostname(hostname: string): boolean {
 
 export function normalizeManagedLoopbackURL(rawURL: string, currentHostname: string): string {
   const target = new URL(rawURL);
-  if (isLoopbackHostname(target.hostname) && isLoopbackHostname(currentHostname)) {
+  if (isLoopbackHostname(target.hostname)) {
     target.hostname = currentHostname;
   }
   const normalized = target.toString();
@@ -14,6 +14,13 @@ export function normalizeManagedLoopbackURL(rawURL: string, currentHostname: str
 }
 
 function contentSwarmOrigin(): string | null {
+  if (typeof window !== "undefined" && window.parent !== window && document.referrer) {
+    try {
+      return new URL(document.referrer).origin;
+    } catch {
+      /* ignore invalid referrer */
+    }
+  }
   const configured = process.env.NEXT_PUBLIC_CONTENTSWARM_URL?.trim().replace(/\/$/, "");
   if (configured) {
     return typeof window === "undefined"

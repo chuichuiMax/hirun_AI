@@ -276,24 +276,18 @@ def _brief_field_value(brief: dict[str, Any], key: str) -> Any:
 
 def review_note_photo_ids(brief: ContentBriefPayload) -> list[str]:
     values = brief.form_values or {}
-    ids: list[str] = []
     extra = values.get("cover_asset_ids")
-    if isinstance(extra, list):
-        ids.extend(str(item).strip() for item in extra if str(item or "").strip())
+    ids = [str(item).strip() for item in extra] if isinstance(extra, list) else []
     cover_id = str(values.get("cover_asset_id") or "").strip()
     if cover_id:
         ids.insert(0, cover_id)
     if not ids:
-        ids.extend(
+        ids = [
             str(item.get("asset_id") or "").strip()
             for item in (brief.attachments or [])
-            if isinstance(item, dict) and str(item.get("asset_id") or "").strip()
-        )
-    unique: list[str] = []
-    for item in ids:
-        if item not in unique:
-            unique.append(item)
-    return unique
+            if isinstance(item, dict)
+        ]
+    return list(dict.fromkeys(item for item in ids if item))
 
 
 def compile_content_brief(

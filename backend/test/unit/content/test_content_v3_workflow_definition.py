@@ -122,27 +122,48 @@ def test_only_parallel_research_nodes_can_query_knowledge_base():
 
 @pytest.mark.unit
 def test_creation_research_runs_with_business_and_viral_retrieval_budget():
-    research = _node(WORKFLOW_V3, "collect_missing_evidence")
+    viral = _node(WORKFLOW_V3, "collect_viral_candidates")
+    business = _node(WORKFLOW_V3, "collect_business_rule_evidence")
 
-    assert research["max_retrieval_rounds"] == 4
-    assert research["max_knowledge_bases"] == 5
-    assert research["max_chunks_per_knowledge_base"] == 6
-    assert research["max_tool_calls"] == 6
-    assert research["max_execution_steps"] == 40
-    assert research["timeout_seconds"] == 180
-    assert research["max_execution_steps"] > 2 * (research["max_tool_calls"] + 2)
+    assert viral["max_retrieval_rounds"] == 1
+    assert viral["max_knowledge_bases"] == 1
+    assert viral["max_chunks_per_knowledge_base"] == 2
+    assert viral["max_tool_calls"] == 3
+    assert viral["max_execution_steps"] == 40
+    assert viral["timeout_seconds"] == 140
+    assert business["max_execution_steps"] == 40
+    assert viral["max_execution_steps"] > 2 * (viral["max_tool_calls"] + 2)
 
 
 @pytest.mark.unit
 def test_generation_and_review_have_budget_for_multi_skill_nodes():
     generation = _node(WORKFLOW_V3, "generate_content")
     review = _node(WORKFLOW_V3, "semantic_review")
+    plan_visuals = _node(WORKFLOW_V3, "plan_visuals")
 
     assert generation["timeout_seconds"] == 240
     assert generation["max_execution_steps"] == 30
     assert generation["max_execution_steps"] > 2 * (generation["max_tool_calls"] + len(generation["required_skills"]))
     assert review["timeout_seconds"] == 180
     assert review["max_execution_steps"] == 20
+    assert plan_visuals["max_execution_steps"] == 40
+    assert plan_visuals["timeout_seconds"] == 180
+
+
+@pytest.mark.unit
+def test_parallel_research_nodes_raise_default_recursion_budget():
+    for node_id in (
+        "collect_business_rule_evidence",
+        "collect_price_evidence",
+        "collect_compliance_evidence",
+        "collect_viral_candidates",
+    ):
+        node = _node(WORKFLOW_V3, node_id)
+        assert node["max_execution_steps"] == 40
+        assert node["max_execution_steps"] > 2 * (node["max_tool_calls"] + 2)
+
+
+@pytest.mark.unit
 def test_creation_research_is_split_into_bounded_parallel_nodes_before_selection():
     research_ids = {
         "collect_business_rule_evidence",

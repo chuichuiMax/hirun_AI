@@ -14,6 +14,12 @@ describe("normalizeManagedLoopbackURL", () => {
     );
   });
 
+  it("rewrites loopback ContentSwarm URLs onto the current LAN hostname", () => {
+    expect(normalizeManagedLoopbackURL("http://127.0.0.1:5173", "10.80.18.218")).toBe(
+      "http://10.80.18.218:5173",
+    );
+  });
+
   it("does not rewrite non-loopback hosts", () => {
     expect(normalizeManagedLoopbackURL("https://content.example/hycanvas", "localhost")).toBe(
       "https://content.example/hycanvas",
