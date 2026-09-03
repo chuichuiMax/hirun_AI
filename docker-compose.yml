@@ -430,7 +430,8 @@ services:
       DB_AUTO_MIGRATE: "true"
       DATABASE_URL: postgresql://${HYCANVAS_DB_USER:-hycanvas}:${HYCANVAS_DB_PASSWORD:-hycanvas-local-password}@hycanvas-db:5432/${HYCANVAS_DB_NAME:-hycanvas}?schema=public
       JWT_SECRET: ${HYCANVAS_JWT_SECRET:-dev-insecure-hycanvas-jwt-secret-change-me}
-      COOKIE_SECURE: "false"
+      COOKIE_SECURE: ${HYCANVAS_COOKIE_SECURE:-false}
+      APP_URL: ${HYCANVAS_PUBLIC_URL:-http://127.0.0.1:${HYCANVAS_PORT:-8005}}
       REDIS_URL: ""
       STORAGE_DRIVER: local
       LOCAL_STORAGE_PATH: /app/.data/storage

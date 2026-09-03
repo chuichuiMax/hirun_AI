@@ -92,3 +92,20 @@ def test_compile_brief_maps_review_notes_variables():
     assert compiled["form_values"]["voice"] == "业主第一人称"
     assert "好评知识库" in compiled["form_values"]["writing_instruction"]
     assert compiled["audience"] == ["业主"]
+
+
+def test_review_note_photo_ids_keep_order_and_drop_duplicates():
+    from yuxi.services.content_service import review_note_photo_ids
+
+    brief = ContentBriefPayload(
+        form_values={"cover_asset_id": "cover-1", "cover_asset_ids": ["cover-1", "cover-2", "cover-3"]},
+        attachments=[{"asset_id": "ignored", "role": "cover"}],
+    )
+    assert review_note_photo_ids(brief) == ["cover-1", "cover-2", "cover-3"]
+
+
+def test_review_note_photo_ids_fall_back_to_attachments():
+    from yuxi.services.content_service import review_note_photo_ids
+
+    brief = ContentBriefPayload(attachments=[{"asset_id": "photo-1", "role": "cover"}, {"asset_id": "photo-2"}])
+    assert review_note_photo_ids(brief) == ["photo-1", "photo-2"]

@@ -153,7 +153,7 @@ const router = createRouter({
       ]
     },
     {
-      path: '/dashboard',
+      path: '/overview',
       name: 'dashboard',
       component: AppLayout,
       children: [

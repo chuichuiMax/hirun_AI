@@ -29,7 +29,8 @@ import {
   Sparkles,
   Tags,
   UserRoundCog,
-  WandSparkles
+  WandSparkles,
+  X
 } from 'lucide-vue-next'
 import AgentInputArea from '@/components/AgentInputArea.vue'
 import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
@@ -108,6 +109,10 @@ const hycanvasFields = reactive({})
 const hycanvasCreating = ref(false)
 const hycanvasDesign = ref(null)
 const hycanvasImageFile = ref(null)
+const reviewNotePhotos = ref([])
+const reviewNotePhotoInput = ref(null)
+const reviewNotePhotoUploading = ref(false)
+let reviewNotePhotoLoadGeneration = 0
 const workflowStreamElement = ref(null)
 const accumulatedWorkflowNarrative = ref([])
 const streamedWorkflowNarrative = ref('')
@@ -304,6 +309,11 @@ const studioServiceEntry = computed(
   () => store.task?.brief?.form_values?.mp_service_entry || creation.service_entry
 )
 const isReviewNotes = computed(() => studioServiceEntry.value === '好评笔记')
+const reviewNotePhotoIds = computed(() =>
+  reviewNotePhotos.value.map((item) => item.assetId).filter(Boolean)
+)
+const REVIEW_NOTE_PHOTO_LIMIT = 3
+const REVIEW_NOTE_PHOTO_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const studioEdition = computed(() => (store.task ? store.task.mode : creation.mode) === 'pro' ? 'pro' : 'quick')
 const activeFields = computed(() =>
   (store.contentVariables || [])
@@ -584,6 +594,103 @@ const initializeVisualSelection = () => {
   selectedPosterTemplateId.value =
     store.task?.selected_poster_template_id || saved.poster_template_id || ''
   selectedHyCanvasTemplateId.value = saved.hycanvas_template_id || ''
+}
+
+const clearReviewNotePhotos = () => {
+  reviewNotePhotoLoadGeneration += 1
+  reviewNotePhotos.value.forEach((item) => {
+    if (item.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
+  })
+  reviewNotePhotos.value = []
+}
+
+const initializeReviewNotePhotos = async () => {
+  const generation = ++reviewNotePhotoLoadGeneration
+  reviewNotePhotos.value.forEach((item) => {
+    if (item.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
+  })
+  reviewNotePhotos.value = []
+  if (!isReviewNotes.value) return
+  const saved = store.task?.brief?.form_values || {}
+  const ids = []
+  if (Array.isArray(saved.cover_asset_ids)) ids.push(...saved.cover_asset_ids)
+  if (saved.cover_asset_id && !ids.includes(saved.cover_asset_id)) ids.unshift(saved.cover_asset_id)
+  const unique = [...new Set(ids.filter(Boolean))].slice(0, REVIEW_NOTE_PHOTO_LIMIT)
+  const next = []
+  for (const assetId of unique) {
+    let previewUrl = ''
+    try {
+      const file = await contentApi.getCoverAssetFile(assetId)
+      previewUrl = URL.createObjectURL(await file.blob())
+    } catch {
+      previewUrl = ''
+    }
+    if (generation !== reviewNotePhotoLoadGeneration) {
+      if (previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+      next.forEach((item) => {
+        if (item.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
+      })
+      return
+    }
+    next.push({ assetId, name: assetId, previewUrl })
+  }
+  if (generation !== reviewNotePhotoLoadGeneration) {
+    next.forEach((item) => {
+      if (item.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
+    })
+    return
+  }
+  reviewNotePhotos.value = next
+}
+
+const isReviewNotePhotoFile = (file) => {
+  if (REVIEW_NOTE_PHOTO_TYPES.has(file.type)) return true
+  return /\.(png|jpe?g|webp)$/i.test(file.name)
+}
+
+const openReviewNotePhotoPicker = () => {
+  if (reviewNotePhotos.value.length >= REVIEW_NOTE_PHOTO_LIMIT || reviewNotePhotoUploading.value) return
+  reviewNotePhotoInput.value?.click()
+}
+
+const onReviewNotePhotos = async (event) => {
+  const selected = Array.from(event.target.files || [])
+  event.target.value = ''
+  if (!selected.length || !store.task?.id) return
+  const remaining = REVIEW_NOTE_PHOTO_LIMIT - reviewNotePhotos.value.length
+  if (remaining <= 0) {
+    message.warning('最多上传3张图片')
+    return
+  }
+  const invalid = selected.find((file) => !isReviewNotePhotoFile(file))
+  if (invalid) {
+    message.warning('仅支持 png/JPG/webp 格式')
+    return
+  }
+  const files = selected.slice(0, remaining)
+  if (selected.length > remaining) message.warning('最多上传3张图片')
+  reviewNotePhotoUploading.value = true
+  try {
+    for (const file of files) {
+      const uploaded = await contentApi.uploadCoverAsset(file, 'source', store.task.id)
+      const assetId = uploaded.asset?.id
+      if (!assetId) throw new Error('上传照片失败')
+      reviewNotePhotos.value = [
+        ...reviewNotePhotos.value,
+        { assetId, name: file.name, previewUrl: URL.createObjectURL(file) }
+      ]
+    }
+  } catch (error) {
+    message.error(error.message || '上传照片失败')
+  } finally {
+    reviewNotePhotoUploading.value = false
+  }
+}
+
+const removeReviewNotePhoto = (index) => {
+  const current = reviewNotePhotos.value[index]
+  if (current?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(current.previewUrl)
+  reviewNotePhotos.value = reviewNotePhotos.value.filter((_, itemIndex) => itemIndex !== index)
 }
 
 const loadGalleryImages = async () => {
@@ -1025,6 +1132,7 @@ onMounted(async () => {
       }
       initializeFormValues()
       initializeVisualSelection()
+      await initializeReviewNotePhotos()
       syncEditor()
       if (route.query.resultDetail === '1' && store.artifact) resultDetailOpen.value = true
       if (stage.value === 1 && !isReviewNotes.value) await loadVisualMaterials()
@@ -1090,6 +1198,7 @@ const createTask = async () => {
     await router.replace(`/content/tasks/${task.id}`)
     initializeFormValues()
     initializeVisualSelection()
+    await initializeReviewNotePhotos()
     if (!isReviewNotes.value) await loadVisualMaterials()
     message.success('内容任务已创建')
   } catch (error) {
@@ -1109,10 +1218,23 @@ const buildBrief = () => ({
   persona: formValues.persona ? { description: formValues.persona } : {},
   required_terms: formValues.required_terms || [],
   forbidden_terms: formValues.forbidden_terms || [],
-  attachments: [],
+  attachments: isReviewNotes.value
+    ? reviewNotePhotoIds.value.map((assetId, index) => ({
+        asset_id: assetId,
+        role: index === 0 ? 'cover' : 'photo'
+      }))
+    : [],
   locked_fields: [],
-  form_values: { ...formValues },
-  visual_material: selectedImageItemId.value
+  form_values: {
+    ...formValues,
+    ...(isReviewNotes.value && reviewNotePhotoIds.value.length
+      ? {
+          cover_asset_id: reviewNotePhotoIds.value[0],
+          cover_asset_ids: reviewNotePhotoIds.value
+        }
+      : {})
+  },
+  visual_material: !isReviewNotes.value && selectedImageItemId.value
     ? {
         image_item_id: selectedImageItemId.value,
         poster_template_id: null,
@@ -1131,6 +1253,7 @@ const scheduleBriefSave = () => {
 
 watch(formValues, scheduleBriefSave, { deep: true })
 watch([selectedImageItemId, selectedHyCanvasTemplateId], scheduleBriefSave)
+watch(reviewNotePhotos, scheduleBriefSave, { deep: true })
 onBeforeUnmount(() => {
   window.clearTimeout(draftSaveTimer)
   window.clearTimeout(workflowNarrativeTimer)
@@ -1142,6 +1265,7 @@ onBeforeUnmount(() => {
   materialPreviewGeneration += 1
   posterPreviewGeneration += 1
   hycanvasTemplateLoadGeneration += 1
+  clearReviewNotePhotos()
   if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
   Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
   revokePreviewUrls(materialImageUrls.value)
@@ -1159,7 +1283,12 @@ const compileBrief = async () => {
     message.warning(`请填写${missing.label}`)
     return
   }
-  if (!isReviewNotes.value) {
+  if (isReviewNotes.value) {
+    if (!reviewNotePhotoIds.value.length) {
+      message.warning('请上传照片')
+      return
+    }
+  } else {
     if (!selectedImageItemId.value) {
       message.warning('请选择一张图库原图')
       return
@@ -1503,6 +1632,42 @@ const openVersions = async () => {
                     :placeholder="`输入${field.label}后回车`"
                   />
                 </label>
+                <div v-if="isReviewNotes" class="review-photo-block">
+                  <div class="review-photo-grid">
+                    <div
+                      v-for="(photo, index) in reviewNotePhotos"
+                      :key="photo.assetId"
+                      class="review-photo-item"
+                    >
+                      <img v-if="photo.previewUrl" :src="photo.previewUrl" :alt="photo.name" />
+                      <button
+                        type="button"
+                        class="review-photo-remove"
+                        aria-label="移除照片"
+                        @click="removeReviewNotePhoto(index)"
+                      >
+                        <X :size="14" />
+                      </button>
+                    </div>
+                    <button
+                      v-if="reviewNotePhotos.length < REVIEW_NOTE_PHOTO_LIMIT"
+                      type="button"
+                      class="review-photo-add"
+                      :disabled="reviewNotePhotoUploading"
+                      @click="openReviewNotePhotoPicker"
+                    >
+                      <span>+<em>*</em>上传照片(最多3张)</span>
+                    </button>
+                  </div>
+                  <input
+                    ref="reviewNotePhotoInput"
+                    type="file"
+                    accept=".png,.jpg,.jpeg,.webp"
+                    multiple
+                    hidden
+                    @change="onReviewNotePhotos"
+                  />
+                </div>
               </div>
             </div>
             <aside class="facts-preview">
@@ -2324,7 +2489,43 @@ const openVersions = async () => {
 .form-card, .facts-preview, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
 .form-card, .content-editor-card { display: flex; flex-direction: column; gap: 18px; }
 .dynamic-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.dynamic-form .field-block:has(textarea), .dynamic-form .field-block:has(.ant-select-multiple) { grid-column: 1 / -1; }
+.dynamic-form .field-block:has(textarea), .dynamic-form .field-block:has(.ant-select-multiple), .review-photo-block { grid-column: 1 / -1; }
+.review-photo-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.review-photo-item, .review-photo-add {
+  position: relative;
+  min-height: 112px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px dashed var(--main-300);
+  border-radius: 8px;
+  background: var(--main-50);
+}
+.review-photo-item { border-style: solid; background: var(--gray-25); }
+.review-photo-item img { width: 100%; height: 112px; object-fit: cover; }
+.review-photo-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: var(--gray-0);
+  background: var(--gray-800);
+  cursor: pointer;
+}
+.review-photo-add {
+  width: 100%;
+  color: var(--main-700);
+  cursor: pointer;
+}
+.review-photo-add:disabled { opacity: 0.64; cursor: wait; }
+.review-photo-add:only-child { grid-column: 1 / -1; min-height: 88px; }
+.review-photo-add span { font-size: 14px; }
+.review-photo-add em { margin: 0 2px; color: var(--color-error-700); font-style: normal; }
 .field-block { display: flex; flex-direction: column; gap: 7px; color: var(--color-text); }
 .field-block > span { font-size: 13px; font-weight: 600; }
 .field-block em { margin-left: 3px; color: var(--color-error-700); font-style: normal; }

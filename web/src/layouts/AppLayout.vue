@@ -247,7 +247,7 @@ const mainList = computed(() => {
   if (userStore.isAdmin) {
     items.push({
       name: '数据总览',
-      path: '/dashboard',
+      path: '/overview',
       icon: BarChart3,
       activeIcon: BarChart3
     })

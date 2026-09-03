@@ -243,6 +243,7 @@ services:
       DATABASE_URL: postgresql://${HYCANVAS_DB_USER:-hycanvas}:${HYCANVAS_DB_PASSWORD:?HYCANVAS_DB_PASSWORD must be set}@hycanvas-db:5432/${HYCANVAS_DB_NAME:-hycanvas}?schema=public
       JWT_SECRET: ${HYCANVAS_JWT_SECRET:?HYCANVAS_JWT_SECRET must be set}
       COOKIE_SECURE: ${HYCANVAS_COOKIE_SECURE:-false}
+      APP_URL: ${HYCANVAS_PUBLIC_URL:?HYCANVAS_PUBLIC_URL must be set}
       REDIS_URL: ""
       STORAGE_DRIVER: local
       LOCAL_STORAGE_PATH: /app/.data/storage

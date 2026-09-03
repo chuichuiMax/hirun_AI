@@ -274,6 +274,28 @@ def _brief_field_value(brief: dict[str, Any], key: str) -> Any:
     return (brief.get("business_variables") or {}).get(key)
 
 
+def review_note_photo_ids(brief: ContentBriefPayload) -> list[str]:
+    values = brief.form_values or {}
+    ids: list[str] = []
+    extra = values.get("cover_asset_ids")
+    if isinstance(extra, list):
+        ids.extend(str(item).strip() for item in extra if str(item or "").strip())
+    cover_id = str(values.get("cover_asset_id") or "").strip()
+    if cover_id:
+        ids.insert(0, cover_id)
+    if not ids:
+        ids.extend(
+            str(item.get("asset_id") or "").strip()
+            for item in (brief.attachments or [])
+            if isinstance(item, dict) and str(item.get("asset_id") or "").strip()
+        )
+    unique: list[str] = []
+    for item in ids:
+        if item not in unique:
+            unique.append(item)
+    return unique
+
+
 def compile_content_brief(
     *,
     task: ContentTask,
@@ -821,6 +843,21 @@ async def save_content_brief(
             edition=edition,
         )
     compiled, missing = compile_content_brief(task=task, template=template, brief=brief, form_fields=form_fields)
+    if compile_now and service_entry == "好评笔记":
+        photo_ids = review_note_photo_ids(brief)
+        if not photo_ids:
+            raise _content_error(422, "CONTENT_REVIEW_NOTE_PHOTO_REQUIRED", "请上传照片")
+        if len(photo_ids) > 3:
+            raise _content_error(422, "CONTENT_REVIEW_NOTE_PHOTO_LIMIT", "最多上传3张图片")
+        compiled["form_values"] = {
+            **(compiled.get("form_values") or {}),
+            "cover_asset_id": photo_ids[0],
+            "cover_asset_ids": photo_ids,
+        }
+        compiled["attachments"] = [
+            {"asset_id": item, "role": "cover" if index == 0 else "photo"}
+            for index, item in enumerate(photo_ids)
+        ]
     selection = brief.visual_material
     requested_image_item_id = selection.image_item_id if selection else None
     requested_poster_template_id = selection.poster_template_id if selection else None
