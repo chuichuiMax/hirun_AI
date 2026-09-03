@@ -84,21 +84,7 @@ WORKFLOW_V3_NODES = [
     _fixed("compile_runtime_snapshot"),
     _fixed("ingest_real_materials"),
     _fixed("normalize_evidence"),
-    _agent(
-        "select_creation_strategy",
-        "content-strategy-agent",
-        ("content-value-analyzer", "content-strategy-planner"),
-        "SelectCreationStrategyInputV1",
-        "CreationStrategySelectionResultV1",
-        state_inputs=(
-            "rule_version_id",
-            "content_brief",
-            "evidence_bundle",
-            "content_type",
-            "industry_pack",
-            "channel_profile",
-        ),
-    ),
+    _fixed("select_creation_strategy"),
     _fixed("lock_creation_strategy"),
     _fixed("load_formula_lexicons"),
     _agent(

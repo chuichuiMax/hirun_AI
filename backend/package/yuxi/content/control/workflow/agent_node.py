@@ -204,6 +204,40 @@ class AgentNodeHandler:
         if node_run is None or task is None or user is None:
             raise ValueError("Agent 节点缺少任务、用户或节点 Run")
 
+        research_result_fields = {
+            "collect_business_rule_evidence": "business_rule_evidence_collection",
+            "collect_price_evidence": "price_evidence_collection",
+            "collect_compliance_evidence": "compliance_evidence_collection",
+        }
+        research_result_field = research_result_fields.get(node["id"])
+        if (
+            research_result_field
+            and not bool((state.get("evidence_gap_analysis") or {}).get("has_missing"))
+            and not bool((state.get("runtime_config_snapshot") or {}).get("force_evidence_research"))
+        ):
+            return {
+                research_result_field: {
+                    "evidence_items": [],
+                    "citations": [],
+                    "unresolved_questions": [],
+                    "skipped": True,
+                    "skip_reason": "当前策略所需变量与证据已完整，无需重复调研",
+                }
+            }
+
+        if node["id"] == "semantic_review" and not bool(
+            (state.get("runtime_config_snapshot") or {}).get("strict_semantic_review")
+        ):
+            return {
+                "review_report": {
+                    "status": "passed",
+                    "checks": [],
+                    "evidence_conflicts": [],
+                    "skipped": True,
+                    "skip_reason": "普通首稿已通过确定性校验，语义审核仅在严格审核模式下执行",
+                }
+            }
+
         if node["id"] == "rank_formula_candidates":
             valid_pairs = (state.get("formula_candidate_pool") or {}).get("valid_formula_pairs") or []
             if len(valid_pairs) == 1:

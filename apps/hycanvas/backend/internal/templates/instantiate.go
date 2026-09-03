@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -195,6 +197,42 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 				asObj(runs[0])["text"] = value
 				first["runs"] = runs[:1]
 				node["content"] = []any{first}
+				box := asObj(node["box"])
+				if asStr(box["mode"]) == "fixed" {
+					autoFit := asObj(box["autoFit"])
+					autoFit["enabled"] = true
+					if asNum(autoFit["min"]) <= 0 {
+						autoFit["min"] = 8.0
+					}
+					if asNum(autoFit["max"]) <= 0 {
+						autoFit["max"] = 512.0
+					}
+					box["autoFit"] = autoFit
+					node["box"] = box
+					style := asObj(asObj(runs[0])["style"])
+					fontSize := asNum(style["fontSize"])
+					padding := asObj(box["padding"])
+					availableWidth := asNum(box["width"]) - asNum(padding["l"]) - asNum(padding["r"])
+					availableHeight := asNum(box["height"]) - asNum(padding["t"]) - asNum(padding["b"])
+					units := 0.0
+					for _, char := range value {
+						if unicode.IsSpace(char) {
+							units += 0.35
+						} else if char <= unicode.MaxASCII {
+							units += 0.6
+						} else {
+							units++
+						}
+					}
+					if fontSize > 0 && units > 0 && availableWidth > 0 && availableHeight > 0 {
+						fittedSize := math.Min(fontSize, math.Min(availableWidth/units*0.92, availableHeight/1.2))
+						if minSize := asNum(autoFit["min"]); minSize > 0 {
+							fittedSize = math.Max(minSize, fittedSize)
+						}
+						style["fontSize"] = fittedSize
+						asObj(runs[0])["style"] = style
+					}
+				}
 				delete(remaining, asStr(node["id"]))
 			})
 		}

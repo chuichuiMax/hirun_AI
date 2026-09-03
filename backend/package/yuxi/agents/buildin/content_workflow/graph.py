@@ -41,6 +41,7 @@ from yuxi.storage.postgres.models_content import (
     ContentArtifact,
     ContentCombinationRule,
     ContentFormula,
+    ContentNodeRun,
     CreationMethod,
     TitleFormula,
 )
@@ -64,6 +65,29 @@ def _report_is_blocked(report: dict[str, Any]) -> bool:
     return report.get("status") == "blocked" or any(
         item.get("status") == "blocked" or item.get("level") == "error" for item in report.get("checks") or []
     )
+
+
+def _parallel_cache_key(node: dict[str, Any], state: ContentWorkflowState) -> str | None:
+    if not node.get("parallel_group"):
+        return None
+    state_keys = [*(node.get("state_inputs") or []), *(node.get("optional_state_inputs") or [])]
+    payload = {
+        "node_id": node["id"],
+        "definition": node,
+        "state": {key: state.get(key) for key in state_keys},
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _find_cached_parallel_result(
+    completed_node_runs: list[ContentNodeRun], cache_key: str
+) -> tuple[ContentNodeRun, dict[str, Any]] | None:
+    for item in completed_node_runs:
+        result = (item.output_snapshot or {}).get("result")
+        if (item.input_snapshot or {}).get("cache_key") == cache_key and isinstance(result, dict):
+            return item, dict(result)
+    return None
 
 
 class ContentWorkflowAgent(BaseAgent):
@@ -135,6 +159,7 @@ class ContentWorkflowAgent(BaseAgent):
         async def run(state: ContentWorkflowState) -> dict[str, Any]:
             node_id = node["id"]
             run_id = state["run_id"]
+            cache_key = _parallel_cache_key(node, state)
             if await has_cancel_signal(run_id):
                 raise InterruptedError("内容运行已取消")
             await append_run_stream_event(
@@ -145,13 +170,58 @@ class ContentWorkflowAgent(BaseAgent):
             )
             async with pg_manager.get_async_session_context() as db:
                 repo = ContentRepository(db)
+                cached_node_run = None
+                if cache_key:
+                    completed_node_runs = list(
+                        (
+                            await db.execute(
+                                select(ContentNodeRun)
+                                .where(
+                                    ContentNodeRun.task_id == state["task_id"],
+                                    ContentNodeRun.node_id == node_id,
+                                    ContentNodeRun.status == "completed",
+                                )
+                                .order_by(ContentNodeRun.finished_at.desc())
+                            )
+                        ).scalars()
+                    )
+                    cached = _find_cached_parallel_result(completed_node_runs, cache_key)
+                    if cached is not None:
+                        cached_node_run, cached_result = cached
                 node_run = await repo.add_node_run(
                     task_id=state["task_id"],
                     run_id=run_id,
                     node_id=node_id,
                     node_type=node["type"],
-                    input_snapshot={"current_node": state.get("current_node")},
+                    input_snapshot={"current_node": state.get("current_node"), "cache_key": cache_key},
                 )
+                if cached_node_run is not None:
+                    result = cached_result
+                    await repo.finish_node_run(
+                        node_run,
+                        status="completed",
+                        output_snapshot={
+                            "updated_fields": sorted(result.keys()),
+                            "result": result,
+                            "cached_from_node_run_id": cached_node_run.id,
+                        },
+                    )
+                else:
+                    result = None
+            if result is not None:
+                await append_run_stream_event(
+                    run_id,
+                    "custom",
+                    _event_payload(
+                        state,
+                        node_id,
+                        "completed",
+                        cached=True,
+                        output_preview=build_execution_preview(result),
+                    ),
+                    thread_id=state["task_id"],
+                )
+                return result
             try:
                 if node["type"] == "agent":
                     async with pg_manager.get_async_session_context() as db:
@@ -218,6 +288,8 @@ class ContentWorkflowAgent(BaseAgent):
                 persisted = await db.get(type(node_run), node_run.id)
                 if persisted:
                     output_snapshot = {"updated_fields": sorted(result.keys())}
+                    if cache_key:
+                        output_snapshot["result"] = result
                     if node_id == "validate_title_candidates":
                         output_snapshot["title_validation_report"] = result.get("title_validation_report") or {}
                     await repo.finish_node_run(
@@ -319,52 +391,11 @@ class ContentWorkflowAgent(BaseAgent):
                     message=f"{revision_reason_label(reason_code)}，没有可执行的定点回修路线",
                     kind="conflict",
                 )
-            if previous_node == "validate_title_candidates":
-                return {
-                    "revision_reason_code": reason_code,
-                    "revision_target": decision.target_node_id,
-                    "revision_status": decision.status,
-                    "retry_counts": decision.retry_counts,
-                    "resume_parent_run_id": None,
-                }
-            state_version = int(state.get("state_version") or 0)
-            expected_run_id = state.get("resume_parent_run_id") or state["run_id"]
-            answer = interrupt(
-                {
-                    "interrupt_type": "content_correction",
-                    "task_id": state["task_id"],
-                    "run_id": expected_run_id,
-                    "node_id": node["id"],
-                    "expected_state_version": state_version,
-                    "reason_code": reason_code,
-                    "suggested_target": decision.target_node_id,
-                    "title_validation_report": title_validation_report,
-                    "validation_report": validation_report,
-                    "review_report": review_report if previous_node == "semantic_review" else {},
-                }
-            )
-            if not isinstance(answer, dict):
-                raise ValueError("人工回修输入必须是对象")
-            expected = {
-                "run_id": expected_run_id,
-                "node_id": node["id"],
-                "expected_state_version": state_version,
-            }
-            mismatched = [key for key, value in expected.items() if answer.get(key) != value]
-            if mismatched:
-                raise ValueError(f"人工回修请求已过期或目标不匹配: {', '.join(mismatched)}")
-            if answer.get("decision") != "revise":
-                raise ContentApplicationError(
-                    code="content_correction_not_confirmed",
-                    message="内容阻断问题尚未确认回修，工作流保持停止",
-                    kind="conflict",
-                )
             return {
                 "revision_reason_code": reason_code,
                 "revision_target": decision.target_node_id,
                 "revision_status": decision.status,
                 "retry_counts": decision.retry_counts,
-                "state_version": state_version + 1,
                 "resume_parent_run_id": None,
             }
         raise ValueError(f"V3 工作流不支持节点类型: {node_type}")
@@ -416,20 +447,23 @@ class ContentWorkflowAgent(BaseAgent):
         if interrupt_type == "high_risk_facts":
             collection = dict(state.get("evidence_collection") or {})
             items = list(collection.get("evidence_items") or [])
-            high_risk_ids = {
-                item["id"]
+            excluded = [
+                item
                 for item in items
                 if item.get("risk_level") == "high_risk" and item.get("verified_status") != "user_confirmed"
-            }
-            if not high_risk_ids:
-                return {"state_version": state_version + 1, "resume_parent_run_id": None}
-            answer = require_resume({"evidence_ids": sorted(high_risk_ids)})
-            confirmed = set(answer.get("confirmed_evidence_ids") or [])
-            if confirmed != high_risk_ids:
-                raise ValueError("高风险事实必须逐项人工确认")
-            collection["evidence_items"] = [
-                {**item, "verified_status": "user_confirmed"} if item.get("id") in confirmed else item for item in items
             ]
+            excluded_ids = {item.get("id") for item in excluded}
+            excluded_source_ids = {str(item.get("source_id")) for item in excluded if item.get("source_id")}
+            collection["evidence_items"] = [item for item in items if item.get("id") not in excluded_ids]
+            collection["citations"] = [
+                item for item in collection.get("citations") or [] if str(item) not in excluded_source_ids
+            ]
+            unresolved = list(collection.get("unresolved_questions") or [])
+            unresolved.extend(
+                f"外部高风险资料“{item.get('value') or item.get('id')}”未经用户确认，本次首稿已自动排除"
+                for item in excluded
+            )
+            collection["unresolved_questions"] = list(dict.fromkeys(unresolved))
             return {
                 "evidence_collection": collection,
                 "state_version": state_version + 1,
@@ -586,15 +620,6 @@ class ContentWorkflowAgent(BaseAgent):
                     message=f"最终审批前仍有阻断报告: {', '.join(invalid_reports)}",
                     kind="conflict",
                 )
-            answer = require_resume(
-                {
-                    "validation_report": validation_report,
-                    "review_report": review_report,
-                    "approval_allowed": True,
-                }
-            )
-            if answer.get("decision") != "approved":
-                raise ValueError("最终内容未获批准")
             artifact_payload = {
                 "task_id": state["task_id"],
                 "run_id": state["run_id"],
@@ -614,8 +639,8 @@ class ContentWorkflowAgent(BaseAgent):
             return {
                 "approval_result": {
                     "status": "approved",
-                    "note": answer.get("note"),
-                    "reviewer_uid": state["uid"],
+                    "note": "固定校验通过后自动批准",
+                    "reviewer_uid": "system",
                 },
                 "artifact_version": {
                     "id": f"cav_{artifact_hash[:32]}",

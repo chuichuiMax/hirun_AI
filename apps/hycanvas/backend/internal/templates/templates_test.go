@@ -150,6 +150,37 @@ func TestFillTextFieldsPreservesStyle(t *testing.T) {
 	}
 }
 
+func TestFillTextFieldsEnablesAutoFitForFixedTextBox(t *testing.T) {
+	file := map[string]any{
+		"pages": []any{map[string]any{"children": []any{map[string]any{
+			"id": "title-node", "type": "text",
+			"box": map[string]any{
+				"mode": "fixed", "width": 300.0, "height": 80.0,
+				"autoFit": map[string]any{"enabled": false, "min": 10.0, "max": 140.0},
+			},
+			"content": []any{map[string]any{
+				"runs": []any{map[string]any{"text": "短标题", "style": map[string]any{"fontSize": 140.0}}},
+			}},
+		}}}},
+	}
+	fields := []any{map[string]any{"nodeId": "title-node", "kind": "text", "label": "主标题"}}
+	if err := fillTextFields(file, fields, map[string]string{"主标题": "替换后更长的封面标题"}); err != nil {
+		t.Fatalf("fillTextFields: %v", err)
+	}
+	node := asObj(asArr(asObj(asArr(file["pages"])[0])["children"])[0])
+	autoFit := asObj(asObj(node["box"])["autoFit"])
+	if enabled, _ := autoFit["enabled"].(bool); !enabled {
+		t.Fatal("replaced fixed text should enable auto-fit")
+	}
+	if asNum(autoFit["min"]) != 10 || asNum(autoFit["max"]) != 140 {
+		t.Fatalf("auto-fit bounds should be preserved: %+v", autoFit)
+	}
+	run := asObj(asArr(asObj(asArr(node["content"])[0])["runs"])[0])
+	if size := asNum(asObj(run["style"])["fontSize"]); size >= 140 {
+		t.Fatalf("long replacement should shrink the persisted font size, got %v", size)
+	}
+}
+
 func TestFillTextFieldsRejectsUnknownLabel(t *testing.T) {
 	file := map[string]any{"pages": []any{}}
 	if err := fillTextFields(file, nil, map[string]string{"不存在": "value"}); err != ErrBadRequest {

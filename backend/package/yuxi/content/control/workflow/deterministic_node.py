@@ -196,6 +196,7 @@ class V3DeterministicNodeHandler:
             "compile_runtime_snapshot": self._compile_runtime_snapshot,
             "ingest_real_materials": self._ingest_real_materials,
             "normalize_evidence": self._normalize_evidence,
+            "select_creation_strategy": self._select_creation_strategy,
             "lock_creation_strategy": self._lock_creation_strategy,
             "load_formula_lexicons": self._load_formula_lexicons,
             "merge_research_evidence": self._merge_research_evidence,
@@ -216,12 +217,73 @@ class V3DeterministicNodeHandler:
         return await handler(db=db, state=state, node_run_id=node_run_id)
 
     @staticmethod
+    async def _select_creation_strategy(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
+        del node_run_id
+        task = await db.get(ContentTask, state["task_id"])
+        if task is None:
+            raise ValueError("内容任务不存在")
+        context = await PostgresStrategyPreviewRepository(db).load_context(
+            task_id=task.id,
+            actor=StrategyPreviewActor(
+                uid=state["uid"],
+                role="superadmin" if task.created_by != state["uid"] else "user",
+                tenant_id=task.tenant_id,
+            ),
+            requested_content_direction_code=None,
+        )
+        if context is None:
+            raise ValueError("无权访问内容任务")
+        if not context.content_direction_code:
+            raise ValueError("内容任务缺少内容方向")
+        decision = CombinationMatcher().match(
+            list(context.groups),
+            MatchRequest(
+                content_direction_code=context.content_direction_code,
+                industry_slug=context.industry_slug,
+                channel_code=context.channel_code,
+                content_goal_code=context.content_goal_code,
+                narrative_axis_code=context.narrative_axis_code,
+                available_variable_codes=context.available_variable_codes,
+                available_evidence_types=context.available_evidence_types,
+            ),
+        )
+        if decision.status != "matched" or not decision.eligible_groups:
+            raise ValueError("固定规则没有匹配到可用的内容策略")
+        selected = decision.eligible_groups[0]
+        group = next(item for item in context.groups if item.code == selected.group_code)
+        title_code = selected.title_formula_candidate_codes[0]
+        body_code = selected.body_formula_candidate_codes[0]
+        method_codes = [item.method_code for item in group.method_members]
+        evidence_ids = [
+            str(item.get("id")) for item in (state.get("evidence_bundle") or {}).get("items") or [] if item.get("id")
+        ]
+        reason = f"固定规则按优先级与变量、证据覆盖度选择 {group.code}，并锁定公式 {title_code} + {body_code}"
+        selection = {
+            "selected_direction_code": context.content_direction_code,
+            "selected_group_id": group.code,
+            "creation_method_codes": method_codes,
+            "title_formula_code": title_code,
+            "body_formula_code": body_code,
+            "reason": reason,
+            "evidence_ids": evidence_ids,
+        }
+        return {
+            "selected_angle": {
+                "direction_code": context.content_direction_code,
+                "reason": reason,
+                "evidence_ids": evidence_ids,
+                "selected_by": "deterministic",
+            },
+            "strategy_selection": selection,
+        }
+
+    @staticmethod
     async def _lock_creation_strategy(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
         selection = state.get("strategy_selection") or {}
         direction = str(selection.get("selected_direction_code") or "")
         task = await db.get(ContentTask, state["task_id"])
         if task is None or not direction:
-            raise ValueError("策略 Agent 未提交内容方向")
+            raise ValueError("固定规则未选出内容方向")
         context = await PostgresStrategyPreviewRepository(db).load_context(
             task_id=task.id,
             actor=StrategyPreviewActor(
@@ -250,11 +312,11 @@ class V3DeterministicNodeHandler:
         group = next(item for item in context.groups if item.code == selected_group_id)
         method_codes = [item.method_code for item in group.method_members]
         if selection.get("creation_method_codes") != method_codes:
-            raise ValueError("策略 Agent 选择的创作手法与组合组不一致")
+            raise ValueError("固定规则选择的创作手法与组合组不一致")
         title_code = str(selection.get("title_formula_code") or "")
         body_code = str(selection.get("body_formula_code") or "")
         if title_code not in group.title_formula_candidate_codes or body_code not in group.body_formula_candidate_codes:
-            raise ValueError("策略 Agent 选择了组合组外的标题或正文公式")
+            raise ValueError("固定规则选择了组合组外的标题或正文公式")
 
         title_formula = (
             await db.execute(
@@ -286,7 +348,7 @@ class V3DeterministicNodeHandler:
             ).scalars()
         )
         if title_formula is None or body_formula is None or {item.code for item in methods} != set(method_codes):
-            raise ValueError("策略 Agent 选择的手法或公式不存在或已停用")
+            raise ValueError("固定规则选择的手法或公式不存在或已停用")
 
         snapshots = PostgresDecisionSnapshotRepository(db)
         match_snapshot = await snapshots.save_match_decision(
@@ -297,7 +359,7 @@ class V3DeterministicNodeHandler:
             industry_pack_version_id=context.industry_pack_version_id,
             channel_profile_version_id=context.channel_profile_version_id,
             decision=match,
-            selected_by="agent",
+            selected_by="deterministic",
         )
         required_variables = set(title_formula.variable_schema or []) | set(body_formula.required_variables or [])
         required_variables.update(variable for method in methods for variable in (method.variable_schema or []))
@@ -327,7 +389,7 @@ class V3DeterministicNodeHandler:
             ),
         )
         if formula_decision.status != "selected":
-            raise ValueError("策略 Agent 选择的标题/正文公式对不可用")
+            raise ValueError("固定规则选择的标题/正文公式对不可用")
         formula_snapshot = await snapshots.save_formula_selection(
             task_id=task.id,
             content_run_id=state["run_id"],
@@ -336,7 +398,7 @@ class V3DeterministicNodeHandler:
             rule_version_id=context.rule_version_id,
             evidence_bundle_hash=str((state.get("evidence_bundle") or {}).get("bundle_hash") or ""),
             decision=formula_decision,
-            selected_by="agent",
+            selected_by="deterministic",
             delegated_agent_run_id=(state.get("delegated_agent_runs") or {}).get("select_creation_strategy"),
         )
         method_by_code = {item.code: item for item in methods}
@@ -829,6 +891,12 @@ class V3DeterministicNodeHandler:
             state.get("compliance_evidence_collection") or {},
         ]
         evidence_items = [item for collection in collections for item in collection.get("evidence_items") or []]
+        excluded_high_risk = [
+            item
+            for item in evidence_items
+            if item.get("risk_level") == "high_risk" and item.get("verified_status") != "user_confirmed"
+        ]
+        evidence_items = [item for item in evidence_items if item not in excluded_high_risk]
         selection = state.get("viral_reference_selection") or {}
         candidate_id = selection.get("selected_candidate_id")
         candidates = (state.get("viral_candidate_collection") or {}).get("evidence_items") or []
@@ -858,6 +926,8 @@ class V3DeterministicNodeHandler:
                 if citation
             )
         )
+        excluded_source_ids = {str(item.get("source_id")) for item in excluded_high_risk if item.get("source_id")}
+        citations = [citation for citation in citations if citation not in excluded_source_ids]
         if candidate_id:
             selected_candidate = next(item for item in candidates if item.get("id") == candidate_id)
             if selected_candidate.get("source_id"):
@@ -869,6 +939,10 @@ class V3DeterministicNodeHandler:
             for question in collection.get("unresolved_questions") or []
             if question
         ]
+        unresolved_questions.extend(
+            f"外部高风险资料“{item.get('value') or item.get('id')}”未经用户确认，本次首稿已自动排除"
+            for item in excluded_high_risk
+        )
         task = state.get("runtime_config_snapshot") or {}
         formula = state.get("formula_selection_snapshot") or {}
         result = validate_content_node_result(

@@ -66,10 +66,6 @@ def test_v37_has_26_nodes_and_passes_full_catalog_validation():
 @pytest.mark.unit
 def test_simplified_agent_nodes_receive_required_upstream_state():
     expected = {
-        "select_creation_strategy": (
-            "SelectCreationStrategyInputV1",
-            {"rule_version_id", "content_brief", "evidence_bundle"},
-        ),
         "collect_business_rule_evidence": (
             "CollectBusinessRuleEvidenceInputV1",
             {"strategy_selection", "strategy_snapshot", "evidence_gap_analysis", "evidence_bundle"},
@@ -165,11 +161,11 @@ def test_parallel_research_two_model_calls_fit_inside_each_node_timeout():
 
 
 @pytest.mark.unit
-def test_strategy_and_generation_are_single_agent_calls():
+def test_strategy_is_deterministic_and_generation_remains_one_agent_call():
     strategy = _node(WORKFLOW_V3, "select_creation_strategy")
     generation = _node(WORKFLOW_V3, "generate_content")
     node_ids = [item["id"] for item in WORKFLOW_V3["nodes"]]
-    assert strategy["required_skills"] == ["content-value-analyzer", "content-strategy-planner"]
+    assert strategy["type"] == "deterministic"
     assert generation["required_skills"] == [
         "content-title-generator",
         "content-outline-builder",
