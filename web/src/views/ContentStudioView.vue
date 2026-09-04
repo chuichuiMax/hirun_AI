@@ -156,7 +156,8 @@ const selectedHyCanvasTemplate = computed(() =>
 const hasViralReference = computed(() => hasSelectedViralReference(store.artifact))
 
 const goBack = () => {
-  if (window.history.length > 1) {
+  const previousRoute = window.history.state?.back
+  if (typeof previousRoute === 'string' && previousRoute && previousRoute !== 'about:blank') {
     router.back()
     return
   }
