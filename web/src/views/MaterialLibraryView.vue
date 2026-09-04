@@ -727,18 +727,18 @@ onBeforeUnmount(releasePreviews)
 .gallery-section, .material-section { margin-bottom: 22px; }
 .gallery-section h3, .material-section h3 { margin: 0 0 12px; color: var(--color-text); font-size: 15px; }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
-.gallery-card { position: relative; overflow: hidden; min-height: 250px; border: 1px solid var(--gray-150); border-radius: 14px; background: var(--gray-0); transition: transform .18s, box-shadow .18s, border-color .18s; }
+.gallery-card { position: relative; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 14px; background: var(--gray-0); transition: transform .18s, box-shadow .18s, border-color .18s; }
 .gallery-card:hover { transform: translateY(-2px); border-color: var(--color-primary); box-shadow: 0 8px 24px rgb(20 35 70 / 10%); }
 .gallery-open { display: block; width: 100%; padding: 0; text-align: left; border: 0; background: transparent; cursor: pointer; }
-.gallery-cover { position: relative; display: grid; place-items: center; height: 166px; overflow: hidden; background: radial-gradient(circle at 25% 20%, var(--main-20), transparent 48%), linear-gradient(145deg, var(--gray-25), var(--gray-100)); color: var(--color-primary); }
+.gallery-cover { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; background: radial-gradient(circle at 25% 20%, var(--main-20), transparent 48%), linear-gradient(145deg, var(--gray-25), var(--gray-100)); color: var(--color-primary); }
 .gallery-cover::after { position: absolute; inset: 0; background: linear-gradient(180deg, transparent 60%, rgb(15 25 45 / 10%)); content: ''; pointer-events: none; }
 .gallery-cover img { width: 100%; height: 100%; object-fit: cover; transition: transform .25s; }.gallery-card:hover .gallery-cover img { transform: scale(1.035); }
 .folder-art { position: relative; display: grid; place-items: center; width: 84px; height: 72px; border-radius: 20px; background: var(--gray-0); box-shadow: 0 12px 28px rgb(30 55 95 / 12%); }.folder-art i { position: absolute; right: 13px; bottom: 12px; width: 22px; height: 5px; border-radius: 3px; background: var(--main-100); }
 .gallery-cover em { position: absolute; z-index: 1; right: 12px; bottom: 12px; padding: 4px 9px; border-radius: 14px; background: rgb(15 25 45 / 66%); color: white; font-size: 12px; font-style: normal; backdrop-filter: blur(4px); }
-.gallery-copy { display: flex; flex-direction: column; gap: 6px; padding: 15px 76px 18px 16px; }
-.gallery-copy strong { overflow: hidden; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text); }.gallery-copy small { min-height: 40px; color: var(--color-text-secondary); line-height: 1.55; }
+.gallery-copy { display: flex; flex-direction: column; gap: 4px; min-height: 78px; padding: 11px 76px 11px 14px; }
+.gallery-copy strong { overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text); }.gallery-copy small { overflow: hidden; color: var(--color-text-secondary); line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .gallery-copy em { color: var(--color-primary); font-size: 12px; font-style: normal; }
-.gallery-actions { position: absolute; right: 12px; bottom: 15px; display: flex; gap: 3px; }.gallery-actions button, .category-row-actions button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 7px; background: var(--gray-25); color: var(--color-text-secondary); cursor: pointer; }.gallery-actions button:hover, .category-row-actions button:hover { background: var(--main-20); color: var(--color-primary); }.gallery-actions button.danger:hover, .category-row-actions button.danger:hover { color: var(--color-error-700); }
+.gallery-actions { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 3px; }.gallery-actions button, .category-row-actions button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 7px; background: var(--gray-25); color: var(--color-text-secondary); cursor: pointer; }.gallery-actions button:hover, .category-row-actions button:hover { background: var(--main-20); color: var(--color-primary); }.gallery-actions button.danger:hover, .category-row-actions button.danger:hover { color: var(--color-error-700); }
 .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
 .poster-wall { columns: 260px; column-gap: 18px; }
 .material-card { position: relative; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 9px; background: var(--gray-0); }
