@@ -24,6 +24,24 @@ type InstantiateInput struct {
 	Background  *InstantiateImage
 }
 
+// PreviewWithBackground applies the same ContentSwarm background transform as
+// Instantiate without creating a design. The returned file is only rendered
+// in memory by the HTTP preview endpoint.
+func (s *Service) PreviewWithBackground(ctx context.Context, userID, templateID string, image InstantiateImage) (map[string]any, Template, error) {
+	template, err := s.Get(ctx, userID, templateID)
+	if err != nil {
+		return nil, Template{}, err
+	}
+	file, err := s.GetFile(ctx, userID, templateID)
+	if err != nil {
+		return nil, Template{}, err
+	}
+	if err := applyBackgroundImage(file, image); err != nil {
+		return nil, Template{}, err
+	}
+	return file, template, nil
+}
+
 // Instantiate fills a template's declared text fields and creates a decoupled
 // design in the requested workspace.
 func (s *Service) Instantiate(ctx context.Context, userID, templateID string, in InstantiateInput) (string, error) {

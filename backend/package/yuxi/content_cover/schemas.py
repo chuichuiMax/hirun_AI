@@ -37,6 +37,10 @@ class HyCanvasDesignSync(BaseModel):
     artifact_id: str = Field(min_length=1, max_length=64)
 
 
+class HyCanvasTemplatePreviewCreate(BaseModel):
+    image_item_id: str = Field(min_length=1, max_length=64)
+
+
 class HyCanvasEditorSessionCreate(BaseModel):
     artifact_id: str = Field(min_length=1, max_length=64)
     return_url: str = Field(min_length=1, max_length=2000)

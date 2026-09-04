@@ -97,6 +97,10 @@ const posterTemplates = ref([])
 const selectedImageItemId = ref('')
 const selectedImageGalleryId = ref('')
 const selectedImageSummary = ref(null)
+const selectedImagePreviewUrl = ref('')
+const selectedImagePreviewLoading = ref(false)
+const hycanvasCompositePreviewUrl = ref('')
+const hycanvasCompositePreviewLoading = ref(false)
 const selectedPosterTemplateId = ref('')
 const materialImageUrls = ref({})
 const posterTemplateUrls = ref({})
@@ -121,6 +125,8 @@ let workflowNarrativeTimer = null
 let coverLoadGeneration = 0
 let coverCandidateLoadGeneration = 0
 let materialPreviewGeneration = 0
+let selectedImagePreviewGeneration = 0
+let hycanvasCompositePreviewGeneration = 0
 let posterPreviewGeneration = 0
 let hycanvasTemplateLoadGeneration = 0
 let posterTemplateSignature = ''
@@ -143,11 +149,6 @@ const selectedImageGallery = computed(() => materialGalleryMap.value.get(selecte
 const selectedImageRootGalleryId = computed(() => (
   selectedImageGallery.value?.parent_id || selectedImageGallery.value?.id || ''
 ))
-const selectedImageGalleryPath = computed(() => {
-  if (!selectedImageGallery.value) return '素材图库'
-  const parent = materialGalleryMap.value.get(selectedImageGallery.value.parent_id)
-  return parent ? `${parent.name} / ${selectedImageGallery.value.name}` : selectedImageGallery.value.name
-})
 const selectedHyCanvasTemplate = computed(() =>
   hycanvasTemplates.value.find((item) => item.id === selectedHyCanvasTemplateId.value) || null
 )
@@ -561,6 +562,54 @@ const revokePreviewUrls = (urls) => {
   })
 }
 
+const loadSelectedImagePreview = async (itemId) => {
+  const generation = ++selectedImagePreviewGeneration
+  if (selectedImagePreviewUrl.value) URL.revokeObjectURL(selectedImagePreviewUrl.value)
+  selectedImagePreviewUrl.value = ''
+  selectedImagePreviewLoading.value = Boolean(itemId)
+  if (!itemId) return
+
+  try {
+    const file = await materialLibraryApi.getItemFile(itemId)
+    const previewUrl = URL.createObjectURL(await file.blob())
+    if (generation !== selectedImagePreviewGeneration) {
+      URL.revokeObjectURL(previewUrl)
+      return
+    }
+    selectedImagePreviewUrl.value = previewUrl
+  } catch (error) {
+    if (generation === selectedImagePreviewGeneration) {
+      message.warning(error.message || '已选图片预览加载失败')
+    }
+  } finally {
+    if (generation === selectedImagePreviewGeneration) selectedImagePreviewLoading.value = false
+  }
+}
+
+const loadHyCanvasCompositePreview = async (imageItemId, templateId) => {
+  const generation = ++hycanvasCompositePreviewGeneration
+  if (hycanvasCompositePreviewUrl.value) URL.revokeObjectURL(hycanvasCompositePreviewUrl.value)
+  hycanvasCompositePreviewUrl.value = ''
+  hycanvasCompositePreviewLoading.value = Boolean(imageItemId && templateId)
+  if (!imageItemId || !templateId) return
+
+  try {
+    const file = await contentApi.getHyCanvasCompositePreview(templateId, imageItemId)
+    const previewUrl = URL.createObjectURL(await file.blob())
+    if (generation !== hycanvasCompositePreviewGeneration) {
+      URL.revokeObjectURL(previewUrl)
+      return
+    }
+    hycanvasCompositePreviewUrl.value = previewUrl
+  } catch (error) {
+    if (generation === hycanvasCompositePreviewGeneration) {
+      message.warning(error.message || '模板合成预览加载失败')
+    }
+  } finally {
+    if (generation === hycanvasCompositePreviewGeneration) hycanvasCompositePreviewLoading.value = false
+  }
+}
+
 const initializeVisualSelection = () => {
   const saved = store.task?.brief?.visual_material || {}
   selectedImageItemId.value = store.task?.selected_image_item_id || saved.image_item_id || ''
@@ -956,6 +1005,11 @@ watch(
 )
 
 watch(selectedHyCanvasTemplateId, initializeHyCanvasFields)
+watch(selectedImageItemId, (itemId) => void loadSelectedImagePreview(itemId))
+watch(
+  [selectedImageItemId, selectedHyCanvasTemplateId],
+  ([imageItemId, templateId]) => void loadHyCanvasCompositePreview(imageItemId, templateId)
+)
 watch(
   () => store.artifact?.hycanvas_design_snapshot,
   (snapshot) => {
@@ -1092,11 +1146,15 @@ onBeforeUnmount(() => {
   coverLoadGeneration += 1
   coverCandidateLoadGeneration += 1
   materialPreviewGeneration += 1
+  selectedImagePreviewGeneration += 1
+  hycanvasCompositePreviewGeneration += 1
   posterPreviewGeneration += 1
   hycanvasTemplateLoadGeneration += 1
   if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
   Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
   revokePreviewUrls(materialImageUrls.value)
+  if (selectedImagePreviewUrl.value) URL.revokeObjectURL(selectedImagePreviewUrl.value)
+  if (hycanvasCompositePreviewUrl.value) URL.revokeObjectURL(hycanvasCompositePreviewUrl.value)
   revokePreviewUrls(posterTemplateUrls.value)
   Object.values(hycanvasTemplateUrls.value).forEach((url) => {
     if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
@@ -1508,11 +1566,32 @@ const openVersions = async () => {
                 </div>
                 <a-empty v-else description="素材库中还没有图库" />
                 <div v-if="selectedImageItemId" class="selected-gallery-image">
-                  <span><CheckCircle2 :size="18" /></span>
-                  <div>
-                    <small>当前已选图片</small>
-                    <strong>{{ selectedImageSummary?.name || '已选择 1 张图库图片' }}</strong>
-                    <em>{{ selectedImageGalleryPath }}</em>
+                  <div class="selected-gallery-preview-grid" aria-label="封面预览">
+                    <div class="selected-gallery-preview-card">
+                      <span class="selected-gallery-preview-media">
+                        <LoaderCircle v-if="selectedImagePreviewLoading" class="spin" :size="18" />
+                        <img
+                          v-else-if="selectedImagePreviewUrl"
+                          :src="selectedImagePreviewUrl"
+                          :alt="selectedImageSummary?.name || '封面原图预览'"
+                        />
+                        <Image v-else :size="20" />
+                      </span>
+                      <strong>封面原图</strong>
+                    </div>
+                    <div class="selected-gallery-preview-card">
+                      <span class="selected-gallery-preview-media">
+                        <LoaderCircle v-if="hycanvasCompositePreviewLoading" class="spin" :size="18" />
+                        <img
+                          v-else-if="hycanvasCompositePreviewUrl"
+                          :src="hycanvasCompositePreviewUrl"
+                          :alt="`${selectedHyCanvasTemplate?.title || '模板'}合成效果`"
+                        />
+                        <LayoutTemplate v-else :size="22" />
+                      </span>
+                      <strong>模板叠加效果</strong>
+                      <small>{{ selectedHyCanvasTemplate?.title || '选择模板后生成' }}</small>
+                    </div>
                   </div>
                   <a-button
                     v-if="selectedImageGalleryId"
@@ -2343,11 +2422,14 @@ const openVersions = async () => {
 .gallery-folder-copy strong { font-size: 14px; }
 .gallery-folder-copy small { color: var(--color-text-tertiary); font-size: 12px; }
 .gallery-selected-badge { position: absolute; top: 7px; right: 8px; padding: 2px 7px; border-radius: 999px; color: var(--main-700); background: var(--main-50); font-size: 10px; }
-.selected-gallery-image { margin-top: 14px; padding: 11px 13px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--main-100); border-radius: 8px; background: var(--main-10); }
-.selected-gallery-image > span { color: var(--main-700); }
-.selected-gallery-image > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
-.selected-gallery-image small, .selected-gallery-image em { color: var(--color-text-tertiary); font-size: 11px; font-style: normal; }
+.selected-gallery-image { margin-top: 14px; padding: 11px 13px; display: flex; align-items: center; justify-content: flex-start; gap: 10px; border: 1px solid var(--main-100); border-radius: 8px; background: var(--main-10); }
+.selected-gallery-image small { color: var(--color-text-tertiary); font-size: 11px; }
 .selected-gallery-image strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.selected-gallery-preview-grid { flex: 0 0 auto; display: grid; grid-template-columns: repeat(2, 128px); gap: 12px; }
+.selected-gallery-preview-card { min-width: 0; display: grid; gap: 5px; }
+.selected-gallery-preview-card > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selected-gallery-preview-media { display: grid; place-items: center; width: 100%; aspect-ratio: 3 / 4; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 6px; color: var(--color-text-tertiary); background: var(--gray-25); }
+.selected-gallery-preview-media img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .poster-choice-grid { display: grid; grid-auto-flow: column; grid-auto-columns: 142px; gap: 12px; padding: 2px 2px 8px; overflow-x: auto; }
 .gallery-modal-content { display: grid; gap: 16px; padding-top: 4px; }
 .gallery-modal-back { width: fit-content; padding: 0; display: inline-flex; align-items: center; gap: 5px; border: 0; color: var(--main-700); background: transparent; cursor: pointer; }
@@ -2612,6 +2694,8 @@ const openVersions = async () => {
   .header-actions, .stage-actions, .stage-actions.split, .editor-actions { width: 100%; flex-direction: column; }
   .visual-material-heading, .material-selector-title { flex-direction: column; }
   .material-selector-title small { text-align: left; }
+  .selected-gallery-image { flex-wrap: wrap; }
+  .selected-gallery-preview-grid { flex: 0 0 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .gallery-folder-grid { grid-template-columns: 1fr 1fr; }
   .gallery-modal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .gallery-modal-actions { grid-template-columns: 1fr 1fr; }

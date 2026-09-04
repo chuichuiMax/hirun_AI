@@ -115,6 +115,40 @@ async def test_renders_custom_template_preview_through_hycanvas():
 
 
 @pytest.mark.asyncio
+async def test_renders_template_preview_with_selected_image_background():
+    template_id = "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == f"/api/v1/templates/{template_id}/preview.png"
+        assert request.headers["Authorization"] == "Bearer hyk_test"
+        assert json.loads(request.content) == {
+            "backgroundImage": {
+                "filename": "cover.png",
+                "contentType": "image/png",
+                "dataBase64": "cG5n",
+            }
+        }
+        return httpx.Response(200, content=b"composite", headers={"content-type": "image/png"})
+
+    client = HyCanvasClient(
+        base_url="http://hycanvas",
+        public_url="http://canvas.example",
+        api_key="hyk_test",
+        workspace_id="ws-1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    content, content_type = await client.render_template_with_background_png(
+        template_id,
+        (b"png", "image/png", "cover.png"),
+    )
+
+    assert content == b"composite"
+    assert content_type == "image/png"
+
+
+@pytest.mark.asyncio
 async def test_creates_design_in_configured_workspace_and_returns_urls():
     async def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)

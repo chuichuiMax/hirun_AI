@@ -30,11 +30,57 @@ func mountTemplates(api chi.Router, tm *templates.Service, acct *accounts.Servic
 		r.Delete("/templates/{id}", templatesDeleteHandler(tm))
 		r.Get("/templates/{id}/file", templatesFileHandler(tm))
 		r.Get("/templates/{id}/render.png", templatesRenderHandler(tm, up))
+		r.Post("/templates/{id}/preview.png", templatesBackgroundPreviewHandler(tm, up))
 		r.Get("/templates/{id}/fillable-fields", templatesFillableHandler(tm))
 		r.Post("/templates/{id}/apply", templatesApplyHandler(tm))
 		r.Post("/templates/{id}/instantiate", templatesInstantiateHandler(tm))
 		r.Post("/templates/{id}/collection", templatesAssignCollectionHandler(tm))
 	})
+}
+
+func templatesBackgroundPreviewHandler(tm *templates.Service, up *uploads.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Background struct {
+				Filename    string `json:"filename"`
+				ContentType string `json:"contentType"`
+				DataBase64  string `json:"dataBase64"`
+			} `json:"backgroundImage"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			problemWithCode(w, r, http.StatusBadRequest, "Bad Request", "invalid body", "invalid_body")
+			return
+		}
+		u := userFrom(r.Context())
+		file, template, err := tm.PreviewWithBackground(r.Context(), u.ID, chi.URLParam(r, "id"), templates.InstantiateImage{
+			Filename: body.Background.Filename, ContentType: body.Background.ContentType, DataBase64: body.Background.DataBase64,
+		})
+		if err != nil {
+			templatesProblem(w, r, err)
+			return
+		}
+		if key := apiKeyFrom(r.Context()); key != nil &&
+			template.WorkspaceID != nil && *template.WorkspaceID != key.WorkspaceID {
+			templatesProblem(w, r, templates.ErrNotFound)
+			return
+		}
+		var fetch assetContent
+		if up != nil && template.WorkspaceID != nil {
+			workspaceID := *template.WorkspaceID
+			fetch = func(assetID string) ([]byte, string, error) {
+				return up.ContentInWorkspace(r.Context(), workspaceID, assetID)
+			}
+		}
+		png, err := renderTemplatePreview(file, fetch)
+		if err != nil {
+			problemWithCode(w, r, http.StatusBadRequest, "Bad Request", "could not render template preview", "could_not_render_template_preview")
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(png)
+	}
 }
 
 func templatesRenderHandler(tm *templates.Service, up *uploads.Service) http.HandlerFunc {
