@@ -154,6 +154,14 @@ const selectedHyCanvasTemplate = computed(() =>
 )
 const hasViralReference = computed(() => hasSelectedViralReference(store.artifact))
 
+const goBack = () => {
+  if (window.history.length > 1) {
+    router.back()
+    return
+  }
+  router.push('/content/history')
+}
+
 watch(
   () => store.artifact?.id,
   () => {
@@ -1403,6 +1411,9 @@ const openVersions = async () => {
   <div class="content-studio-page">
     <header class="studio-header">
       <div>
+        <a-button class="studio-back-button" @click="goBack">
+          <ArrowLeft :size="16" />返回上一页
+        </a-button>
         <div class="header-kicker">Yuxi Content Strategy Studio</div>
         <h1>{{ store.task?.name || '新建内容任务' }}</h1>
         <p>规则、事实和知识同源，关键节点由人确认。</p>
@@ -2362,6 +2373,7 @@ const openVersions = async () => {
 }
 
 .header-kicker { color: var(--main-700); font-size: 12px; font-weight: 600; }
+.studio-back-button { margin-bottom: 12px; display: inline-flex; align-items: center; gap: 6px; }
 .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .header-actions :deep(.ant-btn), .panel-heading :deep(.ant-btn), .stage-actions :deep(.ant-btn), .editor-actions :deep(.ant-btn) { display: inline-flex; align-items: center; gap: 6px; }
 
