@@ -144,8 +144,8 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="content-visual-planner",
         source_dir=_SKILLS_ROOT / "content-visual-planner",
-        description="按内容快照和渠道规范产出结构化视觉方案。",
-        version="1.4.0",
+        description="按内容快照和渠道规范产出字段不重复的结构化视觉方案。",
+        version="1.6.0",
     ),
     BuiltinSkillSpec(
         slug="content-cover-generator",

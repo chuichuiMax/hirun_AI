@@ -512,6 +512,33 @@ def test_hycanvas_template_fields_resolve_semantics_and_constraints():
     }
 
 
+def test_hycanvas_template_fields_use_distinct_agent_text_for_repeated_title_roles():
+    fields = content_tools._hycanvas_template_fields(
+        [
+            {
+                "kind": "text",
+                "key": "field_1",
+                "label": "89㎡多12㎡",
+                "semanticRole": "title",
+                "constraints": {"maxChars": 12},
+            },
+            {
+                "kind": "text",
+                "key": "field_2",
+                "label": "89㎡多12㎡",
+                "semanticRole": "title",
+                "constraints": {"maxChars": 12},
+            },
+            {"kind": "text", "label": "角标", "semanticRole": "label", "constraints": {"maxChars": 8}},
+        ],
+        visual_text=["89㎡收纳焕新"],
+        brief={},
+        template_fields={"field_1": "89㎡收纳焕新", "field_2": "复尺后规划"},
+    )
+
+    assert fields == {"field_1": "89㎡收纳焕新", "field_2": "复尺后规划"}
+
+
 def test_hycanvas_template_fields_reject_missing_required_fact():
     with pytest.raises(ValueError, match="完成年份"):
         content_tools._hycanvas_template_fields(

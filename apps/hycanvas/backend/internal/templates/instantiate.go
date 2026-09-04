@@ -193,9 +193,17 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 				continue
 			}
 			label := asStr(field["label"])
+			key := asStr(field["key"])
+			if key == "" {
+				key = label
+			}
+			fieldNodes[key] = asStr(field["nodeId"])
 			fieldNodes[label] = asStr(field["nodeId"])
 			constraints := asObj(field["constraints"])
-			value, present := values[label]
+			value, present := values[key]
+			if !present {
+				value, present = values[label]
+			}
 			if required, _ := constraints["required"].(bool); required && (!present || strings.TrimSpace(value) == "") {
 				return ErrBadRequest
 			}

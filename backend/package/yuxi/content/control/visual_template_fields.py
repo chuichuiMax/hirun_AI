@@ -28,6 +28,7 @@ def missing_required_template_fields(
     missing: dict[str, dict[str, int]] = {}
     for field in declarations:
         label = str(field.get("label") or "").strip()
+        field_key = str(field.get("key") or label).strip()
         role = str(field.get("semanticRole") or "").strip()
         constraints = field.get("constraints") or {}
         if field.get("kind") != "text" or not label or role in {"", "label", "title", "subtitle", "body_excerpt"}:
@@ -38,7 +39,7 @@ def missing_required_template_fields(
         elif role == "completion_year" and not re.search(r"(?:19|20)\d{2}", value):
             value = ""
         if constraints.get("required") and not value:
-            missing[label] = {
+            missing[field_key] = {
                 key: int(constraints[key])
                 for key in ("maxChars", "maxCharsPerLine", "maxLines")
                 if isinstance(constraints.get(key), int) and constraints[key] > 0

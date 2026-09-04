@@ -150,6 +150,28 @@ func TestFillTextFieldsPreservesStyle(t *testing.T) {
 	}
 }
 
+func TestFillTextFieldsUsesUniqueKeysWhenLabelsRepeat(t *testing.T) {
+	file := map[string]any{
+		"pages": []any{map[string]any{"children": []any{
+			map[string]any{"id": "title-a", "type": "text", "content": []any{map[string]any{"runs": []any{map[string]any{"text": "old"}}}}},
+			map[string]any{"id": "title-b", "type": "text", "content": []any{map[string]any{"runs": []any{map[string]any{"text": "old"}}}}},
+		}}},
+	}
+	fields := []any{
+		map[string]any{"nodeId": "title-a", "kind": "text", "key": "field_1", "label": "重复原文"},
+		map[string]any{"nodeId": "title-b", "kind": "text", "key": "field_2", "label": "重复原文"},
+	}
+	if err := fillTextFields(file, fields, map[string]string{"field_1": "空间焕新", "field_2": "复尺规划"}); err != nil {
+		t.Fatalf("fillTextFields: %v", err)
+	}
+	children := asArr(asObj(asArr(file["pages"])[0])["children"])
+	first := asStr(asObj(asArr(asObj(children[0])["content"])[0])["runs"].([]any)[0].(map[string]any)["text"])
+	second := asStr(asObj(asArr(asObj(children[1])["content"])[0])["runs"].([]any)[0].(map[string]any)["text"])
+	if first != "空间焕新" || second != "复尺规划" {
+		t.Fatalf("filled texts = %q, %q", first, second)
+	}
+}
+
 func TestNormalizeTemplateTypographyCanonicalizesSystemFontAndRecordsContract(t *testing.T) {
 	file := map[string]any{
 		"pages": []any{map[string]any{"children": []any{map[string]any{

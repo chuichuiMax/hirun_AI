@@ -151,12 +151,15 @@ def _hycanvas_template_fields(
         if field.get("kind") != "text" or not field.get("label"):
             continue
         label = str(field["label"])
+        field_key = str(field.get("key") or label)
         role = str(field.get("semanticRole") or "")
         if role == "label":
             continue
-        value = str(sources.get(role) or "").strip()
+        value = str(template_fields.get(field_key) or sources.get(role) or "").strip()
         if not role:
-            if "副标题" in label:
+            if field_key in template_fields:
+                value = str(template_fields[field_key]).strip()
+            elif "副标题" in label:
                 value = sources["subtitle"]
             elif "标题" in label or "语录" in label:
                 value = sources["title"]
@@ -169,8 +172,6 @@ def _hycanvas_template_fields(
             match = re.search(r"(?:19|20)\d{2}", value)
             value = match.group(0) if match else ""
         constraints = field.get("constraints") or {}
-        if constraints.get("required") and not value:
-            value = str(template_fields.get(label) or "").strip()
         if constraints.get("required") and not value:
             raise ValueError(f"封面模板必填字段“{label}”未完成自动适配")
         max_chars = constraints.get("maxChars")
@@ -194,7 +195,7 @@ def _hycanvas_template_fields(
                 )
             except ValueError as exc:
                 raise ValueError(f"封面字段“{label}”超过模板限制的 {max_lines} 行") from exc
-        fields[label] = value
+        fields[field_key] = value
     return fields
 
 

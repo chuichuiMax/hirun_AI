@@ -458,6 +458,61 @@ def test_visual_plan_requires_agent_rewrite_for_missing_template_fact():
     assert exc_info.value.code == "visual_template_claim_unsupported"
 
 
+def test_visual_plan_rejects_duplicate_template_text_for_same_cover():
+    context = replace(
+        DOMAIN_CONTEXT,
+        allowed_visual_template_fields={
+            "主标题": {"maxChars": 12},
+            "强调标题": {"maxChars": 12},
+        },
+    )
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["template_fields"] = {
+        "主标题": "收纳动线焕新",
+        "强调标题": "收纳 动线焕新！",
+    }
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    assert exc_info.value.code == "visual_text_duplicate"
+    assert exc_info.value.field_path == "template_fields.强调标题"
+
+
+def test_visual_plan_requires_copy_for_each_authorized_narrative_field():
+    context = replace(
+        DOMAIN_CONTEXT,
+        allowed_visual_template_fields={"主标题": {"maxChars": 12}, "强调标题": {"maxChars": 12}},
+    )
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["template_fields"] = {"主标题": "收纳空间焕新"}
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    assert exc_info.value.code == "visual_template_field_missing"
+    assert exc_info.value.field_path == "template_fields.强调标题"
+
+
+def test_visual_plan_accepts_distinct_template_text_for_same_cover():
+    context = replace(
+        DOMAIN_CONTEXT,
+        allowed_visual_template_fields={
+            "主标题": {"maxChars": 12},
+            "强调标题": {"maxChars": 12},
+        },
+    )
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["template_fields"] = {
+        "主标题": "收纳空间焕新",
+        "强调标题": "复尺后规划",
+    }
+
+    result = validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    assert result.template_fields["强调标题"] == "复尺后规划"
+
+
 def test_formula_ranking_pool_comes_from_match_snapshot_before_selection_exists():
     node_input = ContentAgentNodeInputV1.model_validate(
         {
