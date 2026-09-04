@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/base64"
+	"strings"
 
 	"hycanvas/backend/internal/render"
 )
@@ -123,12 +124,47 @@ func embedNodeAssets(fetch assetContent, node map[string]any) map[string]any {
 
 // embedDesignFileAssets returns a deep copy of an opaque design file with image
 // node + image/pattern fill bytes inlined across every page, so the raster
-// exporter renders images the file references only by asset id. Never mutates
-// the input; returns it unchanged when fetch is nil.
+// exporter renders images the file references only by asset id. Asset data URLs
+// stored directly in the design take precedence over workspace upload lookup.
+// Never mutates the input; returns it unchanged when neither source is available.
 func embedDesignFileAssets(fetch assetContent, file map[string]any) map[string]any {
-	if fetch == nil {
+	type inlineAsset struct {
+		data []byte
+		mime string
+	}
+	inline := make(map[string]inlineAsset)
+	if assets, ok := file["assets"].([]any); ok {
+		for _, raw := range assets {
+			asset, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			id, _ := asset["id"].(string)
+			url, _ := asset["url"].(string)
+			header, payload, ok := strings.Cut(url, ",")
+			if id == "" || !ok || !strings.HasPrefix(header, "data:image/") || !strings.HasSuffix(strings.ToLower(header), ";base64") {
+				continue
+			}
+			data, err := base64.StdEncoding.DecodeString(payload)
+			if err != nil || len(data) == 0 {
+				continue
+			}
+			mime := strings.TrimPrefix(strings.SplitN(header, ";", 2)[0], "data:")
+			inline[id] = inlineAsset{data: data, mime: mime}
+		}
+	}
+	if len(inline) == 0 && fetch == nil {
 		return file
 	}
+	resolve := assetContent(func(assetID string) ([]byte, string, error) {
+		if asset, ok := inline[assetID]; ok {
+			return asset.data, asset.mime, nil
+		}
+		if fetch == nil {
+			return nil, "", nil
+		}
+		return fetch(assetID)
+	})
 	f2 := make(map[string]any, len(file))
 	for k, v := range file {
 		f2[k] = v
@@ -152,7 +188,7 @@ func embedDesignFileAssets(fetch assetContent, file map[string]any) map[string]a
 			nk := make([]any, len(kids))
 			for j, c := range kids {
 				if cm, ok := c.(map[string]any); ok {
-					nk[j] = embedNodeAssets(fetch, cm)
+					nk[j] = embedNodeAssets(resolve, cm)
 				} else {
 					nk[j] = c
 				}

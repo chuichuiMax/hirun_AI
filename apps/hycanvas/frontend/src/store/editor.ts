@@ -1360,10 +1360,58 @@ function sampleDesign(): DesignFile {
   return d;
 }
 
+// Older automation-created designs stored image pixels on node.src, while the
+// browser renderer resolves images through file.assets + source.assetId. Move
+// those legacy data URLs into the standard asset table as the file is loaded.
+function migrateInlineImageAssets(file: DesignFile): DesignFile {
+  const hasLegacyImage = (nodes: Node[]): boolean => nodes.some((node) => {
+    const legacy = node as Node & { src?: string; source?: { assetId?: string } };
+    const found = node.type === "image" && !legacy.source?.assetId && legacy.src?.startsWith("data:image/");
+    const children = (node as Node & { children?: Node[] }).children ?? [];
+    return Boolean(found) || hasLegacyImage(children);
+  });
+  if (!file.pages.some((page) => hasLegacyImage(page.children))) return file;
+
+  const migrated = structuredClone(file);
+  const assets = migrated.assets ?? [];
+  const assetByUrl = new Map(assets.map((asset) => [asset.url, asset.id]));
+  const usedIDs = new Set(assets.map((asset) => asset.id));
+  let nextID = 1;
+  const walk = (nodes: Node[]) => {
+    for (const node of nodes) {
+      const legacy = node as Node & {
+        src?: string;
+        source?: { assetId?: string; naturalWidth?: number; naturalHeight?: number };
+        children?: Node[];
+      };
+      if (node.type === "image" && !legacy.source?.assetId && legacy.src?.startsWith("data:image/")) {
+        let assetID = assetByUrl.get(legacy.src);
+        if (!assetID) {
+          do assetID = `legacy-inline-image-${nextID++}`; while (usedIDs.has(assetID));
+          const mime = legacy.src.slice(5, legacy.src.indexOf(";"));
+          assets.push({ id: assetID, kind: "image", url: legacy.src, mime, checksum: "" });
+          assetByUrl.set(legacy.src, assetID);
+          usedIDs.add(assetID);
+        }
+        legacy.source = {
+          assetId: assetID,
+          naturalWidth: legacy.source?.naturalWidth ?? 0,
+          naturalHeight: legacy.source?.naturalHeight ?? 0,
+        };
+        delete legacy.src;
+      }
+      walk(legacy.children ?? []);
+    }
+  };
+  for (const page of migrated.pages) walk(page.children);
+  migrated.assets = assets;
+  return migrated;
+}
+
 // Make a loaded design safe to render: guarantee a `meta` object and a finite,
-// positive width/height on every page. Older or template-derived files (or one
-// saved before a fix) can arrive without these, which otherwise produces NaN
-// page frames and a broken canvas. Returns the input unchanged when already valid.
+// positive width/height on every page, and migrate legacy inline images. Older
+// or template-derived files can otherwise produce broken page frames or images.
+// Returns the input unchanged when already valid.
 function normalizeLoadedDoc(file: DesignFile): DesignFile {
   const pages = file.pages ?? [];
   const fin = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
@@ -1400,9 +1448,10 @@ function normalizeLoadedDoc(file: DesignFile): DesignFile {
     changed = true;
     return { ...p, width: w, height: h };
   });
-  return changed
+  const normalized = changed
     ? { ...file, meta: file.meta ?? {}, assets: file.assets ?? [], fonts: file.fonts ?? [], pages: normPages }
     : file;
+  return migrateInlineImageAssets(normalized);
 }
 
 /** Guarantee the top-level asset/font arrays exist before a mutation pushes to

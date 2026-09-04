@@ -2,6 +2,7 @@ package templates
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -96,7 +97,7 @@ func applyBackgroundImage(file map[string]any, image InstantiateImage) error {
 	if image.DataBase64 == "" || !strings.HasPrefix(image.ContentType, "image/") {
 		return ErrBadRequest
 	}
-	src := fmt.Sprintf("data:%s;base64,%s", image.ContentType, image.DataBase64)
+	assetID := registerInlineImageAsset(file, image)
 	for pageIndex, pageRaw := range asArr(file["pages"]) {
 		page := asObj(pageRaw)
 		width, height := asNum(page["width"]), asNum(page["height"])
@@ -113,14 +114,33 @@ func applyBackgroundImage(file map[string]any, image InstantiateImage) error {
 			"blendMode": "normal",
 			"locked":    true,
 			"fit":       "cover",
-			"source":    map[string]any{"assetId": "", "naturalWidth": 0.0, "naturalHeight": 0.0},
-			"src":       src,
+			"source":    map[string]any{"assetId": assetID, "naturalWidth": 0.0, "naturalHeight": 0.0},
 			"data":      map[string]any{"background": true, "source": "contentswarm-material-library"},
 		}
 		page["children"] = append([]any{background}, asArr(page["children"])...)
 		delete(page, "background")
 	}
 	return nil
+}
+
+// registerInlineImageAsset keeps automation-supplied pixels in the standard
+// design asset table. The browser editor resolves image nodes through assetId,
+// while render endpoints inline the same data URL when preparing an export.
+func registerInlineImageAsset(file map[string]any, image InstantiateImage) string {
+	url := fmt.Sprintf("data:%s;base64,%s", image.ContentType, image.DataBase64)
+	assets := asArr(file["assets"])
+	for _, raw := range assets {
+		asset := asObj(raw)
+		if asStr(asset["url"]) == url && asStr(asset["id"]) != "" {
+			return asStr(asset["id"])
+		}
+	}
+	sum := sha256.Sum256([]byte(url))
+	assetID := fmt.Sprintf("contentswarm-inline-%x", sum[:12])
+	file["assets"] = append(assets, map[string]any{
+		"id": assetID, "kind": "image", "url": url, "mime": image.ContentType, "checksum": fmt.Sprintf("%x", sum[:]),
+	})
+	return assetID
 }
 
 func fillImageFields(file map[string]any, declarations []any, values map[string]InstantiateImage) error {
@@ -150,10 +170,10 @@ func fillImageFields(file map[string]any, declarations []any, values map[string]
 						delete(node, key)
 					}
 				}
+				assetID := registerInlineImageAsset(file, value)
 				node["type"] = "image"
 				node["fit"] = "cover"
-				node["source"] = map[string]any{"assetId": "", "naturalWidth": 0, "naturalHeight": 0}
-				node["src"] = fmt.Sprintf("data:%s;base64,%s", value.ContentType, value.DataBase64)
+				node["source"] = map[string]any{"assetId": assetID, "naturalWidth": 0, "naturalHeight": 0}
 				delete(remaining, asStr(node["id"]))
 			})
 		}

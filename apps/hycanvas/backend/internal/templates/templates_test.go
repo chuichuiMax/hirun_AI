@@ -293,6 +293,7 @@ func TestFillTextFieldsPreservesLabelText(t *testing.T) {
 
 func TestFillImageFieldsReplacesDeclaredNode(t *testing.T) {
 	file := map[string]any{
+		"assets": []any{},
 		"pages": []any{map[string]any{"children": []any{map[string]any{
 			"id": "image-node", "type": "text",
 			"transform": map[string]any{"x": 10.0, "y": 20.0},
@@ -308,8 +309,16 @@ func TestFillImageFieldsReplacesDeclaredNode(t *testing.T) {
 		t.Fatalf("fillImageFields: %v", err)
 	}
 	node := asObj(asArr(asObj(asArr(file["pages"])[0])["children"])[0])
-	if asStr(node["type"]) != "image" || asStr(node["src"]) != "data:image/png;base64,cG5n" {
+	if asStr(node["type"]) != "image" {
 		t.Fatalf("image node = %+v", node)
+	}
+	assetID := asStr(asObj(node["source"])["assetId"])
+	assets := asArr(file["assets"])
+	if assetID == "" || len(assets) != 1 || asStr(asObj(assets[0])["id"]) != assetID || asStr(asObj(assets[0])["url"]) != "data:image/png;base64,cG5n" {
+		t.Fatalf("image asset reference missing: node=%+v assets=%+v", node, assets)
+	}
+	if _, ok := node["src"]; ok {
+		t.Fatal("image pixels must live only in file.assets")
 	}
 	if asNum(asObj(node["transform"])["x"]) != 10 || asNum(asObj(node["size"])["width"]) != 300 {
 		t.Fatal("image replacement must preserve geometry")
@@ -328,6 +337,7 @@ func TestFillImageFieldsRejectsUndeclaredLabel(t *testing.T) {
 
 func TestApplyBackgroundImageKeepsTemplateLayersAboveSelectedMaterial(t *testing.T) {
 	file := map[string]any{
+		"assets": []any{},
 		"pages": []any{map[string]any{
 			"width": 1080.0, "height": 1440.0,
 			"background": map[string]any{"type": "solid"},
@@ -347,8 +357,16 @@ func TestApplyBackgroundImageKeepsTemplateLayersAboveSelectedMaterial(t *testing
 		t.Fatalf("layers = %+v", children)
 	}
 	background := asObj(children[0])
-	if asStr(background["src"]) != "data:image/png;base64,cG5n" || !background["locked"].(bool) {
+	if !background["locked"].(bool) {
 		t.Fatalf("background = %+v", background)
+	}
+	assetID := asStr(asObj(background["source"])["assetId"])
+	assets := asArr(file["assets"])
+	if assetID == "" || len(assets) != 1 || asStr(asObj(assets[0])["id"]) != assetID || asStr(asObj(assets[0])["url"]) != "data:image/png;base64,cG5n" {
+		t.Fatalf("background asset reference missing: background=%+v assets=%+v", background, assets)
+	}
+	if _, ok := background["src"]; ok {
+		t.Fatal("background pixels must live only in file.assets")
 	}
 }
 
@@ -491,8 +509,13 @@ func TestTemplates_DB(t *testing.T) {
 	}
 	instantiatedPage := asObj(asArr(instantiated.File["pages"])[0])
 	instantiatedChildren := asArr(instantiatedPage["children"])
-	if len(instantiatedChildren) == 0 || asStr(asObj(instantiatedChildren[0])["src"]) != "data:image/png;base64,cG5n" {
+	if len(instantiatedChildren) == 0 {
 		t.Fatalf("selected material background missing: %+v", instantiatedChildren)
+	}
+	backgroundAssetID := asStr(asObj(asObj(instantiatedChildren[0])["source"])["assetId"])
+	instantiatedAssets := asArr(instantiated.File["assets"])
+	if backgroundAssetID == "" || len(instantiatedAssets) == 0 || asStr(asObj(instantiatedAssets[len(instantiatedAssets)-1])["id"]) != backgroundAssetID || asStr(asObj(instantiatedAssets[len(instantiatedAssets)-1])["url"]) != "data:image/png;base64,cG5n" {
+		t.Fatalf("selected material asset missing: background=%+v assets=%+v", instantiatedChildren[0], instantiatedAssets)
 	}
 	got, err := svc.Get(ctx, owner.ID, saved.ID)
 	if err != nil || got.ID != saved.ID {
