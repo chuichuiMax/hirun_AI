@@ -204,11 +204,11 @@ func serveFile(w http.ResponseWriter, req *http.Request, root http.FileSystem, n
 	}
 	// Turbopack chunk names are not guaranteed to change between production
 	// builds. Revalidate them so a deployment cannot mix an old runtime with new
-	// lazy editor chunks. Build-scoped manifests and media remain immutable.
+	// lazy editor chunks. Browsers can still reuse an unchanged response after a
+	// cheap conditional request instead of downloading multi-megabyte chunks on
+	// every workspace visit. Build-scoped manifests and media remain immutable.
 	if strings.HasPrefix(name, "/_next/static/chunks/") {
-		w.Header().Set("Cache-Control", "no-store")
-		req.Header.Del("If-Modified-Since")
-		req.Header.Del("If-None-Match")
+		w.Header().Set("Cache-Control", "no-cache")
 	} else if strings.HasPrefix(name, "/_next/") {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}

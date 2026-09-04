@@ -170,12 +170,30 @@ func TestStaticServing(t *testing.T) {
 		t.Fatalf("/editor: %d %q", code, body)
 	}
 	// Build-scoped assets remain immutable, while Turbopack chunks must
-	// revalidate because their names can survive builds.
+	// revalidate because their names can survive builds. They are cacheable so
+	// unchanged chunks return 304 instead of being downloaded on every visit.
 	if code, _, cc := get("/_next/static/app.js"); code != 200 || !strings.Contains(cc, "immutable") {
 		t.Fatalf("/_next asset: %d cache=%q", code, cc)
 	}
-	if code, _, cc := get("/_next/static/chunks/editor.js"); code != 200 || cc != "no-store" {
+	if code, _, cc := get("/_next/static/chunks/editor.js"); code != 200 || cc != "no-cache" {
 		t.Fatalf("/_next chunk: %d cache=%q", code, cc)
+	}
+	chunkInfo, err := os.Stat(filepath.Join(dir, "_next/static/chunks/editor.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/_next/static/chunks/editor.js", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("If-Modified-Since", chunkInfo.ModTime().UTC().Format(http.TimeFormat))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("unchanged /_next chunk: %d, want 304", resp.StatusCode)
 	}
 	// Pretty editor URL: /editor/<id> serves the editor page (the id is
 	// client-resolved; the export cannot emit per-design HTML).
