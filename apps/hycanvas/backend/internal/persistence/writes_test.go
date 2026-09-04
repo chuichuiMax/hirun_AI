@@ -54,6 +54,13 @@ func TestPersistenceLifecycle_DB(t *testing.T) {
 	if rec.CurrentSnapshot == nil || rec.SchemaVersion != currentSchemaVersion {
 		t.Fatalf("create record wrong: %+v", rec)
 	}
+	thumbnail := "data:image/jpeg;base64,dGVzdA=="
+	if err := svc.SetThumbnail(ctx, rec.ID, ws.ID, thumbnail); err != nil {
+		t.Fatalf("SetThumbnail: %v", err)
+	}
+	if stored, err := svc.Thumbnail(ctx, rec.ID, ws.ID); err != nil || stored != thumbnail {
+		t.Fatalf("Thumbnail: value=%q err=%v", stored, err)
+	}
 
 	// Capture the blank (create) version id now, before more versions exist.
 	// (The test runs in one transaction, so now() is frozen and createdAt ties;

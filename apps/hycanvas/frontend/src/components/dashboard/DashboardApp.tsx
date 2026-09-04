@@ -764,9 +764,9 @@ export function DashboardApp({ view }: { view: DashboardView }) {
   );
 
   // A design as a grid card / a list row. Used across Home + Favorites.
-  const renderCard = (item: HomeItem) => (
+  const renderCard = (item: HomeItem, allowPreviewFallback = true) => (
     <li key={item.id} className="group relative rounded-2xl border border-neutral-200 bg-surface shadow-sm transition hover:shadow-md">
-      <button onClick={() => void open(item.id)} className="block aspect-[4/3] w-full overflow-hidden rounded-t-2xl" title={tr("dashboard.open")}><DesignThumb designId={item.id} /></button>
+      <button onClick={() => void open(item.id)} className="block aspect-[4/3] w-full overflow-hidden rounded-t-2xl" title={tr("dashboard.open")}><DesignThumb designId={item.id} previewUrl={item.thumbnailUrl} allowFallback={allowPreviewFallback} /></button>
       <FavoriteButton starred={item.starred} onToggle={() => void toggleFavorite(item)} />
       <div className="flex items-center justify-between gap-2 px-3 py-2.5">
         <div className="min-w-0">
@@ -780,7 +780,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
 
   const renderRow = (item: HomeItem) => (
     <li key={item.id} className="group flex items-center gap-3 border-b border-neutral-100 px-3 py-2 last:border-b-0 hover:bg-neutral-50">
-      <button onClick={() => void open(item.id)} className="h-10 w-14 shrink-0 overflow-hidden rounded-md border border-neutral-200 bg-neutral-100" title={tr("dashboard.open")}><DesignThumb designId={item.id} /></button>
+      <button onClick={() => void open(item.id)} className="h-10 w-14 shrink-0 overflow-hidden rounded-md border border-neutral-200 bg-neutral-100" title={tr("dashboard.open")}><DesignThumb designId={item.id} previewUrl={item.thumbnailUrl} /></button>
       <button onClick={() => void open(item.id)} className="min-w-0 flex-1 text-start">
         <div className="truncate text-sm font-semibold text-neutral-800">{item.title}</div>
         <div className="text-xs text-neutral-400">{df.date(item.updatedAt)}</div>
@@ -793,7 +793,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
   // Render a list of designs as the current grid/list view.
   const itemsList = (list: HomeItem[]) =>
     viewMode === "grid" ? (
-      <ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{list.map(renderCard)}</ul>
+      <ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{list.map((item) => renderCard(item))}</ul>
     ) : (
       <ul className="rounded-2xl border border-neutral-200 bg-surface shadow-sm [&>li:first-child]:rounded-t-2xl [&>li:last-child]:rounded-b-2xl">{list.map(renderRow)}</ul>
     );
@@ -1179,7 +1179,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
                     className="group overflow-hidden rounded-2xl border border-neutral-200 bg-surface text-start shadow-sm transition hover:shadow-md disabled:opacity-60"
                   >
                     <div className="aspect-[4/3] bg-neutral-100">
-                      <DesignThumb templateId={t.id} />
+                      <DesignThumb templateId={t.id} previewUrl={t.previewUrls[0]} />
                     </div>
                     <div className="truncate px-3 py-2.5 text-sm font-semibold text-neutral-800">{t.title}</div>
                   </button>
@@ -1278,7 +1278,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
               {templateZone && zoneDesigns.length > 0 && (
                 <div className="mb-6">
                   <h3 className="mb-3 text-xs font-bold uppercase tracking-wide text-neutral-400">{tr("dashboard.designs")} ({zoneDesigns.length})</h3>
-                  <ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{zoneDesigns.map(renderCard)}</ul>
+                  <ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{zoneDesigns.map((item) => renderCard(item, false))}</ul>
                 </div>
               )}
               {templateZone && filteredTemplates.length > 0 && (
@@ -1296,7 +1296,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
                         title={tr("dashboard.use_this_template")}
                         className="block w-full text-start disabled:opacity-60"
                       >
-                        <div className="aspect-[4/3] overflow-hidden rounded-t-2xl bg-neutral-100"><DesignThumb templateId={t.id} /></div>
+                        <div className="aspect-[4/3] overflow-hidden rounded-t-2xl bg-neutral-100"><DesignThumb templateId={t.id} previewUrl={t.previewUrls[0]} /></div>
                         <div className="truncate px-3 py-2.5 text-sm font-semibold text-neutral-800">{t.title}</div>
                       </button>
                       <div className="absolute end-2 top-2">

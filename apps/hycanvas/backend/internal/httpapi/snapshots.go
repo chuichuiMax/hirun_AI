@@ -25,9 +25,10 @@ func mountSnapshots(api chi.Router, p *persistence.Service, br *brand.Service, a
 func snapshotHandler(p *persistence.Service, br *brand.Service, acct *accounts.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			File  persistence.DesignFile `json:"file"`
-			Label string                 `json:"label"`
-			Kind  string                 `json:"kind"`
+			File      persistence.DesignFile `json:"file"`
+			Label     string                 `json:"label"`
+			Kind      string                 `json:"kind"`
+			Thumbnail string                 `json:"thumbnail"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.File == nil {
 			problemWithCode(w, r, http.StatusBadRequest, "Bad Request", "missing file", "missing_file")
@@ -76,6 +77,12 @@ func snapshotHandler(p *persistence.Service, br *brand.Service, acct *accounts.S
 		if err != nil {
 			persistenceProblem(w, r, err)
 			return
+		}
+		if body.Thumbnail != "" && len(body.Thumbnail) <= 256*1024 && strings.HasPrefix(body.Thumbnail, "data:image/") {
+			if err := p.SetThumbnail(r.Context(), id, ws, body.Thumbnail); err != nil {
+				persistenceProblem(w, r, err)
+				return
+			}
 		}
 		writeJSON(w, http.StatusCreated, rec)
 	}

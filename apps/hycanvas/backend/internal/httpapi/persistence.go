@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -29,6 +30,7 @@ func mountPersistence(api chi.Router, p *persistence.Service, acct *accounts.Ser
 	api.With(requireAuth(acct)).Patch("/designs/{id}", renameDesignHandler(p, acct))
 	api.With(requireAuth(acct)).Delete("/designs/{id}", deleteDesignHandler(p, acct))
 	api.With(requireAuth(acct)).Get("/designs/{id}/file", designFileHandler(p, acct, sh))
+	api.With(requireAuth(acct)).Get("/designs/{id}/thumbnail", designThumbnailHandler(p, acct, sh))
 	api.With(requireAuth(acct)).Get("/designs/{id}/versions", listVersionsHandler(p, acct, sh))
 	api.With(requireAuth(acct)).Get("/designs/{id}/versions/{vid}/file", versionFileHandler(p, acct, sh))
 	api.With(requireAuth(acct)).Get("/designs/{id}/versions/{vid}/diff", diffHandler(p, acct, sh))
@@ -207,6 +209,37 @@ func designFileHandler(p *persistence.Service, acct *accounts.Service, sh *shari
 			return
 		}
 		writeJSON(w, http.StatusOK, loaded.File)
+	}
+}
+
+func designThumbnailHandler(p *persistence.Service, acct *accounts.Service, sh *sharing.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		ws, err := authorizeDesignRead(r, p, acct, sh, id)
+		if err != nil {
+			authProblem(w, r, err)
+			return
+		}
+		thumbnail, err := p.Thumbnail(r.Context(), id, ws)
+		if err != nil {
+			persistenceProblem(w, r, err)
+			return
+		}
+		header, encoded, ok := strings.Cut(thumbnail, ",")
+		if !ok || !strings.HasPrefix(header, "data:image/") || !strings.HasSuffix(header, ";base64") {
+			problemWithCode(w, r, http.StatusNotFound, "Not Found", "thumbnail not found", "thumbnail_not_found")
+			return
+		}
+		body, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			problemWithCode(w, r, http.StatusNotFound, "Not Found", "thumbnail not found", "thumbnail_not_found")
+			return
+		}
+		contentType := strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
 	}
 }
 

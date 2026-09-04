@@ -24,6 +24,7 @@ type designRow struct {
 	SchemaVersion   int
 	DocKind         *string
 	TemplateZone    *string
+	ThumbnailURL    *string
 	CurrentSnapshot *string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -33,11 +34,11 @@ type designRow struct {
 	SourceVersionID *string
 }
 
-const designCols = `id,"workspace_id",title,"schema_version","doc_kind","template_zone","current_snapshot_id","created_at","updated_at","deleted_at","purge_after","source_design_id","source_version_id"`
+const designCols = `id,"workspace_id",title,"schema_version","doc_kind","template_zone","thumbnail_url","current_snapshot_id","created_at","updated_at","deleted_at","purge_after","source_design_id","source_version_id"`
 
 func scanDesign(row pgx.Row) (designRow, error) {
 	var d designRow
-	err := row.Scan(&d.ID, &d.WorkspaceID, &d.Title, &d.SchemaVersion, &d.DocKind, &d.TemplateZone, &d.CurrentSnapshot,
+	err := row.Scan(&d.ID, &d.WorkspaceID, &d.Title, &d.SchemaVersion, &d.DocKind, &d.TemplateZone, &d.ThumbnailURL, &d.CurrentSnapshot,
 		&d.CreatedAt, &d.UpdatedAt, &d.DeletedAt, &d.PurgeAfter, &d.SourceDesignID, &d.SourceVersionID)
 	return d, err
 }
@@ -71,6 +72,7 @@ type designPatch struct {
 	title             *string
 	currentSnapshotID *string
 	schemaVersion     *int
+	thumbnailURL      *string
 	deletedAtSet      bool
 	deletedAt         *time.Time
 	purgeAfter        *time.Time
@@ -91,6 +93,9 @@ func (s *Service) updateDesign(ctx context.Context, id string, p designPatch) (d
 	}
 	if p.schemaVersion != nil {
 		add(`"schema_version"`, *p.schemaVersion)
+	}
+	if p.thumbnailURL != nil {
+		add(`"thumbnail_url"`, *p.thumbnailURL)
 	}
 	if p.deletedAtSet {
 		add(`"deleted_at"`, p.deletedAt)

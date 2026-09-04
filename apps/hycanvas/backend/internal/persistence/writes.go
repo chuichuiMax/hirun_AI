@@ -161,6 +161,25 @@ func (s *Service) LoadFile(ctx context.Context, designID, workspaceID string) (L
 	return s.loadFile(ctx, designID, workspaceID, false)
 }
 
+func (s *Service) SetThumbnail(ctx context.Context, designID, workspaceID, thumbnail string) error {
+	if _, err := s.requireDesign(ctx, designID, workspaceID, false); err != nil {
+		return err
+	}
+	_, err := s.updateDesign(ctx, designID, designPatch{thumbnailURL: &thumbnail})
+	return err
+}
+
+func (s *Service) Thumbnail(ctx context.Context, designID, workspaceID string) (string, error) {
+	d, err := s.requireDesign(ctx, designID, workspaceID, false)
+	if err != nil {
+		return "", err
+	}
+	if d.ThumbnailURL == nil || *d.ThumbnailURL == "" {
+		return "", ErrNotFound
+	}
+	return *d.ThumbnailURL, nil
+}
+
 // LoadFileIncludingTrashed also serves designs sitting in the trash. Reserved
 // for read-only, member-facing surfaces (the Trash view's preview thumbnails,
 // where restore decisions need to see the design); every editing and export
@@ -593,7 +612,7 @@ func lockDesignLineage(ctx context.Context, tx pgx.Tx, designID string) error {
 func toRecord(d designRow) DesignRecord {
 	return DesignRecord{
 		ID: d.ID, WorkspaceID: d.WorkspaceID, Title: d.Title, SchemaVersion: d.SchemaVersion,
-		DocKind: d.DocKind, TemplateZone: d.TemplateZone, CurrentSnapshot: d.CurrentSnapshot,
+		DocKind: d.DocKind, TemplateZone: d.TemplateZone, ThumbnailURL: d.ThumbnailURL, CurrentSnapshot: d.CurrentSnapshot,
 		CreatedAt: d.CreatedAt.UTC().Format(iso), UpdatedAt: d.UpdatedAt.UTC().Format(iso),
 		DeletedAt: isoPtr(d.DeletedAt), PurgeAfter: isoPtr(d.PurgeAfter),
 		SourceDesignID: d.SourceDesignID, SourceVersionID: d.SourceVersionID,

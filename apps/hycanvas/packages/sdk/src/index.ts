@@ -1353,7 +1353,7 @@ export class HyCanvasClient {
   getDesignFile(id: string, opts?: { trashed?: boolean }): Promise<DesignFile> {
     return this.request("GET", `/v1/designs/${id}/file${opts?.trashed ? "?trashed=1" : ""}`);
   }
-  saveSnapshot(id: string, input: { file: DesignFile; label?: string; kind?: SavableSnapshotKind }): Promise<DesignRecord> {
+  saveSnapshot(id: string, input: { file: DesignFile; label?: string; kind?: SavableSnapshotKind; thumbnail?: string }): Promise<DesignRecord> {
     return this.request("POST", `/v1/designs/${id}/snapshots`, input);
   }
   /** A page of a design's version history, newest first. Each
