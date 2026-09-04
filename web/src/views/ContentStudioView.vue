@@ -146,6 +146,7 @@ const activeMaterialGalleryPath = computed(() => (
     : activeMaterialGallery.value?.name || '图库'
 ))
 const selectedImageGallery = computed(() => materialGalleryMap.value.get(selectedImageGalleryId.value) || null)
+const showBackButton = computed(() => route.name === 'ContentTask')
 const selectedImageRootGalleryId = computed(() => (
   selectedImageGallery.value?.parent_id || selectedImageGallery.value?.id || ''
 ))
@@ -1411,7 +1412,7 @@ const openVersions = async () => {
   <div class="content-studio-page">
     <header class="studio-header">
       <div>
-        <a-button class="studio-back-button" @click="goBack">
+        <a-button v-if="showBackButton" class="studio-back-button" @click="goBack">
           <ArrowLeft :size="16" />返回上一页
         </a-button>
         <div class="header-kicker">Yuxi Content Strategy Studio</div>

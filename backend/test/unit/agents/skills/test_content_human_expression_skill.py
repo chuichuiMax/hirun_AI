@@ -7,7 +7,7 @@ def test_content_human_expression_skill_preserves_facts_and_persona_boundaries()
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "content-human-expression")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "1.8.0"
+    assert spec.version == "1.9.0"
     assert "自然语气" in skill_text
     assert "情绪推进" in skill_text
     assert "稳定人设" in skill_text
@@ -33,3 +33,5 @@ def test_content_human_expression_skill_preserves_facts_and_persona_boundaries()
     assert "按问题词长度从长到短扫描" in skill_text
     assert "不能机械地永远取第一个" in skill_text
     assert "候选列表为空时" in skill_text
+    assert "通常选择 2～5 个" in skill_text
+    assert "至少两个不同语义锚点" in skill_text

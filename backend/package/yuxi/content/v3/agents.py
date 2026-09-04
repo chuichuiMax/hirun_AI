@@ -136,10 +136,11 @@ CONTENT_AGENT_SPECS = (
             "content-body-generator",
             "viral-structure-rewriter",
             "viral-layout-formatter",
+            "humanizer-zh",
             "content-human-expression",
         ),
         skill_tools=(),
-        config_version=4,
+        config_version=5,
     ),
     ContentAgentSpec(
         slug="content-review-agent",
@@ -240,7 +241,7 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
             },
             "content-generation-agent": {
                 2: (
-                    ("viral-structure-rewriter", "viral-layout-formatter"),
+                    ("viral-structure-rewriter", "viral-layout-formatter", "humanizer-zh"),
                     {
                         "content-title-generator",
                         "content-outline-builder",
@@ -250,12 +251,24 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
                     {},
                 ),
                 3: (
-                    ("viral-layout-formatter",),
+                    ("viral-layout-formatter", "humanizer-zh"),
                     {
                         "content-title-generator",
                         "content-outline-builder",
                         "content-body-generator",
                         "viral-structure-rewriter",
+                        "content-human-expression",
+                    },
+                    {},
+                ),
+                4: (
+                    ("humanizer-zh",),
+                    {
+                        "content-title-generator",
+                        "content-outline-builder",
+                        "content-body-generator",
+                        "viral-structure-rewriter",
+                        "viral-layout-formatter",
                         "content-human-expression",
                     },
                     {},
