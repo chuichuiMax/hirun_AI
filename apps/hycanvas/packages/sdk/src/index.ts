@@ -1692,8 +1692,8 @@ export class HyCanvasClient {
     const qs = params.toString();
     return this.request("GET", `/v1/templates${qs ? `?${qs}` : ""}`);
   }
-  getTemplateFile(id: string): Promise<DesignFile> {
-    return this.request("GET", `/v1/templates/${id}/file`);
+  getTemplateFile(id: string, signal?: AbortSignal): Promise<DesignFile> {
+    return this.request("GET", `/v1/templates/${id}/file`, undefined, { signal });
   }
   /** A template's declared fillable fields, for the bulk-create mapping UI. */
   templateFillableFields(id: string): Promise<FillableFieldSummary[]> {
