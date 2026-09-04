@@ -31,6 +31,7 @@ func mountPersistence(api chi.Router, p *persistence.Service, acct *accounts.Ser
 	api.With(requireAuth(acct)).Delete("/designs/{id}", deleteDesignHandler(p, acct))
 	api.With(requireAuth(acct)).Get("/designs/{id}/file", designFileHandler(p, acct, sh))
 	api.With(requireAuth(acct)).Get("/designs/{id}/thumbnail", designThumbnailHandler(p, acct, sh))
+	api.With(requireAuth(acct)).Put("/designs/{id}/thumbnail", updateDesignThumbnailHandler(p, acct))
 	api.With(requireAuth(acct)).Get("/designs/{id}/versions", listVersionsHandler(p, acct, sh))
 	api.With(requireAuth(acct)).Get("/designs/{id}/versions/{vid}/file", versionFileHandler(p, acct, sh))
 	api.With(requireAuth(acct)).Get("/designs/{id}/versions/{vid}/diff", diffHandler(p, acct, sh))
@@ -240,6 +241,29 @@ func designThumbnailHandler(p *persistence.Service, acct *accounts.Service, sh *
 		w.Header().Set("Cache-Control", "private, max-age=300")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
+	}
+}
+
+func updateDesignThumbnailHandler(p *persistence.Service, acct *accounts.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Thumbnail string `json:"thumbnail"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Thumbnail == "" || len(body.Thumbnail) > 256*1024 || !strings.HasPrefix(body.Thumbnail, "data:image/") {
+			problemWithCode(w, r, http.StatusUnprocessableEntity, "Unprocessable Entity", "thumbnail must be a data image no larger than 256 KiB", "thumbnail_invalid")
+			return
+		}
+		id := chi.URLParam(r, "id")
+		ws, err := authorizeDesign(r, p, acct, id, "member")
+		if err != nil {
+			authProblem(w, r, err)
+			return
+		}
+		if err := p.SetThumbnail(r.Context(), id, ws, body.Thumbnail); err != nil {
+			persistenceProblem(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

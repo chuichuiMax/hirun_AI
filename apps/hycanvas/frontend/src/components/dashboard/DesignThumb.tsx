@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { createScene, renderScene, type CanvasLike, type Viewport } from "@hc/engine";
 import { oc } from "@/lib/sdk";
 import { imageAssets } from "@/lib/assetProvider";
+import { createDesignThumbnail } from "@/lib/designThumbnail";
 
 const previewWaiters: Array<() => void> = [];
 let activePreviews = 0;
@@ -131,6 +132,10 @@ export function DesignThumb({ designId, templateId, previewUrl, allowFallback = 
         imageAssets.registerAll(file.assets ?? []);
         renderScene(createScene(file), ctx as unknown as CanvasLike, vp, { assets: imageAssets });
         setOk(true);
+        if (designId && !trashed) {
+          const thumbnail = createDesignThumbnail(file);
+          if (thumbnail) void oc.updateDesignThumbnail(designId, thumbnail).catch(() => undefined);
+        }
       } catch {
         if (!cancelled) setOk(false);
       }

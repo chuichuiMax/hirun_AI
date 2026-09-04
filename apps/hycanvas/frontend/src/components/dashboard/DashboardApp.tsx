@@ -1278,7 +1278,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
               {templateZone && zoneDesigns.length > 0 && (
                 <div className="mb-6">
                   <h3 className="mb-3 text-xs font-bold uppercase tracking-wide text-neutral-400">{tr("dashboard.designs")} ({zoneDesigns.length})</h3>
-                  <ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{zoneDesigns.map((item) => renderCard(item, false))}</ul>
+                  <ul className="grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{zoneDesigns.map((item) => renderCard(item))}</ul>
                 </div>
               )}
               {templateZone && filteredTemplates.length > 0 && (
