@@ -14,7 +14,20 @@ vi.mock("@/components/ui/Toast", () => ({
   useToast: () => ({ success: mocks.success, error: mocks.error }),
 }));
 vi.mock("@/store/editor", () => {
-  const doc = { title: "我的小红书模板", meta: { templateZone: "xiaohongshu" } };
+  const doc = {
+    title: "我的小红书模板",
+    meta: {
+      templateZone: "xiaohongshu",
+      brandEditableFields: [{
+        nodeId: "title-1", kind: "text", key: "field_1", label: "主标题",
+        semanticRole: "title", constraints: { required: true, maxChars: 20 },
+      }],
+    },
+    pages: [{ children: [{
+      id: "title-1", type: "text", name: "主标题",
+      content: [{ runs: [{ text: "主标题" }] }],
+    }] }],
+  };
   const useEditor = Object.assign(
     (selector: (state: { doc: typeof doc }) => unknown) => selector({ doc }),
     { getState: () => ({ doc }) },
@@ -59,10 +72,11 @@ describe("Xiaohongshu template drafts", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存模板" }));
 
     await waitFor(() => expect(mocks.saveAsTemplate).toHaveBeenCalledWith(expect.objectContaining({
-      designId: "design-1",
+      file: expect.objectContaining({ title: "我的小红书模板" }),
       workspaceId: "workspace-1",
       category: "小红书",
       tags: ["小红书"],
     })));
+    expect(mocks.saveAsTemplate.mock.calls[0][0]).not.toHaveProperty("designId");
   });
 });

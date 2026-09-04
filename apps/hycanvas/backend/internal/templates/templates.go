@@ -362,6 +362,89 @@ type SaveInput struct {
 	FillableFields []any
 }
 
+const canonicalSystemFont = "Noto Sans SC"
+
+// normalizeTemplateTypography makes fillable text deterministic across the
+// browser and server renderer, then records the effective run typography in
+// the field declaration. The design file remains the rendering source of truth.
+func normalizeTemplateTypography(file map[string]any, fields []any) error {
+	textNodes := map[string]map[string]any{}
+	for _, pageRaw := range asArr(file["pages"]) {
+		for _, root := range asArr(asObj(pageRaw)["children"]) {
+			visitTree(asObj(root), func(node map[string]any) {
+				if asStr(node["type"]) == "text" {
+					for _, paragraphRaw := range asArr(node["content"]) {
+						for _, runRaw := range asArr(asObj(paragraphRaw)["runs"]) {
+							style := asObj(asObj(runRaw)["style"])
+							family := strings.TrimSpace(asStr(style["fontFamily"]))
+							if family == "" || strings.EqualFold(family, "system") {
+								style["fontFamily"] = canonicalSystemFont
+							}
+						}
+					}
+					textNodes[asStr(node["id"])] = node
+				}
+			})
+		}
+	}
+	for _, raw := range fields {
+		field := asObj(raw)
+		if asStr(field["kind"]) != "text" {
+			continue
+		}
+		node := textNodes[asStr(field["nodeId"])]
+		if node == nil {
+			return ErrBadRequest
+		}
+		runSnapshots := []any{}
+		paragraphAlign := ""
+		for _, paragraphRaw := range asArr(node["content"]) {
+			paragraph := asObj(paragraphRaw)
+			if paragraphAlign == "" {
+				paragraphAlign = asStr(asObj(paragraph["style"])["align"])
+			}
+			for _, runRaw := range asArr(paragraph["runs"]) {
+				style := asObj(asObj(runRaw)["style"])
+				family := strings.TrimSpace(asStr(style["fontFamily"]))
+				if family == "" {
+					return ErrBadRequest
+				}
+				fontStyle := asStr(style["fontStyle"])
+				weight := int(asNum(asObj(style["axes"])["wght"]))
+				if weight == 0 {
+					if strings.Contains(strings.ToLower(fontStyle), "bold") {
+						weight = 700
+					} else {
+						weight = 400
+					}
+				}
+				snapshot := map[string]any{
+					"fontFamily": family,
+					"fontStyle":  fontStyle,
+					"fontWeight": float64(weight),
+					"fontSize":   asNum(style["fontSize"]),
+				}
+				if value, ok := style["letterSpacing"]; ok {
+					snapshot["letterSpacing"] = value
+				}
+				if value, ok := style["lineHeight"]; ok {
+					snapshot["lineHeight"] = value
+				}
+				runSnapshots = append(runSnapshots, snapshot)
+			}
+		}
+		if len(runSnapshots) == 0 {
+			return ErrBadRequest
+		}
+		typography := map[string]any{"runs": runSnapshots}
+		if paragraphAlign != "" {
+			typography["paragraphAlign"] = paragraphAlign
+		}
+		field["typography"] = typography
+	}
+	return nil
+}
+
 func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInput) (Template, error) {
 	if err := s.access.AssertMember(ctx, userID, in.WorkspaceID, "member"); err != nil {
 		return Template{}, ErrForbidden
@@ -400,6 +483,9 @@ func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInpu
 		return Template{}, ErrBadRequest
 	}
 	if in.FillableFields != nil {
+		if err := normalizeTemplateTypography(file, in.FillableFields); err != nil {
+			return Template{}, err
+		}
 		meta := asObj(file["meta"])
 		meta["brandEditableFields"] = in.FillableFields
 		file["meta"] = meta

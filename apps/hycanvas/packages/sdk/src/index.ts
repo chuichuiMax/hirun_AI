@@ -330,6 +330,19 @@ export interface FillableFieldSummary {
   semanticRole?: "title" | "subtitle" | "project_name" | "project_name_en" | "project_area" | "designer" | "completion_year" | "brand_name" | "label" | "body_excerpt";
   hint?: string;
   constraints?: { maxChars?: number; aspect?: number; required?: boolean };
+  /** Snapshot extracted from the template node when it is saved. The design
+   * file remains the rendering source of truth. */
+  typography?: {
+    paragraphAlign?: "left" | "center" | "right" | "justify";
+    runs: Array<{
+      fontFamily: string;
+      fontStyle: string;
+      fontWeight: number;
+      fontSize: number;
+      letterSpacing?: number;
+      lineHeight?: number | { mode: "auto" | "multiple" | "absolute"; value: number };
+    }>;
+  };
 }
 
 /** One row of fill values, keyed by field nodeId. */

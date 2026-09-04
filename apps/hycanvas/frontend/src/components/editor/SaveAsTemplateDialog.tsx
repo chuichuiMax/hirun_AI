@@ -51,7 +51,6 @@ export function SaveAsTemplateDialog({
   open,
   onClose,
   onSaved,
-  designId,
   workspaceId,
 }: {
   open: boolean;
@@ -113,9 +112,8 @@ export function SaveAsTemplateDialog({
     try {
       await oc.saveAsTemplate({
         workspaceId,
-        // Prefer the saved design (latest snapshot); fall back to the live file.
-        designId: designId ?? undefined,
-        file: designId ? undefined : useEditor.getState().doc,
+        // Loading by designId can race autosave and capture an older style.
+        file: useEditor.getState().doc,
         title: title.trim(),
         category: category.trim() || undefined,
         tags: zoneTag ? [zoneTag] : undefined,

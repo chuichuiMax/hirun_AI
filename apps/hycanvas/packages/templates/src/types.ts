@@ -24,6 +24,18 @@ export interface FillableField {
   semanticRole?: "title" | "subtitle" | "project_name" | "project_name_en" | "project_area" | "designer" | "completion_year" | "brand_name" | "label" | "body_excerpt";
   hint?: string;
   constraints?: { maxChars?: number; aspect?: number; required?: boolean };
+  /** Saved typography contract; node runs remain the rendering source of truth. */
+  typography?: {
+    paragraphAlign?: "left" | "center" | "right" | "justify";
+    runs: Array<{
+      fontFamily: string;
+      fontStyle: string;
+      fontWeight: number;
+      fontSize: number;
+      letterSpacing?: number;
+      lineHeight?: number | { mode: "auto" | "multiple" | "absolute"; value: number };
+    }>;
+  };
 }
 
 /** A brand template's locked structure. The listed node ids are

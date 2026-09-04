@@ -150,6 +150,46 @@ func TestFillTextFieldsPreservesStyle(t *testing.T) {
 	}
 }
 
+func TestNormalizeTemplateTypographyCanonicalizesSystemFontAndRecordsContract(t *testing.T) {
+	file := map[string]any{
+		"pages": []any{map[string]any{"children": []any{map[string]any{
+			"id": "title-node", "type": "text",
+			"content": []any{map[string]any{
+				"runs": []any{map[string]any{"text": "主标题", "style": map[string]any{
+					"fontFamily": "system", "fontStyle": "Bold", "fontSize": 72.0,
+					"axes": map[string]any{"wght": 650.0}, "letterSpacing": 1.5,
+				}}},
+				"style": map[string]any{"align": "center"},
+			}},
+		}}}},
+	}
+	field := map[string]any{"nodeId": "title-node", "kind": "text", "label": "主标题"}
+	if err := normalizeTemplateTypography(file, []any{field}); err != nil {
+		t.Fatalf("normalizeTemplateTypography: %v", err)
+	}
+	node := asObj(asArr(asObj(asArr(file["pages"])[0])["children"])[0])
+	run := asObj(asArr(asObj(asArr(node["content"])[0])["runs"])[0])
+	if got := asStr(asObj(run["style"])["fontFamily"]); got != canonicalSystemFont {
+		t.Fatalf("fontFamily = %q, want %q", got, canonicalSystemFont)
+	}
+	typography := asObj(field["typography"])
+	if asStr(typography["paragraphAlign"]) != "center" {
+		t.Fatalf("paragraphAlign = %q", asStr(typography["paragraphAlign"]))
+	}
+	snapshot := asObj(asArr(typography["runs"])[0])
+	if asStr(snapshot["fontFamily"]) != canonicalSystemFont || int(asNum(snapshot["fontWeight"])) != 650 || asNum(snapshot["fontSize"]) != 72 {
+		t.Fatalf("typography snapshot = %+v", snapshot)
+	}
+}
+
+func TestNormalizeTemplateTypographyRejectsMissingTextNode(t *testing.T) {
+	file := map[string]any{"pages": []any{}}
+	fields := []any{map[string]any{"nodeId": "missing", "kind": "text", "label": "主标题"}}
+	if err := normalizeTemplateTypography(file, fields); err != ErrBadRequest {
+		t.Fatalf("expected ErrBadRequest, got %v", err)
+	}
+}
+
 func TestFillTextFieldsDoesNotChangeTemplateStyleOrStructure(t *testing.T) {
 	file := map[string]any{
 		"pages": []any{map[string]any{"children": []any{map[string]any{
