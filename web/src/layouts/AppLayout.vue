@@ -21,6 +21,7 @@ import {
   Layers,
   PanelsTopLeft,
   Braces,
+  ListTree,
   ChevronRight,
   ChevronDown
 } from 'lucide-vue-next'
@@ -240,6 +241,12 @@ const mainList = computed(() => {
         path: '/config-manage/variables',
         icon: Braces,
         activeIcon: Braces
+      },
+      {
+        name: '业务变量配置',
+        path: '/config-manage/business-variables',
+        icon: ListTree,
+        activeIcon: ListTree
       }
     ]
   })

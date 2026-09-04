@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yuxi.repositories.material_library_repository import IMAGE_OCCUPANCY_RELEASED_STATUSES
 from yuxi.storage.postgres.models_content import (
     ContentArtifact,
     ContentArtifactVersion,
@@ -180,6 +181,7 @@ class ContentCoverRepository:
             ContentTask.created_by == owner_uid,
             ContentTask.selected_poster_template_id == template_id,
             ContentTask.deleted_at.is_(None),
+            ContentTask.status.notin_(IMAGE_OCCUPANCY_RELEASED_STATUSES),
         ]
         if locked_only:
             filters.append(ContentTask.current_stage != "brief")

@@ -24,12 +24,17 @@ from yuxi.content.schemas import (
     ContentTaskCreate,
     ContentVisualMaterialSelection,
 )
-from yuxi.content.service_entry_form import BRAND_NAME, map_service_entry_form_values
+from yuxi.content.service_entry_form import (
+    BRAND_NAME,
+    configured_business_variable_fields,
+    map_service_entry_form_values,
+)
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.cover_repository import CoverRepository
 from yuxi.repositories.employee_repository import EmployeeRepository
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
 from yuxi.services.agent_run_service import stream_agent_run_events
+from yuxi.services.business_variable_service import list_business_variables
 from yuxi.services.content_cover_service import create_cover_asset, get_cover_asset_file
 from yuxi.services.material_library_service import get_material_file, list_image_galleries, list_material_items
 from yuxi.services.content_service import (
@@ -48,7 +53,7 @@ from yuxi.services.content_type_service import ensure_default_content_types, lis
 from yuxi.services.employee_service import ensure_platform_user
 from yuxi.services.run_queue_service import get_redis_client, list_run_stream_events
 from yuxi.services.user_identity_service import is_valid_phone_number, normalize_phone_number
-from yuxi.services.variable_service import SERVICE_ENTRIES, ensure_default_variables, list_variables
+from yuxi.services.variable_service import SERVICE_ENTRIES, ensure_default_variables
 from yuxi.storage.minio.client import StorageError, get_minio_client
 from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import ContentArtifact, ContentEmployee, ContentMpFavorite, ContentTask
@@ -404,6 +409,7 @@ def build_mp_brief_payload(
     service_entry: str,
     form_values: dict[str, Any],
     content_type_name: str,
+    content_type_id: str | None,
     cover_asset_id: str,
     cover_template_id: str | None,
     content_code: str,
@@ -414,6 +420,7 @@ def build_mp_brief_payload(
     values = {str(key): value for key, value in form_values.items()}
     values["mp_service_entry"] = service_entry
     values["mp_content_code"] = content_code
+    values["mp_content_type_id"] = content_type_id or ""
     values["mp_content_type_name"] = content_type_name
     values["cover_asset_id"] = photo_ids[0]
     values["cover_asset_ids"] = photo_ids
@@ -757,27 +764,49 @@ async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any
         raise _mp_error(422, "MP_SERVICE_ENTRY_INVALID", "服务入口不存在")
     await ensure_default_content_types(db)
     await ensure_default_variables(db)
+    bindings = (await list_business_variables(db))["business_variables"]
     types = [item for item in (await list_content_types(db))["content_types"] if item["enabled"]]
-    variables = [
-        item
-        for item in (await list_variables(db))["variables"]
-        if (
-            item["enabled"]
-            and item["service_entry"] == service_entry
-            and "app" in item["ports"]
-            and "quick" in item["editions"]
+    content_types: list[dict[str, Any]] = []
+    flat_variables: list[dict[str, Any]] = []
+    requires_content_type = service_entry == "装修家居"
+    if requires_content_type:
+        for content_type in types:
+            fields = configured_business_variable_fields(
+                bindings,
+                service_entry=service_entry,
+                content_type_id=content_type["id"],
+                port="app",
+            )
+            for field in fields:
+                field["content_type_code"] = content_type["type_code"]
+            content_types.append({**content_type, "variables": fields})
+            flat_variables.extend(fields)
+    else:
+        # 好评笔记无内容类型步骤，直接展示业务变量配置中的字段。
+        flat_variables = configured_business_variable_fields(
+            bindings,
+            service_entry=service_entry,
+            content_type_id=None,
+            port="app",
         )
-    ]
     covers = [_cover_template_item(item) for item in await CoverRepository(db).list_enabled()]
     hycanvas_templates = await _list_mp_hycanvas_templates() if service_entry == "装修家居" else []
     return {
         "service_entry": service_entry,
+        "requires_content_type": requires_content_type,
         "service_entries": [
             {"value": "装修家居", "label": "装修家居", "goal": "acquire"},
             {"value": "好评笔记", "label": "好评笔记", "goal": "brand"},
         ],
-        "content_types": types,
-        "variables": variables,
+        "content_types": content_types,
+        "variables": flat_variables,
+        "business_variable_bindings": [
+            item
+            for item in bindings
+            if item.get("service_entry") == service_entry
+            and item.get("enabled")
+            and "app" in (item.get("ports") or [])
+        ],
         "frame_areas": [_frame_area_payload(item) for item in FRAME_AREA_PRICING]
         if service_entry == "装修家居"
         else [],
@@ -933,6 +962,18 @@ async def compile_brief(db: AsyncSession, ctx: MpContext, payload: MpCompileBrie
     ct_code = map_nrlx_to_ct_code(selected_type["type_code"], selected_type["name"])
     goal = resolve_content_goal(payload.service_entry, ct_code)
     template = await _decoration_template(db)
+    form_fields = configured_business_variable_fields(
+        (await list_business_variables(db))["business_variables"],
+        service_entry=payload.service_entry,
+        content_type_id=selected_type["id"] if payload.service_entry == "装修家居" else None,
+        port="app",
+    )
+    for field in form_fields:
+        if not field.get("required"):
+            continue
+        if str((payload.form_values or {}).get(field["key"]) or "").strip():
+            continue
+        raise _mp_error(422, "MP_VARIABLE_REQUIRED", f"请填写{field['label']}")
     visual_material = None
     cover_asset_id = payload.cover_asset_id
     if payload.service_entry == "装修家居":
@@ -962,6 +1003,7 @@ async def compile_brief(db: AsyncSession, ctx: MpContext, payload: MpCompileBrie
         service_entry=payload.service_entry,
         form_values=payload.form_values,
         content_type_name=selected_type["name"],
+        content_type_id=selected_type["id"],
         cover_asset_id=cover_asset_id,
         cover_asset_ids=payload.cover_asset_ids,
         cover_template_id=payload.cover_template_id,

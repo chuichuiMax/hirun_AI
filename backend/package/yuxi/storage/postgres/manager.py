@@ -979,6 +979,56 @@ class PostgresManager(metaclass=SingletonMeta):
                 "ON content_variables (name)"
             ),
             "CREATE INDEX IF NOT EXISTS ix_content_variables_service_entry ON content_variables (service_entry)",
+            (
+                "ALTER TABLE IF EXISTS content_business_variables "
+                "ADD COLUMN IF NOT EXISTS service_entry VARCHAR(64)"
+            ),
+            (
+                "UPDATE content_business_variables AS binding "
+                "SET service_entry = COALESCE(variable.service_entry, '装修家居') "
+                "FROM content_variables AS variable "
+                "WHERE binding.variable_id = variable.id "
+                "AND (binding.service_entry IS NULL OR binding.service_entry = '')"
+            ),
+            (
+                "UPDATE content_business_variables "
+                "SET service_entry = '装修家居' "
+                "WHERE service_entry IS NULL OR service_entry = ''"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_business_variables "
+                "ALTER COLUMN service_entry SET DEFAULT '装修家居'"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_business_variables "
+                "ALTER COLUMN service_entry SET NOT NULL"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_business_variables "
+                "ALTER COLUMN content_type_id SET DEFAULT ''"
+            ),
+            (
+                "UPDATE content_business_variables "
+                "SET content_type_id = '' "
+                "WHERE content_type_id IS NULL"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_business_variables "
+                "DROP CONSTRAINT IF EXISTS uq_content_business_variables_type_variable"
+            ),
+            "DROP INDEX IF EXISTS uq_content_business_variables_type_variable",
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_business_variables_entry_type_variable "
+                "ON content_business_variables (service_entry, content_type_id, variable_id)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_business_variables_service_entry "
+                "ON content_business_variables (service_entry)"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_business_variables "
+                "ADD COLUMN IF NOT EXISTS ports JSONB NOT NULL DEFAULT '[\"pc\",\"app\"]'::jsonb"
+            ),
         ]
         async with self.async_engine.begin() as conn:
             await conn.execute(

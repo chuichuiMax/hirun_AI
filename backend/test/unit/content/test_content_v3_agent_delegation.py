@@ -1297,6 +1297,34 @@ def test_research_agent_additive_migration_preserves_user_configuration():
     assert existing.config_json["context"]["model_retry_times"] == 1
 
 
+def test_research_agent_additive_migration_from_version_3():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-research-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={
+            "context": {
+                "skills": ["content-evidence-researcher", "strategy-product-researcher"],
+                "skill_tool_allowlist": list(spec.skill_tools),
+                "model": "provider:user-model",
+            }
+        },
+        enabled=True,
+        config_version=3,
+        is_subagent=False,
+        created_by="system",
+        updated_by="user-1",
+    )
+
+    assert migrate_system_content_agent(existing, spec) is True
+    assert existing.config_version == spec.config_version
+    assert existing.updated_by == "user-1"
+    assert set(existing.config_json["context"]["skills"]) == set(spec.skills)
+    assert "viral-reference-selector" in existing.config_json["context"]["skills"]
+    validate_existing_content_agent(existing, spec)
+
+
 def test_research_agent_runtime_budget_migration_preserves_user_knowledge_bases():
     spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-research-agent")
     existing = Agent(

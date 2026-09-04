@@ -1683,6 +1683,46 @@ class ContentVariable(Base):
         }
 
 
+class ContentBusinessVariable(Base):
+    """内容类型与业务参数的绑定配置。"""
+
+    __tablename__ = "content_business_variables"
+    __table_args__ = (
+        UniqueConstraint(
+            "service_entry",
+            "content_type_id",
+            "variable_id",
+            name="uq_content_business_variables_entry_type_variable",
+        ),
+    )
+
+    id = Column(String(64), primary_key=True)
+    service_entry = Column(String(64), nullable=False, index=True, default="装修家居")
+    # 空字符串表示无需内容类型（如好评笔记）
+    content_type_id = Column(String(64), nullable=False, default="", index=True)
+    variable_id = Column(String(64), nullable=False, index=True)
+    ports = Column(JSON, nullable=False, default=list)
+    required = Column(Boolean, nullable=False, default=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "service_entry": self.service_entry,
+            "content_type_id": self.content_type_id or None,
+            "variable_id": self.variable_id,
+            "ports": list(self.ports or []),
+            "required": bool(self.required),
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
 class ContentCover(Base):
     """内容封面。"""
 

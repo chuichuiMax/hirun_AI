@@ -29,6 +29,7 @@ DEFAULT_VARIABLES: tuple[tuple[str, str, str, bool], ...] = (
     ("FWTD0007", "基础", "装修家居", True),
     ("FWTD0008", "木制品", "装修家居", True),
     ("FWTD0009", "主材", "装修家居", True),
+    ("FWTD0019", "项目阶段", "装修家居", True),
 )
 
 

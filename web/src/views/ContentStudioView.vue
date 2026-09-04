@@ -30,6 +30,8 @@ import {
   Tags,
   UserRoundCog,
   WandSparkles,
+  ClipboardList,
+  MessageSquare,
   X
 } from 'lucide-vue-next'
 import AgentInputArea from '@/components/AgentInputArea.vue'
@@ -321,23 +323,59 @@ const reviewNotePhotoIds = computed(() =>
 )
 const REVIEW_NOTE_PHOTO_LIMIT = 3
 const REVIEW_NOTE_PHOTO_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const FIELD_SELECT_OPTIONS = {
+  外框面积: ['50-70㎡', '90-110㎡', '110-130㎡', '130-150㎡', '150-200㎡', '200-300㎡', '300㎡以上'],
+  设计风格: ['现代简约', '轻奢', '新中式', '北欧', '奶油风', '原木风'],
+  项目阶段: ['拆改阶段', '水电阶段', '泥木阶段', '油漆阶段', '竣工交付']
+}
+const FIELD_PLACEHOLDERS = {
+  目标人群: '示例：毛坯装修三口之家',
+  楼盘信息: '示例：洋湖天序',
+  项目阶段: '请选择工种'
+}
 const studioEdition = computed(() => (store.task ? store.task.mode : creation.mode) === 'pro' ? 'pro' : 'quick')
-const activeFields = computed(() =>
-  (store.contentVariables || [])
-    .filter(
-      (item) =>
-        item.enabled &&
-        item.service_entry === studioServiceEntry.value &&
-        (item.ports || []).includes('pc') &&
-        (item.editions || []).includes(studioEdition.value)
-    )
-    .map((item) => ({
-      key: item.name,
-      label: item.name,
-      type: 'textarea',
-      required: true
-    }))
-)
+const selectedContentTypeId = ref('')
+const studioContentTypes = computed(() => {
+  const enabledTypes = (store.managedContentTypes || []).filter((item) => item.enabled !== false)
+  const boundIds = new Set(
+    (store.businessVariableBindings || [])
+      .filter(
+        (item) =>
+          item.enabled &&
+          item.service_entry === '装修家居' &&
+          (item.ports || []).includes('pc') &&
+          item.content_type_id
+      )
+      .map((item) => item.content_type_id)
+  )
+  return enabledTypes.filter((item) => boundIds.has(item.id))
+})
+const activeFields = computed(() => {
+  const bindings = store.businessVariableBindings || []
+  const entry = studioServiceEntry.value
+  const contentTypeId = selectedContentTypeId.value
+  return bindings
+    .filter((item) => {
+      if (!item.enabled || item.service_entry !== entry) return false
+      if (!(item.ports || []).includes('pc')) return false
+      if (entry === '好评笔记') return !item.content_type_id
+      return Boolean(contentTypeId) && item.content_type_id === contentTypeId
+    })
+    .map((item) => {
+      const name = item.variable_name
+      const options = FIELD_SELECT_OPTIONS[name]
+      return {
+        key: name,
+        label: name,
+        type: options ? 'select' : 'text',
+        required: Boolean(item.required),
+        options: options || [],
+        placeholder: options
+          ? `请选择${name}`
+          : FIELD_PLACEHOLDERS[name] || `请输入${name}`
+      }
+    })
+})
 const isQuickMode = computed(() => studioEdition.value === 'quick')
 const titleOptions = computed(
   () => store.interrupt?.options || store.task?.title_candidates || []
@@ -576,10 +614,6 @@ const stageFromTask = (task) => {
 const initializeFormValues = () => {
   Object.keys(formValues).forEach((key) => delete formValues[key])
   const saved = store.task?.brief?.form_values || {}
-  activeFields.value.forEach((field) => {
-    if (saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
-    else formValues[field.key] = ''
-  })
   const savedEntry = saved.mp_service_entry
   if (savedEntry) {
     formValues.mp_service_entry = savedEntry
@@ -587,6 +621,30 @@ const initializeFormValues = () => {
   } else {
     formValues.mp_service_entry = creation.service_entry || '装修家居'
   }
+  selectedContentTypeId.value = saved.mp_content_type_id || selectedContentTypeId.value || ''
+  formValues.mp_content_type_id = selectedContentTypeId.value
+  const contentType = studioContentTypes.value.find((item) => item.id === selectedContentTypeId.value)
+  formValues.mp_content_type_name = contentType?.name || saved.mp_content_type_name || ''
+  activeFields.value.forEach((field) => {
+    if (saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
+    else formValues[field.key] = ''
+  })
+}
+
+const onContentTypeChange = (value) => {
+  selectedContentTypeId.value = value || ''
+  const saved = store.task?.brief?.form_values || {}
+  const contentType = studioContentTypes.value.find((item) => item.id === selectedContentTypeId.value)
+  formValues.mp_content_type_id = selectedContentTypeId.value
+  formValues.mp_content_type_name = contentType?.name || ''
+  const keepKeys = new Set(['mp_service_entry', 'mp_content_type_id', 'mp_content_type_name'])
+  Object.keys(formValues).forEach((key) => {
+    if (!keepKeys.has(key)) delete formValues[key]
+  })
+  activeFields.value.forEach((field) => {
+    if (saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
+    else formValues[field.key] = ''
+  })
 }
 
 const revokePreviewUrls = (urls) => {
@@ -1265,6 +1323,10 @@ onBeforeUnmount(() => {
 })
 
 const compileBrief = async () => {
+  if (!isReviewNotes.value && !selectedContentTypeId.value) {
+    message.warning('请选择内容类型')
+    return
+  }
   const missing = activeFields.value.find(
     (field) => field.required && !String(formValues[field.key] || '').trim()
   )
@@ -1616,31 +1678,69 @@ const openVersions = async () => {
                 <small v-if="saveStatusLabel" :class="{ 'save-error': store.saveStatus === 'error' }">{{ saveStatusLabel }}</small>
               </div>
               <div class="dynamic-form">
-                <a-empty
-                  v-if="!activeFields.length"
-                  description="当前服务入口没有可用于 PC 的业务参数，请在业务参数配置中启用"
-                />
-                <label v-for="field in activeFields" :key="field.key" class="field-block">
-                  <span>{{ field.label }}<em v-if="field.required">*</em></span>
-                  <a-input
-                    v-if="field.type === 'text'"
-                    v-model:value="formValues[field.key]"
-                    :placeholder="field.placeholder || `请输入${field.label}`"
-                  />
-                  <a-textarea
-                    v-else-if="field.type === 'textarea'"
-                    v-model:value="formValues[field.key]"
-                    :rows="3"
-                    :placeholder="field.placeholder || `请输入${field.label}`"
-                  />
-                  <a-select
-                    v-else-if="field.type === 'tags'"
-                    v-model:value="formValues[field.key]"
-                    mode="tags"
-                    :token-separators="[',', '，']"
-                    :placeholder="`输入${field.label}后回车`"
-                  />
-                </label>
+                <section v-if="!isReviewNotes" class="brief-section task-section">
+                  <header class="brief-section-head">
+                    <ClipboardList :size="16" />
+                    <strong>任务</strong>
+                  </header>
+                  <label class="field-block content-type-field">
+                    <span>内容类型<em>*</em></span>
+                    <a-select
+                      :value="selectedContentTypeId"
+                      allow-clear
+                      placeholder="请选择内容类型"
+                      :options="studioContentTypes.map((item) => ({ label: item.name, value: item.id }))"
+                      @change="onContentTypeChange"
+                    />
+                  </label>
+                </section>
+
+                <section class="brief-section variables-section">
+                  <header class="brief-section-head">
+                    <MessageSquare :size="16" />
+                    <strong>业务变量</strong>
+                    <small>模板字段可由企业管理员配置</small>
+                  </header>
+                  <div class="variables-grid">
+                    <a-empty
+                      v-if="!isReviewNotes && !selectedContentTypeId"
+                      description="请先选择内容类型"
+                    />
+                    <a-empty
+                      v-else-if="!activeFields.length"
+                      description="当前内容类型没有可用于 PC 的业务变量，请在业务变量配置中启用"
+                    />
+                    <label v-for="field in activeFields" :key="field.key" class="field-block">
+                      <span>{{ field.label }}<em v-if="field.required">*</em></span>
+                      <a-input
+                        v-if="field.type === 'text'"
+                        v-model:value="formValues[field.key]"
+                        :placeholder="field.placeholder || `请输入${field.label}`"
+                      />
+                      <a-textarea
+                        v-else-if="field.type === 'textarea'"
+                        v-model:value="formValues[field.key]"
+                        :rows="3"
+                        :placeholder="field.placeholder || `请输入${field.label}`"
+                      />
+                      <a-select
+                        v-else-if="field.type === 'select'"
+                        v-model:value="formValues[field.key]"
+                        allow-clear
+                        :placeholder="field.placeholder || `请选择${field.label}`"
+                        :options="(field.options || []).map((item) => ({ label: item, value: item }))"
+                      />
+                      <a-select
+                        v-else-if="field.type === 'tags'"
+                        v-model:value="formValues[field.key]"
+                        mode="tags"
+                        :token-separators="[',', '，']"
+                        :placeholder="`输入${field.label}后回车`"
+                      />
+                    </label>
+                  </div>
+                </section>
+
                 <div v-if="isReviewNotes" class="review-photo-block">
                   <div class="review-photo-grid">
                     <div
@@ -1707,7 +1807,7 @@ const openVersions = async () => {
               <div class="material-selector-block">
                 <div class="material-selector-title">
                   <div><Image :size="18" /><strong>选择图库图片</strong><em>可选 · 单选</em></div>
-                  <small>可从当前账号的图库中选择一张已启用且未被其他内容占用的图片；不选择也可以进入内容生产。</small>
+                  <small>可从当前账号的图库中选择一张已启用且未被其他有效内容占用的图片；失败或已取消任务占用的图可重新选用；不选择也可以进入内容生产。</small>
                   <div><Image :size="18" /><strong>选择图库图片</strong><em>必选 · 单选</em></div>
                   <small>从当前账号的图库中选择一张已启用图片，作为 HyCanvas 封面主图。</small>
                 </div>
@@ -2440,7 +2540,7 @@ const openVersions = async () => {
           </div>
         </section>
         <div class="gallery-modal-heading">
-          <p>{{ activeMaterialGalleryChildren.length ? '当前一级图库中的图片' : '从当前图库中选择一张图片；已被其他内容任务使用的图片会标记为已使用且不能再选。选择将在点击“确认选择”后保存到业务简报。' }}</p>
+          <p>{{ activeMaterialGalleryChildren.length ? '当前一级图库中的图片' : '从当前图库中选择一张图片；已被其他有效内容任务使用的图片会标记为已使用且不能再选，失败或已取消任务占用的图可重新选用。选择将在点击“确认选择”后保存到业务简报。' }}</p>
           <span>{{ galleryImages.length }} 张图片</span>
         </div>
         <div v-if="galleryImagesLoading" class="material-loading-row">
@@ -2539,8 +2639,15 @@ const openVersions = async () => {
 
 .form-card, .facts-preview, .human-review-card, .running-card, .content-editor-card, .review-sidebar { border: 1px solid var(--gray-150); border-radius: 8px; padding: 20px; background: var(--gray-0); }
 .form-card, .content-editor-card { display: flex; flex-direction: column; gap: 18px; }
-.dynamic-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.dynamic-form .field-block:has(textarea), .dynamic-form .field-block:has(.ant-select-multiple), .review-photo-block { grid-column: 1 / -1; }
+.dynamic-form { display: flex; flex-direction: column; gap: 18px; }
+.brief-section { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 10px; background: var(--gray-50); }
+.brief-section-head { display: flex; align-items: center; gap: 8px; color: var(--color-text); }
+.brief-section-head strong { font-size: 14px; }
+.brief-section-head small { margin-left: auto; color: var(--color-text-tertiary); font-size: 12px; }
+.variables-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.variables-grid > .ant-empty { grid-column: 1 / -1; }
+.variables-grid .field-block:has(textarea), .variables-grid .field-block:has(.ant-select-multiple), .review-photo-block { grid-column: 1 / -1; }
+.content-type-field { max-width: 420px; }
 .review-photo-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .review-photo-item, .review-photo-add {
   position: relative;
@@ -2887,9 +2994,9 @@ const openVersions = async () => {
   .result-detail-cover { min-height: 340px; padding: 16px; }
   .result-detail-content { padding: 0 16px; }
   .result-detail-footer :deep(.ant-btn) { min-width: 0; flex: 1; }
-  .template-grid, .dynamic-form { grid-template-columns: 1fr; }
+  .template-grid, .variables-grid { grid-template-columns: 1fr; }
   .hycanvas-template-grid, .hycanvas-fields { grid-template-columns: 1fr; }
-  .dynamic-form .field-block { grid-column: auto; }
+  .variables-grid .field-block { grid-column: auto; }
   .header-actions, .stage-actions, .stage-actions.split, .editor-actions { width: 100%; flex-direction: column; }
   .visual-material-heading, .material-selector-title { flex-direction: column; }
   .material-selector-title small { text-align: left; }

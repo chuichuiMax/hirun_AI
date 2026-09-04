@@ -215,6 +215,15 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
                 ),
             },
             "content-research-agent": {
+                3: (
+                    ("viral-reference-selector",),
+                    {"content-evidence-researcher", "strategy-product-researcher"},
+                    {
+                        "reasoning_effort": spec.reasoning_effort,
+                        "model_call_timeout_seconds": spec.model_call_timeout_seconds,
+                        "model_retry_times": spec.model_retry_times,
+                    },
+                ),
                 4: (
                     ("viral-reference-selector",),
                     {"content-evidence-researcher", "strategy-product-researcher"},

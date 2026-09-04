@@ -1,4 +1,8 @@
-from yuxi.content.service_entry_form import configured_form_fields, map_service_entry_form_values
+from yuxi.content.service_entry_form import (
+    configured_business_variable_fields,
+    configured_form_fields,
+    map_service_entry_form_values,
+)
 
 
 def test_configured_form_fields_filters_port_edition_and_entry():
@@ -41,6 +45,88 @@ def test_configured_form_fields_filters_port_edition_and_entry():
     assert [item["key"] for item in fields] == ["楼盘信息"]
 
     review_fields = configured_form_fields(variables, service_entry="好评笔记", port="pc", edition="quick")
+    assert [item["key"] for item in review_fields] == ["设计师"]
+
+
+def test_configured_business_variable_fields_filters_by_content_type_and_required():
+    bindings = [
+        {
+            "variable_name": "目标人群",
+            "service_entry": "装修家居",
+            "content_type_id": "ct-process",
+            "ports": ["pc", "app"],
+            "required": True,
+            "enabled": True,
+        },
+        {
+            "variable_name": "楼盘信息",
+            "service_entry": "装修家居",
+            "content_type_id": "ct-process",
+            "ports": ["pc"],
+            "required": False,
+            "enabled": True,
+        },
+        {
+            "variable_name": "外框面积",
+            "service_entry": "装修家居",
+            "content_type_id": "ct-process",
+            "ports": ["pc"],
+            "required": True,
+            "enabled": True,
+        },
+        {
+            "variable_name": "目标人群",
+            "service_entry": "装修家居",
+            "content_type_id": "ct-quote",
+            "ports": ["pc"],
+            "required": True,
+            "enabled": True,
+        },
+        {
+            "variable_name": "设计师",
+            "service_entry": "好评笔记",
+            "content_type_id": None,
+            "ports": ["pc"],
+            "required": True,
+            "enabled": True,
+        },
+        {
+            "variable_name": "主材",
+            "service_entry": "装修家居",
+            "content_type_id": "ct-process",
+            "ports": ["app"],
+            "required": True,
+            "enabled": True,
+        },
+    ]
+
+    fields = configured_business_variable_fields(
+        bindings,
+        service_entry="装修家居",
+        content_type_id="ct-process",
+        port="pc",
+    )
+    assert [(item["key"], item["required"], item["type"]) for item in fields] == [
+        ("目标人群", True, "text"),
+        ("楼盘信息", False, "text"),
+        ("外框面积", True, "select"),
+    ]
+    assert fields[0]["name"] == "目标人群"
+
+    empty = configured_business_variable_fields(
+        bindings,
+        service_entry="装修家居",
+        content_type_id="",
+        port="pc",
+    )
+    assert empty == []
+
+    review_fields = configured_business_variable_fields(
+        bindings,
+        service_entry="好评笔记",
+        content_type_id=None,
+        port="pc",
+    )
     assert [item["key"] for item in review_fields] == ["设计师"]
 
 

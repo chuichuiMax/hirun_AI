@@ -12,6 +12,7 @@ from yuxi.services.material_library_categories import (
     normalize_material_category,
     validate_material_category,
 )
+from yuxi.repositories.material_library_repository import IMAGE_OCCUPANCY_RELEASED_STATUSES
 from yuxi.storage.minio.client import MinIOClient
 from yuxi.storage.postgres.models_content import (
     ContentCoverAsset,
@@ -19,6 +20,27 @@ from yuxi.storage.postgres.models_content import (
     ContentMaterialCategory,
     ContentMaterialLibraryItem,
 )
+
+
+def test_failed_and_cancelled_tasks_release_image_occupancy():
+    assert IMAGE_OCCUPANCY_RELEASED_STATUSES == frozenset({"failed", "cancelled"})
+    from sqlalchemy import func, select
+
+    from yuxi.storage.postgres.models_content import ContentTask
+
+    sql = str(
+        select(func.count(ContentTask.id))
+        .where(
+            ContentTask.created_by == "owner",
+            ContentTask.selected_image_item_id == "mli_1",
+            ContentTask.deleted_at.is_(None),
+            ContentTask.status.notin_(IMAGE_OCCUPANCY_RELEASED_STATUSES),
+        )
+        .compile(compile_kwargs={"literal_binds": True})
+    )
+    assert "content_tasks.status NOT IN ('cancelled', 'failed')" in sql or (
+        "failed" in sql and "cancelled" in sql and "NOT IN" in sql
+    )
 
 
 def test_material_library_bucket_defaults_to_image():

@@ -225,6 +225,12 @@ const router = createRouter({
           name: 'VariableConfigComp',
           component: () => import('../views/VariableConfigView.vue'),
           meta: { keepAlive: false, requiresAuth: true },
+        },
+        {
+          path: 'business-variables',
+          name: 'BusinessVariableConfigComp',
+          component: () => import('../views/BusinessVariableConfigView.vue'),
+          meta: { keepAlive: false, requiresAuth: true },
         }
       ]
     },

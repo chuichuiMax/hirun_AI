@@ -82,6 +82,8 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
   const templates = computed(() => bootstrap.value?.industry_templates || [])
   const contentGoals = computed(() => bootstrap.value?.content_goals || [])
   const contentVariables = computed(() => bootstrap.value?.content_variables || [])
+  const managedContentTypes = computed(() => bootstrap.value?.managed_content_types || [])
+  const businessVariableBindings = computed(() => bootstrap.value?.business_variable_bindings || [])
   const evidence = computed(() => task.value?.evidence_bundle || { items: [] })
 
   async function loadBootstrap(force = false) {
@@ -440,6 +442,8 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
     templates,
     contentGoals,
     contentVariables,
+    managedContentTypes,
+    businessVariableBindings,
     evidence,
     loadBootstrap,
     createTask,

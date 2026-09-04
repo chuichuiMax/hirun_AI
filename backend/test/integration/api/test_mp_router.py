@@ -72,10 +72,17 @@ async def test_mp_sms_login_me_schema_and_pc_token_isolation(test_client, admin_
         assert schema.status_code == 200, schema.text
         data = schema.json()
         assert data["service_entry"] == "装修家居"
+        assert data["requires_content_type"] is True
         assert {item["value"] for item in data["service_entries"]} == {"装修家居", "好评笔记"}
         assert all(item["enabled"] for item in data["content_types"])
-        assert all(item["service_entry"] == "装修家居" for item in data["variables"])
-        assert all("app" in item["ports"] and "quick" in item["editions"] for item in data["variables"])
+        process_type = next(item for item in data["content_types"] if item["name"] == "工艺施工展示")
+        process_keys = {field["key"] for field in process_type["variables"]}
+        assert {"目标人群", "楼盘信息", "外框面积", "项目阶段"} <= process_keys
+        assert any(field["key"] == "楼盘信息" and field["required"] is False for field in process_type["variables"])
+        assert any(field["key"] == "外框面积" and field["type"] == "select" for field in process_type["variables"])
+        assert all(item.get("content_type_id") for item in data["variables"])
+        assert all("app" in item["ports"] for item in data["variables"])
+        assert data["business_variable_bindings"]
         assert data["frame_areas"][0]["value"] == "50-70㎡"
         assert data["frame_areas"][0]["quote_choices"]["基础"] == ["4万", "4.5万", "5万"]
         assert "北欧" in data["design_styles"]
@@ -99,9 +106,14 @@ async def test_mp_sms_login_me_schema_and_pc_token_isolation(test_client, admin_
         assert review_schema.status_code == 200, review_schema.text
         review_data = review_schema.json()
         assert review_data["service_entry"] == "好评笔记"
+        assert review_data["requires_content_type"] is False
+        assert review_data["content_types"] == []
         assert review_data["regions"][0] == "长沙市"
         assert review_data["region_tree"] == data["region_tree"]
         assert review_data["hycanvas_templates"] == []
+        assert {item["key"] for item in review_data["variables"]} >= {"设计师", "预算师", "项目经理", "客户经理"}
+        assert all(not item.get("content_type_id") for item in review_data["variables"])
+        assert any(item["key"] == "工匠" and item["required"] is False for item in review_data["variables"])
 
         pricing = await test_client.get(
             "/api/mp/content/pricing",
@@ -165,6 +177,33 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
         assert schema.status_code == 200, schema.text
         schema_data = schema.json()
         type_code = next(item["type_code"] for item in schema_data["content_types"] if item["name"] == "工艺施工展示")
+        process_vars = next(item["variables"] for item in schema_data["content_types"] if item["name"] == "工艺施工展示")
+        form_values = {
+            field["key"]: (
+                "毛坯装修三口之家"
+                if field["key"] == "目标人群"
+                else "星河湾"
+                if field["key"] == "楼盘信息"
+                else "50-70㎡"
+                if field["key"] == "外框面积"
+                else "水电阶段"
+                if field["key"] == "项目阶段"
+                else "示例"
+            )
+            for field in process_vars
+            if field.get("required")
+        }
+        form_values.update(
+            {
+                "楼盘信息": "星河湾",
+                "外框面积": "50-70㎡",
+                "基础": "4-5万",
+                "木制品": "2-3万",
+                "主材": "2-3万",
+                "设计风格": "北欧",
+                "所在区域": "长沙市 岳麓区",
+            }
+        )
         hycanvas_templates = schema_data["hycanvas_templates"]
         assert hycanvas_templates, "装修家居表单应列出 HyCanvas 小红书模板"
         hycanvas_template_id = hycanvas_templates[0]["id"]
@@ -176,15 +215,7 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
                 "service_entry": "装修家居",
                 "content_type_code": type_code,
                 "cover_asset_id": cover_asset_id,
-                "form_values": {
-                    "楼盘信息": "星河湾",
-                    "外框面积": "50-70㎡",
-                    "基础": "4-5万",
-                    "木制品": "2-3万",
-                    "主材": "2-3万",
-                    "设计风格": "北欧",
-                    "所在区域": "长沙市 岳麓区",
-                },
+                "form_values": form_values,
             },
         )
         assert missing_template.status_code == 422, missing_template.text
@@ -198,15 +229,7 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
                 "content_type_code": type_code,
                 "cover_asset_id": cover_asset_id,
                 "hycanvas_template_id": hycanvas_template_id,
-                "form_values": {
-                    "楼盘信息": "星河湾",
-                    "外框面积": "50-70㎡",
-                    "基础": "4-5万",
-                    "木制品": "2-3万",
-                    "主材": "2-3万",
-                    "设计风格": "北欧",
-                    "所在区域": "长沙市 岳麓区",
-                },
+                "form_values": form_values,
             },
         )
         assert compiled.status_code == 200, compiled.text
@@ -243,15 +266,7 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
                 "content_type_code": type_code,
                 "cover_asset_id": cover_asset_id,
                 "hycanvas_template_id": hycanvas_template_id,
-                "form_values": {
-                    "楼盘信息": "星河湾",
-                    "外框面积": "50-70㎡",
-                    "基础": "4-5万",
-                    "木制品": "2-3万",
-                    "主材": "2-3万",
-                    "设计风格": "北欧",
-                    "所在区域": "长沙市 岳麓区",
-                },
+                "form_values": form_values,
             },
         )
         assert reuse.status_code == 409, reuse.text

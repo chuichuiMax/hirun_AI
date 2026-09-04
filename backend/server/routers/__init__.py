@@ -24,6 +24,7 @@ from server.routers.employee_router import employees
 from server.routers.role_router import roles
 from server.routers.content_type_router import content_types
 from server.routers.variable_router import content_variables
+from server.routers.business_variable_router import content_business_variables
 from server.routers.mp_router import mp
 from server.routers.material_library_router import material_library
 
@@ -56,7 +57,8 @@ router.include_router(accounts)  # /api/accounts/* 内容发布账号管理
 router.include_router(employees)  # /api/employees/* 内容发布员工管理
 router.include_router(roles)  # /api/roles/* 内容发布角色与权限配置
 router.include_router(content_types)  # /api/content-types/* 内容类型配置
-router.include_router(content_variables)  # /api/content-variables/* 变量配置
+router.include_router(content_variables)  # /api/content-variables/* 业务参数配置
+router.include_router(content_business_variables)  # /api/content-business-variables/* 业务变量配置
 router.include_router(material_library)  # /api/material-library/* 素材库
 router.include_router(mp)  # /api/mp/* 获客小程序
 

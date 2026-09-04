@@ -125,6 +125,7 @@ def test_build_mp_brief_payload_maps_decoration_fields_to_v3_variables():
             "所在区域": "长沙市 岳麓区",
         },
         content_type_name="工艺施工展示",
+        content_type_id="ct-process",
         cover_asset_id="cca_demo",
         cover_template_id="tpl_1",
         content_code="NR20260825001",
@@ -132,6 +133,7 @@ def test_build_mp_brief_payload_maps_decoration_fields_to_v3_variables():
     values = brief.form_values
     assert values["brand_name"] == "鸿扬家居"
     assert values["project_type"] == "星河湾"
+    assert values["mp_content_type_id"] == "ct-process"
     assert values.get("voice") != "业主第一人称"
     assert "好评知识库" not in str(values.get("writing_instruction") or "")
     assert values["area"] == "50-70㎡"
@@ -157,6 +159,7 @@ def test_build_mp_brief_payload_locks_hycanvas_visual_material():
             "所在区域": "长沙市 岳麓区",
         },
         content_type_name="工艺施工展示",
+        content_type_id="ct-process",
         cover_asset_id="cca_demo",
         cover_template_id=None,
         content_code="NR20260902001",
@@ -300,6 +303,7 @@ def test_build_mp_brief_payload_attaches_up_to_three_photos():
         service_entry="好评笔记",
         form_values={"设计师": "林工"},
         content_type_name="人设自荐",
+        content_type_id=None,
         cover_asset_id="cover-1",
         cover_asset_ids=["cover-2", "cover-3"],
         cover_template_id=None,
@@ -319,6 +323,7 @@ def test_build_mp_brief_payload_review_notes_region_is_optional():
         service_entry="好评笔记",
         form_values={"设计师": "林工", "所在区域": "株洲市 荷塘区"},
         content_type_name="人设自荐",
+        content_type_id=None,
         cover_asset_id="cover-1",
         cover_template_id=None,
         content_code="NR20260828002",
@@ -327,6 +332,7 @@ def test_build_mp_brief_payload_review_notes_region_is_optional():
         service_entry="好评笔记",
         form_values={"设计师": "林工"},
         content_type_name="人设自荐",
+        content_type_id=None,
         cover_asset_id="cover-1",
         cover_template_id=None,
         content_code="NR20260828003",
@@ -351,6 +357,7 @@ def test_build_mp_brief_payload_accepts_city_only_region():
             "所在区域": "长沙市",
         },
         content_type_name="工艺施工展示",
+        content_type_id="ct-process",
         cover_asset_id="cca_demo",
         cover_template_id=None,
         content_code="NR20260831006",

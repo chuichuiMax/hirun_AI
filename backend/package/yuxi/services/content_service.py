@@ -11,7 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content.generation import SKILL_VERSIONS, refine_generated_content, review_generated_content
 from yuxi.content.rules import CONTENT_GOALS
-from yuxi.content.service_entry_form import configured_form_fields, map_service_entry_form_values
+from yuxi.content.service_entry_form import (
+    configured_business_variable_fields,
+    map_service_entry_form_values,
+)
 from yuxi.content.schemas import (
     ContentArtifactAIEdit,
     ContentArtifactUpdate,
@@ -48,6 +51,8 @@ from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
 from yuxi.services.run_queue_service import get_arq_pool, list_run_stream_events
+from yuxi.services.business_variable_service import list_business_variables
+from yuxi.services.content_type_service import list_content_types
 from yuxi.services.variable_service import SERVICE_ENTRIES, list_variables
 from yuxi.storage.postgres.models_business import AgentRun, User
 from yuxi.storage.postgres.models_content import ContentArtifactVersion, ContentTask
@@ -380,6 +385,8 @@ async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
         "content_goals": CONTENT_GOALS,
         "content_types": (rule_bundle or {}).get("content_types") or [],
         "content_variables": (await list_variables(db))["variables"],
+        "managed_content_types": (await list_content_types(db))["content_types"],
+        "business_variable_bindings": (await list_business_variables(db))["business_variables"],
         "industry_packs": await repo.list_industry_packs(),
         "channel_profiles": await repo.list_channel_profiles(),
         "personas": await repo.list_personas(user),
@@ -830,13 +837,15 @@ async def save_content_brief(
         raise _content_error(409, "CONTENT_TEMPLATE_VERSION_MISSING", "任务绑定的行业模板版本不存在")
     form_fields = None
     service_entry = (brief.form_values or {}).get("mp_service_entry")
+    content_type_id = str((brief.form_values or {}).get("mp_content_type_id") or "").strip()
     if service_entry in SERVICE_ENTRIES and not (brief.form_values or {}).get("mp_content_code"):
-        edition = "quick" if task.mode == "quick" else "pro"
-        form_fields = configured_form_fields(
-            (await list_variables(db))["variables"],
+        if compile_now and service_entry == "装修家居" and not content_type_id:
+            raise _content_error(422, "CONTENT_TYPE_REQUIRED", "请选择内容类型")
+        form_fields = configured_business_variable_fields(
+            (await list_business_variables(db))["business_variables"],
             service_entry=str(service_entry),
+            content_type_id=content_type_id or None,
             port="pc",
-            edition=edition,
         )
     compiled, missing = compile_content_brief(task=task, template=template, brief=brief, form_fields=form_fields)
     if compile_now and service_entry == "好评笔记":
