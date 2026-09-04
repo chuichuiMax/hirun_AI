@@ -11,7 +11,46 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 )
+
+// maxEmbeddedFontURLBytes is a document-level safety limit, not a per-upload
+// limit. Imported decks can carry a complete CJK font collection in `fonts`,
+// inflating an otherwise tiny design to hundreds of megabytes and blocking the
+// editor while that JSON is transferred and parsed. Normal custom fonts remain
+// embedded; only pathological collections over this limit lose their inline
+// bytes (the family refs remain so the browser/server can use their fallback).
+const maxEmbeddedFontURLBytes = 32 << 20
+
+// CompactOversizedFonts removes inline font payloads only when their combined
+// size is pathological. It mutates file and returns whether anything changed.
+func CompactOversizedFonts(file DesignFile) bool {
+	fonts, ok := file["fonts"].([]any)
+	if !ok {
+		return false
+	}
+	total := 0
+	for _, raw := range fonts {
+		font, _ := raw.(map[string]any)
+		url, _ := font["url"].(string)
+		if strings.HasPrefix(url, "data:") {
+			total += len(url)
+		}
+	}
+	if total <= maxEmbeddedFontURLBytes {
+		return false
+	}
+	changed := false
+	for _, raw := range fonts {
+		font, _ := raw.(map[string]any)
+		url, _ := font["url"].(string)
+		if strings.HasPrefix(url, "data:") {
+			delete(font, "url")
+			changed = true
+		}
+	}
+	return changed
+}
 
 // currentSchemaVersion mirrors @hc/schema currentSchemaVersion.
 const currentSchemaVersion = 24
@@ -24,6 +63,7 @@ const CurrentSchemaVersion = currentSchemaVersion
 type DesignFile map[string]any
 
 func serialize(file DesignFile) ([]byte, error) {
+	CompactOversizedFonts(file)
 	return json.Marshal(file)
 }
 
