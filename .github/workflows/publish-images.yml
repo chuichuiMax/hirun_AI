@@ -20,6 +20,7 @@ env:
   API_IMAGE: ghcr.io/shenwei8899-ctrl/contentswarm-yuxi-api
   WEB_IMAGE: ghcr.io/shenwei8899-ctrl/contentswarm-yuxi-web
   SANDBOX_PROVISIONER_IMAGE: ghcr.io/shenwei8899-ctrl/contentswarm-yuxi-sandbox-provisioner
+  HYCANVAS_IMAGE: ghcr.io/shenwei8899-ctrl/contentswarm-hycanvas
 
 jobs:
   test-build-push:
@@ -61,21 +62,28 @@ jobs:
             -e POSTGRES_USER=yuxi_ci \
             -e POSTGRES_PASSWORD=ci-postgres-password \
             -e POSTGRES_DB=yuxi_ci \
-            -p 55432:5432 \
+            -p 127.0.0.1::5432 \
             postgres:16
           docker run -d --name yuxi-ci-minio \
             -e MINIO_ROOT_USER=yuxi_ci \
             -e MINIO_ROOT_PASSWORD=ci-minio-secret-password \
-            -p 59000:9000 \
+            -p 127.0.0.1::9000 \
             minio/minio:RELEASE.2023-03-20T20-16-18Z \
             server /data --address :9000
           docker run -d --name yuxi-ci-redis \
-            -p 56379:6379 \
+            -p 127.0.0.1::6379 \
             redis:7-alpine
+
+          postgres_port="$(docker port yuxi-ci-postgres 5432/tcp | sed 's/.*://')"
+          minio_port="$(docker port yuxi-ci-minio 9000/tcp | sed 's/.*://')"
+          redis_port="$(docker port yuxi-ci-redis 6379/tcp | sed 's/.*://')"
+          echo "CI_POSTGRES_PORT=$postgres_port" >> "$GITHUB_ENV"
+          echo "CI_MINIO_PORT=$minio_port" >> "$GITHUB_ENV"
+          echo "CI_REDIS_PORT=$redis_port" >> "$GITHUB_ENV"
 
           for _ in $(seq 1 60); do
             if docker exec yuxi-ci-postgres pg_isready -U yuxi_ci -d yuxi_ci >/dev/null \
-              && curl -sf http://127.0.0.1:59000/minio/health/live >/dev/null \
+              && curl -sf "http://127.0.0.1:${minio_port}/minio/health/live" >/dev/null \
               && docker exec yuxi-ci-redis redis-cli ping >/dev/null; then
               exit 0
             fi
@@ -89,12 +97,12 @@ jobs:
       - name: Test content cover and OCR
         working-directory: backend
         env:
-          POSTGRES_URL: postgresql+asyncpg://yuxi_ci:ci-postgres-password@127.0.0.1:55432/yuxi_ci
-          MINIO_URI: http://127.0.0.1:59000
+          POSTGRES_URL: postgresql+asyncpg://yuxi_ci:ci-postgres-password@127.0.0.1:${{ env.CI_POSTGRES_PORT }}/yuxi_ci
+          MINIO_URI: http://127.0.0.1:${{ env.CI_MINIO_PORT }}
           MINIO_ACCESS_KEY: yuxi_ci
           MINIO_SECRET_KEY: ci-minio-secret-password
           CONTENT_COVER_BUCKET: yuxi-ci-content-covers
-          REDIS_URL: redis://127.0.0.1:56379/0
+          REDIS_URL: redis://127.0.0.1:${{ env.CI_REDIS_PORT }}/0
         run: |
           uv run pytest \
             test/unit/content/test_cover_generation.py \
@@ -173,17 +181,17 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           existing_count=0
-          for image in "$API_IMAGE" "$WEB_IMAGE" "$SANDBOX_PROVISIONER_IMAGE"; do
+          for image in "$API_IMAGE" "$WEB_IMAGE" "$SANDBOX_PROVISIONER_IMAGE" "$HYCANVAS_IMAGE"; do
             if docker buildx imagetools inspect "$image:$VERSION" >/dev/null 2>&1; then
               existing_count=$((existing_count + 1))
             fi
           done
-          if [[ "$existing_count" -eq 3 ]]; then
+          if [[ "$existing_count" -eq 4 ]]; then
             echo "Release version is already fully published and immutable: $VERSION" >&2
             exit 1
           fi
           if [[ "$existing_count" -gt 0 ]]; then
-            echo "Detected a partial release with $existing_count/3 tags; only identical candidate digests may repair it."
+            echo "Detected a partial release with $existing_count/4 tags; only identical candidate digests may repair it."
           fi
 
       - name: Build and push API candidate image
@@ -240,6 +248,21 @@ jobs:
           cache-from: type=gha,scope=sandbox-provisioner
           cache-to: type=gha,mode=max,scope=sandbox-provisioner
 
+      - name: Build and push HyCanvas candidate image
+        id: hycanvas-image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/hycanvas
+          file: apps/hycanvas/Dockerfile
+          push: true
+          tags: ${{ env.HYCANVAS_IMAGE }}:${{ inputs.version }}-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          build-args: |
+            MANAGED_MODE=contentswarm
+            HOST_APP_URL=https://bydf.openswarm.run/boyun
+            VERSION=${{ inputs.version }}
+          cache-from: type=gha,scope=hycanvas
+          cache-to: type=gha,mode=max,scope=hycanvas
+
       - name: Promote all verified candidates to immutable release tags
         id: promote-images
         env:
@@ -247,6 +270,7 @@ jobs:
           API_DIGEST: ${{ steps.api-image.outputs.digest }}
           WEB_DIGEST: ${{ steps.web-image.outputs.digest }}
           SANDBOX_PROVISIONER_DIGEST: ${{ steps.sandbox-provisioner-image.outputs.digest }}
+          HYCANVAS_DIGEST: ${{ steps.hycanvas-image.outputs.digest }}
         run: |
           resolve_digest() {
             local reference="$1"
@@ -298,18 +322,26 @@ jobs:
             fi
           done
 
+          if ! [[ "$HYCANVAS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "HyCanvas candidate image digest is missing or invalid" >&2
+            exit 1
+          fi
+
           ensure_tags_compatible "$API_IMAGE" "$API_DIGEST"
           ensure_tags_compatible "$WEB_IMAGE" "$WEB_DIGEST"
           ensure_tags_compatible "$SANDBOX_PROVISIONER_IMAGE" "$SANDBOX_PROVISIONER_DIGEST"
+          ensure_tags_compatible "$HYCANVAS_IMAGE" "$HYCANVAS_DIGEST"
 
           promote_image "$API_IMAGE" "$API_DIGEST"
           promote_image "$WEB_IMAGE" "$WEB_DIGEST"
           promote_image "$SANDBOX_PROVISIONER_IMAGE" "$SANDBOX_PROVISIONER_DIGEST"
+          promote_image "$HYCANVAS_IMAGE" "$HYCANVAS_DIGEST"
 
           api_release_digest="$(resolve_digest "$API_IMAGE:$VERSION")"
           web_release_digest="$(resolve_digest "$WEB_IMAGE:$VERSION")"
           sandbox_release_digest="$(resolve_digest "$SANDBOX_PROVISIONER_IMAGE:$VERSION")"
-          for digest in "$api_release_digest" "$web_release_digest" "$sandbox_release_digest"; do
+          hycanvas_release_digest="$(resolve_digest "$HYCANVAS_IMAGE:$VERSION")"
+          for digest in "$api_release_digest" "$web_release_digest" "$sandbox_release_digest" "$hycanvas_release_digest"; do
             if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "Promoted release digest could not be resolved" >&2
               exit 1
@@ -318,6 +350,7 @@ jobs:
           echo "api_digest=$api_release_digest" >> "$GITHUB_OUTPUT"
           echo "web_digest=$web_release_digest" >> "$GITHUB_OUTPUT"
           echo "sandbox_provisioner_digest=$sandbox_release_digest" >> "$GITHUB_OUTPUT"
+          echo "hycanvas_digest=$hycanvas_release_digest" >> "$GITHUB_OUTPUT"
 
       - name: Record immutable image digests
         env:
@@ -325,6 +358,7 @@ jobs:
           API_DIGEST: ${{ steps.promote-images.outputs.api_digest }}
           WEB_DIGEST: ${{ steps.promote-images.outputs.web_digest }}
           SANDBOX_PROVISIONER_DIGEST: ${{ steps.promote-images.outputs.sandbox_provisioner_digest }}
+          HYCANVAS_DIGEST: ${{ steps.promote-images.outputs.hycanvas_digest }}
         run: |
           DIGEST_FILE="$RUNNER_TEMP/image-digests.txt"
           {
@@ -333,6 +367,7 @@ jobs:
             echo "api=$API_IMAGE@$API_DIGEST"
             echo "web=$WEB_IMAGE@$WEB_DIGEST"
             echo "sandbox_provisioner=$SANDBOX_PROVISIONER_IMAGE@$SANDBOX_PROVISIONER_DIGEST"
+            echo "hycanvas=$HYCANVAS_IMAGE@$HYCANVAS_DIGEST"
           } > "$DIGEST_FILE"
           {
             echo "## Immutable image digests"

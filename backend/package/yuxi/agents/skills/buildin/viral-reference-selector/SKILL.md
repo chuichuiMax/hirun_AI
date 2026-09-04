@@ -25,7 +25,7 @@ description: 比较爆款候选与当前任务的真实输入变量，选择唯�
    - `narrative_structure`；
    - `paragraph_rhythm`；
    - `list_pattern.type=none|numbered|emoji|bulleted|mixed`、位置与可观察数量；
-   - `emoji_pattern`；
+	   - `emoji_pattern`：除数量和用途外，必须记录每个可观察 Emoji 所在的结构块、`relative_position=start|middle|end`、相邻语义锨点及功能；不得只写“少量点缀”这类无法执行的摘要；
    - `interaction_style`；
    - 可选的 `emotion_curve`。
 9. 不得先套用“1–4 编号、固定五段、固定 Emoji 数量”等预设模板。候选没有编号时不得标记为编号结构。

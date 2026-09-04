@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+from langgraph.errors import InvalidUpdateError
 
 from yuxi.content.schemas import ReviewReport
 from yuxi.services import content_run_worker
@@ -257,6 +258,142 @@ async def test_failed_node_retry_continues_from_checkpoint(monkeypatch):
         "resume_parent_run_id": None,
     }
     assert statuses == ["running", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_retry_at_parallel_join_specifies_completed_predecessor(monkeypatch):
+    class AmbiguousGraph(FakeGraph):
+        def __init__(self):
+            super().__init__()
+            self.pending_node = "select_viral_reference"
+            self.update_calls = []
+
+        async def aupdate_state(self, config, values, as_node=None):
+            self.update_calls.append(as_node)
+            if as_node is None:
+                raise InvalidUpdateError("Ambiguous update, specify as_node")
+            await super().aupdate_state(config, values, as_node=as_node)
+
+    graph = AmbiguousGraph()
+    run = SimpleNamespace(
+        id="run-parallel-join-retry",
+        status="pending",
+        uid="user-1",
+        thread_id="task-1",
+        request_id="request-parallel-join-retry",
+        checkpoint_thread_id="content:task-1",
+        input_payload={"action": "retry", "node_id": None, "model_spec": None},
+    )
+    task = SimpleNamespace(
+        id="task-1",
+        workflow_version_id="workflow-v3",
+        rule_version_id="rules-v3",
+        industry_template_version_id="industry-v3",
+        runtime_config_snapshot_json={"schema_version": 3},
+    )
+    workflow = SimpleNamespace(
+        definition_json={
+            "schema_version": 3,
+            "edges": [
+                ["collect_business_rule_evidence", "select_viral_reference"],
+                ["collect_viral_candidates", "select_viral_reference"],
+            ],
+        }
+    )
+
+    async def load_run(run_id):
+        return run, task, workflow, {"version": {"id": "rules-v3"}}
+
+    async def no_event(*args, **kwargs):
+        return None
+
+    async def no_cancel(*args, **kwargs):
+        return False
+
+    async def get_graph(*args, **kwargs):
+        return graph
+
+    monkeypatch.setattr(content_run_worker, "_load_content_run", load_run)
+    monkeypatch.setattr(content_run_worker, "_set_content_run_status", no_event)
+    monkeypatch.setattr(content_run_worker, "append_run_stream_event", no_event)
+    monkeypatch.setattr(content_run_worker, "clear_cancel_signal", no_event)
+    monkeypatch.setattr(content_run_worker, "has_cancel_signal", no_cancel)
+    monkeypatch.setattr(
+        content_run_worker.agent_manager,
+        "get_agent",
+        lambda agent_id: SimpleNamespace(get_graph=get_graph),
+    )
+
+    await content_run_worker.process_content_run({"job_try": 1}, run.id)
+
+    assert graph.update_calls == [None, "collect_viral_candidates"]
+    assert graph.invoked_with is None
+
+
+@pytest.mark.asyncio
+async def test_cover_submission_retry_replans_when_template_text_is_too_long(monkeypatch):
+    graph = FakeGraph()
+    graph.pending_node = "submit_cover_job"
+    graph.values = {
+        "visual_plan": {"text": ["合规标题", "增加12㎡收纳空间", "品牌标签"]},
+        "runtime_config_snapshot": {
+            "visual_material": {
+                "hycanvas_fillable_fields": [
+                    {
+                        "semanticRole": "subtitle",
+                        "constraints": {"maxChars": 7},
+                    }
+                ]
+            }
+        },
+    }
+    run = SimpleNamespace(
+        id="run-cover-submit-retry",
+        status="pending",
+        uid="user-1",
+        thread_id="task-1",
+        request_id="request-cover-submit-retry",
+        checkpoint_thread_id="content:task-1",
+        input_payload={"action": "retry", "node_id": "submit_cover_job", "model_spec": None},
+    )
+    task = SimpleNamespace(
+        id="task-1",
+        workflow_version_id="workflow-v3",
+        rule_version_id="rules-v3",
+        industry_template_version_id="industry-v3",
+        runtime_config_snapshot_json={"schema_version": 3},
+    )
+    workflow = SimpleNamespace(definition_json={"schema_version": 3, "nodes": [], "edges": []})
+
+    async def load_run(run_id):
+        return run, task, workflow, {"version": {"id": "rules-v3"}}
+
+    async def no_event(*args, **kwargs):
+        return None
+
+    async def no_cancel(*args, **kwargs):
+        return False
+
+    async def get_graph(*args, **kwargs):
+        return graph
+
+    monkeypatch.setattr(content_run_worker, "_load_content_run", load_run)
+    monkeypatch.setattr(content_run_worker, "_set_content_run_status", no_event)
+    monkeypatch.setattr(content_run_worker, "append_run_stream_event", no_event)
+    monkeypatch.setattr(content_run_worker, "clear_cancel_signal", no_event)
+    monkeypatch.setattr(content_run_worker, "has_cancel_signal", no_cancel)
+    monkeypatch.setattr(
+        content_run_worker.agent_manager,
+        "get_agent",
+        lambda agent_id: SimpleNamespace(get_graph=get_graph),
+    )
+
+    await content_run_worker.process_content_run({"job_try": 1}, run.id)
+
+    assert graph.updated_state["visual_plan"] is None
+    assert graph.updated_state["cover_job"] is None
+    assert graph.updated_as_node == "human_content_approval"
+    assert graph.invoked_with is None
 
 
 @pytest.mark.asyncio

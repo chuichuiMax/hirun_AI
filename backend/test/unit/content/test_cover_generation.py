@@ -59,6 +59,14 @@ def _image(color: str, size: tuple[int, int] = (320, 240)) -> bytes:
     return output.getvalue()
 
 
+def test_hycanvas_output_does_not_add_generic_title_overlay():
+    hycanvas_job = SimpleNamespace(mode="hycanvas", request_json={"title": "89㎡收纳逆袭"})
+    generated_job = SimpleNamespace(mode="generate", request_json={"title": "89㎡收纳逆袭"})
+
+    assert content_cover_worker._output_title_overlay(hycanvas_job) == ""
+    assert content_cover_worker._output_title_overlay(generated_job) == "89㎡收纳逆袭"
+
+
 def _template_analysis_fixture():
     template = Image.new("RGB", (1080, 1440), "#E8E2DC")
     draw = ImageDraw.Draw(template)

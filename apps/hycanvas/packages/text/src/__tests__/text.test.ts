@@ -292,6 +292,14 @@ describe("layout + auto-fit (FR-11, FR-12)", () => {
     expect(fit.height).toBeGreaterThan(0);
   });
 
+  it("autoFitScale shrinks an unbreakable title that exceeds the box width", () => {
+    const node = textNode([createParagraph("89㎡多12㎡收纳", { fontSize: 140 })], { width: 300, height: 220 });
+    const scale = autoFitScale(node);
+    expect(scale).toBeLessThan(1);
+    const fitted = layoutText(autoFitNode(node));
+    expect(fitted.lines.every((line) => line.x + line.width <= node.box.width)).toBe(true);
+  });
+
   it("fitBoxToText counts padding exactly once", () => {
     const node = textNode([createParagraph("Hi", { fontSize: 20 })], { mode: "fixed", width: 200, height: 100, padding: { t: 10, r: 5, b: 10, l: 5 } });
     const fit = fitBoxToText(node);

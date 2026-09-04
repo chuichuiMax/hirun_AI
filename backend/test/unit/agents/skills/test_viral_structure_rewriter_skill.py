@@ -7,7 +7,7 @@ def test_viral_structure_rewriter_matches_reference_emoji_distribution():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "viral-structure-rewriter")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "1.4.0"
+    assert spec.version == "1.5.0"
     assert "叙事分散型" in skill_text
     assert "清单连续型" in skill_text
     assert "混合型" in skill_text
@@ -16,6 +16,8 @@ def test_viral_structure_rewriter_matches_reference_emoji_distribution():
     assert "参考在句中或句末" in skill_text
     assert "统一放在自然段开头" in skill_text
     assert "普通项目符号和编号不计入" in skill_text
+    assert "相邻语义锨点" in skill_text
+    assert "至少包含一个非段末落点" in skill_text
 
 
 def test_viral_structure_rewriter_uses_dynamic_reference_and_targeted_repair():

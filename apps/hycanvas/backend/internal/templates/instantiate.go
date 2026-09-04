@@ -161,8 +161,18 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 			if required, _ := constraints["required"].(bool); required && (!present || strings.TrimSpace(value) == "") {
 				return ErrBadRequest
 			}
-			if maxChars := int(asNum(constraints["maxChars"])); maxChars > 0 && present && utf8.RuneCountInString(value) > maxChars {
+			if maxChars := int(asNum(constraints["maxChars"])); maxChars > 0 && present && utf8.RuneCountInString(strings.ReplaceAll(value, "\n", "")) > maxChars {
 				return ErrBadRequest
+			}
+			if maxLines := int(asNum(constraints["maxLines"])); maxLines > 0 && present && strings.Count(value, "\n")+1 > maxLines {
+				return ErrBadRequest
+			}
+			if maxCharsPerLine := int(asNum(constraints["maxCharsPerLine"])); maxCharsPerLine > 0 && present {
+				for _, line := range strings.Split(value, "\n") {
+					if utf8.RuneCountInString(line) > maxCharsPerLine {
+						return ErrBadRequest
+					}
+				}
 			}
 		}
 	}
@@ -192,9 +202,16 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 				if len(runs) == 0 {
 					return
 				}
-				asObj(runs[0])["text"] = value
-				first["runs"] = runs[:1]
-				node["content"] = []any{first}
+				for paragraphIndex, paragraphRaw := range paragraphs {
+					paragraphRuns := asArr(asObj(paragraphRaw)["runs"])
+					for runIndex, runRaw := range paragraphRuns {
+						text := ""
+						if paragraphIndex == 0 && runIndex == 0 {
+							text = value
+						}
+						asObj(runRaw)["text"] = text
+					}
+				}
 				delete(remaining, asStr(node["id"]))
 			})
 		}

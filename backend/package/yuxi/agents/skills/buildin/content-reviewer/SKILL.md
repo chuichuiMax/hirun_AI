@@ -16,7 +16,7 @@ version: 1.4.0
    - EvidenceBundle 存在 `selected_reference=true` 的爆款结构参考时，必须完整读取其 `reference_blueprint.title_slot_sequence`、`content_block_sequence`、`paragraph_rhythm`、`list_pattern`、`emoji_pattern` 和 `interaction_style`，逐项对照，禁止用审核器自己的通用爆款模板替代冻结蓝图。
    - 逐个检查 `content_block_sequence` 是否在正文中按序可识别，并按 `paragraph_rhythm` 检查真实换行和信息密度；只有蓝图实际要求数据块或列表时才检查这些形式。多个独立信息块被压成一行或结构节点缺失时，以 `CONTENT_STRUCTURE_MISMATCH` 阻断。
    - 列表审核严格服从 `list_pattern`。只有 `type=numbered` 或包含编号的 `mixed` 才要求编号清单，并按蓝图的出现位置和条目节奏检查；`none`、`emoji`、`bulleted` 或不含编号的 `mixed` 不得强制改成 `1–4` 清单。不得设置固定段落数、双换行数或条目数。
-   - 对照 `reference_blueprint.emoji_pattern` 判断叙事分散型、清单连续型或混合型。叙事参考在句中、句末或转折处使用 Emoji 时，若成稿把符号全部机械移到自然段开头，必须以 `PERSONA_STYLE_MISMATCH` 阻断。报价、材料、步骤或改造清单参考连续使用行首 Emoji 时，应判定为合理的信息导航，不得因为符号连续就阻断。
+   - 对照 `reference_blueprint.emoji_pattern` 判断叙事分散型、清单连续型或混合型。叙事参考在句中、句末或转折处使用 Emoji 时，逐个核对符号的相邻语义锨点和相对位置；若成稿把符号全部机械移到自然段开头、句号前或自然段末尾，必须以 `PERSONA_STYLE_MISMATCH` 阻断。报价、材料、步骤或改造清单参考连续使用行首 Emoji 时，应判定为合理的信息导航，不得因为符号连续就阻断。
    - 对照 `content_brief` 和允许用于标题的 Evidence 逐项检查标题事实槽位。标题把预算扩大为已在预算内完成、把预计工期扩大为已完工、把方案效果扩大为最终结算或出现其他输入外事实时，以 `TITLE_FACT_UNSUPPORTED` 阻断，并精确指出应删除或改写的词；不得仅给出“标题不符合公式”的泛化建议。
    - EvidenceBundle 存在 `metadata.rule_kind=forbidden_replacement_map` 的平台规则时，从其结构化 `value` 读取完整“问题词—常用表达方式”映射，逐项复查最终标题、正文和话题，不得使用 Skill 内置词表或常识猜测替换关系。
    - 最终内容仍含任一问题词时，以 `FACT_CHECK_FAILED` 阻断，并在建议中列出命中的问题词和表内可选表达；候选列表为空时只要求在不改变事实的前提下重写整句，不得建议删除后留下残句或编造表外替代词。

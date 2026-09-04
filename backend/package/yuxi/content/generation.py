@@ -20,8 +20,8 @@ SKILL_VERSIONS = {
     "content-body-generator": "2.2.0",
     "persona-style-polisher": "1.1.0",
     "content-reviewer": "1.4.0",
-    "content-visual-planner": "1.2.0",
-    "content-cover-generator": "1.1.0",
+    "content-visual-planner": "1.4.0",
+    "content-cover-generator": "1.2.0",
     "content-visual-reviewer": "1.1.0",
 }
 

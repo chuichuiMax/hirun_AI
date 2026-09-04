@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from langgraph.types import Command
+from langgraph.errors import InvalidUpdateError
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
@@ -84,6 +85,28 @@ async def _retry_failed_cover_job(run, state: dict[str, Any]) -> dict[str, Any] 
             },
         )
         return result["job"]
+
+
+def _visual_plan_exceeds_template_limits(state: dict[str, Any]) -> bool:
+    visual_plan_text = (state.get("visual_plan") or {}).get("text") or []
+    visual_material = (state.get("runtime_config_snapshot") or {}).get("visual_material") or {}
+    role_indexes = {"title": 0, "subtitle": 1, "body_excerpt": 1}
+    for field in visual_material.get("hycanvas_fillable_fields") or []:
+        role = str(field.get("semanticRole") or "")
+        text_index = role_indexes.get(role)
+        max_chars = (field.get("constraints") or {}).get("maxChars")
+        if text_index is None or not isinstance(max_chars, int) or max_chars <= 0:
+            continue
+        if text_index < len(visual_plan_text) and len(str(visual_plan_text[text_index])) > max_chars:
+            return True
+    return False
+
+
+def _retry_predecessor(workflow_definition: dict[str, Any], pending_node: str) -> str | None:
+    for source, target in reversed(workflow_definition.get("edges") or []):
+        if target == pending_node:
+            return str(source)
+    return None
 
 
 async def process_content_run(ctx, run_id: str):
@@ -187,7 +210,11 @@ async def process_content_run(ctx, run_id: str):
                     retry_counts=state_values.get("retry_counts") or {},
                 )
             retry_from_node = None
-            if requested_node == "wait_cover_job":
+            if requested_node == "submit_cover_job" and _visual_plan_exceeds_template_limits(state_values):
+                state_update["visual_plan"] = None
+                state_update["cover_job"] = None
+                retry_from_node = "human_content_approval"
+            elif requested_node == "wait_cover_job":
                 retried_cover = await _retry_failed_cover_job(run, state_values)
                 if retried_cover is None:
                     state_update["cover_job"] = None
@@ -201,7 +228,16 @@ async def process_content_run(ctx, run_id: str):
             if retry_from_node:
                 await graph.aupdate_state(config, state_update, as_node=retry_from_node)
             else:
-                await graph.aupdate_state(config, state_update)
+                try:
+                    await graph.aupdate_state(config, state_update)
+                except InvalidUpdateError as exc:
+                    if "Ambiguous update" not in str(exc) or len(pending_nodes) != 1:
+                        raise
+                    pending_node = next(iter(pending_nodes))
+                    predecessor = _retry_predecessor(workflow.definition_json or {}, pending_node)
+                    if predecessor is None:
+                        raise
+                    await graph.aupdate_state(config, state_update, as_node=predecessor)
             graph_input = None
         else:
             visual_material = (task.runtime_config_snapshot_json or {}).get("visual_material") or {}

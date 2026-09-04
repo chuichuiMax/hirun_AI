@@ -911,3 +911,20 @@ def test_hycanvas_template_fields_reject_missing_required_fact():
             visual_text=["标题"],
             brief={"form_values": {}},
         )
+
+
+def test_hycanvas_template_fields_wraps_text_without_changing_template_style():
+    fields = content_tools._hycanvas_template_fields(
+        [
+            {
+                "kind": "text",
+                "label": "主标题",
+                "semanticRole": "title",
+                "constraints": {"maxChars": 13, "maxCharsPerLine": 7, "maxLines": 2},
+            }
+        ],
+        visual_text=["真香，89㎡收纳远超预期"],
+        brief={},
+    )
+
+    assert fields["主标题"] == "真香，89㎡\n收纳远超预期"

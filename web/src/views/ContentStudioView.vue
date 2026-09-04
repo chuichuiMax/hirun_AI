@@ -41,7 +41,7 @@ import { contentApi } from '@/apis/content_api'
 import { materialLibraryApi } from '@/apis/material_library_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
-import { formatEvidenceReference } from '@/utils/contentEvidencePresentation'
+import { formatEvidenceReference, hasSelectedViralReference } from '@/utils/contentEvidencePresentation'
 import { formatDateTime } from '@/utils/time'
 import {
   appendContentNarrativeText,
@@ -80,6 +80,9 @@ const editor = reactive({ title: '', body: '', topics: [] })
 const aiEditInstruction = ref('')
 const versionDrawerOpen = ref(false)
 const resultDetailOpen = ref(false)
+const resultPreviewTab = ref('cover')
+const viralReferenceLoading = ref(false)
+const viralReference = ref(null)
 const publishModalOpen = ref(false)
 const expandedResultIds = ref(new Set())
 const ocrModalOpen = ref(false)
@@ -153,6 +156,15 @@ const selectedImageGalleryPath = computed(() => {
 })
 const selectedHyCanvasTemplate = computed(() =>
   hycanvasTemplates.value.find((item) => item.id === selectedHyCanvasTemplateId.value) || null
+)
+const hasViralReference = computed(() => hasSelectedViralReference(store.artifact))
+
+watch(
+  () => store.artifact?.id,
+  () => {
+    resultPreviewTab.value = 'cover'
+    viralReference.value = null
+  }
 )
 
 const suggestedHyCanvasValue = (field) => {
@@ -1446,6 +1458,22 @@ const copyResultText = async (value, label) => {
   }
 }
 
+const openViralReference = async () => {
+  if (!store.artifact?.id || !hasViralReference.value) return
+  resultPreviewTab.value = 'viral-reference'
+  if (viralReference.value?.artifactId === store.artifact.id) return
+  viralReferenceLoading.value = true
+  try {
+    const response = await contentApi.getArtifactViralReference(store.artifact.id)
+    viralReference.value = { ...response.reference, artifactId: store.artifact.id }
+  } catch (error) {
+    resultPreviewTab.value = 'cover'
+    message.error(error.message || '爆款原文加载失败')
+  } finally {
+    viralReferenceLoading.value = false
+  }
+}
+
 const openCoverEditor = async () => {
   const snapshot = store.artifact?.hycanvas_design_snapshot
   if (snapshot?.design_id && snapshot?.editor_url) {
@@ -2231,7 +2259,13 @@ const openVersions = async () => {
         <section class="result-detail-cover" aria-label="内容封面">
           <div class="result-detail-section-heading">
             <div class="result-detail-cover-tabs" role="tablist" aria-label="封面操作">
-              <button type="button" class="active" role="tab" aria-selected="true">
+              <button
+                type="button"
+                :class="{ active: resultPreviewTab === 'cover' }"
+                role="tab"
+                :aria-selected="resultPreviewTab === 'cover'"
+                @click="resultPreviewTab = 'cover'"
+              >
                 <Image :size="17" />封面
               </button>
               <button
@@ -2243,10 +2277,43 @@ const openVersions = async () => {
               >
                 <PencilLine :size="16" />编辑
               </button>
+              <button
+                v-if="hasViralReference"
+                type="button"
+                :class="{ active: resultPreviewTab === 'viral-reference' }"
+                role="tab"
+                :aria-selected="resultPreviewTab === 'viral-reference'"
+                @click="openViralReference"
+              >
+                <BookOpenCheck :size="16" />爆款原文
+              </button>
             </div>
           </div>
           <div class="result-detail-cover-frame">
-            <div v-if="coverLoading" class="result-detail-cover-state">
+            <div v-if="resultPreviewTab === 'viral-reference'" class="result-detail-viral-reference">
+              <div v-if="viralReferenceLoading" class="result-detail-cover-state">
+                <LoaderCircle class="spin" :size="24" />
+                <span>正在加载本次选中的爆款原文</span>
+              </div>
+              <template v-else-if="viralReference">
+                <div class="result-detail-viral-meta">
+                  <div>
+                    <span>来源</span>
+                    <strong>{{ viralReference.source_name }}</strong>
+                    <small v-if="viralReference.knowledge_base_name">{{ viralReference.knowledge_base_name }}</small>
+                  </div>
+                  <a-button
+                    type="text"
+                    size="small"
+                    @click="copyResultText(viralReference.content || '', '爆款原文')"
+                  >
+                    <Copy :size="14" />复制
+                  </a-button>
+                </div>
+                <div class="result-detail-viral-body">{{ viralReference.content }}</div>
+              </template>
+            </div>
+            <div v-else-if="coverLoading" class="result-detail-cover-state">
               <LoaderCircle class="spin" :size="24" />
               <span>正在加载封面</span>
             </div>
@@ -2647,7 +2714,7 @@ const openVersions = async () => {
 .completion-result-actions :deep(.ant-btn-primary) { border-color: var(--color-info-500); background: var(--color-info-500); box-shadow: none; }
 .completion-result-actions :deep(.ant-btn-primary:hover) { border-color: var(--color-info-700); background: var(--color-info-700); }
 .completion-version-button { grid-column: 1 / -1; }
-.result-detail-layout { height: min(620px, calc(100vh - 230px)); max-height: calc(100vh - 230px); display: grid; grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr); overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; }
+.result-detail-layout { height: calc(100vh - 190px); min-height: 600px; max-height: 820px; display: grid; grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr); overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; }
 .result-detail-cover { min-width: 0; display: flex; flex-direction: column; padding: 20px; background: var(--gray-25); border-right: 1px solid var(--gray-150); }
 .result-detail-section-heading { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .result-detail-section-heading > div { min-width: 0; display: flex; align-items: center; gap: 7px; }
@@ -2663,20 +2730,29 @@ const openVersions = async () => {
 .result-detail-cover-frame img { display: block; width: min(100%, 400px); max-height: 100%; aspect-ratio: 3 / 4; border-radius: 6px; object-fit: contain; background: var(--gray-100); }
 .result-detail-cover-state { min-height: 240px; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-secondary); text-align: center; }
 .result-detail-cover-state.empty span { max-width: 240px; color: var(--color-text-tertiary); font-size: 12px; line-height: 1.6; }
-.result-detail-content { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; padding: 0 20px; background: var(--gray-0); }
-.result-detail-section { padding: 20px 0; border-bottom: 1px solid var(--gray-150); }
+.result-detail-content { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; padding: 0 22px; background: var(--gray-0); }
+.result-detail-section { padding: 14px 0; border-bottom: 1px solid var(--gray-150); }
 .result-detail-section:last-child { border-bottom: 0; }
-.result-detail-title { margin: 12px 0 0; padding: 12px 14px; border: 1px solid var(--gray-150); border-radius: 6px; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
+.result-detail-title { margin: 8px 0 0; padding: 9px 12px; border: 1px solid var(--gray-150); border-radius: 6px; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
 .result-detail-body-section { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.result-detail-body { min-height: 0; flex: 1; margin-top: 12px; padding-right: 8px; overflow-y: auto; overscroll-behavior: contain; color: var(--color-text); font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; }
+.result-detail-body { min-height: 0; flex: 1; margin-top: 8px; padding: 2px 8px 2px 0; overflow-y: auto; overscroll-behavior: contain; color: var(--color-text); font-size: 13px; line-height: 1.68; overflow-wrap: anywhere; }
 .result-detail-body :deep(p:first-child) { margin-top: 0; }
 .result-detail-body :deep(p:last-child) { margin-bottom: 0; }
-.result-detail-topics-section { margin: 14px 0 16px; padding: 12px 14px; border: 1px solid var(--gray-150); border-radius: 8px; }
-.result-detail-topics { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
-.result-detail-topics span { color: var(--main-700); font-size: 13px; line-height: 1.6; }
+.result-detail-topics-section { margin: 6px 0 8px; padding: 7px 10px; border: 1px solid var(--gray-150); border-radius: 8px; }
+.result-detail-topics-section .result-detail-section-heading { min-height: 26px; }
+.result-detail-topics { display: flex; flex-wrap: wrap; gap: 2px 7px; margin-top: 3px; }
+.result-detail-topics span { color: var(--main-700); font-size: 13px; line-height: 1.35; }
 .result-detail-empty { margin: 12px 0 0; color: var(--color-text-tertiary); font-size: 13px; }
 .result-detail-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .result-detail-footer :deep(.ant-btn) { min-width: 132px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.result-detail-viral-reference { min-width: 0; width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
+.result-detail-viral-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--gray-150); }
+.result-detail-viral-meta > div { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 2px 7px; }
+.result-detail-viral-meta span, .result-detail-viral-meta small { color: var(--color-text-tertiary); font-size: 11px; }
+.result-detail-viral-meta small { grid-column: 2; }
+.result-detail-viral-meta strong { min-width: 0; overflow: hidden; color: var(--color-text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.result-detail-viral-meta :deep(.ant-btn) { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; color: var(--main-700); }
+.result-detail-viral-body { min-height: 0; flex: 1; padding: 16px; overflow-y: auto; color: var(--color-text); font-size: 13px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
 .workflow-stream { min-width: 0; min-height: 0; flex: 1; padding: 8px 18px 28px; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
 .codex-workflow-status { min-width: 0; padding: 4px 0 10px; }
 .codex-workflow-heading { min-height: 52px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
@@ -2798,7 +2874,7 @@ const openVersions = async () => {
   .studio-header, .panel-heading { flex-direction: column; }
   .setup-grid, .brief-layout, .review-layout { grid-template-columns: 1fr; }
   .completion-layout { grid-template-columns: 1fr; }
-  .result-detail-layout { grid-template-columns: 1fr; overflow-y: auto; }
+  .result-detail-layout { height: auto; min-height: 0; max-height: calc(100vh - 210px); grid-template-columns: 1fr; overflow-y: auto; }
   .result-detail-cover { min-height: 420px; border-right: 0; border-bottom: 1px solid var(--gray-150); }
   .result-detail-content { height: auto; display: block; overflow: visible; }
   .result-detail-body-section { overflow: visible; }

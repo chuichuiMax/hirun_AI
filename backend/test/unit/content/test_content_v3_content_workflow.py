@@ -12,12 +12,18 @@ from langgraph.types import Command
 import yuxi.agents.buildin.content_workflow.graph as content_workflow_graph_module
 import yuxi.content.control.workflow.deterministic_node as deterministic_node_module
 from yuxi.agents.buildin.content_workflow.context import ContentWorkflowContext
-from yuxi.agents.buildin.content_workflow.graph import ContentWorkflowAgent
+from yuxi.agents.buildin.content_workflow.graph import (
+    ContentWorkflowAgent,
+    _find_cached_parallel_result,
+    _parallel_cache_key,
+)
 from yuxi.agents.buildin.content_workflow.state import ContentWorkflowState
 from yuxi.content.control.workflow.agent_node import AgentNodeHandler, AgentNodeResultMapper
 from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler, _derive_scene_evidence
 from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.control.workflow.revision import resolve_revision_reason, revision_reason_label
+from yuxi.content.control.strategy.recommend_v3 import StrategyPreviewContext
+from yuxi.content.model.rules.engine import CombinationGroup, MethodMember
 from yuxi.content.v3.workflow import WORKFLOW_V3
 from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
 
@@ -234,6 +240,72 @@ async def test_normalize_evidence_adds_derived_scene_to_frozen_bundle(monkeypatc
     assert len(scene_items) == 1
     assert scene_items[0]["source_id"] == "derived_scene_from_business_brief"
     assert persisted["kwargs"]["added_evidence_ids"]
+
+
+@pytest.mark.asyncio
+async def test_strategy_selection_uses_highest_ranked_eligible_group_without_agent(monkeypatch):
+    groups = (
+        CombinationGroup(
+            code="group-low",
+            rule_version_id="rules-v3",
+            content_direction_code="CT01",
+            content_direction_name="案例",
+            combination_type="single",
+            method_members=(MethodMember("M01", "primary", 1),),
+            title_formula_candidate_codes=("T02",),
+            body_formula_candidate_codes=("C02",),
+            priority=10,
+        ),
+        CombinationGroup(
+            code="group-high",
+            rule_version_id="rules-v3",
+            content_direction_code="CT01",
+            content_direction_name="案例",
+            combination_type="single",
+            method_members=(MethodMember("M03", "primary", 1),),
+            title_formula_candidate_codes=("T01",),
+            body_formula_candidate_codes=("C01",),
+            priority=20,
+        ),
+    )
+
+    class FakePreviewRepository:
+        def __init__(self, _db):
+            pass
+
+        async def load_context(self, **_kwargs):
+            return StrategyPreviewContext(
+                task_id="task-1",
+                rule_version_id="rules-v3",
+                industry_pack_version_id="industry-v3",
+                channel_profile_version_id="channel-v1",
+                content_direction_code="CT01",
+                industry_slug="decoration",
+                channel_code="xiaohongshu",
+                content_goal_code="lead",
+                narrative_axis_code=None,
+                available_variable_codes=frozenset(),
+                available_evidence_types=frozenset(),
+                groups=groups,
+            )
+
+    class FakeDB:
+        async def get(self, model, identity):
+            assert model is ContentTask
+            assert identity == "task-1"
+            return SimpleNamespace(id="task-1", uid="user-1", created_by="user-1", tenant_id=None)
+
+    monkeypatch.setattr(deterministic_node_module, "PostgresStrategyPreviewRepository", FakePreviewRepository)
+
+    result = await V3DeterministicNodeHandler()._select_creation_strategy(
+        db=FakeDB(),
+        state={"task_id": "task-1", "uid": "user-1", "evidence_bundle": {"items": []}},
+        node_run_id="node-run-1",
+    )
+
+    assert result["strategy_selection"]["selected_group_id"] == "group-high"
+    assert result["strategy_selection"]["title_formula_code"] == "T01"
+    assert result["selected_angle"]["selected_by"] == "deterministic"
 
 
 @pytest.mark.asyncio
@@ -517,6 +589,207 @@ async def test_high_risk_gate_does_not_interrupt_without_new_high_risk_facts(mon
     )
 
     assert result["state_version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_high_risk_gate_excludes_unconfirmed_external_fact_without_interrupt(monkeypatch):
+    monkeypatch.setattr(
+        content_workflow_graph_module,
+        "interrupt",
+        lambda _payload: pytest.fail("未确认的外部高风险资料应自动排除，不应阻塞首稿"),
+    )
+
+    result = await ContentWorkflowAgent()._v3_human_review(
+        {"id": "confirm_high_risk_facts", "interrupt_type": "high_risk_facts"},
+        {
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "state_version": 1,
+            "evidence_collection": {
+                "evidence_items": [
+                    {
+                        "id": "ev-price",
+                        "source_id": "price-row-1",
+                        "value": "外部价格",
+                        "risk_level": "high_risk",
+                        "verified_status": "retrieved",
+                    },
+                    {
+                        "id": "ev-user-budget",
+                        "source_id": "brief-budget",
+                        "value": "用户填写预算",
+                        "risk_level": "high_risk",
+                        "verified_status": "user_confirmed",
+                    },
+                ],
+                "citations": ["price-row-1", "brief-budget"],
+            },
+        },
+    )
+
+    assert [item["id"] for item in result["evidence_collection"]["evidence_items"]] == ["ev-user-budget"]
+    assert result["evidence_collection"]["citations"] == ["brief-budget"]
+    assert "未经用户确认" in result["evidence_collection"]["unresolved_questions"][0]
+
+
+@pytest.mark.asyncio
+async def test_merge_research_excludes_unconfirmed_external_high_risk_evidence(monkeypatch):
+    captured = {}
+
+    class ValidatedResult:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def model_dump(self, **_kwargs):
+            return self.payload
+
+    def fake_validate(_contract, payload, _context):
+        captured.update(payload)
+        return ValidatedResult(payload)
+
+    monkeypatch.setattr(deterministic_node_module, "validate_content_node_result", fake_validate)
+
+    result = await V3DeterministicNodeHandler()._merge_research_evidence(
+        db=SimpleNamespace(),
+        state={
+            "runtime_config_snapshot": {"creation_mode": "original", "rule_version_id": "rules-v3"},
+            "formula_selection_snapshot": {},
+            "evidence_bundle": {"items": []},
+            "business_rule_evidence_collection": {"evidence_items": []},
+            "compliance_evidence_collection": {"evidence_items": []},
+            "price_evidence_collection": {
+                "evidence_items": [
+                    {
+                        "id": "ev-price",
+                        "value": "设计费 55.8 元/平方米",
+                        "source_id": "price-row-1",
+                        "risk_level": "high_risk",
+                        "verified_status": "retrieved",
+                    }
+                ],
+                "citations": ["price-row-1"],
+                "unresolved_questions": [],
+            },
+            "viral_reference_selection": {},
+            "viral_candidate_collection": {"evidence_items": []},
+        },
+        node_run_id="node-run-1",
+    )
+
+    assert result["evidence_collection"]["evidence_items"] == []
+    assert captured["citations"] == []
+    assert "未经用户确认" in captured["unresolved_questions"][0]
+
+
+@pytest.mark.asyncio
+async def test_semantic_review_skips_model_for_normal_first_draft():
+    node_run = SimpleNamespace(id="node-run-1")
+    task = SimpleNamespace(id="task-1")
+    user = SimpleNamespace(uid="user-1")
+
+    class Result:
+        def scalar_one_or_none(self):
+            return user
+
+    class FakeDB:
+        async def get(self, model, _key):
+            if model is ContentNodeRun:
+                return node_run
+            if model is ContentTask:
+                return task
+            raise AssertionError(f"unexpected model: {model}")
+
+        async def execute(self, _statement):
+            return Result()
+
+    result = await AgentNodeHandler().execute(
+        db=FakeDB(),
+        node={"id": "semantic_review"},
+        state={"task_id": "task-1", "uid": "user-1", "runtime_config_snapshot": {}},
+        node_run_id="node-run-1",
+    )
+
+    assert result["review_report"]["status"] == "passed"
+    assert result["review_report"]["skipped"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("node_id", "result_field"),
+    [
+        ("collect_business_rule_evidence", "business_rule_evidence_collection"),
+        ("collect_price_evidence", "price_evidence_collection"),
+        ("collect_compliance_evidence", "compliance_evidence_collection"),
+    ],
+)
+async def test_parallel_research_skips_agent_when_evidence_has_no_gap(node_id, result_field):
+    node_run = SimpleNamespace(id="node-run-1")
+    task = SimpleNamespace(id="task-1")
+    user = SimpleNamespace(uid="user-1")
+
+    class Result:
+        def scalar_one_or_none(self):
+            return user
+
+    class FakeDB:
+        async def get(self, model, _key):
+            if model is ContentNodeRun:
+                return node_run
+            if model is ContentTask:
+                return task
+            raise AssertionError(f"unexpected model: {model}")
+
+        async def execute(self, _statement):
+            return Result()
+
+    result = await AgentNodeHandler().execute(
+        db=FakeDB(),
+        node={"id": node_id},
+        state={
+            "task_id": "task-1",
+            "uid": "user-1",
+            "evidence_gap_analysis": {"has_missing": False},
+            "runtime_config_snapshot": {},
+        },
+        node_run_id="node-run-1",
+    )
+
+    assert result[result_field]["skipped"] is True
+    assert result[result_field]["evidence_items"] == []
+
+
+def test_parallel_cache_key_changes_only_when_node_inputs_change():
+    node = {
+        "id": "collect_price_evidence",
+        "parallel_group": "research",
+        "state_inputs": ["content_brief", "strategy_snapshot"],
+    }
+    state = {"content_brief": {"city": "杭州"}, "strategy_snapshot": {"id": "s1"}, "run_id": "run-1"}
+
+    first = _parallel_cache_key(node, state)
+    assert first == _parallel_cache_key(node, {**state, "run_id": "run-2"})
+    assert first != _parallel_cache_key(node, {**state, "content_brief": {"city": "长沙"}})
+
+
+def test_parallel_retry_reuses_only_completed_result_with_same_input_snapshot():
+    completed = [
+        SimpleNamespace(
+            id="stale-run",
+            input_snapshot={"cache_key": "old"},
+            output_snapshot={"result": {"price_evidence_collection": {"evidence_items": []}}},
+        ),
+        SimpleNamespace(
+            id="matching-run",
+            input_snapshot={"cache_key": "current"},
+            output_snapshot={"result": {"price_evidence_collection": {"evidence_items": [{"id": "ev-1"}]}}},
+        ),
+    ]
+
+    cached = _find_cached_parallel_result(completed, "current")
+
+    assert cached is not None
+    assert cached[0].id == "matching-run"
+    assert cached[1]["price_evidence_collection"]["evidence_items"][0]["id"] == "ev-1"
 
 
 @pytest.mark.asyncio
@@ -901,7 +1174,7 @@ async def test_save_artifact_binds_selected_reviewed_cover(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_deterministic_block_pauses_for_human_before_targeted_agent_revision():
+async def test_deterministic_block_routes_directly_to_targeted_agent_revision():
     agent = ContentWorkflowAgent()
     graph = StateGraph(ContentWorkflowState)
 
@@ -936,23 +1209,8 @@ async def test_deterministic_block_pauses_for_human_before_targeted_agent_revisi
     }
 
     await workflow.ainvoke(state, config=config)
-    interrupted = await workflow.aget_state(config)
-    payload = interrupted.interrupts[0].value
-    assert payload["interrupt_type"] == "content_correction"
-    assert payload["suggested_target"] == "generate_content"
-
-    await workflow.ainvoke(
-        Command(
-            resume={
-                "run_id": "run-1",
-                "node_id": "revise_if_needed",
-                "expected_state_version": 7,
-                "decision": "revise",
-            }
-        ),
-        config=config,
-    )
     completed = await workflow.aget_state(config)
+    assert completed.interrupts == ()
     assert completed.values["revision_target"] == "generate_content"
     assert completed.values["retry_counts"] == {"generate_content": 1}
 
@@ -1091,6 +1349,56 @@ async def test_final_approval_is_a_backend_hard_gate_for_both_reports():
         )
 
     assert exc_info.value.code == "content_approval_blocked"
+
+
+@pytest.mark.asyncio
+async def test_final_approval_is_automatic_after_reports_pass():
+    agent = ContentWorkflowAgent()
+    state = {
+        "task_id": "task-1",
+        "run_id": "run-1",
+        "uid": "user-1",
+        "state_version": 1,
+        "selected_title": {"text": "标题"},
+        "content_draft": {"body": "正文"},
+        "evidence_bundle": {"bundle_hash": "bundle-1"},
+        "validation_report": {"status": "passed", "checks": []},
+        "review_report": {"status": "passed", "checks": []},
+    }
+
+    result = await agent._v3_human_review(
+        {"id": "human_content_approval", "interrupt_type": "content_approval"},
+        state,
+    )
+
+    assert result["approval_result"] == {
+        "status": "approved",
+        "note": "固定校验通过后自动批准",
+        "reviewer_uid": "system",
+    }
+
+
+@pytest.mark.asyncio
+async def test_blocked_content_validation_routes_to_revision_without_human_interrupt():
+    agent = ContentWorkflowAgent()
+    result = await agent._execute_node(
+        {"id": "revise_if_needed", "type": "revision_router"},
+        {
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "current_node": "deterministic_validate",
+            "retry_counts": {},
+            "validation_report": {
+                "status": "blocked",
+                "checks": [{"code": "BODY_LENGTH_OUT_OF_RANGE", "level": "error"}],
+            },
+        },
+        WORKFLOW_V3,
+    )
+
+    assert result["revision_status"] == "route"
+    assert result["revision_target"] == "generate_content"
+    assert result["revision_reason_code"] == "BODY_STRUCTURE_FAILED"
 
 
 def _title_gate_graph(agent: ContentWorkflowAgent):

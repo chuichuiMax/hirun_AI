@@ -37,10 +37,11 @@ export function autoFitScale(
   const maxScale = bounds.maxScale ?? 4;
   const steps = bounds.steps ?? 20;
   const target = node.box.height - (node.box.padding ? node.box.padding.t + node.box.padding.b : 0);
+  const targetWidth = node.box.width - (node.box.padding ? node.box.padding.l + node.box.padding.r : 0);
 
   const fits = (scale: number) => {
     const laid = layoutText({ ...scaleNode(node, scale), box: { ...node.box, mode: "autoHeight" } }, opts);
-    return laid.height <= target;
+    return laid.height <= target && laid.lines.every((line) => line.x + line.width <= targetWidth);
   };
 
   if (fits(maxScale)) return maxScale;
