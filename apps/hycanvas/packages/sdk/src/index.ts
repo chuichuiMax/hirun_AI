@@ -1353,6 +1353,9 @@ export class HyCanvasClient {
   getDesignFile(id: string, opts?: { trashed?: boolean }): Promise<DesignFile> {
     return this.request("GET", `/v1/designs/${id}/file${opts?.trashed ? "?trashed=1" : ""}`);
   }
+  getDesignPreviewFile(id: string): Promise<DesignFile> {
+    return this.request("GET", `/v1/designs/${id}/preview-file`);
+  }
   updateDesignThumbnail(id: string, thumbnail: string): Promise<void> {
     return this.request("PUT", `/v1/designs/${id}/thumbnail`, { thumbnail });
   }

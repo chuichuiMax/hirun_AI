@@ -86,7 +86,7 @@ export function DesignThumb({ designId, templateId, previewUrl, allowFallback = 
         // endpoint returns 404 for trashed designs and the card shows only the
         // gradient fallback.
         const file = await withPreviewSlot(
-          () => templateId ? oc.getTemplateFile(templateId) : oc.getDesignFile(designId!, trashed ? { trashed: true } : undefined),
+          () => templateId ? oc.getTemplateFile(templateId) : trashed ? oc.getDesignFile(designId!, { trashed: true }) : oc.getDesignPreviewFile(designId!),
           controller.signal,
         );
         if (cancelled || !file) return;

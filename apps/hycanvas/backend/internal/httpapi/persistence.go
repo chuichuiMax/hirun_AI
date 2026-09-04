@@ -30,6 +30,7 @@ func mountPersistence(api chi.Router, p *persistence.Service, acct *accounts.Ser
 	api.With(requireAuth(acct)).Patch("/designs/{id}", renameDesignHandler(p, acct))
 	api.With(requireAuth(acct)).Delete("/designs/{id}", deleteDesignHandler(p, acct))
 	api.With(requireAuth(acct)).Get("/designs/{id}/file", designFileHandler(p, acct, sh))
+	api.With(requireAuth(acct)).Get("/designs/{id}/preview-file", designPreviewFileHandler(p, acct, sh))
 	api.With(requireAuth(acct)).Get("/designs/{id}/thumbnail", designThumbnailHandler(p, acct, sh))
 	api.With(requireAuth(acct)).Put("/designs/{id}/thumbnail", updateDesignThumbnailHandler(p, acct))
 	api.With(requireAuth(acct)).Get("/designs/{id}/versions", listVersionsHandler(p, acct, sh))
@@ -209,6 +210,27 @@ func designFileHandler(p *persistence.Service, acct *accounts.Service, sh *shari
 			persistenceProblem(w, r, err)
 			return
 		}
+		writeJSON(w, http.StatusOK, loaded.File)
+	}
+}
+
+func designPreviewFileHandler(p *persistence.Service, acct *accounts.Service, sh *sharing.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		ws, err := authorizeDesignRead(r, p, acct, sh, id)
+		if err != nil {
+			authProblem(w, r, err)
+			return
+		}
+		loaded, err := p.LoadFile(r.Context(), id, ws)
+		if err != nil {
+			persistenceProblem(w, r, err)
+			return
+		}
+		// Uploaded fonts can add hundreds of megabytes to old design files. A
+		// dashboard thumbnail only needs the page structure; the browser uses an
+		// installed fallback font for this one-time preview render.
+		loaded.File["fonts"] = []any{}
 		writeJSON(w, http.StatusOK, loaded.File)
 	}
 }
