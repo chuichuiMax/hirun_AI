@@ -1655,9 +1655,7 @@ class ContentVariable(Base):
     """变量配置，服务入口与内容类型名称联动。"""
 
     __tablename__ = "content_variables"
-    __table_args__ = (
-        UniqueConstraint("service_entry", "name", name="uq_content_variables_service_entry_name"),
-    )
+    __table_args__ = (UniqueConstraint("name", name="uq_content_variables_name"),)
 
     id = Column(String(64), primary_key=True)
     variable_code = Column(String(32), nullable=False, unique=True, index=True)

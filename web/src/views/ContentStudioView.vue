@@ -1618,7 +1618,7 @@ const openVersions = async () => {
               <div class="dynamic-form">
                 <a-empty
                   v-if="!activeFields.length"
-                  description="当前服务入口没有可用于 PC 的变量，请在变量配置中启用对应端口和版本"
+                  description="当前服务入口没有可用于 PC 的业务参数，请在业务参数配置中启用"
                 />
                 <label v-for="field in activeFields" :key="field.key" class="field-block">
                   <span>{{ field.label }}<em v-if="field.required">*</em></span>

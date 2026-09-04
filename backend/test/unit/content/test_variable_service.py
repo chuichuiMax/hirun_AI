@@ -57,3 +57,29 @@ def test_next_variable_code_increments_fwtd_sequence():
 
 def test_service_entries_are_home_and_review_notes():
     assert SERVICE_ENTRIES == ("装修家居", "好评笔记")
+
+
+def test_dedupe_prefers_enabled_then_smaller_code():
+    class Row:
+        def __init__(self, variable_code: str, name: str, enabled: bool):
+            self.id = variable_code
+            self.variable_code = variable_code
+            self.name = name
+            self.enabled = enabled
+
+    rows = [
+        Row("FWTD0011", "楼盘信息", False),
+        Row("FWTD0006", "楼盘信息", True),
+        Row("FWTD0012", "楼盘信息", True),
+    ]
+    winners: dict[str, Row] = {}
+    for item in rows:
+        current = winners.get(item.name)
+        if current is None:
+            winners[item.name] = item
+            continue
+        prefer_new = (bool(item.enabled) and not bool(current.enabled)) or (
+            bool(item.enabled) == bool(current.enabled) and item.variable_code < current.variable_code
+        )
+        winners[item.name] = item if prefer_new else current
+    assert winners["楼盘信息"].variable_code == "FWTD0006"

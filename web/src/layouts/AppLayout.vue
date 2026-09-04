@@ -236,7 +236,7 @@ const mainList = computed(() => {
         activeIcon: Layers
       },
       {
-        name: '变量配置',
+        name: '业务参数配置',
         path: '/config-manage/variables',
         icon: Braces,
         activeIcon: Braces
