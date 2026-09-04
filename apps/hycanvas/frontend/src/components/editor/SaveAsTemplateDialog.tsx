@@ -13,6 +13,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { tr } from "@/lib/i18n";
 import { templateTagForZone, templateZoneFromMeta } from "@/lib/templateZones";
+import { createDesignThumbnail } from "@/lib/designThumbnail";
 
 const visibilities = (): { value: TemplateVisibility; label: string; hint: string }[] => [
   { value: "private", label: tr("editor.only_me"), hint: tr("editor.visible_only_to_you") },
@@ -110,15 +111,17 @@ export function SaveAsTemplateDialog({
     }
     setBusy(true);
     try {
+      const file = useEditor.getState().doc;
       await oc.saveAsTemplate({
         workspaceId,
         // Loading by designId can race autosave and capture an older style.
-        file: useEditor.getState().doc,
+        file,
         title: title.trim(),
         category: category.trim() || undefined,
         tags: zoneTag ? [zoneTag] : undefined,
         visibility,
         fillableFields,
+        thumbnail: createDesignThumbnail(file),
       });
       useEditor.getState().setDocMeta({ brandEditableFields: fillableFields });
       await onSaved?.(fillableFields);

@@ -7,6 +7,37 @@ import { useEffect, useRef, useState } from "react";
 import { createScene, renderScene, type CanvasLike, type Viewport } from "@hc/engine";
 import { oc } from "@/lib/sdk";
 import { imageAssets } from "@/lib/assetProvider";
+import { createDesignThumbnail } from "@/lib/designThumbnail";
+
+const previewWaiters: Array<() => void> = [];
+let activePreviews = 0;
+const MAX_CONCURRENT_PREVIEWS = 2;
+
+async function withPreviewSlot<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  if (activePreviews >= MAX_CONCURRENT_PREVIEWS) {
+    await new Promise<void>((resolve) => {
+      const resume = () => {
+        signal.removeEventListener("abort", cancel);
+        resolve();
+      };
+      const cancel = () => {
+        const index = previewWaiters.indexOf(resume);
+        if (index >= 0) previewWaiters.splice(index, 1);
+        resolve();
+      };
+      previewWaiters.push(resume);
+      signal.addEventListener("abort", cancel, { once: true });
+    });
+  }
+  if (signal.aborted) return undefined;
+  activePreviews += 1;
+  try {
+    return await work();
+  } finally {
+    activePreviews -= 1;
+    previewWaiters.shift()?.();
+  }
+}
 
 // Nearest scrollable ancestor, used as the observer root: the dashboard grids
 // scroll in an inner overflow-y-auto container, and a rootMargin only extends
@@ -18,9 +49,10 @@ function scrollParent(el: HTMLElement): Element | null {
   return null;
 }
 
-export function DesignThumb({ designId, templateId, trashed }: { designId?: string; templateId?: string; trashed?: boolean }) {
+export function DesignThumb({ designId, templateId, previewUrl, allowFallback = true, trashed }: { designId?: string; templateId?: string; previewUrl?: string; allowFallback?: boolean; trashed?: boolean }) {
+  const holderRef = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLCanvasElement>(null);
-  const [ok, setOk] = useState<boolean | null>(null);
+  const [ok, setOk] = useState<boolean | null>(previewUrl ? true : null);
   // Each preview costs a full design-file download plus an engine render, so
   // it must not start until the card is on (or near) the viewport: a grid of
   // 100 templates or designs would otherwise fetch everything at once.
@@ -29,7 +61,8 @@ export function DesignThumb({ designId, templateId, trashed }: { designId?: stri
 
   useEffect(() => {
     if (near) return;
-    const el = ref.current;
+    if (previewUrl || !allowFallback) return;
+    const el = holderRef.current;
     if (!el) return;
     const io = new IntersectionObserver(
       (entries) => {
@@ -41,18 +74,22 @@ export function DesignThumb({ designId, templateId, trashed }: { designId?: stri
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [near]);
+  }, [allowFallback, near, previewUrl]);
 
   useEffect(() => {
-    if (!near) return;
+    if (!near || previewUrl || !allowFallback) return;
     let cancelled = false;
+    const controller = new AbortController();
     void (async () => {
       try {
         // `trashed` opts into the member-only trash read; without it the file
         // endpoint returns 404 for trashed designs and the card shows only the
         // gradient fallback.
-        const file = templateId ? await oc.getTemplateFile(templateId) : await oc.getDesignFile(designId!, trashed ? { trashed: true } : undefined);
-        if (cancelled) return;
+        const file = await withPreviewSlot(
+          () => templateId ? oc.getTemplateFile(templateId) : trashed ? oc.getDesignFile(designId!, { trashed: true }) : oc.getDesignPreviewFile(designId!),
+          controller.signal,
+        );
+        if (cancelled || !file) return;
         const canvas = ref.current;
         if (!canvas) return;
         // Video documents carry a user-chosen cover frame; the scene render
@@ -95,19 +132,27 @@ export function DesignThumb({ designId, templateId, trashed }: { designId?: stri
         imageAssets.registerAll(file.assets ?? []);
         renderScene(createScene(file), ctx as unknown as CanvasLike, vp, { assets: imageAssets });
         setOk(true);
+        if (designId && !trashed) {
+          const thumbnail = createDesignThumbnail(file);
+          if (thumbnail) void oc.updateDesignThumbnail(designId, thumbnail).catch(() => undefined);
+        }
       } catch {
         if (!cancelled) setOk(false);
       }
     })();
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [near, designId, templateId, trashed]);
+  }, [allowFallback, near, designId, templateId, previewUrl, trashed]);
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-neutral-100">
+    <div ref={holderRef} className="relative h-full w-full overflow-hidden bg-neutral-100">
       {ok !== true && <div className="oc-gradient absolute inset-0 opacity-90" />}
-      <canvas ref={ref} className="relative h-full w-full" />
+      {previewUrl
+        // Authenticated API previews cannot use Next's build-time image loader.
+        ? <img /* eslint-disable-line @next/next/no-img-element */ src={previewUrl} alt="" className="relative h-full w-full object-cover" />
+        : allowFallback ? <canvas ref={ref} className="relative h-full w-full" /> : null}
     </div>
   );
 }

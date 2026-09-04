@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -204,11 +207,23 @@ func serveFile(w http.ResponseWriter, req *http.Request, root http.FileSystem, n
 	}
 	// Turbopack chunk names are not guaranteed to change between production
 	// builds. Revalidate them so a deployment cannot mix an old runtime with new
-	// lazy editor chunks. Build-scoped manifests and media remain immutable.
+	// lazy editor chunks. Browsers can still reuse an unchanged response after a
+	// cheap conditional request instead of downloading multi-megabyte chunks on
+	// every workspace visit. Build-scoped manifests and media remain immutable.
 	if strings.HasPrefix(name, "/_next/static/chunks/") {
-		w.Header().Set("Cache-Control", "no-store")
-		req.Header.Del("If-Modified-Since")
-		req.Header.Del("If-None-Match")
+		w.Header().Set("Cache-Control", "no-cache")
+		body, rerr := io.ReadAll(f)
+		if rerr == nil {
+			sum := sha256.Sum256(body)
+			etag := fmt.Sprintf(`"%x"`, sum[:16])
+			w.Header().Set("ETag", etag)
+			if req.Header.Get("If-None-Match") == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			http.ServeContent(w, req, info.Name(), info.ModTime(), bytes.NewReader(body))
+			return
+		}
 	} else if strings.HasPrefix(name, "/_next/") {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}

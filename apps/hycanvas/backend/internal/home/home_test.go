@@ -86,9 +86,13 @@ func TestHome_DB(t *testing.T) {
 
 func TestDesignToItemCarriesTemplateZone(t *testing.T) {
 	zone := "xiaohongshu"
-	item := designToItem(persistence.DesignRecord{ID: "d1", TemplateZone: &zone}, false)
+	thumbnail := "data:image/jpeg;base64,dGVzdA=="
+	item := designToItem(persistence.DesignRecord{ID: "d1", TemplateZone: &zone, ThumbnailURL: &thumbnail}, false)
 	if item.TemplateZone == nil || *item.TemplateZone != zone {
 		t.Fatalf("template zone missing from home item: %+v", item)
+	}
+	if item.ThumbnailURL == nil || *item.ThumbnailURL != "/api/v1/designs/d1/thumbnail" {
+		t.Fatalf("thumbnail endpoint missing from home item: %+v", item)
 	}
 }
 

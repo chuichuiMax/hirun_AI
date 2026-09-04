@@ -49,6 +49,7 @@ import { PromptHost } from "@/components/ui/PromptHost";
 import { isContentSwarmManaged } from "@/lib/managedAuth";
 import { useRealtime, getDesignDoc, resyncFromLiveDoc } from "@/lib/useRealtime";
 import { useAutoSnapshot, checkpointMaxBytes } from "@/lib/useAutoSnapshot";
+import { createDesignThumbnail } from "@/lib/designThumbnail";
 import { onCommentChanged, onRoleChanged } from "@/lib/realtime";
 import { useViewBeat } from "@/lib/useViewBeat";
 import { useComments } from "@/store/comments";
@@ -925,7 +926,7 @@ export function EditorApp() {
         toast.error("The design is still loading; try again in a moment.");
         return false;
       }
-      await oc.saveSnapshot(designId, { file, kind: "checkpoint" });
+      await oc.saveSnapshot(designId, { file, kind: "checkpoint", thumbnail: createDesignThumbnail(file) });
       if (!mounted.current) return;
       // Mark the doc clean at the just-saved revision so the dirty indicator and
       // the unload guard clear; record the wall-clock time for the status text.

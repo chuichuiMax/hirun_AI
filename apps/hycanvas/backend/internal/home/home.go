@@ -52,11 +52,17 @@ func NewService(db DBTX, persist *persistence.Service, access Access) *Service {
 }
 
 func designToItem(d persistence.DesignRecord, starred bool) HomeItem {
+	var thumbnailURL *string
+	if d.ThumbnailURL != nil && *d.ThumbnailURL != "" {
+		url := "/api/v1/designs/" + d.ID + "/thumbnail"
+		thumbnailURL = &url
+	}
 	return HomeItem{
 		Kind:         "design",
 		DocKind:      d.DocKind,
 		ID:           d.ID,
 		Title:        d.Title,
+		ThumbnailURL: thumbnailURL,
 		WorkspaceID:  d.WorkspaceID,
 		TemplateZone: d.TemplateZone,
 		UpdatedAt:    d.UpdatedAt,
