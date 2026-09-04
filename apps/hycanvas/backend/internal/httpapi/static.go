@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -209,6 +212,18 @@ func serveFile(w http.ResponseWriter, req *http.Request, root http.FileSystem, n
 	// every workspace visit. Build-scoped manifests and media remain immutable.
 	if strings.HasPrefix(name, "/_next/static/chunks/") {
 		w.Header().Set("Cache-Control", "no-cache")
+		body, rerr := io.ReadAll(f)
+		if rerr == nil {
+			sum := sha256.Sum256(body)
+			etag := fmt.Sprintf(`"%x"`, sum[:16])
+			w.Header().Set("ETag", etag)
+			if req.Header.Get("If-None-Match") == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			http.ServeContent(w, req, info.Name(), info.ModTime(), bytes.NewReader(body))
+			return
+		}
 	} else if strings.HasPrefix(name, "/_next/") {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}

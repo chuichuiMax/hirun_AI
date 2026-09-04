@@ -178,16 +178,25 @@ func TestStaticServing(t *testing.T) {
 	if code, _, cc := get("/_next/static/chunks/editor.js"); code != 200 || cc != "no-cache" {
 		t.Fatalf("/_next chunk: %d cache=%q", code, cc)
 	}
-	chunkInfo, err := os.Stat(filepath.Join(dir, "_next/static/chunks/editor.js"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/_next/static/chunks/editor.js", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("If-Modified-Since", chunkInfo.ModTime().UTC().Format(http.TimeFormat))
 	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	etag := resp.Header.Get("ETag")
+	resp.Body.Close()
+	if etag == "" {
+		t.Fatal("/_next chunk missing ETag")
+	}
+	req, err = http.NewRequest(http.MethodGet, srv.URL+"/_next/static/chunks/editor.js", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("If-None-Match", etag)
+	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
