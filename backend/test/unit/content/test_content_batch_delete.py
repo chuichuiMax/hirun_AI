@@ -21,6 +21,7 @@ async def test_batch_delete_deduplicates_ids_and_soft_deletes_after_validation(m
         task_id: SimpleNamespace(
             id=task_id,
             workflow_version_id="content-workflow-v3.7",
+            runtime_config_snapshot_json={"schema_version": 1},
             deleted_at=None,
             status="completed",
             updated_by=None,
@@ -38,8 +39,6 @@ async def test_batch_delete_deduplicates_ids_and_soft_deletes_after_validation(m
             return tasks.get(task_id)
 
     monkeypatch.setattr(content_service, "ContentRepository", FakeRepository)
-    monkeypatch.setattr(content_service, "_require_v3_task", lambda task: None)
-
     result = await content_service.delete_content_tasks(db, user, ["task-1", "task-1", "task-2"])
 
     assert result == {"deleted": True, "task_ids": ["task-1", "task-2"], "deleted_count": 2}
@@ -69,11 +68,41 @@ async def test_batch_delete_does_not_mutate_or_commit_when_any_task_is_inaccessi
             return first if task_id == first.id else None
 
     monkeypatch.setattr(content_service, "ContentRepository", FakeRepository)
-    monkeypatch.setattr(content_service, "_require_v3_task", lambda task: None)
-
     with pytest.raises(Exception):
         await content_service.delete_content_tasks(db, user, ["task-1", "other-user-task"])
 
     assert db.commit_count == 0
     assert first.status == "completed"
     assert first.deleted_at is None
+
+
+@pytest.mark.asyncio
+async def test_delete_allows_legacy_task(monkeypatch):
+    db = FakeDB()
+    user = SimpleNamespace(uid="user-1")
+    task = SimpleNamespace(
+        id="legacy-task",
+        runtime_config_snapshot_json={"schema_version": 1},
+        deleted_at=None,
+        status="completed",
+        updated_by=None,
+    )
+
+    class FakeRepository:
+        def __init__(self, session):
+            assert session is db
+
+        async def get_task_for_user(self, task_id, current_user, *, for_update=False):
+            assert task_id == task.id
+            assert current_user is user
+            assert for_update is True
+            return task
+
+    monkeypatch.setattr(content_service, "ContentRepository", FakeRepository)
+
+    result = await content_service.delete_content_task(db, user, task.id)
+
+    assert result == {"deleted": True, "task_id": task.id}
+    assert db.commit_count == 1
+    assert task.status == "deleted"
+    assert task.deleted_at is not None

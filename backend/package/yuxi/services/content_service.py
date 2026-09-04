@@ -725,7 +725,6 @@ async def delete_content_task(db: AsyncSession, user: User, task_id: str) -> dic
     task = await repo.get_task_for_user(task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    _require_v3_task(task)
     task.deleted_at = utc_now_naive()
     task.status = "deleted"
     task.updated_by = str(user.uid)
@@ -741,7 +740,6 @@ async def delete_content_tasks(db: AsyncSession, user: User, task_ids: list[str]
         task = await repo.get_task_for_user(task_id, user, for_update=True)
         if task is None:
             raise _content_error(404, "CONTENT_TASK_NOT_FOUND", f"内容任务不存在: {task_id}")
-        _require_v3_task(task)
         tasks.append(task)
 
     deleted_at = utc_now_naive()
