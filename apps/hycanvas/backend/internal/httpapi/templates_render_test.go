@@ -39,3 +39,13 @@ func TestTemplatePreviewAPIKeyRouteRequiresExportScope(t *testing.T) {
 		t.Fatalf("template preview route = scope %q design %q", route.scope, designID)
 	}
 }
+
+func TestTemplateBackgroundPreviewAPIKeyRouteRequiresExportScope(t *testing.T) {
+	route, designID, ok := matchAPIKeyRoute(http.MethodPost, "/api/v1/templates/template-id/preview.png")
+	if !ok {
+		t.Fatal("template background preview route is not available to API keys")
+	}
+	if route.scope != apikeys.ScopeExport || designID != "" {
+		t.Fatalf("template background preview route = scope %q design %q", route.scope, designID)
+	}
+}

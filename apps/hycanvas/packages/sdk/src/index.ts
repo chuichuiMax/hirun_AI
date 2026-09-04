@@ -6,6 +6,27 @@ import type { Color, DesignFile } from "@hc/schema";
 import type { AccessMode, Capability, HomeItem, Membership, TimeFormat, User, WeekStart, Workspace, WorkspaceRole } from "@hc/authz";
 import type { BrandLintViolation } from "@hc/brandkit";
 
+const maxEmbeddedFontURLBytes = 32 << 20;
+
+/** Keep normal custom fonts portable, but never stringify and upload a
+ * pathological imported font collection. The backend enforces the same limit;
+ * doing it here avoids spending tens of seconds serializing/transferring bytes
+ * that the server will discard. */
+export function compactOversizedFontPayloads(file: DesignFile): DesignFile {
+  const fonts = (file as DesignFile & { fonts?: Array<{ url?: string }> }).fonts;
+  if (!Array.isArray(fonts)) return file;
+  const total = fonts.reduce((size, font) => size + (font.url?.startsWith("data:") ? font.url.length : 0), 0);
+  if (total <= maxEmbeddedFontURLBytes) return file;
+  return {
+    ...file,
+    fonts: fonts.map((font) => {
+      if (!font.url?.startsWith("data:")) return font;
+      const { url: _url, ...ref } = font;
+      return ref;
+    }),
+  } as DesignFile;
+}
+
 // Re-export the shared domain types so the SDK is a single import surface for
 // consumers (the web app imports User/Workspace/HomeItem etc. from here).
 export type { DesignFile } from "@hc/schema";
@@ -1360,7 +1381,7 @@ export class HyCanvasClient {
     return this.request("PUT", `/v1/designs/${id}/thumbnail`, { thumbnail });
   }
   saveSnapshot(id: string, input: { file: DesignFile; label?: string; kind?: SavableSnapshotKind; thumbnail?: string }): Promise<DesignRecord> {
-    return this.request("POST", `/v1/designs/${id}/snapshots`, input);
+    return this.request("POST", `/v1/designs/${id}/snapshots`, { ...input, file: compactOversizedFontPayloads(input.file) });
   }
   /** A page of a design's version history, newest first. Each
    *  entry carries its resolved author, kind, label, and timestamp. Pass the
@@ -1692,8 +1713,8 @@ export class HyCanvasClient {
     const qs = params.toString();
     return this.request("GET", `/v1/templates${qs ? `?${qs}` : ""}`);
   }
-  getTemplateFile(id: string): Promise<DesignFile> {
-    return this.request("GET", `/v1/templates/${id}/file`);
+  getTemplateFile(id: string, signal?: AbortSignal): Promise<DesignFile> {
+    return this.request("GET", `/v1/templates/${id}/file`, undefined, { signal });
   }
   /** A template's declared fillable fields, for the bulk-create mapping UI. */
   templateFillableFields(id: string): Promise<FillableFieldSummary[]> {
@@ -1774,7 +1795,9 @@ export class HyCanvasClient {
   }
   /** Save the current design (by id or inline file) as a template (FR-9). */
   saveAsTemplate(input: SaveAsTemplateInput): Promise<TemplateSummary> {
-    return this.request("POST", "/v1/templates", input);
+    return this.request("POST", "/v1/templates", input.file
+      ? { ...input, file: compactOversizedFontPayloads(input.file) }
+      : input);
   }
   renameTemplate(id: string, title: string): Promise<TemplateSummary> {
     return this.request("PATCH", `/v1/templates/${id}`, { title });

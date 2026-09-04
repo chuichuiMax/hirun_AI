@@ -88,7 +88,7 @@ import { Modal } from "@/components/ui/Modal";
 import { PromptHost } from "@/components/ui/PromptHost";
 import { Spinner } from "@/components/ui/Spinner";
 import { dashboardPath, type DashboardView } from "./views";
-import { DesignThumb } from "./DesignThumb";
+import { cancelThumbnailPreviews, DesignThumb } from "./DesignThumb";
 import { BulkCreateModal } from "./BulkCreateModal";
 import { MembersPanel } from "./MembersPanel";
 import { ApiKeysPanel } from "./ApiKeysPanel";
@@ -646,6 +646,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
 
   async function applyTemplate(template: TemplateSummary | string) {
     if (!activeWorkspaceId) return;
+    cancelThumbnailPreviews();
     setBusy(true);
     try {
       const templateId = typeof template === "string" ? template : template.id;

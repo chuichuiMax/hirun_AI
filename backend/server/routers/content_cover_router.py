@@ -18,6 +18,7 @@ from yuxi.content_cover.schemas import (
     HyCanvasDesignCreate,
     HyCanvasDesignSync,
     HyCanvasEditorSessionCreate,
+    HyCanvasTemplatePreviewCreate,
     Image2ConfigTestRequest,
     Image2GlobalConfigUpdate,
     PosterGenerateCreate,
@@ -58,6 +59,7 @@ from yuxi.services.content_cover_service import (
     update_poster_template,
 )
 from yuxi.services.hycanvas_service import HyCanvasClient
+from yuxi.services.material_library_service import get_material_file
 from yuxi.storage.postgres.models_business import User
 
 content_covers = APIRouter(prefix="/content/covers", tags=["content-covers"])
@@ -77,6 +79,21 @@ async def render_hycanvas_template(
     del current_user
     content, content_type = await HyCanvasClient.from_env().render_template_png(template_id)
     return Response(content=content, media_type=content_type)
+
+
+@content_covers.post("/hycanvas/templates/{template_id}/preview.png")
+async def preview_hycanvas_template(
+    template_id: str,
+    payload: HyCanvasTemplatePreviewCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    image = await get_material_file(db, current_user, payload.image_item_id)
+    content, content_type = await HyCanvasClient.from_env().render_template_with_background_png(
+        template_id,
+        image,
+    )
+    return Response(content=content, media_type=content_type, headers={"Cache-Control": "no-store"})
 
 
 @content_covers.post("/hycanvas/designs", status_code=status.HTTP_201_CREATED)

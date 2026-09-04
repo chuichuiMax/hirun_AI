@@ -210,6 +210,10 @@ func designFileHandler(p *persistence.Service, acct *accounts.Service, sh *shari
 			persistenceProblem(w, r, err)
 			return
 		}
+		// Do not send pathological inline font collections to the editor. The
+		// same compaction runs on snapshot writes, so the next save permanently
+		// repairs an old oversized current snapshot without touching its history.
+		persistence.CompactOversizedFonts(loaded.File)
 		writeJSON(w, http.StatusOK, loaded.File)
 	}
 }

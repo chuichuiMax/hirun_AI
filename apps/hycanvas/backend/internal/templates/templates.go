@@ -18,6 +18,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"hycanvas/backend/internal/persistence"
 )
 
 //go:embed seed.json
@@ -490,6 +492,11 @@ func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInpu
 		meta["brandEditableFields"] = in.FillableFields
 		file["meta"] = meta
 	}
+	// Match the design snapshot safety limit for every caller, including API
+	// clients that do not use the browser SDK. Catalog listing parses each custom
+	// template's JSON metadata, so persisting a full imported CJK font collection
+	// here would make merely opening the dashboard CPU-bound.
+	persistence.CompactOversizedFonts(persistence.DesignFile(file))
 	if in.CollectionID != "" {
 		col, err := s.getCollection(ctx, in.CollectionID)
 		if err != nil || col.WorkspaceID != in.WorkspaceID {

@@ -289,6 +289,25 @@ class HyCanvasClient:
         response = await self._send("GET", f"/api/v1/templates/{quote(template_id, safe='')}/render.png")
         return response.content, response.headers.get("content-type", "image/png")
 
+    async def render_template_with_background_png(
+        self,
+        template_id: str,
+        image: tuple[bytes, str, str],
+    ) -> tuple[bytes, str]:
+        content, content_type, file_name = image
+        response = await self._send(
+            "POST",
+            f"/api/v1/templates/{quote(template_id, safe='')}/preview.png",
+            json={
+                "backgroundImage": {
+                    "filename": file_name,
+                    "contentType": content_type,
+                    "dataBase64": base64.b64encode(content).decode("ascii"),
+                }
+            },
+        )
+        return response.content, response.headers.get("content-type", "image/png")
+
     async def _request(self, method: str, path: str, **kwargs):
         response = await self._send(method, path, **kwargs)
         return response.json()

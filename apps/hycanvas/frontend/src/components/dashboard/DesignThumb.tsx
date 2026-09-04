@@ -10,8 +10,15 @@ import { imageAssets } from "@/lib/assetProvider";
 import { createDesignThumbnail } from "@/lib/designThumbnail";
 
 const previewWaiters: Array<() => void> = [];
+const previewControllers = new Set<AbortController>();
 let activePreviews = 0;
 const MAX_CONCURRENT_PREVIEWS = 2;
+
+export function cancelThumbnailPreviews() {
+  for (const controller of previewControllers) controller.abort();
+  previewControllers.clear();
+  previewWaiters.splice(0).forEach((resume) => resume());
+}
 
 async function withPreviewSlot<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T | undefined> {
   if (activePreviews >= MAX_CONCURRENT_PREVIEWS) {
@@ -70,7 +77,7 @@ export function DesignThumb({ designId, templateId, previewUrl, allowFallback = 
       },
       // Start slightly ahead of the visible area so scrolling rarely catches
       // a card still on its placeholder.
-      { root: scrollParent(el), rootMargin: "400px" },
+      { root: scrollParent(el), rootMargin: "100px" },
     );
     io.observe(el);
     return () => io.disconnect();
@@ -80,13 +87,14 @@ export function DesignThumb({ designId, templateId, previewUrl, allowFallback = 
     if (!near || previewUrl || !allowFallback) return;
     let cancelled = false;
     const controller = new AbortController();
+    previewControllers.add(controller);
     void (async () => {
       try {
         // `trashed` opts into the member-only trash read; without it the file
         // endpoint returns 404 for trashed designs and the card shows only the
         // gradient fallback.
         const file = await withPreviewSlot(
-          () => templateId ? oc.getTemplateFile(templateId) : trashed ? oc.getDesignFile(designId!, { trashed: true }) : oc.getDesignPreviewFile(designId!),
+          () => templateId ? oc.getTemplateFile(templateId, controller.signal) : trashed ? oc.getDesignFile(designId!, { trashed: true }) : oc.getDesignPreviewFile(designId!),
           controller.signal,
         );
         if (cancelled || !file) return;
@@ -138,11 +146,14 @@ export function DesignThumb({ designId, templateId, previewUrl, allowFallback = 
         }
       } catch {
         if (!cancelled) setOk(false);
+      } finally {
+        previewControllers.delete(controller);
       }
     })();
     return () => {
       cancelled = true;
       controller.abort();
+      previewControllers.delete(controller);
     };
   }, [allowFallback, near, designId, templateId, previewUrl, trashed]);
 

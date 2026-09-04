@@ -13,6 +13,17 @@ export function normalizeManagedLoopbackURL(rawURL: string, currentHostname: str
   return rawURL.endsWith("/") ? normalized : normalized.replace(/\/$/, "");
 }
 
+export function resolveContentSwarmOrigin(configuredURL: string, referrer: string, currentHostname: string): string | null {
+  // In an iframe the referrer is the actual parent page. It must take
+  // precedence over the deployment's canonical URL because ContentSwarm can
+  // also be reached through an IP address or another reverse-proxy hostname;
+  // postMessage silently drops a message whose targetOrigin is not the real
+  // parent origin.
+  if (referrer) return new URL(referrer).origin;
+  const configured = configuredURL.trim().replace(/\/$/, "");
+  return configured ? normalizeManagedLoopbackURL(configured, currentHostname) : null;
+}
+
 function contentSwarmOrigin(): string | null {
   if (typeof window !== "undefined" && window.parent !== window && document.referrer) {
     try {
@@ -29,6 +40,9 @@ function contentSwarmOrigin(): string | null {
   }
   if (typeof document === "undefined" || !document.referrer) return null;
   return new URL(document.referrer).origin;
+  const configured = process.env.NEXT_PUBLIC_CONTENTSWARM_URL ?? "";
+  if (typeof window === "undefined") return configured.trim().replace(/\/$/, "") || null;
+  return resolveContentSwarmOrigin(configured, document.referrer, window.location.hostname);
 }
 
 export function contentSwarmHyCanvasURL(): string | null {

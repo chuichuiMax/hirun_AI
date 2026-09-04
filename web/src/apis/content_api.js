@@ -38,6 +38,14 @@ export const contentApi = {
       true,
       'blob'
     ),
+  getHyCanvasCompositePreview: (templateId, imageItemId) =>
+    apiPost(
+      `/api/content/covers/hycanvas/templates/${encodeURIComponent(templateId)}/preview.png`,
+      { image_item_id: imageItemId },
+      {},
+      true,
+      'blob'
+    ),
   createHyCanvasDesign: (payload) => apiPost('/api/content/covers/hycanvas/designs', payload),
   syncHyCanvasDesign: (designId, artifactId) =>
     apiPost(`/api/content/covers/hycanvas/designs/${encodeURIComponent(designId)}/sync`, {

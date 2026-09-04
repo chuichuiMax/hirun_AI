@@ -16,6 +16,7 @@ from yuxi.services.material_library_service import (
     delete_material_item,
     delete_material_category,
     get_material_file,
+    get_material_thumbnail,
     get_material_categories,
     import_material_images,
     list_image_galleries,
@@ -143,6 +144,24 @@ async def material_item_file(
         headers={
             "Cache-Control": "private, max-age=3600",
             "Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}",
+        },
+    )
+
+
+@material_library.get("/items/{item_id}/thumbnail")
+async def material_item_thumbnail(
+    item_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    data, file_name = await get_material_thumbnail(db, current_user, item_id)
+    encoded_name = quote(file_name, safe="")
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "private, max-age=86400",
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}.thumb.jpg",
         },
     )
 
