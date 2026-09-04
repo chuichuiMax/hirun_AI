@@ -64,6 +64,8 @@ for path in "${changed_paths[@]}"; do
     apps/hycanvas/go.mod|apps/hycanvas/go.sum|apps/hycanvas/package.json|apps/hycanvas/package-lock.json|apps/hycanvas/*/package.json|apps/hycanvas/*/package-lock.json)
       blocked+=("$path")
       ;;
+    docker/incremental/*)
+      ;;
     docker/*|docker-compose*.yml|.github/workflows/*|scripts/deploy-prod-server.sh|scripts/push-and-deploy.sh)
       blocked+=("$path")
       ;;
