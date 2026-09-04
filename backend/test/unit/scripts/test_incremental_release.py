@@ -23,6 +23,7 @@ PLANNER = Path(os.environ.get("INCREMENTAL_RELEASE_PLANNER", ROOT / "scripts" / 
         ),
         (["backend/uv.lock"], "full_required", ""),
         (["docker-compose.prod.yml"], "full_required", ""),
+        (["docker/incremental/api.Dockerfile"], "incremental", ""),
         (["apps/hycanvas/go.mod"], "full_required", ""),
         (["docs/index.md", "backend/test/unit/test_demo.py"], "incremental", ""),
     ],

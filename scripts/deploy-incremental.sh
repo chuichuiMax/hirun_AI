@@ -49,7 +49,7 @@ base_sha="$(git -C "$ROOT" rev-parse "$BASE^{commit}")"
 git -C "$ROOT" merge-base --is-ancestor "$base_sha" "$head_sha" \
   || fail "服务器发布基线不是目标提交的祖先，请先确认生产版本"
 
-plan="$($ROOT/scripts/plan-incremental-release.sh --base "$base_sha" --head "$head_sha")"
+plan="$("$ROOT/scripts/plan-incremental-release.sh" --base "$base_sha" --head "$head_sha")"
 printf '%s\n' "$plan"
 mode="$(printf '%s\n' "$plan" | sed -n 's/^release_mode=//p')"
 components="$(printf '%s\n' "$plan" | sed -n 's/^components=//p')"
