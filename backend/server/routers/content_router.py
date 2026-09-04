@@ -15,6 +15,7 @@ from yuxi.content.schemas import (
     ContentRunCreate,
     ContentRunResume,
     ContentTaskCreate,
+    ContentTaskBatchDelete,
     ContentTaskUpdate,
     ChannelPreviewRequest,
     MaterialConfirmation,
@@ -56,6 +57,7 @@ from yuxi.services.content_service import (
     create_content_run,
     create_content_task,
     delete_content_task,
+    delete_content_tasks,
     discard_content_rule_draft,
     duplicate_content_task,
     finalize_content_artifact,
@@ -306,6 +308,15 @@ async def list_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     return await list_content_tasks(db, current_user, page=page, page_size=page_size, status=status)
+
+
+@content.post("/tasks/batch-delete")
+async def batch_delete_tasks(
+    payload: ContentTaskBatchDelete,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await delete_content_tasks(db, current_user, payload.task_ids)
 
 
 @content.get("/tasks/{task_id}")

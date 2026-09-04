@@ -16,6 +16,7 @@ export const contentApi = {
   getTask: (taskId) => apiGet(`/api/content/tasks/${taskId}`),
   updateTask: (taskId, payload) => apiPatch(`/api/content/tasks/${taskId}`, payload),
   deleteTask: (taskId) => apiDelete(`/api/content/tasks/${taskId}`),
+  deleteTasks: (taskIds) => apiPost('/api/content/tasks/batch-delete', { task_ids: taskIds }),
   duplicateTask: (taskId) => apiPost(`/api/content/tasks/${taskId}/duplicate`),
   createOcrResult: (taskId, file) => {
     const form = new FormData()
