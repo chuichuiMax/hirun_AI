@@ -12,10 +12,23 @@ const previewWaiters: Array<() => void> = [];
 let activePreviews = 0;
 const MAX_CONCURRENT_PREVIEWS = 2;
 
-async function withPreviewSlot<T>(work: () => Promise<T>): Promise<T> {
+async function withPreviewSlot<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T | undefined> {
   if (activePreviews >= MAX_CONCURRENT_PREVIEWS) {
-    await new Promise<void>((resolve) => previewWaiters.push(resolve));
+    await new Promise<void>((resolve) => {
+      const resume = () => {
+        signal.removeEventListener("abort", cancel);
+        resolve();
+      };
+      const cancel = () => {
+        const index = previewWaiters.indexOf(resume);
+        if (index >= 0) previewWaiters.splice(index, 1);
+        resolve();
+      };
+      previewWaiters.push(resume);
+      signal.addEventListener("abort", cancel, { once: true });
+    });
   }
+  if (signal.aborted) return undefined;
   activePreviews += 1;
   try {
     return await work();
@@ -65,13 +78,17 @@ export function DesignThumb({ designId, templateId, previewUrl, allowFallback = 
   useEffect(() => {
     if (!near || previewUrl || !allowFallback) return;
     let cancelled = false;
+    const controller = new AbortController();
     void (async () => {
       try {
         // `trashed` opts into the member-only trash read; without it the file
         // endpoint returns 404 for trashed designs and the card shows only the
         // gradient fallback.
-        const file = await withPreviewSlot(() => templateId ? oc.getTemplateFile(templateId) : oc.getDesignFile(designId!, trashed ? { trashed: true } : undefined));
-        if (cancelled) return;
+        const file = await withPreviewSlot(
+          () => templateId ? oc.getTemplateFile(templateId) : oc.getDesignFile(designId!, trashed ? { trashed: true } : undefined),
+          controller.signal,
+        );
+        if (cancelled || !file) return;
         const canvas = ref.current;
         if (!canvas) return;
         // Video documents carry a user-chosen cover frame; the scene render
@@ -120,6 +137,7 @@ export function DesignThumb({ designId, templateId, previewUrl, allowFallback = 
     })();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [allowFallback, near, designId, templateId, previewUrl, trashed]);
 
