@@ -6,7 +6,7 @@
 
 ## v0.7.1 (current)
 
-- 生产镜像发布与部署链路纳入 HyCanvas：GitHub Actions 与 API、Web、Sandbox Provisioner 同批构建并提升 HyCanvas 不可变镜像，digest 清单和服务器部署脚本统一校验、拉取四类镜像，避免主站与封面编辑器版本不一致；内置 Skills 继续随 API 镜像发布。
+- 生产镜像发布与部署链路纳入 HyCanvas：GitHub Actions 与 API、Web、Sandbox Provisioner 同批构建并提升 HyCanvas 不可变镜像，digest 清单和服务器部署脚本统一校验、拉取四类镜像，避免主站与封面编辑器版本不一致；内置 Skills 继续随 API 镜像发布。CI 集成测试依赖改为动态宿主机端口，避免共享 Runner 端口占用导致发布误失败。
 
 - ContentSwarm 本地 Compose 为 HyCanvas 增加完整热更新环境：开发容器挂载源码，Next.js 前端与 Go API 分端口运行，ContentFlow 浏览器链接自动指向开发前端；Go 源码由 air 自动重启，前端由 Next.js 热更新，共享包和模板定义由轮询监听自动编译，模板 seed 变化会触发后端重启。本机 ContentSwarm 来源可连接 HyCanvas 热更新通道，避免跨端口嵌入时退化为整个 iframe 重新加载、丢失弹窗中的未保存设置。依赖卷按 lockfile 缓存，普通容器重建不再重复安装依赖；生产 Compose 继续使用前端与模板内嵌的单二进制镜像。
 

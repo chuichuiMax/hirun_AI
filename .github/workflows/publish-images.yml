@@ -62,21 +62,28 @@ jobs:
             -e POSTGRES_USER=yuxi_ci \
             -e POSTGRES_PASSWORD=ci-postgres-password \
             -e POSTGRES_DB=yuxi_ci \
-            -p 55432:5432 \
+            -p 127.0.0.1::5432 \
             postgres:16
           docker run -d --name yuxi-ci-minio \
             -e MINIO_ROOT_USER=yuxi_ci \
             -e MINIO_ROOT_PASSWORD=ci-minio-secret-password \
-            -p 59000:9000 \
+            -p 127.0.0.1::9000 \
             minio/minio:RELEASE.2023-03-20T20-16-18Z \
             server /data --address :9000
           docker run -d --name yuxi-ci-redis \
-            -p 56379:6379 \
+            -p 127.0.0.1::6379 \
             redis:7-alpine
+
+          postgres_port="$(docker port yuxi-ci-postgres 5432/tcp | sed 's/.*://')"
+          minio_port="$(docker port yuxi-ci-minio 9000/tcp | sed 's/.*://')"
+          redis_port="$(docker port yuxi-ci-redis 6379/tcp | sed 's/.*://')"
+          echo "CI_POSTGRES_PORT=$postgres_port" >> "$GITHUB_ENV"
+          echo "CI_MINIO_PORT=$minio_port" >> "$GITHUB_ENV"
+          echo "CI_REDIS_PORT=$redis_port" >> "$GITHUB_ENV"
 
           for _ in $(seq 1 60); do
             if docker exec yuxi-ci-postgres pg_isready -U yuxi_ci -d yuxi_ci >/dev/null \
-              && curl -sf http://127.0.0.1:59000/minio/health/live >/dev/null \
+              && curl -sf "http://127.0.0.1:${minio_port}/minio/health/live" >/dev/null \
               && docker exec yuxi-ci-redis redis-cli ping >/dev/null; then
               exit 0
             fi
@@ -90,12 +97,12 @@ jobs:
       - name: Test content cover and OCR
         working-directory: backend
         env:
-          POSTGRES_URL: postgresql+asyncpg://yuxi_ci:ci-postgres-password@127.0.0.1:55432/yuxi_ci
-          MINIO_URI: http://127.0.0.1:59000
+          POSTGRES_URL: postgresql+asyncpg://yuxi_ci:ci-postgres-password@127.0.0.1:${{ env.CI_POSTGRES_PORT }}/yuxi_ci
+          MINIO_URI: http://127.0.0.1:${{ env.CI_MINIO_PORT }}
           MINIO_ACCESS_KEY: yuxi_ci
           MINIO_SECRET_KEY: ci-minio-secret-password
           CONTENT_COVER_BUCKET: yuxi-ci-content-covers
-          REDIS_URL: redis://127.0.0.1:56379/0
+          REDIS_URL: redis://127.0.0.1:${{ env.CI_REDIS_PORT }}/0
         run: |
           uv run pytest \
             test/unit/content/test_cover_generation.py \
