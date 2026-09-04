@@ -437,6 +437,27 @@ def test_visual_plan_over_template_limit_is_returned_to_agent_for_revision():
     assert "最多 7 个字符" in str(exc_info.value)
 
 
+def test_visual_plan_requires_agent_rewrite_for_missing_template_fact():
+    context = replace(
+        DOMAIN_CONTEXT,
+        required_visual_template_fields={"免费量尺规划": {"maxChars": 6}},
+    )
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    assert exc_info.value.code == "visual_template_field_missing"
+
+    payload["template_fields"] = {"免费量尺规划": "空间规划"}
+    validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    payload["template_fields"] = {"免费量尺规划": "免费量尺"}
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("VisualPlanResultV1", payload, context)
+    assert exc_info.value.code == "visual_template_claim_unsupported"
+
+
 def test_formula_ranking_pool_comes_from_match_snapshot_before_selection_exists():
     node_input = ContentAgentNodeInputV1.model_validate(
         {

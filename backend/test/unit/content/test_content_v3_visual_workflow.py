@@ -528,6 +528,24 @@ def test_hycanvas_template_fields_reject_missing_required_fact():
         )
 
 
+def test_hycanvas_template_fields_use_agent_rewrite_for_missing_required_fact():
+    fields = content_tools._hycanvas_template_fields(
+        [
+            {
+                "kind": "text",
+                "label": "免费量尺规划",
+                "semanticRole": "designer",
+                "constraints": {"required": True, "maxChars": 6},
+            }
+        ],
+        visual_text=["旧房焕新"],
+        brief={"form_values": {}},
+        template_fields={"免费量尺规划": "空间规划"},
+    )
+
+    assert fields == {"免费量尺规划": "空间规划"}
+
+
 def test_hycanvas_template_fields_wraps_text_without_changing_template_style():
     fields = content_tools._hycanvas_template_fields(
         [
