@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { formatEvidenceReference } from '../contentEvidencePresentation.js'
+import { formatEvidenceReference, hasSelectedViralReference } from '../contentEvidencePresentation.js'
 
 assert.equal(
   formatEvidenceReference(
@@ -27,5 +27,20 @@ assert.equal(
 
 assert.equal(formatEvidenceReference(null, {}, 1), '已确认事实 2')
 assert.equal(formatEvidenceReference({ source_type: 'knowledge_base', value: '企业产品手册' }), '知识库资料：企业产品手册')
+
+assert.equal(
+  hasSelectedViralReference({
+    runtime_config_snapshot: { creation_mode: 'viral_rewrite' },
+    evidence_snapshot: { items: [{ metadata: { selected_reference: true } }] }
+  }),
+  true
+)
+assert.equal(
+  hasSelectedViralReference({
+    runtime_config_snapshot: { creation_mode: 'original' },
+    evidence_snapshot: { items: [{ metadata: { selected_reference: true } }] }
+  }),
+  false
+)
 
 console.log('contentEvidencePresentation: all assertions passed')

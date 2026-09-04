@@ -135,6 +135,13 @@ async def _download_asset(asset: ContentCoverAsset) -> bytes:
         raise RuntimeError(f"封面素材读取失败：{asset.id}") from exc
 
 
+def _output_title_overlay(job: ContentCoverJob) -> str:
+    request = job.request_json or {}
+    if job.mode in {"hycanvas", "poster_billboard", "editor_render"} or request.get("template_replicate"):
+        return ""
+    return str(request.get("title") or "").strip()
+
+
 def _normalize_output(
     data: bytes,
     *,
@@ -175,7 +182,6 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
     uploaded_objects: list[tuple[str, str]] = []
     requested_size = COVER_SIZES.get((job.request_json or {}).get("size") or "")
     target_size = (requested_size["width"], requested_size["height"]) if requested_size is not None else None
-    title = str((job.request_json or {}).get("title") or "").strip()
     template_replicate = bool((job.request_json or {}).get("template_replicate"))
     poster_billboard = job.mode == "poster_billboard"
     editor_render = job.mode == "editor_render"
@@ -186,7 +192,7 @@ async def _store_outputs(job: ContentCoverJob, outputs: list[bytes]) -> list[str
                 normalized, width, height = _normalize_output(
                     raw,
                     target_size=target_size,
-                    title="" if template_replicate or poster_billboard else title,
+                    title=_output_title_overlay(job),
                 )
                 asset_id = f"cca_{uuid.uuid4().hex}"
                 object_name = f"content-covers/{job.owner_uid}/{job.id}/output-{index + 1}.png"
@@ -820,8 +826,11 @@ async def process_content_cover_job(ctx: dict, job_id: str) -> None:
             result_json={
                 **(job.result_json or {}),
                 "asset_ids": asset_ids,
-                **({"hycanvas_design_snapshot": {**hycanvas_snapshot, "cover_asset_id": asset_ids[0]}}
-                   if hycanvas_snapshot else {}),
+                **(
+                    {"hycanvas_design_snapshot": {**hycanvas_snapshot, "cover_asset_id": asset_ids[0]}}
+                    if hycanvas_snapshot
+                    else {}
+                ),
             },
             completed_at=utc_now_naive(),
         )

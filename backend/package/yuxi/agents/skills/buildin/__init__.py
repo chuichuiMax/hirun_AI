@@ -76,7 +76,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="viral-reference-selector",
         source_dir=_SKILLS_ROOT / "viral-reference-selector",
         description="按当前输入变量选择唯一可填充的爆款参考，并动态提取结构蓝图。",
-        version="2.0.0",
+        version="2.1.0",
     ),
     BuiltinSkillSpec(
         slug="strategy-product-researcher",
@@ -101,7 +101,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-human-expression",
         source_dir=_SKILLS_ROOT / "content-human-expression",
         description="在不改变事实、公式和证据的前提下，优化自然表达并按知识库映射替换封禁词。",
-        version="1.7.0",
+        version="1.8.0",
     ),
     BuiltinSkillSpec(
         slug="viral-structure-rewriter",
@@ -110,13 +110,13 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
             "按已冻结的唯一爆款结构蓝图重构标题、大纲和正文，"
             "保留真实 Emoji 的位置和功能，并使用真实业务证据替换原文内容。"
         ),
-        version="1.4.0",
+        version="1.5.0",
     ),
     BuiltinSkillSpec(
         slug="viral-layout-formatter",
         source_dir=_SKILLS_ROOT / "viral-layout-formatter",
         description="按已冻结爆款的真实信息块、列表类型和段落节奏排版正文。",
-        version="1.3.0",
+        version="1.4.0",
     ),
     BuiltinSkillSpec(
         slug="content-outline-builder",
@@ -134,7 +134,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-reviewer",
         source_dir=_SKILLS_ROOT / "content-reviewer",
         description="审核公式执行、事实一致性、人设语气和内容风险。",
-        version="1.7.0",
+        version="1.8.0",
         tool_dependencies=(
             "query_kb",
             "open_kb_document",
@@ -145,13 +145,13 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-visual-planner",
         source_dir=_SKILLS_ROOT / "content-visual-planner",
         description="按内容快照和渠道规范产出结构化视觉方案。",
-        version="1.2.0",
+        version="1.4.0",
     ),
     BuiltinSkillSpec(
         slug="content-cover-generator",
         source_dir=_SKILLS_ROOT / "content-cover-generator",
         description="校验锁定视觉方案并提交唯一封面任务。",
-        version="1.1.0",
+        version="1.2.0",
         tool_dependencies=("create_content_cover_job",),
     ),
     BuiltinSkillSpec(

@@ -139,7 +139,7 @@ func TestFillTextFieldsPreservesStyle(t *testing.T) {
 	node := asObj(asArr(asObj(asArr(file["pages"])[0])["children"])[0])
 	paragraph := asObj(asArr(node["content"])[0])
 	runs := asArr(paragraph["runs"])
-	if len(runs) != 1 || asStr(asObj(runs[0])["text"]) != "新标题" {
+	if len(runs) != 2 || asStr(asObj(runs[0])["text"]) != "新标题" || asStr(asObj(runs[1])["text"]) != "" {
 		t.Fatalf("filled runs = %+v", runs)
 	}
 	if asNum(asObj(asObj(runs[0])["style"])["fontSize"]) != 72 {
@@ -150,7 +150,7 @@ func TestFillTextFieldsPreservesStyle(t *testing.T) {
 	}
 }
 
-func TestFillTextFieldsEnablesAutoFitForFixedTextBox(t *testing.T) {
+func TestFillTextFieldsDoesNotChangeTemplateStyleOrStructure(t *testing.T) {
 	file := map[string]any{
 		"pages": []any{map[string]any{"children": []any{map[string]any{
 			"id": "title-node", "type": "text",
@@ -158,9 +158,10 @@ func TestFillTextFieldsEnablesAutoFitForFixedTextBox(t *testing.T) {
 				"mode": "fixed", "width": 300.0, "height": 80.0,
 				"autoFit": map[string]any{"enabled": false, "min": 10.0, "max": 140.0},
 			},
-			"content": []any{map[string]any{
-				"runs": []any{map[string]any{"text": "短标题", "style": map[string]any{"fontSize": 140.0}}},
-			}},
+			"content": []any{
+				map[string]any{"runs": []any{map[string]any{"text": "短", "style": map[string]any{"fontSize": 140.0}}}},
+				map[string]any{"runs": []any{map[string]any{"text": "标题", "style": map[string]any{"fontSize": 80.0}}}},
+			},
 		}}}},
 	}
 	fields := []any{map[string]any{"nodeId": "title-node", "kind": "text", "label": "主标题"}}
@@ -168,16 +169,25 @@ func TestFillTextFieldsEnablesAutoFitForFixedTextBox(t *testing.T) {
 		t.Fatalf("fillTextFields: %v", err)
 	}
 	node := asObj(asArr(asObj(asArr(file["pages"])[0])["children"])[0])
-	autoFit := asObj(asObj(node["box"])["autoFit"])
-	if enabled, _ := autoFit["enabled"].(bool); !enabled {
-		t.Fatal("replaced fixed text should enable auto-fit")
+	box := asObj(node["box"])
+	autoFit := asObj(box["autoFit"])
+	if enabled, _ := autoFit["enabled"].(bool); enabled {
+		t.Fatal("text replacement must preserve the template auto-fit setting")
 	}
 	if asNum(autoFit["min"]) != 10 || asNum(autoFit["max"]) != 140 {
 		t.Fatalf("auto-fit bounds should be preserved: %+v", autoFit)
 	}
-	run := asObj(asArr(asObj(asArr(node["content"])[0])["runs"])[0])
-	if size := asNum(asObj(run["style"])["fontSize"]); size >= 140 {
-		t.Fatalf("long replacement should shrink the persisted font size, got %v", size)
+	paragraphs := asArr(node["content"])
+	if len(paragraphs) != 2 {
+		t.Fatalf("template paragraphs changed: %+v", paragraphs)
+	}
+	firstRun := asObj(asArr(asObj(paragraphs[0])["runs"])[0])
+	secondRun := asObj(asArr(asObj(paragraphs[1])["runs"])[0])
+	if asStr(firstRun["text"]) != "替换后更长的封面标题" || asStr(secondRun["text"]) != "" {
+		t.Fatalf("only text values should change: %+v", paragraphs)
+	}
+	if asNum(asObj(firstRun["style"])["fontSize"]) != 140 || asNum(asObj(secondRun["style"])["fontSize"]) != 80 {
+		t.Fatalf("template font sizes changed: %+v", paragraphs)
 	}
 }
 
@@ -199,6 +209,24 @@ func TestFillTextFieldsEnforcesRequiredAndMaxChars(t *testing.T) {
 	}
 	if err := fillTextFields(file, fields, map[string]string{"项目名称": "岳阳杏林小区"}); err != ErrBadRequest {
 		t.Fatalf("oversized field: expected ErrBadRequest, got %v", err)
+	}
+}
+
+func TestFillTextFieldsAcceptsDeclaredMultilineText(t *testing.T) {
+	file := map[string]any{
+		"pages": []any{map[string]any{
+			"children": []any{map[string]any{
+				"id": "title-node", "type": "text",
+				"content": []any{map[string]any{"runs": []any{map[string]any{"text": "旧标题"}}}},
+			}},
+		}},
+	}
+	fields := []any{map[string]any{
+		"nodeId": "title-node", "kind": "text", "label": "主标题",
+		"constraints": map[string]any{"maxChars": 13.0, "maxCharsPerLine": 7.0, "maxLines": 2.0},
+	}}
+	if err := fillTextFields(file, fields, map[string]string{"主标题": "真香，89㎡收\n纳远超预期"}); err != nil {
+		t.Fatalf("declared multiline text should be accepted: %v", err)
 	}
 }
 

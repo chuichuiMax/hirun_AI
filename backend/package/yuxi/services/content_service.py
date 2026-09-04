@@ -1176,6 +1176,45 @@ async def get_task_artifact(db: AsyncSession, user: User, task_id: str) -> dict[
     return {"artifact": artifact.to_dict() if artifact else None}
 
 
+async def get_artifact_viral_reference(db: AsyncSession, user: User, artifact_id: str) -> dict[str, Any]:
+    repo = ContentRepository(db)
+    artifact = await repo.get_artifact_for_user(artifact_id, user)
+    if artifact is None:
+        raise _content_error(404, "CONTENT_ARTIFACT_NOT_FOUND", "内容资产不存在")
+    if (artifact.runtime_config_snapshot or {}).get("creation_mode") != "viral_rewrite":
+        raise _content_error(409, "VIRAL_REFERENCE_NOT_AVAILABLE", "当前内容不是爆款仿写")
+
+    selected = next(
+        (
+            item
+            for item in (artifact.evidence_snapshot or {}).get("items") or []
+            if (item.get("metadata") or {}).get("selected_reference") is True
+        ),
+        None,
+    )
+    if selected is None:
+        raise _content_error(404, "VIRAL_REFERENCE_NOT_FOUND", "未找到本次仿写选中的爆款参考")
+
+    node_run = await repo.get_latest_completed_node_run(artifact.task_id, "collect_viral_candidates")
+    collection = ((node_run.output_snapshot or {}).get("result") or {}).get("viral_candidate_collection") or {}
+    candidate = next(
+        (item for item in collection.get("evidence_items") or [] if item.get("id") == selected.get("id")),
+        None,
+    )
+    if candidate is None or not str(candidate.get("value") or "").strip():
+        raise _content_error(404, "VIRAL_REFERENCE_SOURCE_NOT_FOUND", "未找到已选爆款的原文记录")
+
+    metadata = candidate.get("metadata") or {}
+    return {
+        "reference": {
+            "id": candidate["id"],
+            "content": str(candidate["value"]).strip(),
+            "source_name": metadata.get("document_name") or metadata.get("source") or "爆款库",
+            "knowledge_base_name": metadata.get("knowledge_base_name") or "",
+        }
+    }
+
+
 async def regenerate_content_artifact(
     db: AsyncSession,
     user: User,

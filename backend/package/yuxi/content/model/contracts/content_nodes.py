@@ -369,6 +369,7 @@ class PlanVisualsInputV1(StrictContract):
     media_evidence_items: list[dict[str, Any]]
     artifact_version: dict[str, Any] = Field(min_length=1)
     channel_profile: dict[str, Any]
+    runtime_config_snapshot: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("media_evidence_items")
     @classmethod
@@ -774,6 +775,7 @@ class ContractDomainContext:
     creation_mode: Literal["original", "viral_rewrite"] = "original"
     selected_viral_reference_ids: tuple[str, ...] = ()
     viral_candidate_ids: frozenset[str] = frozenset()
+    visual_text_max_chars: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def from_node_input(cls, node_input: ContentAgentNodeInputV1) -> ContractDomainContext:
@@ -906,6 +908,11 @@ class ContractDomainContext:
                 and item.get("metadata", {}).get("material_type") == "viral_example"
                 and item.get("metadata", {}).get("selected_reference") is True
             ),
+            visual_text_max_chars={
+                str(key): int(value)
+                for key, value in (locks.get("visual_text_max_chars") or {}).items()
+                if str(key) in {"title", "subtitle", "body_excerpt"} and isinstance(value, int) and value > 0
+            },
             viral_candidate_ids=frozenset(
                 str(item["id"])
                 for item in (viral_candidate_collection or {}).get("evidence_items") or []
@@ -1483,6 +1490,15 @@ def validate_content_node_result(
             _require_member(asset_id, context.allowed_asset_ids, f"source_asset_ids.{index}")
         _validate_evidence_ids(result.evidence_ids, "visual", context, "evidence_ids")
         _validate_numbers("\n".join(result.text), context, "text", "visual")
+        role_indexes = {"title": 0, "subtitle": 1, "body_excerpt": 1}
+        for role, max_chars in context.visual_text_max_chars.items():
+            index = role_indexes[role]
+            if index < len(result.text) and len(result.text[index]) > max_chars:
+                raise ContractDomainValidationError(
+                    "visual_text_too_long",
+                    f"text.{index}",
+                    f"封面{role}最多 {max_chars} 个字符，请缩短后重新提交视觉方案",
+                )
     elif isinstance(result, CoverJobSubmissionResultV1):
         _require_equal(result.plan_hash, context.visual_plan_hash, "plan_hash")
         if context.required_source_asset_ids and tuple(result.source_asset_ids) != context.required_source_asset_ids:

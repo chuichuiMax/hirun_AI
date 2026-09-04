@@ -128,6 +128,8 @@ export const contentApi = {
       'raw'
     ),
   getTaskArtifact: (taskId) => apiGet(`/api/content/tasks/${taskId}/artifact`),
+  getArtifactViralReference: (artifactId) =>
+    apiGet(`/api/content/artifacts/${artifactId}/viral-reference`),
   updateArtifact: (artifactId, payload) =>
     apiPatch(`/api/content/artifacts/${artifactId}`, payload),
   aiEditArtifact: (artifactId, payload) =>

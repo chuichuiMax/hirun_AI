@@ -71,3 +71,7 @@ export const formatEvidenceReference = (evidence, fieldLabels = {}, fallbackInde
 
   return value ? `${label}：${value}` : label
 }
+
+export const hasSelectedViralReference = (artifact) =>
+  artifact?.runtime_config_snapshot?.creation_mode === 'viral_rewrite' &&
+  (artifact?.evidence_snapshot?.items || []).some((item) => item.metadata?.selected_reference === true)

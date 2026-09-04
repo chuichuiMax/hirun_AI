@@ -111,6 +111,24 @@ class CreateContentCoverJobInput(BaseModel):
     task_id: str = Field(description="当前内容任务 ID；视觉方案由运行时锁定快照提供")
 
 
+def _wrap_visual_text(value: str, *, max_chars_per_line: int, max_lines: int) -> str:
+    if len(value) <= max_chars_per_line or "\n" in value:
+        return value
+    if max_lines == 2 and len(value) <= max_chars_per_line * 2:
+        minimum = len(value) - max_chars_per_line
+        candidates = range(minimum, max_chars_per_line + 1)
+        preferred_endings = "，。！？；：、,.!?;:㎡%元万亿"
+        breakpoint = min(
+            candidates,
+            key=lambda index: (value[index - 1] not in preferred_endings, abs(index * 2 - len(value))),
+        )
+        return f"{value[:breakpoint]}\n{value[breakpoint:]}"
+    lines = [value[index : index + max_chars_per_line] for index in range(0, len(value), max_chars_per_line)]
+    if len(lines) > max_lines:
+        raise ValueError(f"文字超过模板限制的 {max_lines} 行")
+    return "\n".join(lines)
+
+
 def _hycanvas_template_fields(
     declarations: list[dict[str, Any]],
     *,
@@ -157,8 +175,26 @@ def _hycanvas_template_fields(
         if constraints.get("required") and not value:
             raise ValueError(f"封面模板必填字段“{label}”在事实简报中没有对应内容")
         max_chars = constraints.get("maxChars")
-        if isinstance(max_chars, int) and max_chars > 0 and len(value) > max_chars:
+        if isinstance(max_chars, int) and max_chars > 0 and len(value.replace("\n", "")) > max_chars:
             raise ValueError(f"封面字段“{label}”超过模板限制的 {max_chars} 个字符")
+        max_chars_per_line = constraints.get("maxCharsPerLine")
+        max_lines = constraints.get("maxLines")
+        if (
+            isinstance(max_chars_per_line, int)
+            and max_chars_per_line > 0
+            and isinstance(max_lines, int)
+            and max_lines > 1
+            and "\n" not in value
+            and len(value) > max_chars_per_line
+        ):
+            try:
+                value = _wrap_visual_text(
+                    value,
+                    max_chars_per_line=max_chars_per_line,
+                    max_lines=max_lines,
+                )
+            except ValueError as exc:
+                raise ValueError(f"封面字段“{label}”超过模板限制的 {max_lines} 行") from exc
         fields[label] = value
     return fields
 

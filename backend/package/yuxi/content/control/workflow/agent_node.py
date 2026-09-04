@@ -300,6 +300,16 @@ class AgentNodeHandler:
             "visual_plan_hash": (state.get("visual_plan") or {}).get("plan_hash"),
             "state_version": int(state.get("state_version") or 0),
         }
+        if node["id"] == "plan_visuals":
+            limits: dict[str, int] = {}
+            for field in visual_material.get("hycanvas_fillable_fields") or []:
+                role = str(field.get("semanticRole") or "")
+                if role == "label" or role not in {"title", "subtitle", "body_excerpt"}:
+                    continue
+                max_chars = (field.get("constraints") or {}).get("maxChars")
+                if isinstance(max_chars, int) and max_chars > 0:
+                    limits[role] = min(limits.get(role, max_chars), max_chars)
+            locked_values["visual_text_max_chars"] = limits
         if node["id"] == "submit_cover_job":
             locked_values["visual_plan"] = state.get("visual_plan") or {}
         assembly = ContentNodeInputAssembler.build(node=node, state=state)

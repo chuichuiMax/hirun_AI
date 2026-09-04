@@ -424,6 +424,19 @@ def test_visual_plan_must_use_exactly_the_task_locked_gallery_image():
     assert exc_info.value.code == "visual_source_locked"
 
 
+def test_visual_plan_over_template_limit_is_returned_to_agent_for_revision():
+    context = replace(DOMAIN_CONTEXT, visual_text_max_chars={"title": 7, "subtitle": 4})
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["text"] = ["超过七个字符的封面标题", "四字以内"]
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    assert exc_info.value.code == "visual_text_too_long"
+    assert exc_info.value.field_path == "text.0"
+    assert "最多 7 个字符" in str(exc_info.value)
+
+
 def test_formula_ranking_pool_comes_from_match_snapshot_before_selection_exists():
     node_input = ContentAgentNodeInputV1.model_validate(
         {

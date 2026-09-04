@@ -62,6 +62,7 @@ from yuxi.services.content_service import (
     get_content_bootstrap,
     get_content_run,
     get_content_task,
+    get_artifact_viral_reference,
     get_task_artifact,
     list_content_artifact_versions,
     list_content_tasks,
@@ -585,6 +586,15 @@ async def update_artifact(
     db: AsyncSession = Depends(get_db),
 ):
     return await update_content_artifact(db, current_user, artifact_id, payload)
+
+
+@content.get("/artifacts/{artifact_id}/viral-reference")
+async def get_viral_reference(
+    artifact_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_artifact_viral_reference(db, current_user, artifact_id)
 
 
 @content.post("/artifacts/{artifact_id}/ai-edit")

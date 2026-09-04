@@ -271,6 +271,7 @@ WORKFLOW_V3_NODES = [
             "media_evidence_items",
             "artifact_version",
             "channel_profile",
+            "runtime_config_snapshot",
         ),
     ),
     _agent(

@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -163,8 +161,18 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 			if required, _ := constraints["required"].(bool); required && (!present || strings.TrimSpace(value) == "") {
 				return ErrBadRequest
 			}
-			if maxChars := int(asNum(constraints["maxChars"])); maxChars > 0 && present && utf8.RuneCountInString(value) > maxChars {
+			if maxChars := int(asNum(constraints["maxChars"])); maxChars > 0 && present && utf8.RuneCountInString(strings.ReplaceAll(value, "\n", "")) > maxChars {
 				return ErrBadRequest
+			}
+			if maxLines := int(asNum(constraints["maxLines"])); maxLines > 0 && present && strings.Count(value, "\n")+1 > maxLines {
+				return ErrBadRequest
+			}
+			if maxCharsPerLine := int(asNum(constraints["maxCharsPerLine"])); maxCharsPerLine > 0 && present {
+				for _, line := range strings.Split(value, "\n") {
+					if utf8.RuneCountInString(line) > maxCharsPerLine {
+						return ErrBadRequest
+					}
+				}
 			}
 		}
 	}
@@ -194,43 +202,14 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 				if len(runs) == 0 {
 					return
 				}
-				asObj(runs[0])["text"] = value
-				first["runs"] = runs[:1]
-				node["content"] = []any{first}
-				box := asObj(node["box"])
-				if asStr(box["mode"]) == "fixed" {
-					autoFit := asObj(box["autoFit"])
-					autoFit["enabled"] = true
-					if asNum(autoFit["min"]) <= 0 {
-						autoFit["min"] = 8.0
-					}
-					if asNum(autoFit["max"]) <= 0 {
-						autoFit["max"] = 512.0
-					}
-					box["autoFit"] = autoFit
-					node["box"] = box
-					style := asObj(asObj(runs[0])["style"])
-					fontSize := asNum(style["fontSize"])
-					padding := asObj(box["padding"])
-					availableWidth := asNum(box["width"]) - asNum(padding["l"]) - asNum(padding["r"])
-					availableHeight := asNum(box["height"]) - asNum(padding["t"]) - asNum(padding["b"])
-					units := 0.0
-					for _, char := range value {
-						if unicode.IsSpace(char) {
-							units += 0.35
-						} else if char <= unicode.MaxASCII {
-							units += 0.6
-						} else {
-							units++
+				for paragraphIndex, paragraphRaw := range paragraphs {
+					paragraphRuns := asArr(asObj(paragraphRaw)["runs"])
+					for runIndex, runRaw := range paragraphRuns {
+						text := ""
+						if paragraphIndex == 0 && runIndex == 0 {
+							text = value
 						}
-					}
-					if fontSize > 0 && units > 0 && availableWidth > 0 && availableHeight > 0 {
-						fittedSize := math.Min(fontSize, math.Min(availableWidth/units*0.92, availableHeight/1.2))
-						if minSize := asNum(autoFit["min"]); minSize > 0 {
-							fittedSize = math.Max(minSize, fittedSize)
-						}
-						style["fontSize"] = fittedSize
-						asObj(runs[0])["style"] = style
+						asObj(runRaw)["text"] = text
 					}
 				}
 				delete(remaining, asStr(node["id"]))

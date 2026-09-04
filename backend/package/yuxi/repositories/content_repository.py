@@ -992,6 +992,20 @@ class ContentRepository:
         item.delegated_agent_run_id = delegated_run_id
         await self.db.flush()
 
+    async def get_latest_completed_node_run(self, task_id: str, node_id: str) -> ContentNodeRun | None:
+        return (
+            await self.db.execute(
+                select(ContentNodeRun)
+                .where(
+                    ContentNodeRun.task_id == task_id,
+                    ContentNodeRun.node_id == node_id,
+                    ContentNodeRun.status == "completed",
+                )
+                .order_by(ContentNodeRun.finished_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
     async def get_v3_run_projection(
         self,
         *,
