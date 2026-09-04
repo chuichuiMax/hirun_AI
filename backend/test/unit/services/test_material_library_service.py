@@ -6,7 +6,12 @@ import pytest
 from fastapi import HTTPException
 from PIL import Image
 
-from yuxi.services.material_library_service import MATERIAL_LIBRARY_BUCKET, _normalize_image, serialize_item
+from yuxi.services.material_library_service import (
+    MATERIAL_LIBRARY_BUCKET,
+    _make_image_thumbnail,
+    _normalize_image,
+    serialize_item,
+)
 from yuxi.services.material_library_categories import (
     category_definition,
     normalize_material_category,
@@ -43,6 +48,17 @@ def test_normalize_image_rejects_non_image():
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["error"]["code"] == "MATERIAL_IMAGE_INVALID"
+
+
+def test_make_image_thumbnail_limits_dimensions_and_returns_jpeg():
+    source = io.BytesIO()
+    Image.new("RGB", (1200, 800), "gray").save(source, format="PNG")
+
+    data = _make_image_thumbnail(source.getvalue())
+
+    assert data.startswith(b"\xff\xd8")
+    with Image.open(io.BytesIO(data)) as image:
+        assert image.size == (480, 320)
 
 
 def test_material_categories_normalize_legacy_values_and_reject_free_form():

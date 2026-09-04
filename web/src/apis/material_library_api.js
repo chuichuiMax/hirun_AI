@@ -30,5 +30,7 @@ export const materialLibraryApi = {
   updateItem: (itemId, payload) => apiPatch(`/api/material-library/items/${itemId}`, payload),
   deleteItem: (itemId) => apiDelete(`/api/material-library/items/${itemId}`),
   getItemFile: (itemId) =>
-    apiGet(`/api/material-library/items/${itemId}/file`, {}, true, 'blob')
+    apiGet(`/api/material-library/items/${itemId}/file`, {}, true, 'blob'),
+  getItemThumbnail: (itemId) =>
+    apiGet(`/api/material-library/items/${itemId}/thumbnail`, {}, true, 'blob')
 }

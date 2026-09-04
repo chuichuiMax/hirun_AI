@@ -592,22 +592,31 @@ const loadGalleryImages = async () => {
       selectedImageGalleryId.value = activeGalleryId.value
       selectedImageSummary.value = selectedItem
     }
-    const nextUrls = {}
-    await Promise.all(
-      galleryImages.value.map(async (item) => {
+    // Show the grid as soon as metadata arrives. Thumbnails then fill in
+    // progressively with bounded concurrency instead of blocking the whole
+    // dialog on 20+ full-resolution image downloads and decodes.
+    galleryImagesLoading.value = false
+    const items = [...galleryImages.value]
+    let cursor = 0
+    const loadNext = async () => {
+      while (cursor < items.length) {
+        const item = items[cursor++]
         try {
-          const file = await materialLibraryApi.getItemFile(item.id)
-          nextUrls[item.id] = URL.createObjectURL(await file.blob())
+          const file = await materialLibraryApi.getItemThumbnail(item.id)
+          const url = URL.createObjectURL(await file.blob())
+          if (generation !== materialPreviewGeneration) {
+            URL.revokeObjectURL(url)
+            return
+          }
+          materialImageUrls.value = { ...materialImageUrls.value, [item.id]: url }
         } catch {
-          nextUrls[item.id] = ''
+          if (generation === materialPreviewGeneration) {
+            materialImageUrls.value = { ...materialImageUrls.value, [item.id]: '' }
+          }
         }
-      })
-    )
-    if (generation !== materialPreviewGeneration) {
-      revokePreviewUrls(nextUrls)
-      return
+      }
     }
-    materialImageUrls.value = nextUrls
+    await Promise.all(Array.from({ length: Math.min(4, items.length) }, () => loadNext()))
   } catch (error) {
     if (generation === materialPreviewGeneration) {
       message.warning(error.message || '图库图片加载失败')

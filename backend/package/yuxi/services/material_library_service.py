@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import uuid
@@ -34,6 +35,7 @@ MATERIAL_LIBRARY_BUCKET = "image"
 MAX_MATERIAL_BYTES = 20 * 1024 * 1024
 MAX_MATERIAL_DIMENSION = 8192
 MAX_MATERIAL_PIXELS = 40_000_000
+MATERIAL_THUMBNAIL_SIZE = (480, 480)
 
 
 class MaterialItemUpdate(BaseModel):
@@ -116,6 +118,15 @@ def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
         raise
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise _error(400, "MATERIAL_IMAGE_INVALID", "上传文件不是有效图片") from exc
+
+
+def _make_image_thumbnail(data: bytes) -> bytes:
+    with Image.open(io.BytesIO(data)) as source:
+        image = ImageOps.exif_transpose(source).convert("RGB")
+        image.thumbnail(MATERIAL_THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=78, optimize=True)
+        return output.getvalue()
 
 
 def serialize_item(
@@ -703,6 +714,15 @@ async def get_material_file(db: AsyncSession, user: User, item_id: str) -> tuple
     except StorageError as exc:
         raise _error(500, "MATERIAL_STORAGE_FAILED", "素材文件读取失败") from exc
     return data, asset.content_type, asset.original_file_name
+
+
+async def get_material_thumbnail(db: AsyncSession, user: User, item_id: str) -> tuple[bytes, str]:
+    data, _, file_name = await get_material_file(db, user, item_id)
+    try:
+        thumbnail = await asyncio.to_thread(_make_image_thumbnail, data)
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise _error(400, "MATERIAL_IMAGE_INVALID", "素材文件不是有效图片") from exc
+    return thumbnail, file_name
 
 
 async def delete_material_item(db: AsyncSession, user: User, item_id: str) -> dict[str, Any]:

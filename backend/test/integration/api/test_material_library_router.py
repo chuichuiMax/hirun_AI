@@ -152,6 +152,14 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
     with Image.open(io.BytesIO(downloaded.content)) as image:
         assert image.size == (48, 36)
 
+    thumbnail = await test_client.get(
+        f"/api/material-library/items/{item['id']}/thumbnail", headers=owner_headers
+    )
+    assert thumbnail.status_code == 200, thumbnail.text
+    assert thumbnail.headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(thumbnail.content)) as image:
+        assert image.size == (48, 36)
+
     private = await test_client.get(item["file_url"], headers=material_users["other"])
     assert private.status_code == 404
 
