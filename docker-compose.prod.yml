@@ -231,7 +231,7 @@ services:
       args:
         MANAGED_MODE: contentswarm
         HOST_APP_URL: ${CONTENTSWARM_PUBLIC_URL:?CONTENTSWARM_PUBLIC_URL must be set}
-    image: ${HYCANVAS_IMAGE:-contentswarm-hycanvas}:${YUXI_VERSION:?YUXI_VERSION must be set}
+    image: ${HYCANVAS_REF:-${HYCANVAS_IMAGE:-ghcr.io/shenwei8899-ctrl/contentswarm-hycanvas}:${YUXI_VERSION:?YUXI_VERSION must be set}}
     entrypoint: ["/app/hycanvas"]
     depends_on:
       hycanvas-db:

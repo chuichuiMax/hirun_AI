@@ -35,7 +35,7 @@ cp .env.template .env.prod
 - `IMAGE2_BASE_URL` / `IMAGE2_API_KEY` / `IMAGE2_MODEL`：封面生成使用的 image2 中转站地址、密钥和模型名；文生图、图片编辑或异步状态接口不是默认路径时，分别设置 `IMAGE2_SUBMIT_PATH`、`IMAGE2_EDIT_PATH` 与 `IMAGE2_STATUS_PATH`。用户也可在封面生成页右上角保存账号级全局 Base URL、API Key 与模型；账号配置优先，环境变量作为未配置时的回退，API Key 不通过读取接口回显。模板复刻 V2 默认启用；紧急回滚时可将 `CONTENT_COVER_TEMPLATE_REPLICATION_V2=false`，使 Worker 暂时使用旧版最终合成器。
 - `XHS_GATEWAY_TOKEN`：至少 32 个字符的随机内部浏览器网关密钥，不能使用开发默认值
 - `SANDBOX_IMAGE`：使用固定版本或 digest，禁止使用 `latest`
-- `YUXI_API_IMAGE`、`YUXI_WEB_IMAGE`、`YUXI_SANDBOX_PROVISIONER_IMAGE`：镜像仓库地址
+- `YUXI_API_IMAGE`、`YUXI_WEB_IMAGE`、`YUXI_SANDBOX_PROVISIONER_IMAGE`、`HYCANVAS_IMAGE`：镜像仓库地址
 - `PUBLIC_BASE_URL`：运营人员实际访问的 HTTPS 地址，例如 `https://content.example.com/boyun`；生产部署拒绝纯 HTTP，证书必须可被标准客户端验证
 
 部署脚本会在拉取镜像之前校验上述生产凭据和 HTTPS 地址，缺失、仍为公开默认值或长度不足时立即终止，且不会把密钥内容输出到日志。部署完成后除本机 API 与内部浏览器网关外，还会通过 `PUBLIC_BASE_URL` 验证公网 TLS 入口；三者任一失败都会触发既定回滚流程。
@@ -51,7 +51,7 @@ docker compose exec -e RUN_IMAGE2_LIVE_TESTS=1 api \
 
 ### 2. 发布不可变镜像
 
-在 GitHub Actions 手动运行 `Publish versioned images`，输入发布版本号。流程会先拒绝仓库中已经存在的同名版本，再运行后端测试和前端构建，分别构建 API、Web 与 Sandbox Provisioner 候选镜像，并对 API 候选镜像执行 Patchright Mock 浏览器 E2E。三类候选镜像全部成功后才统一提升为版本号与 `sha-<Git SHA>` 正式标签，避免后续构建失败留下部分发布；流程不生成 `latest`。完成后下载 `image-digests-<版本号>` 构建产物并归档，其中记录的是正式标签从仓库解析出的最终 digest，作为部署与审计依据。
+在 GitHub Actions 手动运行 `Publish versioned images`，输入发布版本号。流程会先拒绝仓库中已经存在的同名版本，再运行后端测试和前端构建，分别构建 API、Web、Sandbox Provisioner 与 HyCanvas 候选镜像，并对 API 候选镜像执行 Patchright Mock 浏览器 E2E。四类候选镜像全部成功后才统一提升为版本号与 `sha-<Git SHA>` 正式标签，避免后续构建失败留下部分发布；流程不生成 `latest`。完成后下载 `image-digests-<版本号>` 构建产物并归档，其中记录的是正式标签从仓库解析出的最终 digest，作为部署与审计依据。
 
 ### 3. 启动服务
 
@@ -70,7 +70,7 @@ DEPLOY_HOST=user@server \
   bash scripts/push-and-deploy.sh 0.7.2-contentflow ./image-digests-0.7.2-contentflow.txt
 ```
 
-部署脚本会校验清单版本、Git SHA、仓库名称与三个 SHA-256 digest，并将 Compose 镜像引用固定为 `仓库@sha256:...`。成功部署的清单保存在 `.deploy/releases/`，后续回滚继续使用原 digest，不依赖可能漂移的标签。仅对尚无 digest 清单的历史版本，允许运维显式设置 `ALLOW_LEGACY_TAG_ROLLBACK=true` 做一次兼容回滚；该开关禁止用于新版本部署。`push-and-deploy.sh` 会在上传任何文件前，通过 SSH 流式执行一次只读资源预检；描述文件上传后，正式部署脚本还会再次执行同一门禁，避免预检与启动之间的资源状态变化被忽略。
+部署脚本会校验清单版本、Git SHA、仓库名称与四个 SHA-256 digest，并将 Compose 镜像引用固定为 `仓库@sha256:...`。成功部署的清单保存在 `.deploy/releases/`，后续回滚继续使用原 digest，不依赖可能漂移的标签。仅对尚无 digest 清单的历史版本，允许运维显式设置 `ALLOW_LEGACY_TAG_ROLLBACK=true` 做一次兼容回滚；该开关禁止用于新版本部署。`push-and-deploy.sh` 会在上传任何文件前，通过 SSH 流式执行一次只读资源预检；描述文件上传后，正式部署脚本还会再次执行同一门禁，避免预检与启动之间的资源状态变化被忽略。
 
 正式部署前可以分两步只读验证：`--validate-only` 仅校验生产配置、凭据、Compose 与 digest 清单；`--preflight-only` 在此基础上继续执行磁盘、inode、内存、负载、Docker 占用、并行任务和近期内核异常检查。两种模式都不会拉取镜像、创建目录、重启或修改服务：
 
