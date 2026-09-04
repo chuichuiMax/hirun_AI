@@ -285,12 +285,6 @@ const STUDIO_ENTRIES = [
     name: '装修与家居',
     description: '报价、工艺、实景案例和装修避坑',
     default_goal: 'acquire'
-  },
-  {
-    key: '好评笔记',
-    name: '好评笔记',
-    description: '业主第一人称评价项目成员，模仿好评知识库已有文章',
-    default_goal: 'brand'
   }
 ]
 

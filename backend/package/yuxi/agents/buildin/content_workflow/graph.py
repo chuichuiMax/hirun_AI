@@ -461,6 +461,10 @@ class ContentWorkflowAgent(BaseAgent):
                 "run_id": expected_run_id,
                 "node_id": node["id"],
                 "expected_state_version": state_version,
+            }
+            mismatched = [key for key, value in expected.items() if answer.get(key) != value]
+            if mismatched:
+                raise ValueError(f"人工回修请求已过期或目标不匹配: {', '.join(mismatched)}")
             return {
                 "revision_reason_code": reason_code,
                 "revision_target": decision.target_node_id,
