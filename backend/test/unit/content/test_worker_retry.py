@@ -10,6 +10,29 @@ from yuxi.services import content_run_worker
 from yuxi.services.run_worker import RetryableRunError
 
 
+def test_visual_plan_missing_required_fact_is_replanned_until_agent_supplies_rewrite():
+    state = {
+        "runtime_config_snapshot": {
+            "visual_material": {
+                "hycanvas_fillable_fields": [
+                    {
+                        "kind": "text",
+                        "label": "免费量尺规划",
+                        "semanticRole": "designer",
+                        "constraints": {"required": True, "maxChars": 6},
+                    }
+                ]
+            }
+        },
+        "content_brief": {"form_values": {}},
+        "visual_plan": {"template_fields": {}},
+    }
+
+    assert content_run_worker._visual_plan_needs_template_field_repair(state) is True
+    state["visual_plan"]["template_fields"] = {"免费量尺规划": "空间规划"}
+    assert content_run_worker._visual_plan_needs_template_field_repair(state) is False
+
+
 class FakeGraph:
     def __init__(self):
         self.updated_state = None

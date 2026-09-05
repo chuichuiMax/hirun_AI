@@ -327,8 +327,9 @@ function drawImageNode(ctx: CanvasLike, node: ImageNode, w: number, h: number, a
   if (status === "ready") {
     let img = assets?.image(assetId);
     if (img && ctx.drawImage) {
-      const natW = node.source.naturalWidth || 1;
-      const natH = node.source.naturalHeight || 1;
+      const el = img as { width?: number; height?: number; naturalWidth?: number; naturalHeight?: number };
+      const natW = node.source.naturalWidth || el.naturalWidth || el.width || 1;
+      const natH = node.source.naturalHeight || el.naturalHeight || el.height || 1;
       // Source-pixel basis for the crop/sample math. The duotone buffer may be
       // downscaled (capped longest side), so sampling must use the buffer's own
       // dimensions, not the natural ones.

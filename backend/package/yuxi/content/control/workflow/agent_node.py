@@ -370,19 +370,42 @@ class AgentNodeHandler:
             "visual_plan_hash": (state.get("visual_plan") or {}).get("plan_hash"),
             "state_version": int(state.get("state_version") or 0),
         }
+        assembly_state = state
         if node["id"] == "plan_visuals":
+            from yuxi.content.control.visual_template_fields import missing_required_template_fields
+
             limits: dict[str, int] = {}
+            allowed_template_fields: dict[str, dict[str, int]] = {}
             for field in visual_material.get("hycanvas_fillable_fields") or []:
                 role = str(field.get("semanticRole") or "")
                 if role == "label" or role not in {"title", "subtitle", "body_excerpt"}:
                     continue
-                max_chars = (field.get("constraints") or {}).get("maxChars")
+                constraints = field.get("constraints") or {}
+                field_key = str(field.get("key") or field.get("label") or "").strip()
+                if field_key:
+                    allowed_template_fields[field_key] = {
+                        key: value
+                        for key in ("maxChars", "maxCharsPerLine", "maxLines")
+                        if isinstance((value := constraints.get(key)), int) and value > 0
+                    }
+                max_chars = constraints.get("maxChars")
                 if isinstance(max_chars, int) and max_chars > 0:
                     limits[role] = min(limits.get(role, max_chars), max_chars)
             locked_values["visual_text_max_chars"] = limits
+            locked_values["allowed_visual_template_fields"] = allowed_template_fields
+            required_template_fields = missing_required_template_fields(
+                visual_material.get("hycanvas_fillable_fields") or [], task.brief_json or {}
+            )
+            locked_values["required_visual_template_fields"] = required_template_fields
+            runtime_snapshot = dict(state.get("runtime_config_snapshot") or {})
+            runtime_snapshot["visual_material"] = {
+                **visual_material,
+                "required_template_field_repairs": required_template_fields,
+            }
+            assembly_state = {**state, "runtime_config_snapshot": runtime_snapshot}
         if node["id"] == "submit_cover_job":
             locked_values["visual_plan"] = state.get("visual_plan") or {}
-        assembly = ContentNodeInputAssembler.build(node=node, state=state)
+        assembly = ContentNodeInputAssembler.build(node=node, state=assembly_state)
         domain_context = ContractDomainContext.from_governance(
             match_decision_snapshot=state.get("match_decision_snapshot") or {},
             formula_selection_snapshot=state.get("formula_selection_snapshot") or {},

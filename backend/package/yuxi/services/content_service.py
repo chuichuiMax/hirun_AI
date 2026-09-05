@@ -766,12 +766,30 @@ async def delete_content_task(db: AsyncSession, user: User, task_id: str) -> dic
     task = await repo.get_task_for_user(task_id, user, for_update=True)
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
-    _require_v3_task(task)
     task.deleted_at = utc_now_naive()
     task.status = "deleted"
     task.updated_by = str(user.uid)
     await db.commit()
     return {"deleted": True, "task_id": task.id}
+
+
+async def delete_content_tasks(db: AsyncSession, user: User, task_ids: list[str]) -> dict[str, Any]:
+    unique_task_ids = list(dict.fromkeys(task_ids))
+    repo = ContentRepository(db)
+    tasks = []
+    for task_id in unique_task_ids:
+        task = await repo.get_task_for_user(task_id, user, for_update=True)
+        if task is None:
+            raise _content_error(404, "CONTENT_TASK_NOT_FOUND", f"内容任务不存在: {task_id}")
+        tasks.append(task)
+
+    deleted_at = utc_now_naive()
+    for task in tasks:
+        task.deleted_at = deleted_at
+        task.status = "deleted"
+        task.updated_by = str(user.uid)
+    await db.commit()
+    return {"deleted": True, "task_ids": unique_task_ids, "deleted_count": len(unique_task_ids)}
 
 
 async def duplicate_content_task(db: AsyncSession, user: User, task_id: str) -> dict[str, Any]:

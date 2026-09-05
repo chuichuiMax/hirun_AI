@@ -217,6 +217,7 @@ WORKFLOW_V3_NODES = [
             "content-body-generator",
             "viral-structure-rewriter",
             "viral-layout-formatter",
+            "humanizer-zh",
             "content-human-expression",
         ),
         "GenerateContentInputV1",

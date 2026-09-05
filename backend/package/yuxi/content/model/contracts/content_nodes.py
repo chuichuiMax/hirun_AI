@@ -676,6 +676,7 @@ class VisualPlanResultV1(StrictContract):
     size: VisualSizeV1
     safe_area: SafeAreaV1
     text: list[str]
+    template_fields: dict[str, str] = Field(default_factory=dict)
     source_asset_ids: list[str]
     mode: Literal["template", "generated", "mixed"]
     risks: list[str]
@@ -801,6 +802,8 @@ class ContractDomainContext:
     selected_viral_reference_ids: tuple[str, ...] = ()
     viral_candidate_ids: frozenset[str] = frozenset()
     visual_text_max_chars: dict[str, int] = field(default_factory=dict)
+    allowed_visual_template_fields: dict[str, dict[str, int]] = field(default_factory=dict)
+    required_visual_template_fields: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @classmethod
     def from_node_input(cls, node_input: ContentAgentNodeInputV1) -> ContractDomainContext:
@@ -946,6 +949,16 @@ class ContractDomainContext:
                 str(key): int(value)
                 for key, value in (locks.get("visual_text_max_chars") or {}).items()
                 if str(key) in {"title", "subtitle", "body_excerpt"} and isinstance(value, int) and value > 0
+            },
+            allowed_visual_template_fields={
+                str(label): dict(constraints)
+                for label, constraints in (locks.get("allowed_visual_template_fields") or {}).items()
+                if isinstance(constraints, dict)
+            },
+            required_visual_template_fields={
+                str(label): dict(constraints)
+                for label, constraints in (locks.get("required_visual_template_fields") or {}).items()
+                if isinstance(constraints, dict)
             },
             viral_candidate_ids=frozenset(
                 str(item["id"])
@@ -1553,7 +1566,65 @@ def validate_content_node_result(
         for index, asset_id in enumerate(result.source_asset_ids):
             _require_member(asset_id, context.allowed_asset_ids, f"source_asset_ids.{index}")
         _validate_evidence_ids(result.evidence_ids, "visual", context, "evidence_ids")
-        _validate_numbers("\n".join(result.text), context, "text", "visual")
+        _validate_numbers("\n".join([*result.text, *result.template_fields.values()]), context, "text", "visual")
+        allowed_template_fields = {
+            **context.allowed_visual_template_fields,
+            **context.required_visual_template_fields,
+        }
+        unexpected_template_fields = set(result.template_fields) - set(allowed_template_fields)
+        if unexpected_template_fields:
+            label = sorted(unexpected_template_fields)[0]
+            raise ContractDomainValidationError(
+                "visual_template_field_not_authorized",
+                f"template_fields.{label}",
+                "视觉方案只能填写服务端授权的叙事字段或缺失必填字段，不得改动其他模板文字",
+            )
+        missing_narrative_fields = set(context.allowed_visual_template_fields) - set(result.template_fields)
+        if missing_narrative_fields:
+            label = sorted(missing_narrative_fields)[0]
+            raise ContractDomainValidationError(
+                "visual_template_field_missing",
+                f"template_fields.{label}",
+                f"封面叙事字段“{label}”必须单独生成文案，不能复用其他字段的文字",
+            )
+        for label, constraints in allowed_template_fields.items():
+            value = result.template_fields.get(label, "").strip()
+            if not value:
+                raise ContractDomainValidationError(
+                    "visual_template_field_missing",
+                    f"template_fields.{label}",
+                    f"封面字段“{label}”必须生成有依据且不重复的短句",
+                )
+            unsupported_claim = next(
+                (term for term in ("免费", "保证", "保价", "最低", "第一", "省钱", "零风险") if term in value),
+                None,
+            )
+            if unsupported_claim:
+                raise ContractDomainValidationError(
+                    "visual_template_claim_unsupported",
+                    f"template_fields.{label}",
+                    f"封面补写文案不得沿用无事实依据的承诺词“{unsupported_claim}”，请改为中性描述",
+                )
+            max_chars = constraints.get("maxChars")
+            if max_chars and len(value.replace("\n", "")) > max_chars:
+                raise ContractDomainValidationError(
+                    "visual_text_too_long",
+                    f"template_fields.{label}",
+                    f"封面字段“{label}”最多 {max_chars} 个字符，请缩短后重新提交视觉方案",
+                )
+        normalized_template_text: dict[str, str] = {}
+        for label, value in result.template_fields.items():
+            normalized = re.sub(r"[\W_]+", "", value, flags=re.UNICODE).casefold()
+            if not normalized:
+                continue
+            previous_label = normalized_template_text.get(normalized)
+            if previous_label:
+                raise ContractDomainValidationError(
+                    "visual_text_duplicate",
+                    f"template_fields.{label}",
+                    f"封面字段“{label}”与“{previous_label}”内容重复，请改写为不同的信息点",
+                )
+            normalized_template_text[normalized] = label
         role_indexes = {"title": 0, "subtitle": 1, "body_excerpt": 1}
         for role, max_chars in context.visual_text_max_chars.items():
             index = role_indexes[role]

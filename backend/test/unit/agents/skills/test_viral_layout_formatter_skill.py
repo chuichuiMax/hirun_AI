@@ -7,8 +7,12 @@ def test_viral_layout_formatter_preserves_facts_and_requires_visible_layout():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "viral-layout-formatter")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "1.4.0"
+    assert spec.version == "1.5.0"
     assert "creation_mode=viral_rewrite" in skill_text
+    assert "creation_mode=original" in skill_text
+    assert "相邻信息块之间保留一个空行" in skill_text
+    assert "通常不超过三句" in skill_text
+    assert "humanizer-zh" in skill_text
     assert "排版映射表" in skill_text
     assert "使用真实换行符" in skill_text
     assert "相邻信息块之间保留一个空行" in skill_text

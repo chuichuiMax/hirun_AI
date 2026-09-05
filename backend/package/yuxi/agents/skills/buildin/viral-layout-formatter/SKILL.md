@@ -1,15 +1,28 @@
 ---
 name: viral-layout-formatter
-description: 在爆款仿写模式中，参考已冻结爆款的段落节奏，把正文排成适合小红书扫读的短段落、数据块、条目和互动收尾；只调整呈现方式，不复制爆款原文或改动业务事实。
+description: 在原创或爆款仿写模式中，把正文排成适合渠道扫读的短段落、信息块、必要条目和互动收尾；只调整呈现方式，不改动业务事实。
 ---
 
-# 爆款正文排版
+# 正文排版
 
-仅在 `payload.runtime_config_snapshot.creation_mode=viral_rewrite` 时执行。原创模式保持静默，不改变原创正文的排版。
+在 `generate_content` 节点内执行，并根据 `payload.runtime_config_snapshot.creation_mode` 选择排版依据：原创模式按锁定正文公式、内容大纲与渠道节奏排版；爆款仿写模式按已冻结爆款结构蓝图排版。
 
 本 Skill 在 `viral-structure-rewriter` 完成结构仿写后、`content-human-expression` 完成最终表达前执行。它只负责正文的视觉节奏，不重新选择标题公式、正文公式、事实或证据。
 
+## 原创模式
+
+当 `creation_mode=original` 时，不读取或模仿爆款结构参考。逐项读取 `content_outline`、`strategy_snapshot.body_formula` 和 `channel_profile`，把大纲中不同任务拆成可扫读的信息块：
+
+- 开头的用户处境、痛点或场景独立成短段，避免与项目数据、解决方案挤在同一大段。
+- 面积、预算、工期、材料、方案和验收等不同类型的信息按大纲顺序分块；只使用已有事实，不为排版补造标签或数字。
+- 一个自然段只承担一个主要任务，通常不超过三句；长句群按语义停顿拆分，相邻信息块之间保留一个空行。
+- 只有正文公式或内容本身确实包含并列步骤、清单或对比项时才逐条换行，不把连续叙事机械改成固定编号列表。
+- 面向小红书等社交渠道时，结尾互动或行动提示独立成段；不得把正文压成连续的项目报告，也不得用 Markdown 标题、表格或分割线制造层级。
+- 完成排版后交给 `humanizer-zh` 与 `content-human-expression` 优化措辞和 Emoji；后续不得把已拆开的信息块重新合成长段。
+
 ## 一、读取参考排版
+
+以下章节仅适用于 `creation_mode=viral_rewrite`。
 
 从唯一满足以下条件的 Evidence 中读取 `metadata.reference_blueprint`：
 

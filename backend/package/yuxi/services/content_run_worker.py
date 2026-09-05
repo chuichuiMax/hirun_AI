@@ -102,6 +102,17 @@ def _visual_plan_exceeds_template_limits(state: dict[str, Any]) -> bool:
     return False
 
 
+def _visual_plan_needs_template_field_repair(state: dict[str, Any]) -> bool:
+    from yuxi.content.control.visual_template_fields import missing_required_template_fields
+
+    visual_material = (state.get("runtime_config_snapshot") or {}).get("visual_material") or {}
+    missing = missing_required_template_fields(
+        visual_material.get("hycanvas_fillable_fields") or [], state.get("content_brief") or {}
+    )
+    supplied = (state.get("visual_plan") or {}).get("template_fields") or {}
+    return any(not str(supplied.get(label) or "").strip() for label in missing)
+
+
 def _retry_predecessor(workflow_definition: dict[str, Any], pending_node: str) -> str | None:
     for source, target in reversed(workflow_definition.get("edges") or []):
         if target == pending_node:
@@ -210,7 +221,10 @@ async def process_content_run(ctx, run_id: str):
                     retry_counts=state_values.get("retry_counts") or {},
                 )
             retry_from_node = None
-            if requested_node == "submit_cover_job" and _visual_plan_exceeds_template_limits(state_values):
+            if requested_node == "submit_cover_job" and (
+                _visual_plan_exceeds_template_limits(state_values)
+                or _visual_plan_needs_template_field_repair(state_values)
+            ):
                 state_update["visual_plan"] = None
                 state_update["cover_job"] = None
                 retry_from_node = "human_content_approval"

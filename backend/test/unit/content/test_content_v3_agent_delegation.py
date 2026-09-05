@@ -1204,9 +1204,10 @@ def test_formal_content_agent_catalog_and_conflict_policy():
         "content-body-generator",
         "viral-structure-rewriter",
         "viral-layout-formatter",
+        "humanizer-zh",
         "content-human-expression",
     )
-    assert generation_spec.config_version == 4
+    assert generation_spec.config_version == 5
     spec = CONTENT_AGENT_SPECS[0]
     existing = Agent(
         slug=spec.slug,
@@ -1383,7 +1384,7 @@ def test_generation_agent_additive_migration_installs_viral_skills():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 4
+    assert existing.config_version == 5
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(existing.config_json["context"]["skills"]) == set(spec.skills)
@@ -1417,7 +1418,42 @@ def test_generation_agent_additive_migration_installs_viral_layout_formatter():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 4
+    assert existing.config_version == 5
+    assert existing.updated_by == "user-1"
+    assert existing.config_json["context"]["model"] == "provider:user-model"
+    assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}
+
+
+def test_generation_agent_additive_migration_installs_humanizer_for_original_content():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-generation-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={
+            "context": {
+                "skills": [
+                    "content-title-generator",
+                    "content-outline-builder",
+                    "content-body-generator",
+                    "viral-structure-rewriter",
+                    "viral-layout-formatter",
+                    "content-human-expression",
+                    "user-extra-skill",
+                ],
+                "skill_tool_allowlist": [],
+                "model": "provider:user-model",
+            }
+        },
+        enabled=True,
+        config_version=4,
+        is_subagent=False,
+        created_by="system",
+        updated_by="user-1",
+    )
+
+    assert migrate_system_content_agent(existing, spec) is True
+    assert existing.config_version == 5
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}

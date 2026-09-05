@@ -32,6 +32,12 @@ class ContentTaskUpdate(BaseModel):
     mode: ContentMode | None = None
 
 
+class ContentTaskBatchDelete(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_ids: list[str] = Field(min_length=1, max_length=100)
+
+
 class ContentVisualMaterialSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

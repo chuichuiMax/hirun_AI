@@ -22,7 +22,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="humanizer-zh",
         source_dir=_SKILLS_ROOT / "humanizer-zh",
         description="降低中文内容的机械腔与模板化表达，同时保留原文事实、语气和格式。",
-        version="1.0.0",
+        version="1.1.0",
     ),
     BuiltinSkillSpec(
         slug="content-strategy-planner",
@@ -100,8 +100,8 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="content-human-expression",
         source_dir=_SKILLS_ROOT / "content-human-expression",
-        description="在不改变事实、公式和证据的前提下，优化自然表达并按知识库映射替换封禁词。",
-        version="1.8.0",
+        description="在不改变事实、公式和证据的前提下，落实人设语气、语义化 Emoji 和封禁词替换。",
+        version="1.9.0",
     ),
     BuiltinSkillSpec(
         slug="viral-structure-rewriter",
@@ -115,8 +115,8 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="viral-layout-formatter",
         source_dir=_SKILLS_ROOT / "viral-layout-formatter",
-        description="按已冻结爆款的真实信息块、列表类型和段落节奏排版正文。",
-        version="1.4.0",
+        description="按原创公式或已冻结爆款结构，把正文排成适合渠道扫读的信息块、短段与互动收尾。",
+        version="1.5.0",
     ),
     BuiltinSkillSpec(
         slug="content-outline-builder",
@@ -144,8 +144,8 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="content-visual-planner",
         source_dir=_SKILLS_ROOT / "content-visual-planner",
-        description="按内容快照和渠道规范产出结构化视觉方案。",
-        version="1.4.0",
+        description="按内容快照和渠道规范产出字段不重复的结构化视觉方案。",
+        version="1.6.0",
     ),
     BuiltinSkillSpec(
         slug="content-cover-generator",

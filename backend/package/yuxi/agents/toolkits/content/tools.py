@@ -134,32 +134,32 @@ def _hycanvas_template_fields(
     *,
     visual_text: list[str],
     brief: dict[str, Any],
+    template_fields: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Resolve author-declared template semantics from locked content inputs."""
-    form_values = brief.get("form_values") or {}
-    brand = brief.get("brand") or {}
+    from yuxi.content.control.visual_template_fields import template_fact_sources
+
+    template_fields = template_fields or {}
     sources = {
         "title": visual_text[0] if visual_text else "",
         "subtitle": visual_text[1] if len(visual_text) > 1 else "",
         "body_excerpt": visual_text[1] if len(visual_text) > 1 else (visual_text[0] if visual_text else ""),
-        "project_name": form_values.get("project_name") or form_values.get("community_name") or "",
-        "project_name_en": form_values.get("project_name_en") or form_values.get("community_name_en") or "",
-        "project_area": form_values.get("project_area") or form_values.get("area") or form_values.get("area_sqm") or "",
-        "designer": form_values.get("designer") or form_values.get("designer_name") or "",
-        "completion_year": form_values.get("completion_year") or form_values.get("year") or "",
-        "brand_name": brand.get("name") or form_values.get("brand_name") or "",
+        **template_fact_sources(brief),
     }
     fields: dict[str, str] = {}
     for field in declarations:
         if field.get("kind") != "text" or not field.get("label"):
             continue
         label = str(field["label"])
+        field_key = str(field.get("key") or label)
         role = str(field.get("semanticRole") or "")
         if role == "label":
             continue
-        value = str(sources.get(role) or "").strip()
+        value = str(template_fields.get(field_key) or sources.get(role) or "").strip()
         if not role:
-            if "副标题" in label:
+            if field_key in template_fields:
+                value = str(template_fields[field_key]).strip()
+            elif "副标题" in label:
                 value = sources["subtitle"]
             elif "标题" in label or "语录" in label:
                 value = sources["title"]
@@ -173,7 +173,7 @@ def _hycanvas_template_fields(
             value = match.group(0) if match else ""
         constraints = field.get("constraints") or {}
         if constraints.get("required") and not value:
-            raise ValueError(f"封面模板必填字段“{label}”在事实简报中没有对应内容")
+            raise ValueError(f"封面模板必填字段“{label}”未完成自动适配")
         max_chars = constraints.get("maxChars")
         if isinstance(max_chars, int) and max_chars > 0 and len(value.replace("\n", "")) > max_chars:
             raise ValueError(f"封面字段“{label}”超过模板限制的 {max_chars} 个字符")
@@ -195,7 +195,7 @@ def _hycanvas_template_fields(
                 )
             except ValueError as exc:
                 raise ValueError(f"封面字段“{label}”超过模板限制的 {max_lines} 行") from exc
-        fields[label] = value
+        fields[field_key] = value
     return fields
 
 
@@ -487,6 +487,7 @@ async def create_content_cover_job(
             fields = _hycanvas_template_fields(
                 fillable_fields,
                 visual_text=text,
+                template_fields=visual_plan.template_fields,
                 brief=task.brief_json or {},
             )
             image_field_label = None

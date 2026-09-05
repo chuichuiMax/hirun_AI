@@ -11,6 +11,8 @@ const store = useContentStudioStore()
 const page = ref(1)
 const pageSize = ref(20)
 const status = ref(undefined)
+const selectedTaskIds = ref([])
+const deleting = ref(false)
 
 const statusLabels = {
   draft: '草稿',
@@ -51,8 +53,43 @@ const remove = (task) => {
     cancelText: '取消',
     okType: 'danger',
     onOk: async () => {
-      await contentApi.deleteTask(task.id)
-      await load()
+      try {
+        await contentApi.deleteTask(task.id)
+        selectedTaskIds.value = selectedTaskIds.value.filter((id) => id !== task.id)
+        if (store.history.length === 1 && page.value > 1) page.value -= 1
+        await load()
+        message.success('生成历史已删除')
+      } catch (error) {
+        message.error(error.message || '删除生成历史失败')
+        throw error
+      }
+    }
+  })
+}
+
+const removeSelected = () => {
+  const taskIds = [...selectedTaskIds.value]
+  if (!taskIds.length) return
+  Modal.confirm({
+    title: `批量删除 ${taskIds.length} 条生成历史`,
+    content: '确定删除所选内容任务吗？内容任务会软删除，正式审计记录仍保留。',
+    okText: '删除',
+    cancelText: '取消',
+    okType: 'danger',
+    onOk: async () => {
+      deleting.value = true
+      try {
+        const response = await contentApi.deleteTasks(taskIds)
+        selectedTaskIds.value = []
+        if (store.history.length <= response.deleted_count && page.value > 1) page.value -= 1
+        await load()
+        message.success(`已删除 ${response.deleted_count} 条生成历史`)
+      } catch (error) {
+        message.error(error.message || '批量删除失败')
+        throw error
+      } finally {
+        deleting.value = false
+      }
     }
   })
 }
@@ -61,6 +98,10 @@ const handlePageChange = (nextPage, nextPageSize) => {
   page.value = nextPage
   pageSize.value = nextPageSize
   void load()
+}
+
+const handleSelectionChange = (keys) => {
+  selectedTaskIds.value = keys
 }
 
 onMounted(load)
@@ -75,6 +116,9 @@ onMounted(load)
 
     <section class="history-card">
       <div class="history-toolbar">
+        <a-button danger :disabled="!selectedTaskIds.length" :loading="deleting" @click="removeSelected">
+          <Trash2 :size="15" />批量删除<span v-if="selectedTaskIds.length">（{{ selectedTaskIds.length }}）</span>
+        </a-button>
         <a-select v-model:value="status" allow-clear placeholder="全部状态" style="width: 180px" @change="load">
           <a-select-option v-for="(label, value) in statusLabels" :key="value" :value="value">{{ label }}</a-select-option>
         </a-select>
@@ -86,6 +130,11 @@ onMounted(load)
         :loading="store.loading.history"
         :pagination="{ current: page, pageSize, total: store.historyTotal, showSizeChanger: true }"
         row-key="id"
+        :row-selection="{
+          selectedRowKeys: selectedTaskIds,
+          preserveSelectedRowKeys: true,
+          onChange: handleSelectionChange
+        }"
         @change="(pagination) => handlePageChange(pagination.current, pagination.pageSize)"
       >
         <a-table-column title="任务" key="name">

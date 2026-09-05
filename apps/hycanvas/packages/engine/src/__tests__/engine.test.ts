@@ -66,6 +66,7 @@ interface Op {
   text?: string;
   /** Recorded x for fillText, for asserting alignment. */
   x?: number;
+  args?: unknown[];
 }
 const gradientStub = { addColorStop() {} };
 class RecordingCtx implements CanvasLike {
@@ -82,7 +83,7 @@ class RecordingCtx implements CanvasLike {
   filter = "none";
   throwOnFillText = false;
 
-  private rec(op: string, text?: string, x?: number) {
+  private rec(op: string, text?: string, x?: number, args?: unknown[]) {
     this.ops.push({
       op,
       alpha: this.globalAlpha,
@@ -92,6 +93,7 @@ class RecordingCtx implements CanvasLike {
       fillIsGradient: typeof this.fillStyle === "object",
       text,
       x,
+      args,
     });
   }
   createLinearGradient() {
@@ -103,8 +105,8 @@ class RecordingCtx implements CanvasLike {
   createConicGradient() {
     return gradientStub;
   }
-  drawImage() {
-    this.rec("drawImage");
+  drawImage(...args: unknown[]) {
+    this.rec("drawImage", undefined, undefined, args);
   }
   save() {
     this.saves++;
@@ -866,6 +868,19 @@ describe("asset/font readiness (FR-11)", () => {
     const ctx = new RecordingCtx();
     renderScene(createScene(imageDesign()), ctx, defaultViewport(800, 600), { assets });
     expect(ctx.ops.some((o) => o.op === "drawImage")).toBe(true);
+  });
+
+  it("uses the decoded image dimensions for cover cropping when source dimensions are unset", () => {
+    const assets = new FakeAssets();
+    assets.statuses.set("asset-1", "ready");
+    assets.images.set("asset-1", { naturalWidth: 400, naturalHeight: 200 });
+    const ctx = new RecordingCtx();
+    renderScene(createScene(imageDesign()), ctx, defaultViewport(800, 600), { assets });
+
+    const args = ctx.ops.find((o) => o.op === "drawImage")?.args as number[];
+    expect(args[1]).toBeCloseTo(200 / 3);
+    expect(args.slice(2, 5)).toEqual([0, 800 / 3, 200]);
+    expect(args.slice(5)).toEqual([0, 0, 40, 30]);
   });
 
   it("shows a neutral placeholder while loading and a missing placeholder when dangling", () => {
