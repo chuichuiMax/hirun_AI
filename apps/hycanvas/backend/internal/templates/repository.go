@@ -58,6 +58,10 @@ func scanTemplate(row pgx.Row) (TemplateRow, error) {
 }
 
 func (s *Service) getRow(ctx context.Context, id string) (TemplateRow, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		// Built-in seed IDs are slugs (e.g. xiaohongshu-*); DB primary keys are UUIDs.
+		return TemplateRow{}, ErrNotFound
+	}
 	t, err := scanTemplate(s.db.QueryRow(ctx, `SELECT `+tmplCols+` FROM "templates" WHERE id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRow{}, ErrNotFound

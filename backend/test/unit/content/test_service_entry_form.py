@@ -133,7 +133,7 @@ def test_configured_business_variable_fields_filters_by_content_type_and_require
 def test_map_service_entry_form_values_keeps_configured_names():
     mapped = map_service_entry_form_values(
         "装修家居",
-        {"楼盘信息": "星河湾", "基础": "4万", "木制品": "2万", "主材": "2万", "设计风格": "北欧"},
+        {"楼盘信息": "星河湾", "基础": "4万", "木制品": "2万", "主材": "2万", "设计风格": "北欧之光"},
     )
     assert mapped["楼盘信息"] == "星河湾"
     assert mapped["project_type"] == "星河湾"

@@ -7,6 +7,7 @@ import re
 import secrets
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Literal
 
 import httpx
@@ -62,6 +63,7 @@ from yuxi.utils.datetime_utils import format_utc_datetime, shanghai_now, utc_now
 
 INDUSTRY_SLUG = "decoration"
 SMS_TTL_SECONDS = 300
+MP_TOKEN_TTL = timedelta(days=30)
 WECHAT_SESSION_TTL_SECONDS = 600
 NRLX_TO_CT = {
     "NRLX0001": "CT05",
@@ -104,7 +106,26 @@ _QUOTE_RANGE = re.compile(r"^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)万$")
 _QUOTE_FLOOR = re.compile(r"^(\d+(?:\.\d+)?)万以上$")
 _HYCANVAS_TEMPLATE_ID = re.compile(r"^xiaohongshu-[a-z0-9-]+$")
 _OPEN_QUOTE_SPAN = 10
-DESIGN_STYLES: tuple[str, ...] = ("现代简约", "轻奢", "新中式", "北欧", "奶油风", "原木风")
+DESIGN_STYLES: tuple[str, ...] = (
+    "复合写意",
+    "写意木构",
+    "江南印象",
+    "东方古雅",
+    "轻欧简美",
+    "欧美香颂",
+    "欧式田园",
+    "异域风情",
+    "新装饰主义",
+    "北欧之光",
+    "意境东方",
+    "复古风潮",
+    "雅致现代",
+    "工业再造",
+    "优雅缤纷",
+    "极简侘寂",
+    "仿材未来",
+    "艺术室界",
+)
 REGION_TREE: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "长沙市",
@@ -498,9 +519,17 @@ async def _issue_token(db: AsyncSession, employee: ContentEmployee) -> dict[str,
     employee = await require_app_employee(db, employee.login_account)
     employee.last_login_at = utc_now_naive()
     user = await ensure_platform_user(db, employee)
-    token = AuthUtils.create_access_token({"sub": employee.id, "typ": "mp", "uid": user.uid})
+    token = AuthUtils.create_access_token(
+        {"sub": employee.id, "typ": "mp", "uid": user.uid},
+        expires_delta=MP_TOKEN_TTL,
+    )
     await db.commit()
-    return {"access_token": token, "token_type": "bearer", "employee": _me_dict(employee)}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": int(MP_TOKEN_TTL.total_seconds()),
+        "employee": _me_dict(employee),
+    }
 
 
 def _me_dict(employee: ContentEmployee) -> dict[str, Any]:

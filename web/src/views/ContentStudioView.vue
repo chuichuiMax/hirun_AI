@@ -336,13 +336,76 @@ const REVIEW_NOTE_PHOTO_LIMIT = 3
 const REVIEW_NOTE_PHOTO_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const FIELD_SELECT_OPTIONS = {
   外框面积: ['50-70㎡', '90-110㎡', '110-130㎡', '130-150㎡', '150-200㎡', '200-300㎡', '300㎡以上'],
-  设计风格: ['现代简约', '轻奢', '新中式', '北欧', '奶油风', '原木风'],
+  设计风格: [
+    '复合写意',
+    '写意木构',
+    '江南印象',
+    '东方古雅',
+    '轻欧简美',
+    '欧美香颂',
+    '欧式田园',
+    '异域风情',
+    '新装饰主义',
+    '北欧之光',
+    '意境东方',
+    '复古风潮',
+    '雅致现代',
+    '工业再造',
+    '优雅缤纷',
+    '极简侘寂',
+    '仿材未来',
+    '艺术室界'
+  ],
   项目阶段: ['拆改阶段', '水电阶段', '泥木阶段', '油漆阶段', '竣工交付']
+}
+const DECORATION_QUOTE_KEYS = ['基础', '木制品', '主材']
+const FRAME_AREA_QUOTES = {
+  '50-70㎡': { 基础: '4-5万', 木制品: '2-3万', 主材: '2-3万' },
+  '90-110㎡': { 基础: '7-8万', 木制品: '3-4万', 主材: '4-5万' },
+  '110-130㎡': { 基础: '9-11万', 木制品: '4-5万', 主材: '5-6万' },
+  '130-150㎡': { 基础: '11-12万', 木制品: '5-6万', 主材: '6-7万' },
+  '150-200㎡': { 基础: '15-18万', 木制品: '6-8万', 主材: '7-8万' },
+  '200-300㎡': { 基础: '20-30万', 木制品: '9-11万', 主材: '8-10万' },
+  '300㎡以上': { 基础: '30万以上', 木制品: '11万以上', 主材: '16万以上' }
 }
 const FIELD_PLACEHOLDERS = {
   目标人群: '示例：毛坯装修三口之家',
   楼盘信息: '示例：洋湖天序',
-  项目阶段: '请选择工种'
+  项目阶段: '请选择项目阶段'
+}
+
+function formatWan(value) {
+  return Number.isInteger(value) ? `${value}万` : `${value}万`
+}
+
+function discreteQuoteValues(low, high) {
+  const values = [low]
+  const half = low + 0.5
+  if (half <= high) values.push(half)
+  let integer = Math.floor(low) + 1
+  while (integer <= high) {
+    values.push(integer)
+    integer += 1
+  }
+  return values.map(formatWan)
+}
+
+function expandQuoteRange(spec) {
+  const text = String(spec || '').trim()
+  const ranged = text.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)万$/)
+  if (ranged) return discreteQuoteValues(Number(ranged[1]), Number(ranged[2]))
+  const floor = text.match(/^(\d+(?:\.\d+)?)万以上$/)
+  if (floor) {
+    const low = Number(floor[1])
+    return discreteQuoteValues(low, low + 10)
+  }
+  return text ? [text] : []
+}
+
+function pickTemporaryQuote(spec) {
+  const choices = expandQuoteRange(spec)
+  if (!choices.length) return ''
+  return choices[Math.floor(Math.random() * choices.length)]
 }
 const studioEdition = computed(() => (store.task ? store.task.mode : creation.mode) === 'pro' ? 'pro' : 'quick')
 const selectedContentTypeId = ref('')
@@ -383,7 +446,9 @@ const activeFields = computed(() => {
         options: options || [],
         placeholder: options
           ? `请选择${name}`
-          : FIELD_PLACEHOLDERS[name] || `请输入${name}`
+          : DECORATION_QUOTE_KEYS.includes(name)
+            ? '根据外框面积自动带出暂时金额'
+            : FIELD_PLACEHOLDERS[name] || `请输入${name}`
       }
     })
 })
@@ -620,6 +685,23 @@ const stageFromTask = (task) => {
   if (task.current_stage === 'review') return task.latest_run_id ? 2 : 3
   if (['generation', 'strategy'].includes(task.current_stage)) return 2
   return 1
+}
+
+const applyFrameAreaTemporaryQuotes = (frameArea) => {
+  const presentKeys = new Set(
+    activeFields.value
+      .map((field) => field.key)
+      .filter((key) => DECORATION_QUOTE_KEYS.includes(key))
+  )
+  if (!presentKeys.size) return
+  const quotes = FRAME_AREA_QUOTES[frameArea]
+  for (const key of presentKeys) {
+    formValues[key] = quotes ? pickTemporaryQuote(quotes[key]) : ''
+  }
+}
+
+const onBusinessSelectChange = (key, value) => {
+  if (key === '外框面积') applyFrameAreaTemporaryQuotes(value)
 }
 
 const initializeFormValues = () => {
@@ -1809,6 +1891,7 @@ const openVersions = async () => {
                         allow-clear
                         :placeholder="field.placeholder || `请选择${field.label}`"
                         :options="(field.options || []).map((item) => ({ label: item, value: item }))"
+                        @change="(value) => onBusinessSelectChange(field.key, value)"
                       />
                       <a-select
                         v-else-if="field.type === 'tags'"

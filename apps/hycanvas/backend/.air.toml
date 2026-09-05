@@ -8,7 +8,7 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go build -o ./tmp/api ./cmd/api"
+  cmd = "go build -o ./tmp/api ./cmd/api && chmod +x ./tmp/api"
   bin = "./tmp/api"
   delay = 800
   # seed.json is generated from scripts/templates by the dev watcher. Reloading

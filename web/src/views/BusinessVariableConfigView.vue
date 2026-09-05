@@ -61,10 +61,19 @@ const contentTypeOptions = computed(() =>
   contentTypes.value.map((item) => ({ value: item.id, label: item.name }))
 )
 const variableOptions = computed(() => {
-  const selectedId = form.variable_id
-  return variables.value
-    .filter((item) => item.service_entry === activeServiceEntry.value || item.id === selectedId)
-    .map((item) => ({ value: item.id, label: item.name }))
+  const nameCounts = variables.value.reduce((acc, item) => {
+    const name = item.name || ''
+    acc[name] = (acc[name] || 0) + 1
+    return acc
+  }, {})
+  return variables.value.map((item) => {
+    const name = item.name || ''
+    const needsEntry = (nameCounts[name] || 0) > 1
+    return {
+      value: item.id,
+      label: needsEntry ? `${name}（${item.service_entry}）` : name
+    }
+  })
 })
 
 const loadOptions = async () => {

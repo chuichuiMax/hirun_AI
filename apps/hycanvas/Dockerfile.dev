@@ -24,7 +24,8 @@ RUN apt-get update \
 # Go live-reload for the dev backend (rebuilds + restarts on source changes).
 # Installed into /go/bin, which is on PATH in the golang base image.
 # v1.67 requires Go 1.26; HyCanvas intentionally builds with Go 1.25.
-RUN go install github.com/air-verse/air@v1.66.0
+# Use goproxy.cn first so local builds work when proxy.golang.org is unreachable.
+RUN GOPROXY=https://goproxy.cn,direct go install github.com/air-verse/air@v1.66.0
 
 WORKDIR /app
 

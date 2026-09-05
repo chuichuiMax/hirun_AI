@@ -85,7 +85,7 @@ async def test_mp_sms_login_me_schema_and_pc_token_isolation(test_client, admin_
         assert data["business_variable_bindings"]
         assert data["frame_areas"][0]["value"] == "50-70㎡"
         assert data["frame_areas"][0]["quote_choices"]["基础"] == ["4万", "4.5万", "5万"]
-        assert "北欧" in data["design_styles"]
+        assert "北欧之光" in data["design_styles"]
         assert data["regions"][0] == "长沙市"
         zhuzhou = next(item for item in data["region_tree"] if item["city"] == "株洲市")
         assert "荷塘区" in zhuzhou["districts"]
@@ -200,7 +200,7 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
                 "基础": "4-5万",
                 "木制品": "2-3万",
                 "主材": "2-3万",
-                "设计风格": "北欧",
+                "设计风格": "北欧之光",
                 "所在区域": "长沙市 岳麓区",
             }
         )
