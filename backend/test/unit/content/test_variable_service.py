@@ -59,27 +59,93 @@ def test_service_entries_are_home_and_review_notes():
     assert SERVICE_ENTRIES == ("装修家居", "好评笔记")
 
 
-def test_dedupe_prefers_enabled_then_smaller_code():
-    class Row:
-        def __init__(self, variable_code: str, name: str, enabled: bool):
-            self.id = variable_code
-            self.variable_code = variable_code
-            self.name = name
-            self.enabled = enabled
+@pytest.mark.asyncio
+async def test_ensure_default_variables_skips_when_table_has_rows(monkeypatch):
+    from yuxi.services import variable_service as service
 
-    rows = [
-        Row("FWTD0011", "楼盘信息", False),
-        Row("FWTD0006", "楼盘信息", True),
-        Row("FWTD0012", "楼盘信息", True),
-    ]
-    winners: dict[str, Row] = {}
-    for item in rows:
-        current = winners.get(item.name)
-        if current is None:
-            winners[item.name] = item
-            continue
-        prefer_new = (bool(item.enabled) and not bool(current.enabled)) or (
-            bool(item.enabled) == bool(current.enabled) and item.variable_code < current.variable_code
+    calls = {"create": 0}
+
+    class FakeRepo:
+        async def has_any(self):
+            return True
+
+        async def create(self, data):
+            calls["create"] += 1
+            return data
+
+    monkeypatch.setattr(service, "VariableRepository", lambda _db: FakeRepo())
+    await service.ensure_default_variables(object())
+    assert calls["create"] == 0
+
+
+@pytest.mark.asyncio
+async def test_create_variable_allows_same_name_on_different_service_entry(monkeypatch):
+    from types import SimpleNamespace
+
+    from yuxi.services import variable_service as service
+
+    existing = SimpleNamespace(id="v1", name="外框面积", service_entry="装修家居")
+
+    class FakeRepo:
+        async def list_codes(self):
+            return ["FWTD0018"]
+
+        async def get_by_service_entry_and_name(self, service_entry, name):
+            if service_entry == existing.service_entry and name == existing.name:
+                return existing
+            return None
+
+        async def get_by_code(self, code):
+            return None
+
+        async def create(self, data):
+            return SimpleNamespace(to_dict=lambda: data, **data)
+
+    async def fake_ensure(_db):
+        return None
+
+    monkeypatch.setattr(service, "ensure_default_variables", fake_ensure)
+    monkeypatch.setattr(service, "VariableRepository", lambda _db: FakeRepo())
+
+    result = await service.create_variable(
+        object(),
+        SimpleNamespace(uid="u1"),
+        VariableCreate(name="外框面积", service_entry="好评笔记"),
+    )
+    assert result["variable"]["name"] == "外框面积"
+    assert result["variable"]["service_entry"] == "好评笔记"
+
+
+@pytest.mark.asyncio
+async def test_create_variable_rejects_same_name_on_same_service_entry(monkeypatch):
+    from types import SimpleNamespace
+
+    from yuxi.services import variable_service as service
+
+    class FakeRepo:
+        async def list_codes(self):
+            return []
+
+        async def get_by_service_entry_and_name(self, service_entry, name):
+            return SimpleNamespace(id="v1")
+
+        async def get_by_code(self, code):
+            return None
+
+        async def create(self, data):
+            raise AssertionError("should not create")
+
+    async def fake_ensure(_db):
+        return None
+
+    monkeypatch.setattr(service, "ensure_default_variables", fake_ensure)
+    monkeypatch.setattr(service, "VariableRepository", lambda _db: FakeRepo())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await service.create_variable(
+            object(),
+            SimpleNamespace(uid="u1"),
+            VariableCreate(name="外框面积", service_entry="好评笔记"),
         )
-        winners[item.name] = item if prefer_new else current
-    assert winners["楼盘信息"].variable_code == "FWTD0006"
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"]["code"] == "VARIABLE_NAME_EXISTS"

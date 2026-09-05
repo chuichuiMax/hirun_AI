@@ -140,7 +140,9 @@ class UserRepository:
 
     async def count_by_role_with_db(self, db: AsyncSession) -> dict[str, int]:
         result = await db.execute(
-            select(User.role, func.count()).where(User.is_deleted == 0).group_by(User.role)
+            select(User.role, func.count())
+            .where(User.is_deleted == 0, ~User.uid.startswith("mp_"))
+            .group_by(User.role)
         )
         return {role: count for role, count in result.all()}
 
@@ -149,7 +151,11 @@ class UserRepository:
     ) -> list[User]:
         if not roles:
             return []
-        query = select(User).where(User.is_deleted == 0, User.role.in_(roles))
+        query = select(User).where(
+            User.is_deleted == 0,
+            User.role.in_(roles),
+            ~User.uid.startswith("mp_"),
+        )
         if keyword:
             escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             pattern = f"%{escaped}%"

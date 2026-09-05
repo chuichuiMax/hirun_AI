@@ -21,6 +21,9 @@ const page = ref(1)
 const pageSize = ref(20)
 const roles = ref([])
 const modalOpen = ref(false)
+const editingId = ref('')
+const editingIsSystem = ref(false)
+const editingRoleCode = ref('')
 const membersOpen = ref(false)
 const membersLoading = ref(false)
 const members = ref([])
@@ -39,6 +42,7 @@ const tablePagination = computed(() => ({
   showTotal: (total) => `共 ${total} 条`,
   pageSizeOptions: ['10', '20', '50']
 }))
+const modalTitle = computed(() => (editingId.value ? '编辑角色' : '新增角色'))
 const membersPagination = computed(() => ({
   current: memberPage.value,
   pageSize: memberPageSize.value,
@@ -84,12 +88,29 @@ const handleMembersTableChange = (pagination) => {
 }
 
 const openCreate = () => {
+  editingId.value = ''
+  editingIsSystem.value = false
+  editingRoleCode.value = ''
   Object.assign(form, emptyForm())
+  modalOpen.value = true
+}
+
+const openEdit = (role) => {
+  editingId.value = role.id
+  editingIsSystem.value = Boolean(role.is_system)
+  editingRoleCode.value = role.role_code || ''
+  Object.assign(form, {
+    name: role.name,
+    enabled: role.enabled
+  })
   modalOpen.value = true
 }
 
 const closeCreate = () => {
   modalOpen.value = false
+  editingId.value = ''
+  editingIsSystem.value = false
+  editingRoleCode.value = ''
   Object.assign(form, emptyForm())
 }
 
@@ -101,8 +122,15 @@ const saveRole = async () => {
   }
   saving.value = true
   try {
-    await roleApi.createRole({ name, enabled: form.enabled })
-    message.success('角色已创建')
+    if (editingId.value) {
+      const payload = { enabled: form.enabled }
+      if (!editingIsSystem.value) payload.name = name
+      await roleApi.updateRole(editingId.value, payload)
+      message.success('角色已更新')
+    } else {
+      await roleApi.createRole({ name, enabled: form.enabled })
+      message.success('角色已创建')
+    }
     closeCreate()
     await loadRoles()
   } catch (error) {
@@ -266,9 +294,10 @@ watch(members, (list) => {
         <a-table-column title="创建时间" key="created_at" :width="180">
           <template #default="{ record }">{{ formatCreatedAt(record.created_at) }}</template>
         </a-table-column>
-        <a-table-column title="操作" key="actions" :width="140">
+        <a-table-column title="操作" key="actions" :width="200">
           <template #default="{ record }">
             <div class="row-actions">
+              <a-button type="link" @click="openEdit(record)">编辑</a-button>
               <a-button type="link" @click="openAuthorize(record)">授权</a-button>
               <a-button v-if="!record.is_system" type="link" @click="removeRole(record)">删除</a-button>
             </div>
@@ -279,7 +308,7 @@ watch(members, (list) => {
 
     <a-modal
       v-model:open="modalOpen"
-      title="新增角色"
+      :title="modalTitle"
       :mask-closable="false"
       :footer="null"
       width="480px"
@@ -293,10 +322,18 @@ watch(members, (list) => {
         :wrapper-col="{ style: { flex: 1 } }"
       >
         <a-form-item label="角色名称" required>
-          <a-input v-model:value="form.name" placeholder="请输入角色名称" allow-clear />
+          <a-input
+            v-model:value="form.name"
+            placeholder="请输入角色名称"
+            allow-clear
+            :disabled="editingIsSystem"
+          />
         </a-form-item>
         <a-form-item label="状态" required>
-          <a-radio-group v-model:value="form.enabled">
+          <a-radio-group
+            v-model:value="form.enabled"
+            :disabled="editingRoleCode === 'superadmin'"
+          >
             <a-radio :value="true">启用</a-radio>
             <a-radio :value="false">禁用</a-radio>
           </a-radio-group>

@@ -1655,7 +1655,9 @@ class ContentVariable(Base):
     """变量配置，服务入口与内容类型名称联动。"""
 
     __tablename__ = "content_variables"
-    __table_args__ = (UniqueConstraint("name", name="uq_content_variables_name"),)
+    __table_args__ = (
+        UniqueConstraint("service_entry", "name", name="uq_content_variables_service_entry_name"),
+    )
 
     id = Column(String(64), primary_key=True)
     variable_code = Column(String(32), nullable=False, unique=True, index=True)
@@ -1716,6 +1718,34 @@ class ContentBusinessVariable(Base):
             "variable_id": self.variable_id,
             "ports": list(self.ports or []),
             "required": bool(self.required),
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentProcessStandard(Base):
+    """工艺标准配置。"""
+
+    __tablename__ = "content_process_standards"
+    __table_args__ = (
+        UniqueConstraint("name", "detail", name="uq_content_process_standards_name_detail"),
+    )
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(64), nullable=False, index=True)
+    detail = Column(String(255), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "detail": self.detail,
             "enabled": bool(self.enabled),
             "created_by": self.created_by,
             "created_at": format_utc_datetime(self.created_at),

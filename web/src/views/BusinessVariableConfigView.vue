@@ -32,16 +32,19 @@ const saving = ref(false)
 const togglingId = ref('')
 const keywordInput = ref('')
 const keyword = ref('')
+const contentTypeFilter = ref(undefined)
 const page = ref(1)
 const pageSize = ref(20)
 const items = ref([])
 const contentTypes = ref([])
 const variables = ref([])
 const modalOpen = ref(false)
+const editingId = ref('')
 const activeServiceEntry = ref('装修家居')
 const form = reactive(emptyForm())
 
 const needsContentType = computed(() => activeServiceEntry.value !== '好评笔记')
+const modalTitle = computed(() => (editingId.value ? '编辑业务变量' : '新增业务变量'))
 const displayedItems = computed(() =>
   items.value.filter((item) => item.service_entry === activeServiceEntry.value)
 )
@@ -57,9 +60,12 @@ const tablePagination = computed(() => ({
 const contentTypeOptions = computed(() =>
   contentTypes.value.map((item) => ({ value: item.id, label: item.name }))
 )
-const variableOptions = computed(() =>
-  variables.value.map((item) => ({ value: item.id, label: item.name }))
-)
+const variableOptions = computed(() => {
+  const selectedId = form.variable_id
+  return variables.value
+    .filter((item) => item.service_entry === activeServiceEntry.value || item.id === selectedId)
+    .map((item) => ({ value: item.id, label: item.name }))
+})
 
 const loadOptions = async () => {
   const [typeResponse, variableResponse] = await Promise.all([
@@ -73,7 +79,10 @@ const loadOptions = async () => {
 const loadItems = async () => {
   loading.value = true
   try {
-    const response = await businessVariableApi.listBusinessVariables({ keyword: keyword.value })
+    const response = await businessVariableApi.listBusinessVariables({
+      keyword: keyword.value,
+      content_type_id: needsContentType.value ? contentTypeFilter.value : undefined
+    })
     items.value = response.business_variables || []
   } catch (error) {
     message.error(error.message || '加载业务变量失败')
@@ -88,26 +97,48 @@ const handleSearch = () => {
   void loadItems()
 }
 
+const handleContentTypeFilterChange = () => {
+  page.value = 1
+  void loadItems()
+}
+
 const handleTableChange = (pagination) => {
   page.value = pagination.current
   pageSize.value = pagination.pageSize
 }
 
 const openCreate = () => {
+  editingId.value = ''
   Object.assign(form, emptyForm())
   form.service_entry = activeServiceEntry.value
   modalOpen.value = true
 }
 
+const openEdit = (item) => {
+  editingId.value = item.id
+  Object.assign(form, {
+    service_entry: item.service_entry || activeServiceEntry.value,
+    content_type_id: item.content_type_id || undefined,
+    variable_id: item.variable_id,
+    ports: Array.isArray(item.ports) && item.ports.length ? [...item.ports] : ['pc', 'app'],
+    required: Boolean(item.required),
+    enabled: Boolean(item.enabled)
+  })
+  modalOpen.value = true
+}
+
 const closeModal = () => {
   modalOpen.value = false
+  editingId.value = ''
   Object.assign(form, emptyForm())
   form.service_entry = activeServiceEntry.value
 }
 
 const selectServiceEntry = (entry) => {
   activeServiceEntry.value = entry
+  contentTypeFilter.value = undefined
   page.value = 1
+  void loadItems()
 }
 
 const saveItem = async () => {
@@ -126,15 +157,23 @@ const saveItem = async () => {
   }
   saving.value = true
   try {
-    await businessVariableApi.createBusinessVariable({
-      service_entry: activeServiceEntry.value,
+    const payload = {
       content_type_id: needsContentType.value ? form.content_type_id : null,
       variable_id: form.variable_id,
       ports: form.ports,
       required: form.required,
       enabled: form.enabled
-    })
-    message.success('业务变量已创建')
+    }
+    if (editingId.value) {
+      await businessVariableApi.updateBusinessVariable(editingId.value, payload)
+      message.success('业务变量已更新')
+    } else {
+      await businessVariableApi.createBusinessVariable({
+        service_entry: activeServiceEntry.value,
+        ...payload
+      })
+      message.success('业务变量已创建')
+    }
     closeModal()
     await loadItems()
   } catch (error) {
@@ -210,20 +249,33 @@ watch([displayedItems, pageSize], () => {
 
     <div class="business-variable-config-content">
       <div class="toolbar">
-        <a-input
-          v-model:value="keywordInput"
-          class="search-input"
-          placeholder="输入搜索关键词"
-          allow-clear
-          @pressEnter="handleSearch"
-          @clear="handleSearch"
-        >
-          <template #suffix>
-            <button type="button" class="search-btn" aria-label="查询" @click="handleSearch">
-              <Search :size="16" />
-            </button>
-          </template>
-        </a-input>
+        <div class="toolbar-filters">
+          <a-select
+            v-if="needsContentType"
+            v-model:value="contentTypeFilter"
+            class="content-type-filter"
+            allow-clear
+            placeholder="内容类型"
+            show-search
+            option-filter-prop="label"
+            :options="contentTypeOptions"
+            @change="handleContentTypeFilterChange"
+          />
+          <a-input
+            v-model:value="keywordInput"
+            class="search-input"
+            placeholder="输入搜索关键词"
+            allow-clear
+            @pressEnter="handleSearch"
+            @clear="handleSearch"
+          >
+            <template #suffix>
+              <button type="button" class="search-btn" aria-label="查询" @click="handleSearch">
+                <Search :size="16" />
+              </button>
+            </template>
+          </a-input>
+        </div>
         <a-button type="primary" class="add-btn" @click="openCreate">新增</a-button>
       </div>
 
@@ -274,9 +326,12 @@ watch([displayedItems, pageSize], () => {
             </div>
           </template>
         </a-table-column>
-        <a-table-column title="操作" key="actions" :width="100" align="center">
+        <a-table-column title="操作" key="actions" :width="148" align="center">
           <template #default="{ record }">
-            <a-button type="link" @click="removeItem(record)">删除</a-button>
+            <div class="row-actions">
+              <a-button type="link" @click="openEdit(record)">编辑</a-button>
+              <a-button type="link" @click="removeItem(record)">删除</a-button>
+            </div>
           </template>
         </a-table-column>
       </a-table>
@@ -284,7 +339,7 @@ watch([displayedItems, pageSize], () => {
 
     <a-modal
       v-model:open="modalOpen"
-      title="新增业务变量"
+      :title="modalTitle"
       :mask-closable="false"
       :footer="null"
       width="480px"
@@ -364,8 +419,21 @@ watch([displayedItems, pageSize], () => {
   gap: 16px;
   margin-bottom: 12px;
 
+  .toolbar-filters {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .content-type-filter {
+    width: 200px;
+  }
+
   .search-input {
     width: 360px;
+    max-width: 100%;
 
     :deep(.ant-input-affix-wrapper) {
       height: 36px;
@@ -481,6 +549,12 @@ watch([displayedItems, pageSize], () => {
 
 .status-off {
   color: var(--gray-500);
+}
+
+.row-actions {
+  display: inline-flex;
+  justify-content: center;
+  gap: 4px;
 }
 
 .form {

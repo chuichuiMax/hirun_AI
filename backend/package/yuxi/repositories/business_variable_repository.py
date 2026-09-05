@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.storage.postgres.models_content import ContentBusinessVariable
@@ -35,6 +35,10 @@ class BusinessVariableRepository:
         )
         return result.scalar_one_or_none()
 
+    async def has_any(self) -> bool:
+        result = await self.db.execute(select(ContentBusinessVariable.id).limit(1))
+        return result.scalar_one_or_none() is not None
+
     async def list_items(self) -> list[ContentBusinessVariable]:
         result = await self.db.execute(
             select(ContentBusinessVariable).order_by(
@@ -59,4 +63,10 @@ class BusinessVariableRepository:
 
     async def delete(self, item: ContentBusinessVariable) -> None:
         await self.db.delete(item)
+        await self.db.flush()
+
+    async def delete_by_variable_id(self, variable_id: str) -> None:
+        await self.db.execute(
+            delete(ContentBusinessVariable).where(ContentBusinessVariable.variable_id == variable_id)
+        )
         await self.db.flush()

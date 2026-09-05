@@ -231,6 +231,12 @@ const router = createRouter({
           name: 'BusinessVariableConfigComp',
           component: () => import('../views/BusinessVariableConfigView.vue'),
           meta: { keepAlive: false, requiresAuth: true },
+        },
+        {
+          path: 'process-standards',
+          name: 'ProcessStandardConfigComp',
+          component: () => import('../views/ProcessStandardConfigView.vue'),
+          meta: { keepAlive: false, requiresAuth: true },
         }
       ]
     },

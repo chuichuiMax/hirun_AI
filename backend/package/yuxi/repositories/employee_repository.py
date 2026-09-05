@@ -49,7 +49,10 @@ class EmployeeRepository:
         return list(result.scalars().all())
 
     async def list_by_role(self, role: str, *, keyword: str | None = None) -> list[ContentEmployee]:
-        query = select(ContentEmployee).where(ContentEmployee.role == role)
+        query = select(ContentEmployee).where(
+            ContentEmployee.role == role,
+            ~ContentEmployee.employee_code.startswith("mp_"),
+        )
         if keyword:
             escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             pattern = f"%{escaped}%"
@@ -63,7 +66,11 @@ class EmployeeRepository:
         return list(result.scalars().all())
 
     async def count_by_role(self) -> dict[str, int]:
-        result = await self.db.execute(select(ContentEmployee.role, func.count()).group_by(ContentEmployee.role))
+        result = await self.db.execute(
+            select(ContentEmployee.role, func.count())
+            .where(~ContentEmployee.employee_code.startswith("mp_"))
+            .group_by(ContentEmployee.role)
+        )
         return {name: count for name, count in result.all()}
 
     async def rename_role(self, old_name: str, new_name: str) -> None:

@@ -63,6 +63,8 @@ class BusinessVariableCreate(BaseModel):
 
 
 class BusinessVariableUpdate(BaseModel):
+    content_type_id: str | None = Field(default=None, max_length=64)
+    variable_id: str | None = Field(default=None, min_length=1, max_length=64)
     ports: list[VariablePort] | None = Field(default=None, min_length=1)
     required: bool | None = None
     enabled: bool | None = None
@@ -99,6 +101,8 @@ async def ensure_default_business_variables(db: AsyncSession) -> None:
     await ensure_default_content_types(db)
     await ensure_default_variables(db)
     repo = BusinessVariableRepository(db)
+    if await repo.has_any():
+        return
     content_types = {item.name: item for item in await ContentTypeRepository(db).list_types()}
     variables = {item.name: item for item in await VariableRepository(db).list_variables()}
     for service_entry, content_type_name, variable_name, required, enabled in DEFAULT_BUSINESS_VARIABLES:
@@ -111,12 +115,6 @@ async def ensure_default_business_variables(db: AsyncSession) -> None:
             if content_type is None:
                 continue
             content_type_id = content_type.id
-        if await repo.get_by_key(
-            service_entry=service_entry,
-            content_type_id=content_type_id,
-            variable_id=variable.id,
-        ):
-            continue
         await repo.create(
             {
                 "id": str(uuid.uuid4()),
@@ -154,14 +152,22 @@ def serialize_binding(
     return payload
 
 
-async def list_business_variables(db: AsyncSession, keyword: str | None = None) -> dict[str, Any]:
+async def list_business_variables(
+    db: AsyncSession,
+    keyword: str | None = None,
+    *,
+    content_type_id: str | None = None,
+) -> dict[str, Any]:
     await ensure_default_business_variables(db)
     bindings = await BusinessVariableRepository(db).list_items()
     content_types = {item.id: item for item in await ContentTypeRepository(db).list_types()}
     variables = {item.id: item for item in await VariableRepository(db).list_variables()}
     rows: list[dict[str, Any]] = []
     needle = (keyword or "").strip().lower()
+    content_type_filter = (content_type_id or "").strip()
     for binding in bindings:
+        if content_type_filter and binding.content_type_id != content_type_filter:
+            continue
         variable = variables.get(binding.variable_id)
         if variable is None:
             continue
@@ -221,7 +227,7 @@ async def create_business_variable(
         content_type_id=content_type_id,
         variable_id=payload.variable_id,
     ):
-        raise _error(409, "BUSINESS_VARIABLE_EXISTS", "该业务变量绑定已存在")
+        raise _error(409, "BUSINESS_VARIABLE_EXISTS", "当前服务入口下该业务变量绑定已存在")
     try:
         item = await repo.create(
             {
@@ -236,7 +242,7 @@ async def create_business_variable(
             }
         )
     except IntegrityError as exc:
-        raise _error(409, "BUSINESS_VARIABLE_EXISTS", "该业务变量绑定已存在") from exc
+        raise _error(409, "BUSINESS_VARIABLE_EXISTS", "当前服务入口下该业务变量绑定已存在") from exc
     return {
         "business_variable": serialize_binding(
             item,
@@ -257,9 +263,44 @@ async def update_business_variable(
     if item is None:
         raise _error(404, "BUSINESS_VARIABLE_NOT_FOUND", "业务变量不存在")
     data = payload.model_dump(exclude_unset=True)
+    service_entry = item.service_entry or "装修家居"
+
     if "ports" in data:
         data["ports"] = _normalize_ports(data["ports"])
-    item = await repo.update(item, data)
+
+    if "variable_id" in data:
+        variable = await VariableRepository(db).get(data["variable_id"])
+        if variable is None:
+            raise _error(404, "VARIABLE_NOT_FOUND", "业务参数不存在")
+
+    if "content_type_id" in data or service_entry == REVIEW_NOTES_ENTRY:
+        if service_entry == REVIEW_NOTES_ENTRY:
+            data["content_type_id"] = NO_CONTENT_TYPE_ID
+        else:
+            content_type_id = _normalize_content_type_id(data.get("content_type_id", item.content_type_id))
+            if not content_type_id:
+                raise _error(422, "CONTENT_TYPE_REQUIRED", "装修家居必须选择内容类型")
+            content_type = await ContentTypeRepository(db).get(content_type_id)
+            if content_type is None:
+                raise _error(404, "CONTENT_TYPE_NOT_FOUND", "内容类型不存在")
+            data["content_type_id"] = content_type_id
+
+    next_content_type_id = data.get("content_type_id", item.content_type_id) or NO_CONTENT_TYPE_ID
+    next_variable_id = data.get("variable_id", item.variable_id)
+    if next_content_type_id != (item.content_type_id or NO_CONTENT_TYPE_ID) or next_variable_id != item.variable_id:
+        existing = await repo.get_by_key(
+            service_entry=service_entry,
+            content_type_id=next_content_type_id,
+            variable_id=next_variable_id,
+        )
+        if existing is not None and existing.id != item.id:
+            raise _error(409, "BUSINESS_VARIABLE_EXISTS", "当前服务入口下该业务变量绑定已存在")
+
+    try:
+        item = await repo.update(item, data)
+    except IntegrityError as exc:
+        raise _error(409, "BUSINESS_VARIABLE_EXISTS", "当前服务入口下该业务变量绑定已存在") from exc
+
     variable = await VariableRepository(db).get(item.variable_id)
     if variable is None:
         raise _error(404, "BUSINESS_VARIABLE_REF_MISSING", "关联的业务参数已不存在")

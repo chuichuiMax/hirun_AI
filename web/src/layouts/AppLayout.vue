@@ -22,6 +22,7 @@ import {
   PanelsTopLeft,
   Braces,
   ListTree,
+  Hammer,
   ChevronRight,
   ChevronDown
 } from 'lucide-vue-next'
@@ -247,6 +248,12 @@ const mainList = computed(() => {
         path: '/config-manage/business-variables',
         icon: ListTree,
         activeIcon: ListTree
+      },
+      {
+        name: '工艺标准列表',
+        path: '/config-manage/process-standards',
+        icon: Hammer,
+        activeIcon: Hammer
       }
     ]
   })

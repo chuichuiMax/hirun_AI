@@ -957,14 +957,16 @@ class PostgresManager(metaclass=SingletonMeta):
                 'ADD COLUMN IF NOT EXISTS editions JSONB NOT NULL DEFAULT \'["quick","pro"]\'::jsonb'
             ),
             "ALTER TABLE IF EXISTS content_variables DROP CONSTRAINT IF EXISTS content_variables_name_key",
+            "ALTER TABLE IF EXISTS content_variables DROP CONSTRAINT IF EXISTS uq_content_variables_name",
             "ALTER TABLE IF EXISTS content_variables DROP CONSTRAINT IF EXISTS uq_content_variables_service_entry_name",
             "DROP INDEX IF EXISTS content_variables_name_key",
-            "DROP INDEX IF EXISTS ix_content_variables_name",
+            "DROP INDEX IF EXISTS uq_content_variables_name",
             "DROP INDEX IF EXISTS uq_content_variables_service_entry_name",
             """
             DELETE FROM content_variables AS duplicate
             USING content_variables AS kept
             WHERE duplicate.name = kept.name
+              AND duplicate.service_entry = kept.service_entry
               AND duplicate.id <> kept.id
               AND (
                 (COALESCE(duplicate.enabled, false) = false AND kept.enabled = true)
@@ -975,9 +977,10 @@ class PostgresManager(metaclass=SingletonMeta):
               )
             """,
             (
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_variables_name "
-                "ON content_variables (name)"
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_variables_service_entry_name "
+                "ON content_variables (service_entry, name)"
             ),
+            "CREATE INDEX IF NOT EXISTS ix_content_variables_name ON content_variables (name)",
             "CREATE INDEX IF NOT EXISTS ix_content_variables_service_entry ON content_variables (service_entry)",
             (
                 "ALTER TABLE IF EXISTS content_business_variables "

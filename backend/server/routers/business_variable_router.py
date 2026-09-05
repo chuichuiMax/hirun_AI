@@ -21,10 +21,11 @@ content_business_variables = APIRouter(
 @content_business_variables.get("")
 async def list_content_business_variables(
     keyword: str | None = Query(default=None),
+    content_type_id: str | None = Query(default=None),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_business_variables(db, keyword)
+    return await list_business_variables(db, keyword, content_type_id=content_type_id)
 
 
 @content_business_variables.post("")

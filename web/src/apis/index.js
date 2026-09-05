@@ -22,6 +22,7 @@ export * from './role_api' // 内容发布角色 API
 export * from './content_type_api' // 内容类型配置 API
 export * from './variable_api' // 业务参数配置 API
 export * from './business_variable_api' // 业务变量配置 API
+export * from './process_standard_api' // 工艺标准列表 API
 export * from './material_library_api' // 素材库 API
 
 // 导出基础工具函数
