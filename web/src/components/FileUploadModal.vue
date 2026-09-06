@@ -177,6 +177,11 @@
       </div>
 
       <!-- 文件上传区域 -->
+      <div class="reference-purpose">
+        <a-checkbox v-model:checked="useAsViralReference" :disabled="chunkLoading">用于爆款仿写参考</a-checkbox>
+        <p v-if="useAsViralReference">解析完成后自动识别完整文章，准备参考卡和结构蓝图；可在创作规则库查看进度。</p>
+      </div>
+
       <div class="upload-area" v-if="uploadMode === 'file' || uploadMode === 'folder'">
         <a-upload-dragger
           class="custom-dragger"
@@ -466,6 +471,7 @@ const props = defineProps({
 const emit = defineEmits(['update:visible', 'success'])
 
 const store = useDatabaseStore()
+const useAsViralReference = ref(false)
 
 // 文件夹选择相关
 const selectedFolderId = ref(null)
@@ -491,6 +497,7 @@ watch(
   () => props.visible,
   (newVal) => {
     if (newVal) {
+      useAsViralReference.value = false
       selectedFolderId.value = props.currentFolderId
       isFolderUpload.value = props.isFolderMode
       uploadMode.value = props.mode || (props.isFolderMode ? 'folder' : 'file')
@@ -1443,7 +1450,7 @@ const chunkData = async () => {
         }
       }
 
-      const params = { ...processingParams.value, content_hashes, file_sizes }
+      const params = { ...processingParams.value, content_hashes, file_sizes, use_as_viral_reference: useAsViralReference.value }
       if (autoIndex.value) {
         params.auto_index = true
         Object.assign(params, buildAutoIndexParams())
@@ -1502,7 +1509,7 @@ const chunkData = async () => {
 
     try {
       store.state.chunkLoading = true
-      const params = { ...processingParams.value }
+      const params = { ...processingParams.value, use_as_viral_reference: useAsViralReference.value }
       if (autoIndex.value) {
         params.auto_index = true
         Object.assign(params, buildAutoIndexParams())
@@ -1582,7 +1589,7 @@ const chunkData = async () => {
 
   try {
     store.state.chunkLoading = true
-    const params = { ...processingParams.value, content_hashes, file_sizes }
+    const params = { ...processingParams.value, content_hashes, file_sizes, use_as_viral_reference: useAsViralReference.value }
     if (autoIndex.value) {
       params.auto_index = true
       Object.assign(params, buildAutoIndexParams())
@@ -1609,6 +1616,7 @@ const chunkData = async () => {
 </script>
 
 <style lang="less" scoped>
+.reference-purpose { padding: 12px; background: var(--gray-50); border-radius: 8px; p { margin: 8px 0 0; color: var(--gray-600); font-size: 12px; } }
 .footer-container {
   display: flex;
   justify-content: space-between;

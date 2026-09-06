@@ -29,6 +29,17 @@ class ContentAgentSpec:
 
 CONTENT_AGENT_SPECS = (
     ContentAgentSpec(
+        slug="content-viral-asset-agent",
+        name="爆款资产准备 Agent",
+        description="入库时核验完整原文并提取可复用参考卡和结构蓝图。",
+        skills=("viral-asset-preparer", "viral-document-detector"),
+        reasoning_effort="low",
+        inherit_context_from="content-research-agent",
+        model_call_timeout_seconds=100,
+        model_retry_times=0,
+        config_version=3,
+    ),
+    ContentAgentSpec(
         slug="content-strategy-agent",
         name="内容策略 Agent",
         description="分析内容价值、从候选集中确定内容方向，并解释固定规则结果及排序候选公式。",

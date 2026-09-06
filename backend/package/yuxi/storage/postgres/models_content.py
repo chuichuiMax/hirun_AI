@@ -36,6 +36,59 @@ class ContentRuleVersion(Base):
     __table_args__ = (UniqueConstraint("tenant_id", "version", name="uq_content_rule_versions_tenant_version"),)
 
 
+class ContentViralArticleVersion(Base):
+    """完整文章及其准备结果快照；同文件的不同文章独立版本化。"""
+
+    __tablename__ = "content_viral_article_versions"
+
+    id = Column(String(64), primary_key=True)
+    article_id = Column(String(64), nullable=False, index=True)
+    kb_id = Column(String(80), nullable=False, index=True)
+    file_id = Column(String(64), nullable=False, index=True)
+    industry_slug = Column(String(80), nullable=False, index=True)
+    source_hash = Column(String(64), nullable=False)
+    preparation_skill_hash = Column(String(64), nullable=False)
+    source_json = Column(JSON, nullable=False)
+    prepared_json = Column(JSON, nullable=False, default=dict)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    attempt = Column(Integer, nullable=False, default=1)
+    agent_run_id = Column(String(64), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_by = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("article_id", "source_hash", "preparation_skill_hash", name="uq_viral_article_preparation"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'ready', 'needs_review', 'failed', 'invalidated')",
+            name="ck_viral_asset_status",
+        ),
+    )
+
+
+class ContentViralFileJob(Base):
+    """文件自动识别任务；与文章资产分开，未识别出文章时仍可追踪问题。"""
+
+    __tablename__ = "content_viral_file_jobs"
+    id = Column(String(64), primary_key=True)
+    kb_id = Column(String(80), nullable=False, index=True)
+    file_id = Column(String(64), nullable=False, index=True)
+    filename = Column(String(512), nullable=False)
+    source_hash = Column(String(64), nullable=False)
+    file_version = Column(String(128), nullable=False)
+    skill_hash = Column(String(64), nullable=False)
+    input_json = Column(JSON, nullable=False)
+    result_json = Column(JSON, nullable=False, default=dict)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    attempt = Column(Integer, nullable=False, default=1)
+    agent_run_id = Column(String(64), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_by = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+
 class CreationMethod(Base):
     __tablename__ = "content_creation_methods"
 

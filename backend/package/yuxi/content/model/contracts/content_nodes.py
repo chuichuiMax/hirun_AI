@@ -13,6 +13,11 @@ from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
+from yuxi.content.model.viral_document import ViralDocumentResultV1, validate_document_result
+from yuxi.content.model.viral_assets import (
+    ViralArticleSource, ViralAssetPreparationInputV1, ViralAssetPreparationResultV1, validate_prepared_asset,
+)
+
 class StrictContract(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -410,6 +415,7 @@ INPUT_CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         AnalyzeContentValueInputV1,
         AnalyzeAndSelectDirectionInputV1,
         SelectCreationStrategyInputV1,
+        ViralAssetPreparationInputV1,
         SelectContentDirectionInputV1,
         ExplainStrategyInputV1,
         CollectMissingEvidenceInputV1,
@@ -704,6 +710,8 @@ CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         ContentValueResultV1,
         ContentDirectionDecisionResultV1,
         CreationStrategySelectionResultV1,
+        ViralAssetPreparationResultV1,
+        ViralDocumentResultV1,
         DirectionSelectionResultV1,
         StrategyExplanationResultV1,
         EvidenceCollectionResultV1,
@@ -751,6 +759,8 @@ def _extract_supported_numbers(value: Any) -> set[str]:
 
 @dataclass(frozen=True, slots=True)
 class ContractDomainContext:
+    viral_source: dict[str, Any] = field(default_factory=dict)
+    viral_document: dict[str, Any] = field(default_factory=dict)
     locked_group_id: str | None = None
     title_formula_pool: frozenset[str] = frozenset()
     body_formula_pool: frozenset[str] = frozenset()
@@ -1047,7 +1057,17 @@ def validate_content_node_result(
     context: ContractDomainContext,
 ) -> StrictContract:
     result = get_contract_model(contract_name).model_validate(payload)
-    if isinstance(result, ContentValueResultV1):
+    if isinstance(result, ViralDocumentResultV1):
+        try:
+            result = validate_document_result(result.model_dump(), context.viral_document)
+        except ValueError as exc:
+            raise ContractDomainValidationError("viral_document_invalid", "articles", str(exc)) from exc
+    elif isinstance(result, ViralAssetPreparationResultV1):
+        try:
+            result = validate_prepared_asset(payload, ViralArticleSource.model_validate(context.viral_source))
+        except ValueError as exc:
+            raise ContractDomainValidationError("viral_asset_invalid", "reference_blueprint", str(exc)) from exc
+    elif isinstance(result, ContentValueResultV1):
         _validate_evidence_ids(result.evidence_ids, "any", context, "evidence_ids")
         for index, item in enumerate(result.direction_candidates):
             _validate_evidence_ids(item.evidence_ids, "any", context, f"direction_candidates.{index}.evidence_ids")

@@ -10,6 +10,12 @@ const encodeQuery = (params = {}) => {
 }
 
 export const contentApi = {
+  listViralFileJobs: () => apiGet('/api/content/viral-file-jobs'),
+  prepareViralFiles: (payload) => apiPost('/api/content/viral-file-jobs', payload),
+  listViralAssets: (params) => apiGet(`/api/content/viral-assets${encodeQuery(params)}`),
+  importViralAssets: (payload) => apiPost('/api/content/viral-assets/import', payload),
+  getViralAsset: (assetId) => apiGet(`/api/content/viral-assets/${assetId}`),
+  retryViralAsset: (assetId) => apiPost(`/api/content/viral-assets/${assetId}/retry`),
   getBootstrap: () => apiGet('/api/content/bootstrap'),
   createTask: (payload) => apiPost('/api/content/tasks', payload),
   listTasks: (params) => apiGet(`/api/content/tasks${encodeQuery(params)}`),

@@ -19,6 +19,18 @@ _SKILLS_ROOT = Path(__file__).resolve().parent
 
 BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
+        slug="viral-document-detector",
+        version="1.0.1",
+        source_dir=_SKILLS_ROOT / "viral-document-detector",
+        description="自动识别上传文件中的完整参考文章和行业。",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-asset-preparer",
+        version="1.1.0",
+        source_dir=_SKILLS_ROOT / "viral-asset-preparer",
+        description="在入库时核验单篇完整原文并生成有原文锚点的参考卡和结构蓝图。",
+    ),
+    BuiltinSkillSpec(
         slug="humanizer-zh",
         source_dir=_SKILLS_ROOT / "humanizer-zh",
         description="降低中文内容的机械腔与模板化表达，同时保留原文事实、语气和格式。",

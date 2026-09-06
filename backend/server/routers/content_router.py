@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.content.schemas import (
@@ -40,6 +40,12 @@ from yuxi.content.control.strategy.recommend_v3 import (
     StrategyPreviewActor,
 )
 from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
+from yuxi.content.model.viral_assets import ViralAssetImport
+from yuxi.repositories.viral_asset_repository import asset_dict
+from yuxi.services.content_viral_assets import (
+    check_asset_source, import_viral_assets, list_viral_assets,
+    preparation_skill_hash, require_asset, retry_viral_asset,
+)
 from yuxi.services.agent_run_service import cancel_agent_run_view, stream_agent_run_events
 from yuxi.services.content_ocr_service import (
     create_content_ocr_result,
@@ -461,6 +467,81 @@ async def compile_brief(
     db: AsyncSession = Depends(get_db),
 ):
     return await save_content_brief(db, current_user, task_id, payload.brief, compile_now=True)
+
+
+@content.get("/viral-assets")
+async def get_viral_assets(
+    industry_slug: str | None = None,
+    ready_only: bool = False,
+    limit: int = Query(default=100, ge=1, le=100),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_viral_assets(db, current_user, industry_slug=industry_slug, ready_only=ready_only, limit=limit)
+
+
+@content.post("/viral-assets/import")
+async def import_viral_asset_file(
+    payload: ViralAssetImport,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await import_viral_assets(db, current_user, payload)
+
+
+@content.get("/viral-file-jobs")
+async def get_viral_file_jobs(
+    current_user: User = Depends(get_required_user), db: AsyncSession = Depends(get_db),
+):
+    from yuxi.services.viral_document_service import list_reference_file_jobs
+    return await list_reference_file_jobs(db, current_user)
+
+
+@content.post("/viral-file-jobs")
+async def prepare_viral_files(
+    payload: dict = Body(...), current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db),
+):
+    from yuxi.services.viral_document_service import schedule_reference_file
+    kb_id, file_ids = payload.get("kb_id"), payload.get("file_ids")
+    if not isinstance(kb_id, str) or not isinstance(file_ids, list) or not 1 <= len(file_ids) <= 100:
+        raise HTTPException(422, "请选择知识库和 1—100 个原文文件")
+    if any(not isinstance(item, str) or not item for item in file_ids):
+        raise HTTPException(422, "原文文件标识无效")
+    retry = payload.get("retry", False)
+    if not isinstance(retry, bool):
+        raise HTTPException(422, "重试标记必须为布尔值")
+    items, errors = [], []
+    for file_id in dict.fromkeys(file_ids):
+        try:
+            items.append(await schedule_reference_file(db, current_user, kb_id, file_id, retry=retry))
+        except HTTPException as exc:
+            errors.append({"file_id": file_id, "message": str(exc.detail)})
+    return {"items": items, "errors": errors}
+
+
+@content.get("/viral-assets/{asset_id}")
+async def get_viral_asset(
+    asset_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    asset = await require_asset(db, current_user, asset_id)
+    if asset.status == "ready" and not await check_asset_source(db, asset):
+        asset.status, asset.error_message = "invalidated", "原文已更新，请重新准备"
+        await db.commit()
+    elif asset.status == "ready" and asset.preparation_skill_hash != preparation_skill_hash():
+        asset.status, asset.error_message = "invalidated", "准备标准已更新，请重新导入"
+        await db.commit()
+    return {"asset": asset_dict(asset, include_source=True)}
+
+
+@content.post("/viral-assets/{asset_id}/retry")
+async def retry_viral_asset_preparation(
+    asset_id: str,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await retry_viral_asset(db, current_user, asset_id)
 
 
 @content.post("/tasks/{task_id}/strategy/recommend-v3")

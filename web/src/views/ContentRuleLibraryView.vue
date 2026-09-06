@@ -19,6 +19,7 @@ import {
   Trash2
 } from 'lucide-vue-next'
 import ContentFormulaDetails from '@/components/content/ContentFormulaDetails.vue'
+import ContentViralAssets from '@/components/content/ContentViralAssets.vue'
 import ContentRuleEditorDrawer from '@/components/content/ContentRuleEditorDrawer.vue'
 import { contentApi } from '@/apis/content_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
@@ -637,6 +638,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
           <div class="readonly-note">工作流是独立的可执行版本，需要单独设计和发布。</div>
           <div class="workflow-list"><article v-for="item in workflows" :key="item.id"><div><code>{{ item.id }}</code><h3>{{ item.slug }} · v{{ item.version }}</h3></div><span>{{ item.status }}</span><p>{{ item.definition.nodes?.length || 0 }} 个节点 · {{ item.definition.edges?.length || 0 }} 条连线</p><small>定义哈希：{{ item.definition_hash || '草稿未冻结' }}</small><a-button v-if="userStore.isSuperAdmin && item.definition.schema_version === 3 && item.status !== 'published'" class="workflow-action" size="small" type="primary" @click="publishWorkflow(item)">校验并发布</a-button><details><summary>查看工作流 JSON 定义</summary><pre>{{ JSON.stringify(item.definition, null, 2) }}</pre></details></article></div>
         </a-tab-pane>
+        <a-tab-pane key="viral-assets" tab="爆款参考资产"><ContentViralAssets :industries="uniqueIndustries" /></a-tab-pane>
       </a-tabs>
     </section>
 
