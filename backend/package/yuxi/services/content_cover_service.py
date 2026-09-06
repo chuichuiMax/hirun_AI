@@ -1488,10 +1488,22 @@ async def create_hycanvas_cover_job(
     image_field_label: str | None,
     idempotency_key: str,
     parameters: dict[str, Any],
+    photo_composition: dict | None = None,
 ) -> dict[str, Any]:
     source = await ContentCoverRepository(db).get_asset_for_user(source_asset_id, _owner_uid(user))
     if source is None or source.role not in {"source", "library_image"}:
         raise _error(422, "COVER_SOURCE_ASSET_INVALID", "HyCanvas 主图不存在或角色不正确")
+    source_ids = list(
+        dict.fromkeys(
+            [
+                source_asset_id,
+                *[slot["asset_id"] for slot in (photo_composition or {}).get("slots", [])],
+            ]
+        )
+    )
+    assets = await ContentCoverRepository(db).get_assets_for_user(source_ids, _owner_uid(user))
+    if len(assets) != len(source_ids) or any(asset.role not in {"source", "library_image"} for asset in assets):
+        raise _error(422, "COVER_SOURCE_ASSET_INVALID", "组合图片不存在或无权访问")
     job, deduplicated = await _create_job(
         db,
         user,
@@ -1501,7 +1513,8 @@ async def create_hycanvas_cover_job(
         idempotency_key=idempotency_key,
         model="hycanvas-deterministic",
         request={
-            "source_asset_ids": [source_asset_id],
+            "source_asset_ids": source_ids,
+            "photo_composition": photo_composition,
             "template_id": template_id,
             "title": title,
             "fields": fields,

@@ -462,16 +462,21 @@ func (rc *rctx) rasterImage(m mat, node map[string]any) {
 		oy := dst.Min.Y + (dst.Dy()-fh)/2
 		xdraw.CatmullRom.Scale(canvas, image.Rect(ox, oy, ox+fw, oy+fh), img, sb, xdraw.Over, nil)
 	} else {
-		// cover: center-crop the source to the box aspect, then scale to fill.
+		// Match the editor's normalized focal point when cropping to cover.
+		fx, fy := 0.5, 0.5
+		if focal := asObj(node["focalPoint"]); focal != nil {
+			fx, fy = asNum(focal["x"]), asNum(focal["y"])
+		}
+
 		dstAspect := float64(dst.Dx()) / float64(dst.Dy())
 		var crop image.Rectangle
 		if float64(sw)/float64(sh) > dstAspect {
 			cw := int(float64(sh) * dstAspect)
-			x0 := sb.Min.X + (sw-cw)/2
+			x0 := sb.Min.X + int(math.Max(0, math.Min(float64(sw-cw), fx*float64(sw-cw))))
 			crop = image.Rect(x0, sb.Min.Y, x0+cw, sb.Max.Y)
 		} else {
 			ch := int(float64(sw) / dstAspect)
-			y0 := sb.Min.Y + (sh-ch)/2
+			y0 := sb.Min.Y + int(math.Max(0, math.Min(float64(sh-ch), fy*float64(sh-ch))))
 			crop = image.Rect(sb.Min.X, y0, sb.Max.X, y0+ch)
 		}
 		xdraw.CatmullRom.Scale(canvas, dst, img, crop, xdraw.Over, nil)

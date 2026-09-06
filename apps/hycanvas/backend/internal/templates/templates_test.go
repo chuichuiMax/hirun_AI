@@ -1,8 +1,13 @@
 package templates
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"strings"
 	"testing"
@@ -623,5 +628,47 @@ func TestTemplates_DB(t *testing.T) {
 	}
 	if err := svc.Delete(ctx, owner.ID, wsTmpl.ID); err != nil {
 		t.Fatalf("workspace member should delete a workspace template: %v", err)
+	}
+}
+
+func TestPhotoCompositionPreservesTemplateAndEditableCells(t *testing.T) {
+	var buffer bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 20, 10))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+	_ = png.Encode(&buffer, img)
+	photo := CompositionImage{InstantiateImage: InstantiateImage{Filename: "test.png", ContentType: "image/png", DataBase64: base64.StdEncoding.EncodeToString(buffer.Bytes())}, FocalX: 0.2, FocalY: 0.8}
+	in := &PhotoComposition{Rows: 1, Cols: 2, Gap: 8, Cells: []PhotoCell{{Row: 0, Col: 0, RowSpan: 1, ColSpan: 1}, {Row: 0, Col: 1, RowSpan: 1, ColSpan: 1}}, Images: []CompositionImage{photo, photo}}
+	text := map[string]any{"id": "existing-title", "type": "text", "name": "原始字体与位置"}
+	page := map[string]any{"width": 1080.0, "height": 1440.0, "children": []any{text}}
+	file := map[string]any{"pages": []any{page}}
+	if err := applyPhotoComposition(file, in); err != nil {
+		t.Fatal(err)
+	}
+	roots := asArr(page["children"])
+	if len(roots) != 2 || asStr(asObj(roots[1])["id"]) != "existing-title" {
+		t.Fatal("template layers changed")
+	}
+	grid := asObj(roots[0])
+	if grid["locked"] != false || grid["type"] != "grid" {
+		t.Fatal("grid must remain editable")
+	}
+	children := asArr(grid["children"])
+	if len(children) != 2 {
+		t.Fatal("missing cells")
+	}
+	frame := asObj(children[1])
+	if asNum(asObj(frame["transform"])["x"]) != 544 {
+		t.Fatal("wrong layout")
+	}
+	imageNode := asObj(asArr(frame["children"])[0])
+	if asNum(asObj(imageNode["focalPoint"])["x"]) != 0.2 {
+		t.Fatal("crop lost")
+	}
+	if asNum(asObj(imageNode["source"])["naturalWidth"]) != 20 {
+		t.Fatal("source dimensions missing")
+	}
+	in.Cells[1].Col = 0
+	if err := applyPhotoComposition(file, in); err == nil {
+		t.Fatal("overlapping cells accepted")
 	}
 }

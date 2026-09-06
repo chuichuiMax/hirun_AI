@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
+import ContentPhotoComposition from '@/components/content/ContentPhotoComposition.vue'
 import {
   ArrowLeft,
   BookOpenCheck,
@@ -95,6 +96,9 @@ const galleryModalOpen = ref(false)
 const pendingImageItemId = ref('')
 const posterTemplates = ref([])
 const selectedImageItemId = ref('')
+const photoComposition = ref(null)
+const compositionSlotIndex = ref(null)
+let compositionPreviewTimer = null
 const selectedImageGalleryId = ref('')
 const selectedImageSummary = ref(null)
 const selectedImagePreviewUrl = ref('')
@@ -138,7 +142,9 @@ const activeMaterialGalleryParent = computed(() => (
   materialGalleryMap.value.get(activeMaterialGallery.value?.parent_id) || null
 ))
 const activeMaterialGalleryChildren = computed(() => (
-  materialGalleries.value.filter((item) => item.parent_id === activeGalleryId.value)
+  activeGalleryId.value
+    ? materialGalleries.value.filter((item) => item.parent_id === activeGalleryId.value)
+    : rootMaterialGalleries.value
 ))
 const activeMaterialGalleryPath = computed(() => (
   activeMaterialGalleryParent.value
@@ -601,10 +607,13 @@ const loadHyCanvasCompositePreview = async (imageItemId, templateId) => {
   if (hycanvasCompositePreviewUrl.value) URL.revokeObjectURL(hycanvasCompositePreviewUrl.value)
   hycanvasCompositePreviewUrl.value = ''
   hycanvasCompositePreviewLoading.value = Boolean(imageItemId && templateId)
-  if (!imageItemId || !templateId) return
+  if (!imageItemId || !templateId || photoComposition.value?.slots.some(slot => !slot.image_item_id)) {
+    hycanvasCompositePreviewLoading.value = false
+    return
+  }
 
   try {
-    const file = await contentApi.getHyCanvasCompositePreview(templateId, imageItemId)
+    const file = await contentApi.getHyCanvasCompositePreview(templateId, imageItemId, photoComposition.value)
     const previewUrl = URL.createObjectURL(await file.blob())
     if (generation !== hycanvasCompositePreviewGeneration) {
       URL.revokeObjectURL(previewUrl)
@@ -626,6 +635,7 @@ const initializeVisualSelection = () => {
   selectedPosterTemplateId.value =
     store.task?.selected_poster_template_id || saved.poster_template_id || ''
   selectedHyCanvasTemplateId.value = saved.hycanvas_template_id || ''
+  photoComposition.value = saved.photo_composition || null
 }
 
 const loadGalleryImages = async () => {
@@ -687,12 +697,26 @@ const loadGalleryImages = async () => {
 
 const openGallery = async (galleryId) => {
   activeGalleryId.value = galleryId
-  pendingImageItemId.value = selectedImageItemId.value
+  pendingImageItemId.value = compositionSlotIndex.value === null
+    ? selectedImageItemId.value
+    : photoComposition.value.slots[compositionSlotIndex.value].image_item_id
   galleryModalOpen.value = true
   await loadGalleryImages()
 }
 
 const confirmGalleryImage = () => {
+  if (compositionSlotIndex.value !== null) {
+    const index = compositionSlotIndex.value
+    const replacesPrimary = photoComposition.value.slots[index].image_item_id === selectedImageItemId.value
+    photoComposition.value = { ...photoComposition.value, slots: photoComposition.value.slots.map((slot, i) => i === index ? { image_item_id: pendingImageItemId.value || null, focal_x: 0.5, focal_y: 0.5 } : slot) }
+    if (replacesPrimary) {
+      selectedImageItemId.value = pendingImageItemId.value || photoComposition.value.slots.find(slot => slot.image_item_id)?.image_item_id || ''
+      if (!selectedImageItemId.value) photoComposition.value = null
+    }
+    compositionSlotIndex.value = null
+    galleryModalOpen.value = false
+    return
+  }
   selectedImageItemId.value = pendingImageItemId.value
   const selectedItem = galleryImages.value.find((item) => item.id === pendingImageItemId.value)
   if (selectedItem) {
@@ -709,7 +733,14 @@ const clearSelectedGalleryImage = () => {
   selectedImageItemId.value = ''
   selectedImageGalleryId.value = ''
   selectedImageSummary.value = null
+  photoComposition.value = null
 }
+
+const selectCompositionImage = (index) => {
+  compositionSlotIndex.value = index
+  void openGallery('')
+}
+watch(galleryModalOpen, open => { if (!open) compositionSlotIndex.value = null })
 
 const listAllMaterialPosterTemplates = async () => {
   const templates = []
@@ -1017,8 +1048,12 @@ watch(
 watch(selectedHyCanvasTemplateId, initializeHyCanvasFields)
 watch(selectedImageItemId, (itemId) => void loadSelectedImagePreview(itemId))
 watch(
-  [selectedImageItemId, selectedHyCanvasTemplateId],
-  ([imageItemId, templateId]) => void loadHyCanvasCompositePreview(imageItemId, templateId)
+  [selectedImageItemId, selectedHyCanvasTemplateId, photoComposition],
+  ([imageItemId, templateId]) => {
+    window.clearTimeout(compositionPreviewTimer)
+    compositionPreviewTimer = window.setTimeout(() => void loadHyCanvasCompositePreview(imageItemId, templateId), 350)
+  },
+  { deep: true }
 )
 watch(
   () => store.artifact?.hycanvas_design_snapshot,
@@ -1115,7 +1150,7 @@ const createTask = async () => {
 
 const buildBrief = () => ({
   brand: { name: formValues.brand_name || '' },
-  audience: formValues.audience || [],
+  audience: Array.isArray(formValues.audience) ? formValues.audience : formValues.audience ? [formValues.audience] : [],
   business_variables: Object.fromEntries(
     Object.entries(formValues).filter(
       ([key]) =>
@@ -1132,7 +1167,8 @@ const buildBrief = () => ({
     ? {
         image_item_id: selectedImageItemId.value || null,
         poster_template_id: null,
-        hycanvas_template_id: selectedHyCanvasTemplateId.value
+        hycanvas_template_id: selectedHyCanvasTemplateId.value,
+        photo_composition: photoComposition.value
       }
     : null
 })
@@ -1146,9 +1182,10 @@ const scheduleBriefSave = () => {
 }
 
 watch(formValues, scheduleBriefSave, { deep: true })
-watch([selectedImageItemId, selectedHyCanvasTemplateId], scheduleBriefSave)
+watch([selectedImageItemId, selectedHyCanvasTemplateId, photoComposition], scheduleBriefSave, { deep: true })
 onBeforeUnmount(() => {
   window.clearTimeout(draftSaveTimer)
+  window.clearTimeout(compositionPreviewTimer)
   window.clearTimeout(workflowNarrativeTimer)
   window.clearInterval(posterTemplateSyncTimer)
   window.removeEventListener('focus', syncPosterTemplatesWhenVisible)
@@ -1172,6 +1209,10 @@ onBeforeUnmount(() => {
 })
 
 const compileBrief = async () => {
+  if (photoComposition.value?.slots.some(slot => !slot.image_item_id)) {
+    message.warning('请填满图片组合的所有位置')
+    return
+  }
   if (!selectedImageItemId.value) {
     message.warning('请选择一张图库图片作为封面主图')
     return
@@ -1578,6 +1619,7 @@ const openVersions = async () => {
                   </button>
                 </div>
                 <a-empty v-else description="素材库中还没有图库" />
+                <ContentPhotoComposition v-model="photoComposition" v-model:primary-image-id="selectedImageItemId" @select="selectCompositionImage" />
                 <div v-if="selectedImageItemId" class="selected-gallery-image">
                   <div class="selected-gallery-preview-grid" aria-label="封面预览">
                     <div class="selected-gallery-preview-card">
@@ -2276,16 +2318,16 @@ const openVersions = async () => {
     >
       <div class="gallery-modal-content">
         <button
-          v-if="activeMaterialGalleryParent"
+          v-if="activeGalleryId"
           type="button"
           class="gallery-modal-back"
-          @click="openGallery(activeMaterialGalleryParent.id)"
+          @click="openGallery(activeMaterialGalleryParent?.id || '')"
         >
-          <ArrowLeft :size="15" />返回 {{ activeMaterialGalleryParent.name }}
+          <ArrowLeft :size="15" />返回 {{ activeMaterialGalleryParent?.name || '全部图库' }}
         </button>
         <section v-if="activeMaterialGalleryChildren.length" class="gallery-modal-folders">
           <div class="gallery-modal-section-title">
-            <strong>二级图库</strong>
+            <strong>{{ activeGalleryId ? '二级图库' : '选择图库' }}</strong>
             <small>选择所属图库后查看其中的图片</small>
           </div>
           <div class="gallery-folder-grid">

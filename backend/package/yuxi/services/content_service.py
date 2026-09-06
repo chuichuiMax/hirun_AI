@@ -810,11 +810,15 @@ async def save_content_brief(
             "CONTENT_IMAGE_MATERIAL_REQUIRED",
             "请选择一张图库图片作为 HyCanvas 封面主图",
         )
+    requested_composition = (
+        selection.photo_composition.model_dump() if selection and selection.photo_composition else None
+    )
     current_visual_material = (getattr(task, "brief_json", None) or {}).get("visual_material") or {}
     if task.current_stage != "brief" and (
         task.selected_image_item_id != requested_image_item_id
         or task.selected_poster_template_id != requested_poster_template_id
         or current_visual_material.get("hycanvas_template_id") != requested_hycanvas_template_id
+        or current_visual_material.get("photo_composition") != requested_composition
     ):
         raise _content_error(
             409,
@@ -877,6 +881,14 @@ async def save_content_brief(
                     "poster_template_version": poster.version,
                 }
             )
+    if requested_composition:
+        from yuxi.services.content_photo_composition import resolve_photo_composition
+
+        if not requested_image_item_id or not requested_hycanvas_template_id:
+            raise _content_error(422, "CONTENT_COMPOSITION_TEMPLATE_REQUIRED", "图片组合需要选择首图和封面模板")
+        visual_snapshot["photo_composition"] = await resolve_photo_composition(
+            db, user, selection.photo_composition, requested_image_item_id, complete=compile_now,
+        )
     if compile_now and requested_hycanvas_template_id:
         from yuxi.services.hycanvas_service import HyCanvasClient
 
@@ -910,6 +922,7 @@ async def save_content_brief(
             "poster_template_name": visual_snapshot.get("poster_template_name"),
             "hycanvas_template_id": requested_hycanvas_template_id,
             "hycanvas_template_title": visual_snapshot.get("hycanvas_template_title"),
+            "photo_composition": requested_composition,
         }
         if visual_snapshot
         else None

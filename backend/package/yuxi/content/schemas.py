@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from yuxi.content_cover.photo_composition import PhotoComposition
+
 from pydantic import BaseModel, ConfigDict, Field
 from yuxi.content.model.industry.pack import IndustryPackRegressionMetrics
 
@@ -41,6 +43,7 @@ class ContentTaskBatchDelete(BaseModel):
 class ContentVisualMaterialSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    photo_composition: PhotoComposition | None = None
     image_item_id: str | None = Field(default=None, min_length=1, max_length=64)
     poster_template_id: str | None = Field(default=None, min_length=1, max_length=64)
     hycanvas_template_id: str | None = Field(
