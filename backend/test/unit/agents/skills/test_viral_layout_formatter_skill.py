@@ -7,7 +7,7 @@ def test_viral_layout_formatter_preserves_facts_and_requires_visible_layout():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "viral-layout-formatter")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "1.5.0"
+    assert spec.version == "1.6.0"
     assert "creation_mode=viral_rewrite" in skill_text
     assert "creation_mode=original" in skill_text
     assert "相邻信息块之间保留一个空行" in skill_text
@@ -31,7 +31,7 @@ def test_content_reviewer_blocks_flattened_viral_layout():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "content-reviewer")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "1.8.0"
+    assert spec.version == "1.9.0"
     assert "selected_reference=true" in skill_text
     assert "多个独立信息块被压成一行" in skill_text
     assert "CONTENT_STRUCTURE_MISMATCH" in skill_text
