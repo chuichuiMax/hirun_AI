@@ -439,7 +439,7 @@ const outputNarratives = (preview) => {
   const draft = preview.draft || preview.content_draft || {}
   const body =
     preview.polished_body || preview.body || (typeof draft === 'string' ? draft : draft.body)
-  if (body) add(`正文内容：${normalizeNarrativeText(body, 1200)}`)
+  if (body) lines.push(`**正文内容**\n\n${normalizeNarrativeMarkdown(body, Infinity)}`)
 
   const topics = asTextList(preview.topics || draft.topics, 10)
   if (topics.length) add(`建议话题：${topics.map((item) => (item.startsWith('#') ? item : `#${item}`)).join(' ')}`)
@@ -464,9 +464,9 @@ const outputNarratives = (preview) => {
 export const buildContentNarrativeStream = (activities = [], codeLabels = {}) => {
   const lines = []
   const seen = new Set()
-  const add = (id, text, tone = 'normal', preserveMarkdown = false) => {
+  const add = (id, text, tone = 'normal', preserveMarkdown = false, maxLength = 1400) => {
     const normalized = explainNarrativeCodes(
-      preserveMarkdown ? normalizeNarrativeMarkdown(text, 1400) : normalizeNarrativeText(text, 1400),
+      preserveMarkdown ? normalizeNarrativeMarkdown(text, maxLength) : normalizeNarrativeText(text, maxLength),
       codeLabels
     )
     if (!normalized || seen.has(normalized)) return
@@ -510,7 +510,7 @@ export const buildContentNarrativeStream = (activities = [], codeLabels = {}) =>
     }
     if (activity.outputPreview) {
       outputNarratives(activity.outputPreview).forEach((text, index) =>
-        add(`${activity.id}-output-${index}`, text, 'result')
+        add(`${activity.id}-output-${index}`, text, 'result', true, Infinity)
       )
     }
   }
