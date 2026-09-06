@@ -15,7 +15,6 @@ import {
   Folder,
   FileText,
   FolderOpen,
-  History,
   Image,
   LayoutTemplate,
   LoaderCircle,
@@ -23,16 +22,14 @@ import {
   Play,
   RefreshCw,
   Save,
-  ScanText,
   Send,
-  Settings2,
   ShieldCheck,
   Sparkles,
   Tags,
-  UserRoundCog,
   WandSparkles
 } from 'lucide-vue-next'
 import AgentInputArea from '@/components/AgentInputArea.vue'
+import ContentStudioToolbar from '@/components/content/ContentStudioToolbar.vue'
 import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
 import ContentWorkflowStrategyPanel from '@/components/content/ContentWorkflowStrategyPanel.vue'
 import ContentStrategyDecision from '@/components/content/ContentStrategyDecision.vue'
@@ -134,7 +131,8 @@ const hycanvasFields = reactive({})
 const hycanvasCreating = ref(false)
 const hycanvasDesign = ref(null)
 const hycanvasImageFile = ref(null)
-const workflowStreamElement = ref(null)
+const studioPageElement = ref(null)
+const followWorkflowOutput = ref(true)
 const accumulatedWorkflowNarrative = ref([])
 const streamedWorkflowNarrative = ref('')
 const posterTemplateSyncIntervalMs = 10_000
@@ -167,7 +165,6 @@ const activeMaterialGalleryPath = computed(() => (
     : activeMaterialGallery.value?.name || '图库'
 ))
 const selectedImageGallery = computed(() => materialGalleryMap.value.get(selectedImageGalleryId.value) || null)
-const showBackButton = computed(() => route.name === 'ContentTask')
 const selectedImageRootGalleryId = computed(() => (
   selectedImageGallery.value?.parent_id || selectedImageGallery.value?.id || ''
 ))
@@ -176,14 +173,6 @@ const selectedHyCanvasTemplate = computed(() =>
 )
 const hasViralReference = computed(() => hasSelectedViralReference(store.artifact))
 
-const goBack = () => {
-  const previousRoute = window.history.state?.back
-  if (typeof previousRoute === 'string' && previousRoute && previousRoute !== 'about:blank') {
-    router.back()
-    return
-  }
-  router.push('/content/history')
-}
 
 watch(
   () => store.artifact?.id,
@@ -889,6 +878,17 @@ const syncEditor = () => {
   editor.topics = [...(store.artifact?.topics || [])]
 }
 
+const trackWorkflowScroll = () => {
+  const page = studioPageElement.value
+  followWorkflowOutput.value = page.scrollHeight - page.scrollTop - page.clientHeight <= 80
+}
+
+const scrollWorkflowToEnd = () => {
+  if (studioPageElement.value && followWorkflowOutput.value) {
+    studioPageElement.value.scrollTop = studioPageElement.value.scrollHeight
+  }
+}
+
 watch(
   () => store.task,
   (task) => {
@@ -906,9 +906,7 @@ watch(
     void store.loadVersions()
     if (wasCompleted !== false) return
     await nextTick()
-    if (workflowStreamElement.value) {
-      workflowStreamElement.value.scrollTop = workflowStreamElement.value.scrollHeight
-    }
+    scrollWorkflowToEnd()
   },
   { immediate: true }
 )
@@ -917,6 +915,7 @@ watch(
   taskId,
   () => {
     window.clearTimeout(workflowNarrativeTimer)
+    followWorkflowOutput.value = true
     accumulatedWorkflowNarrative.value = []
     streamedWorkflowNarrative.value = ''
   }
@@ -942,11 +941,7 @@ watch(
     window.clearTimeout(workflowNarrativeTimer)
     if (completed) {
       streamedWorkflowNarrative.value = targetText
-      void nextTick(() => {
-        if (workflowStreamElement.value) {
-          workflowStreamElement.value.scrollTop = workflowStreamElement.value.scrollHeight
-        }
-      })
+      void nextTick(scrollWorkflowToEnd)
       return
     }
     if (!targetText.startsWith(streamedWorkflowNarrative.value)) {
@@ -961,9 +956,7 @@ watch(
         streamedWorkflowNarrative.value.length + chunkSize
       )
       await nextTick()
-      if (workflowStreamElement.value) {
-        workflowStreamElement.value.scrollTop = workflowStreamElement.value.scrollHeight
-      }
+      scrollWorkflowToEnd()
       workflowNarrativeTimer = window.setTimeout(appendChunk, 18)
     }
     void appendChunk()
@@ -1473,31 +1466,27 @@ const openVersions = async () => {
 </script>
 
 <template>
-  <div class="content-studio-page">
+  <div
+    ref="studioPageElement"
+    class="content-studio-page"
+    :class="{ 'studio-production': stage === 2 }"
+    @scroll.passive="trackWorkflowScroll"
+  >
     <header class="studio-header">
       <div>
-        <a-button v-if="showBackButton" class="studio-back-button" @click="goBack">
-          <ArrowLeft :size="16" />返回上一页
-        </a-button>
         <div class="header-kicker">Yuxi Content Strategy Studio</div>
         <h1>{{ store.task?.name || '新建内容任务' }}</h1>
         <p>规则、事实和知识同源，关键节点由人确认。</p>
       </div>
-      <div class="header-actions">
-        <a-button @click="router.push('/content/accounts')"><UserRoundCog :size="16" />账号管理</a-button>
-        <a-button
-          :disabled="!store.task"
-          :title="store.task ? '上传图片并使用 RapidOCR 识别' : '请先创建内容任务'"
-          @click="ocrModalOpen = true"
-        ><ScanText :size="16" />图片识别</a-button>
-        <a-button @click="router.push('/content/history')"><History :size="16" />生产历史</a-button>
-        <a-button v-if="userStore.isAdmin" @click="router.push('/content/admin/rules')">
-          <Settings2 :size="16" />创作规则库
-        </a-button>
-      </div>
     </header>
 
     <main v-if="!store.loading.bootstrap" class="studio-main">
+      <ContentStudioToolbar
+        v-if="stage !== 2 || (!store.currentRun && !store.interrupt)"
+        :has-task="Boolean(store.task)"
+        :is-admin="userStore.isAdmin"
+        @recognize-image="ocrModalOpen = true"
+      />
       <section v-if="stage === 1" class="stage-panel">
         <div class="panel-heading">
           <div><span>阶段 1</span><h2>业务素材与事实简报</h2></div>
@@ -1755,7 +1744,7 @@ const openVersions = async () => {
         >
           <template v-if="workflowCompleted">
             <div class="completion-left completion-conversation">
-              <div ref="workflowStreamElement" class="workflow-stream">
+              <div class="workflow-stream">
                 <section class="codex-workflow-status completed" aria-live="polite">
                   <div class="workflow-narrative completion-narrative">
                     <div v-if="streamedWorkflowNarrative" class="workflow-narrative-copy-wrap">
@@ -1792,7 +1781,11 @@ const openVersions = async () => {
                   :placeholder="aiEditPlaceholder"
                   @send="submitAiEdit"
                   @keydown="handleAiEditKeydown"
-                />
+                >
+                  <template #toolbar>
+                    <ContentStudioToolbar :has-task="Boolean(store.task)" :is-admin="userStore.isAdmin" @recognize-image="ocrModalOpen = true" />
+                  </template>
+                </AgentInputArea>
               </section>
             </div>
 
@@ -1859,7 +1852,7 @@ const openVersions = async () => {
           </template>
 
           <template v-else>
-            <div ref="workflowStreamElement" class="workflow-stream">
+            <div class="workflow-stream">
             <Transition name="workflow-list" mode="out-in">
               <section
                 v-if="activeWorkflowGroup"
@@ -2059,7 +2052,11 @@ const openVersions = async () => {
               disabled
               send-button-disabled
               :placeholder="aiEditPlaceholder"
-            />
+            >
+              <template #toolbar>
+                <ContentStudioToolbar :has-task="Boolean(store.task)" :is-admin="userStore.isAdmin" @recognize-image="ocrModalOpen = true" />
+              </template>
+            </AgentInputArea>
             <p>流程执行完成后，可在这里要求 AI 修改标题、正文或话题。</p>
           </section>
           </template>
@@ -2449,11 +2446,13 @@ const openVersions = async () => {
 }
 
 .header-kicker { color: var(--main-700); font-size: 12px; font-weight: 600; }
-.studio-back-button { margin-bottom: 12px; display: inline-flex; align-items: center; gap: 6px; }
-.header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.header-actions :deep(.ant-btn), .panel-heading :deep(.ant-btn), .stage-actions :deep(.ant-btn), .editor-actions :deep(.ant-btn) { display: inline-flex; align-items: center; gap: 6px; }
+.panel-heading :deep(.ant-btn), .stage-actions :deep(.ant-btn), .editor-actions :deep(.ant-btn) { display: inline-flex; align-items: center; gap: 6px; }
 
 .studio-main { max-width: 1180px; margin: 18px auto 0; }
+.studio-production {
+  padding-bottom: 0;
+  .studio-header, .studio-main { max-width: none; }
+}
 .stage-panel { background: var(--gray-0); border: 1px solid var(--gray-150); border-radius: 8px; padding: 24px; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
 .panel-heading span { color: var(--main-700); font-size: 12px; font-weight: 600; }
@@ -2462,7 +2461,7 @@ const openVersions = async () => {
 
 .setup-grid, .brief-layout, .review-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr); gap: 20px; }
 .run-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
-.active-run-layout { width: 100%; max-width: 900px; height: max(560px, calc(100vh - 280px)); margin: 0 auto; display: flex; flex-direction: column; gap: 0; }
+.active-run-layout { width: 100%; max-width: 1100px; min-height: calc(100vh - 210px); margin: 0 auto; display: flex; flex-direction: column; gap: 0; }
 .setup-grid { grid-template-columns: 1fr 1fr; margin-bottom: 20px; }
 .template-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .template-card { min-height: 116px; padding: 16px; display: flex; flex-direction: column; gap: 7px; text-align: left; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); color: var(--color-text); cursor: pointer; }
@@ -2562,9 +2561,9 @@ const openVersions = async () => {
 .generation-start p { color: var(--color-text-secondary); }
 .generation-start :deep(.ant-input) { max-width: 500px; }
 .completion-stage { padding: 0; border: 0; background: transparent; }
-.completion-layout { grid-template-columns: minmax(0, 1.65fr) minmax(300px, 0.85fr); align-items: start; }
-.completion-left { min-width: 0; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
-.completion-conversation { height: max(560px, calc(100vh - 280px)); display: flex; flex-direction: column; }
+.completion-layout { grid-template-columns: minmax(0, 1fr) 394px; gap: 24px; align-items: start; }
+.completion-left { min-width: 0; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
+.completion-conversation { min-height: calc(100vh - 180px); display: flex; flex-direction: column; }
 .completion-narrative { margin-top: 0; }
 .workflow-complete-line { display: flex; align-items: center; gap: 8px; margin-top: 20px; color: var(--color-success-700); }
 .workflow-complete-line strong { color: var(--color-text); font-size: 14px; }
@@ -2642,7 +2641,7 @@ const openVersions = async () => {
 .result-detail-viral-meta strong { min-width: 0; overflow: hidden; color: var(--color-text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .result-detail-viral-meta :deep(.ant-btn) { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; color: var(--main-700); }
 .result-detail-viral-body { min-height: 0; flex: 1; padding: 16px; overflow-y: auto; color: var(--color-text); font-size: 13px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
-.workflow-stream { min-width: 0; min-height: 0; flex: 1; padding: 8px 18px 28px; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
+.workflow-stream { min-width: 0; flex: 1; padding: 16px 24px 28px; }
 .codex-workflow-status { min-width: 0; padding: 4px 0 10px; }
 .codex-workflow-heading { min-height: 52px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
 .codex-workflow-icon { display: inline-flex; color: var(--color-text-tertiary); }
@@ -2650,7 +2649,7 @@ const openVersions = async () => {
 .codex-workflow-status.failed .codex-workflow-icon { color: var(--color-error-700); }
 .codex-workflow-copy { min-width: 0; }
 .codex-workflow-copy strong { color: var(--color-text); font-size: 14px; line-height: 1.4; }
-.workflow-narrative { min-width: 0; max-width: 760px; margin: 8px 0 0 27px; }
+.workflow-narrative { min-width: 0; max-width: 1100px; margin: 8px auto 0; }
 .workflow-narrative :deep(.yk-markdown-preview ul) { display: block; margin: 6px 0 12px; padding-left: 20px; }
 .workflow-narrative :deep(.yk-markdown-preview ul > li) { min-height: 0; margin: 0; padding: 0; line-height: 1.65; }
 .workflow-narrative :deep(.yk-markdown-preview ul > li + li) { margin-top: 2px; }
@@ -2669,7 +2668,7 @@ const openVersions = async () => {
 .workflow-list-enter-active, .workflow-list-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
 .workflow-list-enter-from { opacity: 0; transform: translateY(6px); }
 .workflow-list-leave-to { opacity: 0; transform: translateY(-6px); }
-.workflow-chat-panel { flex: 0 0 auto; padding: 8px 18px 0; background: var(--gray-0); }
+.workflow-chat-panel { position: sticky; bottom: 0; z-index: 2; flex: 0 0 auto; padding: 12px 18px; border-radius: 0 0 8px 8px; background: var(--gray-0); }
 .workflow-chat-panel > p { margin: 6px 0 0; color: var(--color-text-tertiary); font-size: 11px; line-height: 1.5; text-align: center; }
 .human-review-card, .running-card { align-self: start; }
 .failure-card { color: var(--color-error-700); background: var(--color-error-50); }
@@ -2760,10 +2759,13 @@ const openVersions = async () => {
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+@media (max-width: 1100px) {
+  .completion-layout { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 900px) {
   .studio-header, .panel-heading { flex-direction: column; }
   .setup-grid, .brief-layout, .review-layout { grid-template-columns: 1fr; }
-  .completion-layout { grid-template-columns: 1fr; }
   .result-detail-layout { height: auto; min-height: 0; max-height: calc(100vh - 210px); grid-template-columns: 1fr; overflow-y: auto; }
   .result-detail-cover { min-height: 420px; border-right: 0; border-bottom: 1px solid var(--gray-150); }
   .result-detail-content { height: auto; display: block; overflow: visible; }
@@ -2775,8 +2777,7 @@ const openVersions = async () => {
 @media (max-width: 600px) {
   .content-studio-page { padding-top: 14px; }
   .stage-panel { padding: 16px; }
-  .active-run-layout { height: max(520px, calc(100vh - 230px)); }
-  .workflow-stream, .workflow-chat-panel { padding-left: 0; padding-right: 0; }
+  .workflow-stream, .workflow-chat-panel { padding-left: 12px; padding-right: 12px; }
   .workflow-narrative { margin-left: 0; }
   .completion-stage { padding: 0; }
   .ai-edit-message { max-width: 92%; }
@@ -2786,7 +2787,7 @@ const openVersions = async () => {
   .template-grid, .dynamic-form { grid-template-columns: 1fr; }
   .hycanvas-template-grid, .hycanvas-fields { grid-template-columns: 1fr; }
   .dynamic-form .field-block { grid-column: auto; }
-  .header-actions, .stage-actions, .stage-actions.split, .editor-actions { width: 100%; flex-direction: column; }
+  .stage-actions, .stage-actions.split, .editor-actions { width: 100%; flex-direction: column; }
   .visual-material-heading, .material-selector-title { flex-direction: column; }
   .material-selector-title small { text-align: left; }
   .selected-gallery-image { flex-wrap: wrap; }
@@ -2800,6 +2801,6 @@ const openVersions = async () => {
   .workflow-group summary { grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; padding: 11px; }
   .workflow-group-progress { display: none; }
   .workflow-group-copy small { white-space: normal; }
-  .header-actions :deep(.ant-btn), .stage-actions :deep(.ant-btn), .editor-actions :deep(.ant-btn) { width: 100%; justify-content: center; }
+  .stage-actions :deep(.ant-btn), .editor-actions :deep(.ant-btn) { width: 100%; justify-content: center; }
 }
 </style>
