@@ -12,11 +12,16 @@ from typing import Any, Literal
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-
+from yuxi.content.model.contracts.joint_strategy import (
+    JointStrategyInputV1, JointStrategyDecisionV1,
+    StrategySnapshotV2, validate_joint_strategy,
+)
+from yuxi.content.model.contracts.strategy import SelectStrategyInputV2, StrategyDecisionV2, validate_strategy_decision
 from yuxi.content.model.viral_document import ViralDocumentResultV1, validate_document_result
 from yuxi.content.model.viral_assets import (
     ViralArticleSource, ViralAssetPreparationInputV1, ViralAssetPreparationResultV1, validate_prepared_asset,
 )
+
 
 class StrictContract(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -215,7 +220,7 @@ class ProductMaterialRequirementsV1(StrictContract):
 
 class CollectStrategyProductEvidenceInputV1(StrictContract):
     content_brief: dict[str, Any] = Field(min_length=1)
-    strategy_snapshot: StrategySnapshotV1
+    strategy_snapshot: StrategySnapshotV1 | StrategySnapshotV2
     product_material_requirements: ProductMaterialRequirementsV1
     evidence_bundle: dict[str, Any] = Field(min_length=1)
     channel_profile: dict[str, Any]
@@ -249,7 +254,7 @@ class ProductEvidencePackV1(StrictContract):
 
 class ProductEvidenceBoundInputV1(StrictContract):
     content_brief: dict[str, Any] = Field(min_length=1)
-    strategy_snapshot: StrategySnapshotV1
+    strategy_snapshot: StrategySnapshotV1 | StrategySnapshotV2
     product_evidence_pack: ProductEvidencePackV1
     evidence_bundle: dict[str, Any] = Field(min_length=1)
     channel_profile: dict[str, Any]
@@ -312,7 +317,7 @@ class PersonaStylePolishInputV1(GenerateBodyInputV1):
 
 class GenerateContentInputV1(StrictContract):
     content_brief: dict[str, Any] = Field(min_length=1)
-    strategy_snapshot: StrategySnapshotV1
+    strategy_snapshot: StrategySnapshotV1 | StrategySnapshotV2
     formula_lexicon_bundle: dict[str, Any] = Field(min_length=1)
     evidence_bundle: dict[str, Any] = Field(min_length=1)
     channel_profile: dict[str, Any]
@@ -333,7 +338,11 @@ class GenerateContentInputV1(StrictContract):
             raise ValueError("标题词库包必须匹配锁定标题公式")
         if bundle.get("body_formula_code") != body_formula_code:
             raise ValueError("正文词库包必须匹配锁定正文公式")
-        if title_formula_code in {f"T{index:02d}" for index in range(1, 8)} and body_formula_code in {
+        decoration = (
+            not isinstance(self.strategy_snapshot, StrategySnapshotV2)
+            or self.strategy_snapshot.industry_slug == "decoration"
+        )
+        if decoration and title_formula_code in {f"T{index:02d}" for index in range(1, 8)} and body_formula_code in {
             f"C{index:02d}" for index in range(1, 5)
         }:
             if bundle.get("required") is not True:
@@ -356,7 +365,7 @@ class GenerateContentInputV1(StrictContract):
 
 class SemanticReviewInputV1(StrictContract):
     content_brief: dict[str, Any] = Field(min_length=1)
-    strategy_snapshot: StrategySnapshotV1
+    strategy_snapshot: StrategySnapshotV1 | StrategySnapshotV2
     selected_title: dict[str, Any] = Field(min_length=1)
     content_outline: dict[str, Any] = Field(min_length=1)
     content_draft: dict[str, Any] = Field(min_length=1)
@@ -369,7 +378,7 @@ class SemanticReviewInputV1(StrictContract):
 class PlanVisualsInputV1(StrictContract):
     selected_title: dict[str, Any] = Field(min_length=1)
     content_draft: dict[str, Any] = Field(min_length=1)
-    strategy_snapshot: StrategySnapshotV1
+    strategy_snapshot: StrategySnapshotV1 | StrategySnapshotV2
     evidence_bundle: dict[str, Any] = Field(min_length=1)
     media_evidence_items: list[dict[str, Any]]
     artifact_version: dict[str, Any] = Field(min_length=1)
@@ -415,6 +424,8 @@ INPUT_CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         AnalyzeContentValueInputV1,
         AnalyzeAndSelectDirectionInputV1,
         SelectCreationStrategyInputV1,
+        SelectStrategyInputV2,
+        JointStrategyInputV1,
         ViralAssetPreparationInputV1,
         SelectContentDirectionInputV1,
         ExplainStrategyInputV1,
@@ -710,6 +721,8 @@ CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         ContentValueResultV1,
         ContentDirectionDecisionResultV1,
         CreationStrategySelectionResultV1,
+        StrategyDecisionV2,
+        JointStrategyDecisionV1,
         ViralAssetPreparationResultV1,
         ViralDocumentResultV1,
         DirectionSelectionResultV1,
@@ -759,8 +772,12 @@ def _extract_supported_numbers(value: Any) -> set[str]:
 
 @dataclass(frozen=True, slots=True)
 class ContractDomainContext:
+    joint_strategy_input: dict[str, Any] = field(default_factory=dict)
     viral_source: dict[str, Any] = field(default_factory=dict)
     viral_document: dict[str, Any] = field(default_factory=dict)
+    strategy_candidates: dict[str, Any] = field(default_factory=dict)
+    strategy_brief: dict[str, Any] = field(default_factory=dict)
+    strategy_evidence: dict[str, Any] = field(default_factory=dict)
     locked_group_id: str | None = None
     title_formula_pool: frozenset[str] = frozenset()
     body_formula_pool: frozenset[str] = frozenset()
@@ -960,7 +977,11 @@ def get_input_contract_model(name: str) -> type[StrictContract]:
 
 def _require_member(value: str, allowed: frozenset[str], field_path: str) -> None:
     if value not in allowed:
-        raise ContractDomainValidationError("unknown_id", field_path, f"{field_path} 不在锁定候选范围内: {value}")
+        candidates = "、".join(sorted(allowed))
+        raise ContractDomainValidationError(
+            "unknown_id", field_path,
+            f"{field_path} 不在锁定候选范围内: {value}；请逐字使用以下候选之一：{candidates}",
+        )
 
 
 def _require_equal(value: str | None, locked: str | None, field_path: str) -> None:
@@ -1057,7 +1078,12 @@ def validate_content_node_result(
     context: ContractDomainContext,
 ) -> StrictContract:
     result = get_contract_model(contract_name).model_validate(payload)
-    if isinstance(result, ViralDocumentResultV1):
+    if isinstance(result, JointStrategyDecisionV1):
+        try:
+            result = validate_joint_strategy(payload, context.joint_strategy_input)
+        except (ValueError, KeyError) as exc:
+            raise ContractDomainValidationError("joint_strategy_invalid", "strategy", str(exc)) from exc
+    elif isinstance(result, ViralDocumentResultV1):
         try:
             result = validate_document_result(result.model_dump(), context.viral_document)
         except ValueError as exc:
@@ -1067,6 +1093,16 @@ def validate_content_node_result(
             result = validate_prepared_asset(payload, ViralArticleSource.model_validate(context.viral_source))
         except ValueError as exc:
             raise ContractDomainValidationError("viral_asset_invalid", "reference_blueprint", str(exc)) from exc
+    elif isinstance(result, StrategyDecisionV2):
+        if not context.strategy_candidates:
+            raise ContractDomainValidationError("strategy_scope_missing", "strategy_candidates", "缺少锁定行业策略候选")
+        try:
+            result = validate_strategy_decision(
+                payload, context.strategy_candidates,
+                content_brief=context.strategy_brief, evidence_bundle=context.strategy_evidence,
+            )
+        except ValueError as exc:
+            raise ContractDomainValidationError("strategy_decision_invalid", "strategy_selection", str(exc)) from exc
     elif isinstance(result, ContentValueResultV1):
         _validate_evidence_ids(result.evidence_ids, "any", context, "evidence_ids")
         for index, item in enumerate(result.direction_candidates):

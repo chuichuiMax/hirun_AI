@@ -116,8 +116,93 @@ class TaskFactsInput(BaseModel):
     task_id: str
 
 
+@tool(category="buildin", tags=["内容生产", "规则"], display_name="读取行业策略候选", args_schema=TaskFactsInput)
+async def get_strategy_candidates(task_id: str, runtime: ToolRuntime = None) -> dict[str, Any]:
+    """读取任务锁定行业/方向的公式及独立手法候选，返回 Skill 评分规则，不代替 Agent 选择。"""
+    from yuxi.content.control.strategy.recommend_v3 import StrategyPreviewActor
+    from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
+
+    runtime = _effective_runtime(runtime)
+    uid = _runtime_uid(runtime)
+    context = getattr(runtime, "context", None)
+    active_task_id = getattr(context, "_content_task_id", None)
+    if active_task_id and str(active_task_id) != task_id:
+        raise ValueError("只能读取当前内容任务的策略候选")
+    async with pg_manager.get_async_session_context() as db:
+        user = (await db.execute(select(User).where(User.uid == uid, User.is_deleted == 0))).scalar_one_or_none()
+        if user is None:
+            raise ValueError("当前用户不存在")
+        result = await PostgresStrategyPreviewRepository(db).load_candidates(
+            task_id=task_id,
+            actor=StrategyPreviewActor(
+                uid=uid, role=user.role,
+                tenant_id=str(user.department_id) if user.department_id is not None else None,
+            ),
+        )
+    return result
+
+
 class TaskOCRInput(BaseModel):
     task_id: str = Field(description="需要读取 OCR 结果的内容任务 ID")
+
+
+@tool
+async def search_viral_reference_cards(task_id: str, query: str, runtime: ToolRuntime = None) -> dict[str, Any]:
+    """在任务行业及受管 Agent 的知识库范围内检索已准备的完整文章参考卡，不返回原文分块。"""
+    from yuxi.services.agent_runtime_service import resolve_agent_runtime_context
+    from yuxi.services.content_viral_assets import search_ready_viral_assets
+    from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
+    from yuxi.content.model.strategy import load_selection_policy
+
+    runtime = _effective_runtime(runtime)
+    uid = _runtime_uid(runtime)
+    context = getattr(runtime, "context", None)
+    active = getattr(context, "_content_task_id", None)
+    if active and active != task_id:
+        raise ValueError("只能检索当前任务的参考")
+    async with pg_manager.get_async_session_context() as db:
+        user = (await db.execute(select(User).where(User.uid == uid, User.is_deleted == 0))).scalar_one()
+        task = await ContentRepository(db).get_task_for_user(task_id, user)
+        if task is None:
+            raise ValueError("内容任务不存在")
+        policy = (task.runtime_config_snapshot_json or {}).get("selection_policy_snapshot") or load_selection_policy()
+        calls = getattr(context, "_prepared_reference_searches", 0)
+        if calls >= policy["max_reference_searches"]:
+            raise ValueError("已达到本次参考卡检索次数上限")
+        if context is not None:
+            context._prepared_reference_searches = calls + 1
+        managed = await resolve_agent_runtime_context(db=db, user=user, bound_agent_id="content-joint-strategy-agent")
+        industry, _ = await PostgresStrategyPreviewRepository(db)._industry_context(task)
+        items = await search_ready_viral_assets(
+            db, user, industry_slug=industry, query=query,
+            kb_ids=list(managed.knowledges or []), limit=policy["reference_candidate_limit"],
+        )
+        await db.commit()
+        return {"items": items, "query": query}
+
+
+@tool
+async def read_viral_reference(asset_id: str, runtime: ToolRuntime = None) -> dict[str, Any]:
+    """按资产版本读取已准备蓝图及完整原文，重新检查原文版本和访问权限。"""
+    from yuxi.services.agent_runtime_service import resolve_agent_runtime_context
+    from yuxi.services.content_viral_assets import check_asset_source, preparation_skill_hash, require_asset
+    from yuxi.repositories.viral_asset_repository import asset_dict
+
+    runtime = _effective_runtime(runtime)
+    async with pg_manager.get_async_session_context() as db:
+        user = (await db.execute(
+            select(User).where(User.uid == _runtime_uid(runtime), User.is_deleted == 0)
+        )).scalar_one()
+        managed = await resolve_agent_runtime_context(db=db, user=user, bound_agent_id="content-joint-strategy-agent")
+        asset = await require_asset(db, user, asset_id)
+        if asset.kb_id not in (managed.knowledges or []):
+            raise ValueError("资产不在当前 Agent 知识库范围内")
+        if (
+            asset.status != "ready" or not await check_asset_source(db, asset)
+            or asset.preparation_skill_hash != preparation_skill_hash()
+        ):
+            raise ValueError("参考资产已失效或尚未准备完成")
+        return asset_dict(asset, include_source=True)
 
 
 class NormalizeEvidenceInput(BaseModel):

@@ -18,6 +18,18 @@ import {
 
 assert.deepEqual(buildContentNarrativeCodeLabels(null), {})
 
+const rejectedResultTimeline = buildContentRuntimeTimeline([], [{
+  event_type: 'content.tool.failed',
+  payload: {
+    tool_name: 'submit_content_node_result',
+    output_contract: 'JointStrategyDecisionV1',
+    error_type: 'ContractDomainValidationError',
+    message: '评分引用了不存在的输入字段: content_brief.business_variables.emotion'
+  }
+}])
+assert.ok(rejectedResultTimeline[0].detail.includes('评分引用了不存在的输入字段: content_brief.business_variables.emotion'))
+assert.ok(!rejectedResultTimeline[0].detail.includes('ContractDomainValidationError'))
+
 const groupedNodeIds = CONTENT_WORKFLOW_GROUPS.flatMap((group) => group.nodes)
 assert.equal(CONTENT_WORKFLOW_GROUPS.length, 5)
 assert.equal(groupedNodeIds.length, 26)
@@ -606,3 +618,12 @@ assert.deepEqual(persistedSkillSummary.skills[0], {
 assert.equal(formatElapsedDuration(141000), '2分21秒')
 
 console.log('contentWorkflowPresentation: all assertions passed')
+
+const jointGroups = buildContentWorkflowGroups([
+  { node_id: 'prepare_strategy_candidates', status: 'completed' },
+  { node_id: 'select_creation_strategy', status: 'completed' },
+  { node_id: 'lock_creation_strategy', status: 'completed' }
+])
+const jointStrategy = jointGroups.find(group => group.id === 'strategy')
+assert.ok(jointStrategy)
+assert.ok(!jointStrategy.nodes.some(node => ['collect_viral_candidates', 'select_viral_reference'].includes(node.id)))

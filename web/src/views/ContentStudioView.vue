@@ -64,6 +64,7 @@ const creation = reactive({
   mode: window.matchMedia('(max-width: 800px)').matches ? 'quick' : 'quick',
   creation_mode: 'original',
   content_goal: '',
+  content_type_code: undefined,
   name: ''
 })
 const formValues = reactive({})
@@ -314,6 +315,8 @@ const selectedTemplate = computed(() =>
   store.templates.find((item) => item.id === creation.industry_template_id)
 )
 const selectedIndustrySlug = computed(() => store.template?.slug || selectedTemplate.value?.slug || '')
+const needsContentDirection = computed(() => selectedTemplate.value?.strategy_mode === 'direction_scoped' && !selectedTemplate.value?.blueprint_first)
+const directionOptions = computed(() => (store.ruleBundle?.content_types || []).filter(item => item.enabled !== false && (item.supported_goals || []).includes(creation.content_goal)))
 const activeFields = computed(() => {
   if (!store.task) {
     if (!selectedTemplate.value) return []
@@ -1040,12 +1043,16 @@ watch(
   () => creation.industry_template_id,
   () => {
     const template = selectedTemplate.value
+    creation.content_type_code = undefined
     if (template && !creation.content_goal) creation.content_goal = template.default_goal
     if (!store.task) initializeFormValues()
   }
 )
 
 watch(selectedHyCanvasTemplateId, initializeHyCanvasFields)
+watch(directionOptions, (options) => {
+  if (!options.some((item) => item.code === creation.content_type_code)) creation.content_type_code = undefined
+})
 watch(selectedImageItemId, (itemId) => void loadSelectedImagePreview(itemId))
 watch(
   [selectedImageItemId, selectedHyCanvasTemplateId, photoComposition],
@@ -1134,6 +1141,10 @@ onMounted(async () => {
 const createTask = async () => {
   if (!creation.industry_template_id || !creation.content_goal) {
     message.warning('请选择行业模板和内容目标')
+    return
+  }
+  if (needsContentDirection.value && !creation.content_type_code) {
+    message.warning('请选择本次内容方向')
     return
   }
   try {
@@ -1499,7 +1510,7 @@ const openVersions = async () => {
                 ]"
               />
               <small v-if="creation.creation_mode === 'viral_rewrite'">
-                系统会从爆款库选择一篇最匹配内容，只仿写结构，业务事实仍来自真实知识库。
+                系统比较已准备的完整文章参考，复用选中结构，业务事实来自本次真实资料。
               </small>
               <small v-else>根据锁定公式原创内容，并使用真实知识库补充业务事实。</small>
             </label>
@@ -1511,6 +1522,13 @@ const openVersions = async () => {
                 </a-select-option>
               </a-select>
             </label>
+            <p v-if="selectedTemplate?.blueprint_first" class="auto-strategy-hint">填写资料后，系统自动匹配参考结构与创作方式，无需选择内容方向。</p>
+            <label v-if="needsContentDirection" class="field-block">
+              <span>一级内容方向</span>
+              <a-select v-model:value="creation.content_type_code" placeholder="请选择本次内容方向" :options="directionOptions.map(item => ({ value: item.code, label: item.name }))" />
+              <small>仅从所选方向内匹配标题和正文公式。</small>
+            </label>
+            <p v-else-if="selectedTemplate && !selectedTemplate.blueprint_first">根据本次资料评分选择该行业的公式和创作手法。</p>
           </div>
 
           <div class="template-grid">

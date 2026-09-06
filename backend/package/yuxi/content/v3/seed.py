@@ -199,6 +199,28 @@ async def ensure_content_v3_seed_data(db: AsyncSession) -> None:
 
 
 async def _ensure_workflow_v3(db: AsyncSession) -> None:
+    from yuxi.content.v3.joint_workflow import (
+        PLATFORM_WORKFLOW_JOINT_ID, WORKFLOW_JOINT,
+        PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID, WORKFLOW_BLUEPRINT_FIRST,
+    )
+
+    if await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID) is None:
+        db.add(ContentWorkflowVersion(
+            id=PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID, slug="enterprise-content", tenant_id=None, version=17,
+            schema_version=3, status="draft", definition_json=deepcopy(WORKFLOW_BLUEPRINT_FIRST),
+            definition_hash=workflow_definition_hash(WORKFLOW_BLUEPRINT_FIRST),
+            input_schema={"type": "ContentBrief", "version": 3},
+            output_schema={"type": "ContentArtifact", "version": 3}, created_by="system",
+        ))
+
+    if await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_JOINT_ID) is None:
+        db.add(ContentWorkflowVersion(
+            id=PLATFORM_WORKFLOW_JOINT_ID, slug="enterprise-content", tenant_id=None, version=15,
+            schema_version=3, status="draft", definition_json=deepcopy(WORKFLOW_JOINT),
+            definition_hash=workflow_definition_hash(WORKFLOW_JOINT),
+            input_schema={"type": "ContentBrief", "version": 3},
+            output_schema={"type": "ContentArtifact", "version": 3}, created_by="system",
+        ))
     workflow = await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_V3_ID)
     if workflow is not None:
         previous_hash = workflow.definition_hash

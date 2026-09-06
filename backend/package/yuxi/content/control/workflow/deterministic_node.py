@@ -193,6 +193,14 @@ class V3DeterministicNodeHandler:
         state: dict[str, Any],
         node_run_id: str,
     ) -> dict[str, Any]:
+        if node["id"] == "prepare_strategy_candidates":
+            from yuxi.content.control.workflow.joint_strategy import prepare_strategy_candidates
+
+            return await prepare_strategy_candidates(db=db, state=state, node_run_id=node_run_id)
+        if node["id"] == "lock_creation_strategy" and state.get("joint_strategy_decision"):
+            from yuxi.content.control.workflow.joint_strategy import lock_joint_strategy
+
+            return await lock_joint_strategy(db=db, state=state, node_run_id=node_run_id)
         handlers = {
             "compile_runtime_snapshot": self._compile_runtime_snapshot,
             "ingest_real_materials": self._ingest_real_materials,

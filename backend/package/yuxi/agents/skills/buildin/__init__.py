@@ -25,6 +25,30 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         description="自动识别上传文件中的完整参考文章和行业。",
     ),
     BuiltinSkillSpec(
+        slug="content-joint-strategy-selector",
+        version="1.2.0",
+        source_dir=_SKILLS_ROOT / "content-joint-strategy-selector",
+        description="按行业规则一次选择公式、独立手法及已准备的文章级参考。",
+    ),
+    BuiltinSkillSpec(
+        slug="prepared-viral-reference-selector",
+        version="1.2.0",
+        source_dir=_SKILLS_ROOT / "prepared-viral-reference-selector",
+        description="基于本次输入评分选择已准备参考卡，不阅读全文或重新提取蓝图。",
+    ),
+    BuiltinSkillSpec(
+        slug="decoration-direction-formula-selector",
+        version="1.2.0",
+        source_dir=_SKILLS_ROOT / "decoration-direction-formula-selector",
+        description="仅在装修已选内容方向内匹配公式，独立评估手法，不生成公式分数。",
+    ),
+    BuiltinSkillSpec(
+        slug="industry-strategy-scorer",
+        version="1.0.1",
+        source_dir=_SKILLS_ROOT / "industry-strategy-scorer",
+        description="依据本次输入证据和版本化评分标准选择行业公式及创作手法。",
+    ),
+    BuiltinSkillSpec(
         slug="viral-asset-preparer",
         version="1.1.0",
         source_dir=_SKILLS_ROOT / "viral-asset-preparer",
@@ -40,7 +64,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-strategy-planner",
         source_dir=_SKILLS_ROOT / "content-strategy-planner",
         description="根据 SOP1 输入和正式规则，一次选择方向、创作手法及标题正文公式。",
-        version="4.0.1",
+        version="4.1.0",
         tool_dependencies=("get_creation_rule_bundle",),
     ),
     BuiltinSkillSpec(
@@ -60,7 +84,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-business-rule-researcher",
         source_dir=_SKILLS_ROOT / "content-business-rule-researcher",
         description="只检索与锁定公式相关的品牌业务事实与平台业务规则。",
-        version="1.1.0",
+        version="1.1.1",
         tool_dependencies=("query_kb",),
     ),
     BuiltinSkillSpec(

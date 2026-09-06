@@ -288,8 +288,10 @@ class ContentWorkflowAgent(BaseAgent):
                 persisted = await db.get(type(node_run), node_run.id)
                 if persisted:
                     output_snapshot = {"updated_fields": sorted(result.keys())}
-                    if cache_key:
+                    if cache_key or node_id in {"select_creation_strategy", "lock_creation_strategy"}:
                         output_snapshot["result"] = result
+                    if node_id == "prepare_strategy_candidates":
+                        output_snapshot["reference_search_queries"] = result.get("reference_search_queries", [])
                     if node_id == "validate_title_candidates":
                         output_snapshot["title_validation_report"] = result.get("title_validation_report") or {}
                     await repo.finish_node_run(

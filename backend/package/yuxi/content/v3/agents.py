@@ -29,17 +29,6 @@ class ContentAgentSpec:
 
 CONTENT_AGENT_SPECS = (
     ContentAgentSpec(
-        slug="content-viral-asset-agent",
-        name="爆款资产准备 Agent",
-        description="入库时核验完整原文并提取可复用参考卡和结构蓝图。",
-        skills=("viral-asset-preparer", "viral-document-detector"),
-        reasoning_effort="low",
-        inherit_context_from="content-research-agent",
-        model_call_timeout_seconds=100,
-        model_retry_times=0,
-        config_version=3,
-    ),
-    ContentAgentSpec(
         slug="content-strategy-agent",
         name="内容策略 Agent",
         description="分析内容价值、从候选集中确定内容方向，并解释固定规则结果及排序候选公式。",
@@ -60,6 +49,31 @@ CONTENT_AGENT_SPECS = (
         model_call_timeout_seconds=60,
         model_retry_times=1,
         config_version=6,
+    ),
+    ContentAgentSpec(
+        slug="content-viral-asset-agent",
+        name="爆款资产准备 Agent",
+        description="入库时核验完整原文并提取可复用参考卡和结构蓝图。",
+        skills=("viral-asset-preparer", "viral-document-detector"),
+        reasoning_effort="low",
+        inherit_context_from="content-research-agent",
+        model_call_timeout_seconds=100,
+        model_retry_times=0,
+        config_version=3,
+    ),
+    ContentAgentSpec(
+        slug="content-joint-strategy-agent",
+        name="行业联合策略 Agent",
+        description="依据行业 Skill 比较公式、独立手法和已准备参考卡，提交一次可审计决策。",
+        skills=(
+            "content-joint-strategy-selector", "prepared-viral-reference-selector",
+            "decoration-direction-formula-selector", "industry-strategy-scorer",
+        ),
+        inherit_context_from="content-research-agent",
+        reasoning_effort="low",
+        model_call_timeout_seconds=65,
+        model_retry_times=0,
+        config_version=3,
     ),
     ContentAgentSpec(
         slug="content-business-rule-research-agent",

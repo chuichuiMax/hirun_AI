@@ -544,6 +544,72 @@ async def retry_viral_asset_preparation(
     return await retry_viral_asset(db, current_user, asset_id)
 
 
+@content.get("/tasks/{task_id}/strategy/candidates")
+async def get_strategy_candidates(
+    task_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await PostgresStrategyPreviewRepository(db).load_candidates(
+            task_id=task_id,
+            actor=StrategyPreviewActor(
+                uid=str(current_user.uid),
+                role=current_user.role,
+                tenant_id=str(current_user.department_id) if current_user.department_id is not None else None,
+            ),
+        )
+    except ContentApplicationError as exc:
+        raise present_content_error(exc) from exc
+
+
+@content.get("/tasks/{task_id}/strategy/decision")
+async def get_strategy_decision(
+    task_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import select
+    from yuxi.storage.postgres.models_business import AgentRun
+    from yuxi.storage.postgres.models_content import ContentNodeRun
+
+    task = await ContentRepository(db).get_task_for_user(task_id, current_user)
+    if task is None:
+        raise HTTPException(404, "内容任务不存在")
+    run_ids = []
+    run = await db.get(AgentRun, task.latest_run_id) if task.latest_run_id else None
+    while run and run.thread_id == task_id and run.id not in run_ids:
+        run_ids.append(run.id)
+        run = await db.get(AgentRun, run.parent_run_id) if run.parent_run_id else None
+    rows = list((await db.execute(
+        select(ContentNodeRun).where(
+            ContentNodeRun.task_id == task_id,
+            ContentNodeRun.agent_run_id.in_(run_ids),
+            ContentNodeRun.node_id.in_(["select_creation_strategy", "lock_creation_strategy"]),
+            ContentNodeRun.status == "completed",
+        ).order_by(ContentNodeRun.finished_at.desc(), ContentNodeRun.id.desc()).limit(6)
+    )).scalars())
+    selection_row = next((row for row in rows if row.node_id == "select_creation_strategy"), None)
+    candidates = (
+        ((selection_row.input_snapshot or {}).get("visible_payload") or {}).get("strategy_candidates", {})
+        if selection_row else {}
+    )
+    automatic_view = {
+        "automatic_direction": candidates.get("auto_direction", False),
+        "direction_names": {item["code"]: item["name"] for item in candidates.get("direction_options", [])},
+    } if candidates.get("auto_direction") else {}
+    for row in rows:
+        output = (row.output_snapshot or {}).get("result") or {}
+        snapshot = output.get("strategy_snapshot")
+        decision = (snapshot or {}).get("decision") or output.get("joint_strategy_decision")
+        if decision:
+            return {
+                "decision": decision, "snapshot": snapshot, "node_run_id": row.id,
+                "run_id": row.agent_run_id, **automatic_view,
+            }
+    return {"decision": None, "snapshot": None, **automatic_view}
+
+
 @content.post("/tasks/{task_id}/strategy/recommend-v3")
 async def recommend_strategy_v3(
     task_id: str,

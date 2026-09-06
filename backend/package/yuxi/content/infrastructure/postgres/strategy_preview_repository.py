@@ -53,6 +53,37 @@ class PostgresStrategyPreviewRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def _load_strategy_source(self, task_id, actor):
+        task = await ContentRepository(self.db).get_task(task_id)
+        if task is None or task.deleted_at is not None or not self._can_read(task, actor):
+            raise ContentApplicationError("CONTENT_TASK_NOT_FOUND", "内容任务不存在", "not_found")
+        industry_slug, _ = await self._industry_context(task)
+        bundle = await ContentRepository(self.db).get_rule_bundle(task.rule_version_id, include_disabled=True)
+        if bundle is None:
+            raise ContentApplicationError("CONTENT_RULE_VERSION_NOT_FOUND", "任务锁定规则版本不存在", "conflict")
+        return task, industry_slug, bundle
+
+    async def load_candidates(
+        self, *, task_id: str, actor: StrategyPreviewActor, auto_direction: bool = False
+    ) -> dict[str, Any]:
+        """读取完整规则引用，装配手动方向或自动蓝图选择所需的候选。"""
+        from yuxi.content.model.strategy import build_strategy_candidates
+
+        task, industry_slug, bundle = await self._load_strategy_source(task_id, actor)
+        auto_direction = auto_direction or task.workflow_version_id == "content-workflow-blueprint-first-v1"
+        try:
+            candidates = build_strategy_candidates(
+                bundle,
+                industry_slug=industry_slug,
+                direction_code=None if auto_direction else task.content_type_code,
+                auto_direction=auto_direction,
+                rule_version_id=task.rule_version_id,
+                policy=(task.runtime_config_snapshot_json or {}).get("selection_policy_snapshot"),
+            )
+        except ValueError as exc:
+            raise ContentApplicationError("CONTENT_STRATEGY_CANDIDATES_INVALID", str(exc), "conflict") from exc
+        return {"task_id": task.id, "creates_run": False, "strategy_candidates": candidates}
+
     async def load_context(
         self,
         *,

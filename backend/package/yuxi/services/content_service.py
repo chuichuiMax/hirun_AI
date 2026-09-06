@@ -368,13 +368,22 @@ def compile_content_brief(
 
 
 async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
+    from yuxi.content.model.strategy import load_selection_policy
+
     repo = ContentRepository(db)
     version = await repo.get_published_rule_version(schema_version=3)
     if version is None:
         raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "创作规则库尚未初始化")
     rule_bundle = await repo.get_rule_bundle(version.id)
+    policy = load_selection_policy()
+    templates = await repo.list_templates()
+    from yuxi.content.v3.joint_workflow import PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID
+
+    for template in templates:
+        template["strategy_mode"] = policy["industry_modes"].get(template["slug"], policy["default_mode"])
+        template["blueprint_first"] = template["default_workflow_version_id"] == PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID
     return {
-        "industry_templates": await repo.list_templates(),
+        "industry_templates": templates,
         "content_goals": CONTENT_GOALS,
         "content_types": (rule_bundle or {}).get("content_types") or [],
         "industry_packs": await repo.list_industry_packs(),
@@ -558,6 +567,8 @@ async def preview_task_channel(
 
 
 async def create_content_task(db: AsyncSession, user: User, payload: ContentTaskCreate) -> dict[str, Any]:
+    from yuxi.content.model.strategy import load_selection_policy
+
     repo = ContentRepository(db)
     template = await repo.get_template(payload.industry_template_id)
     if template is None or template.status != "published":
@@ -586,7 +597,15 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
     bundle = await repo.get_rule_bundle(rule_version.id)
     content_types = (bundle or {}).get("content_types") or []
     content_type_code = payload.content_type_code
-    if content_types:
+    selection_policy = load_selection_policy()
+    joint = workflow_version.definition_json.get("selection_policy") in {"agent_skill_v1", "blueprint_first_v1"}
+    mode = selection_policy["industry_modes"].get(template.slug, selection_policy["default_mode"])
+    automatic = workflow_version.definition_json.get("selection_policy") == "blueprint_first_v1"
+    if automatic:
+        content_type_code = None
+    if joint and not automatic and mode == "direction_scoped" and not content_type_code:
+        raise _content_error(422, "CONTENT_DIRECTION_REQUIRED", "请先选择本次内容方向")
+    if content_types and not automatic and (not joint or mode == "direction_scoped"):
         type_map = {item["code"]: item for item in content_types}
         if content_type_code is None:
             content_type_code = next(
@@ -634,6 +653,7 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
         "channel_profile_version_id": channel_profile_version_id,
         "content_type_code": content_type_code,
         "creation_mode": payload.creation_mode,
+        **({"selection_policy_snapshot": selection_policy, "strategy_mode": mode} if joint else {}),
     }
     task = await repo.create_task(
         task_id=f"ct_{uuid.uuid4().hex}",
@@ -711,13 +731,16 @@ async def update_content_task(db: AsyncSession, user: User, task_id: str, payloa
         raise _content_error(422, "CONTENT_GOAL_INVALID", "内容目标无效")
     next_goal = changes.get("content_goal", task.content_goal)
     next_type = changes.get("content_type_code", task.content_type_code)
-    if "content_type_code" in changes:
+    direction_scoped = (
+        (task.runtime_config_snapshot_json or {}).get("strategy_mode", "direction_scoped") == "direction_scoped"
+    )
+    if "content_type_code" in changes and direction_scoped:
         definition = await repo.get_content_type(task.rule_version_id, changes["content_type_code"])
         if definition is None:
             raise _content_error(422, "CONTENT_TYPE_INVALID", "内容类型不存在或未发布")
         if next_goal not in (definition.supported_goals or []):
             raise _content_error(422, "CONTENT_TYPE_GOAL_MISMATCH", "内容类型不支持当前内容目标")
-    elif "content_goal" in changes and next_type:
+    elif "content_goal" in changes and next_type and direction_scoped:
         definition = await repo.get_content_type(task.rule_version_id, next_type)
         if definition and next_goal not in (definition.supported_goals or []):
             raise _content_error(422, "CONTENT_TYPE_GOAL_MISMATCH", "当前内容类型不支持新的内容目标")

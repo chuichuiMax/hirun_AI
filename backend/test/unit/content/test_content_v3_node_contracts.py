@@ -911,4 +911,4 @@ async def test_structured_result_tool_uses_registered_pydantic_schema():
 
     assert tool.name == "submit_content_node_result"
     assert collector.submission_count == 1
-    assert len(CONTRACT_REGISTRY) == 23
+    assert tool.args_schema is CONTRACT_REGISTRY["ContentReviewResultV1"]

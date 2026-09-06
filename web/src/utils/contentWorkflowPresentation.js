@@ -2,6 +2,7 @@ export const CONTENT_WORKFLOW_NODE_LABELS = {
   compile_runtime_snapshot: '冻结运行配置',
   ingest_real_materials: '导入真实素材',
   normalize_evidence: '规范化证据',
+  prepare_strategy_candidates: '准备行业公式与文章参考卡',
   select_creation_strategy: 'Agent 匹配创作手法与公式',
   lock_creation_strategy: '固定规则校验并锁定策略',
   load_formula_lexicons: '加载公式必选词库',
@@ -82,6 +83,7 @@ const runtimeEventDetail = (eventType, payload) => {
     return [payload.skill_slug, payload.skill_version].filter(Boolean).join(' · ')
   }
   if (eventType.startsWith('content.tool.')) {
+    if (payload.message || payload.error_message) return payload.message || payload.error_message
     const detail = [payload.tool_name, payload.output_contract].filter(Boolean).join(' · ')
     return payload.error_type ? `${detail} · ${payload.error_type}` : detail
   }
@@ -845,10 +847,18 @@ export const buildContentWorkflowGroups = (runEvents = [], auditEvents = []) => 
     !eventByNode.has('select_creation_strategy') &&
     ['analyze_content_value', 'select_content_direction', 'explain_strategy'].some((id) => eventByNode.has(id))
   const groups = CONTENT_WORKFLOW_GROUPS.map((group) => {
-    const steps =
+    let steps =
       group.id === 'strategy' && usesLegacyStrategy
         ? LEGACY_STRATEGY_STEPS
         : group.steps || group.nodes.map((id) => ({ id, label: CONTENT_WORKFLOW_NODE_LABELS[id], nodes: [id] }))
+    if (group.id === 'strategy' && eventByNode.has('prepare_strategy_candidates')) {
+      steps = [
+        { id: 'prepare_strategy_candidates', label: '装配行业公式与已准备参考卡', nodes: ['prepare_strategy_candidates'] },
+        ...steps.filter(step => !['collect_viral_candidates', 'select_viral_reference'].includes(step.id)).map(step =>
+          step.id === 'select_creation_strategy' ? { ...step, label: 'Agent 联合选择公式、手法和参考' } : step
+        )
+      ]
+    }
     const nodes = steps.map((step) => {
       const activities = runtimeTimeline.filter((item) => step.nodes.includes(item.nodeId))
       return {
