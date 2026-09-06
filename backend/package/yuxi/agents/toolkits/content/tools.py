@@ -48,6 +48,8 @@ class RuleBundleInput(BaseModel):
 def _filter_strategy_rule_bundle(
     bundle: dict[str, Any], *, industry_slug: str, content_type_code: str
 ) -> dict[str, Any]:
+    from yuxi.content.industry_matrix import resolve_industry_formula
+
     rules = [
         item
         for item in bundle.get("combination_rules") or []
@@ -79,8 +81,33 @@ def _filter_strategy_rule_bundle(
     return {
         **bundle,
         "methods": [item for item in bundle.get("methods") or [] if item.get("code") in method_codes],
-        "title_formulas": [item for item in bundle.get("title_formulas") or [] if item.get("code") in title_codes],
-        "content_formulas": [item for item in bundle.get("content_formulas") or [] if item.get("code") in body_codes],
+        "title_formulas": [
+            resolve_industry_formula(
+                item,
+                industry_slug=industry_slug,
+                scenario="；".join(
+                    rule.get("scenario_description", "")
+                    for rule in rules
+                    if item.get("code")
+                    in (rule.get("title_formula_candidate_codes") or rule.get("title_formula_codes") or [])
+                ),
+            )
+            for item in bundle.get("title_formulas") or []
+            if item.get("code") in title_codes
+        ],
+        "content_formulas": [
+            resolve_industry_formula(
+                item,
+                industry_slug=industry_slug,
+                scenario="；".join(
+                    rule.get("scenario_description", "")
+                    for rule in rules
+                    if item.get("code") in (rule.get("body_formula_candidate_codes") or [])
+                ),
+            )
+            for item in bundle.get("content_formulas") or []
+            if item.get("code") in body_codes
+        ],
         "combination_rules": rules,
     }
 

@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yuxi.content.rule_library import active_combination_rules
 from yuxi.storage.postgres.models_business import AgentRun, User
 from yuxi.storage.postgres.models_content import (
     ChannelProfile,
@@ -65,6 +66,7 @@ def _method_dict(item: CreationMethod) -> dict[str, Any]:
 
 def _title_formula_dict(item: TitleFormula) -> dict[str, Any]:
     return {
+        "source_content": item.source_content or {},
         "id": item.id,
         "code": item.code,
         "name": item.name,
@@ -81,6 +83,7 @@ def _title_formula_dict(item: TitleFormula) -> dict[str, Any]:
 
 def _content_formula_dict(item: ContentFormula) -> dict[str, Any]:
     return {
+        "source_content": item.source_content or {},
         "id": item.id,
         "code": item.code,
         "name": item.name,
@@ -100,6 +103,7 @@ def _content_formula_dict(item: ContentFormula) -> dict[str, Any]:
 
 def _combination_dict(item: ContentCombinationRule) -> dict[str, Any]:
     return {
+        "enabled": item.compatibility != "disabled",
         "id": item.id,
         "schema_version": item.schema_version,
         "content_goal": item.content_goal,
@@ -254,13 +258,16 @@ class ContentRepository:
     ) -> ContentRuleVersion | None:
         query = select(ContentRuleVersion)
         if schema_version is not None:
-            query = query.join(
-                ContentCombinationRule,
-                ContentCombinationRule.version_id == ContentRuleVersion.id,
-            ).where(ContentCombinationRule.schema_version == schema_version)
+            query = query.where(
+                select(ContentCombinationRule.id)
+                .where(
+                    ContentCombinationRule.version_id == ContentRuleVersion.id,
+                    ContentCombinationRule.schema_version == schema_version,
+                )
+                .exists()
+            )
         result = await self.db.execute(
             query.where(ContentRuleVersion.status == "published", ContentRuleVersion.tenant_id.is_(None))
-            .distinct()
             .order_by(ContentRuleVersion.version.desc())
             .limit(1)
             .with_for_update()
@@ -312,7 +319,7 @@ class ContentRepository:
         slots_by_pattern: dict[str, list[FormulaSlotBinding]] = {}
         for slot in slots:
             slots_by_pattern.setdefault(slot.pattern_id, []).append(slot)
-        return {
+        bundle = {
             "version": {
                 "id": version.id,
                 "tenant_id": version.tenant_id,
@@ -329,6 +336,10 @@ class ContentRepository:
             "formula_patterns": [_pattern_dict(item, slots_by_pattern.get(item.id, [])) for item in patterns],
             "variables": [_variable_dict(item) for item in variables],
         }
+
+        if not include_disabled and all(item["schema_version"] == 3 for item in bundle["combination_rules"]):
+            bundle["combination_rules"] = active_combination_rules(bundle)
+        return bundle
 
     async def list_rule_versions(self) -> list[dict[str, Any]]:
         schema_versions = (
@@ -435,6 +446,7 @@ class ContentRepository:
         for sort_order, item in enumerate(bundle.get("title_formulas") or []):
             self.db.add(
                 TitleFormula(
+                    source_content=item.get("source_content") or {},
                     id=f"ctf_{uuid.uuid4().hex}",
                     version_id=version_id,
                     code=item["code"],
@@ -452,6 +464,7 @@ class ContentRepository:
         for sort_order, item in enumerate(bundle.get("content_formulas") or []):
             self.db.add(
                 ContentFormula(
+                    source_content=item.get("source_content") or {},
                     id=f"cbf_{uuid.uuid4().hex}",
                     version_id=version_id,
                     code=item["code"],
@@ -565,7 +578,7 @@ class ContentRepository:
                     scenario_description=item.get("scenario_description") or "",
                     required_variable_codes=item.get("required_variable_codes") or [],
                     required_evidence_types=item.get("required_evidence_types") or [],
-                    compatibility="compatible",
+                    compatibility="compatible" if item.get("enabled", True) else "disabled",
                     priority=item.get("priority", 0),
                     conditions=item.get("conditions") or {},
                     hard_conditions=item.get("hard_conditions") or {},

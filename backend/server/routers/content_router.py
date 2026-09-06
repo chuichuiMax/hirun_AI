@@ -680,7 +680,7 @@ async def get_admin_rule_bundle(
 @content.post("/admin/rules/drafts")
 async def create_rule_draft(
     payload: RuleDraftCreate,
-    current_user: User = Depends(get_superadmin_user),
+    current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await create_content_rule_draft(db, current_user, payload)
@@ -690,7 +690,7 @@ async def create_rule_draft(
 async def save_rule_draft(
     version_id: str,
     payload: RuleBundleUpdate,
-    current_user: User = Depends(get_superadmin_user),
+    current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await save_content_rule_draft(db, current_user, version_id, payload)
@@ -699,7 +699,7 @@ async def save_rule_draft(
 @content.delete("/admin/rules/{version_id}")
 async def discard_rule_draft(
     version_id: str,
-    current_user: User = Depends(get_superadmin_user),
+    current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await discard_content_rule_draft(db, current_user, version_id)
@@ -709,7 +709,7 @@ async def discard_rule_draft(
 async def publish_rule_version(
     version_id: str,
     payload: RuleVersionAction,
-    current_user: User = Depends(get_superadmin_user),
+    current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await activate_content_rule_version(

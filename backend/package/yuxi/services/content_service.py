@@ -181,13 +181,29 @@ def validate_rule_bundle_for_publish(bundle: dict[str, Any]) -> dict[str, list[d
     errors: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
 
-    methods = {item["code"]: item for item in bundle.get("methods") or [] if item.get("enabled", True)}
-    titles = {item["code"]: item for item in bundle.get("title_formulas") or [] if item.get("enabled", True)}
-    bodies = {item["code"]: item for item in bundle.get("content_formulas") or [] if item.get("enabled", True)}
+    methods = {item["code"]: item for item in bundle.get("methods") or []}
+    titles = {item["code"]: item for item in bundle.get("title_formulas") or []}
+    bodies = {item["code"]: item for item in bundle.get("content_formulas") or []}
     combination_rules = bundle.get("combination_rules") or []
 
     def add_error(code: str, message: str, path: str) -> None:
         errors.append({"code": code, "message": message, "path": path})
+
+    for section in ("title_formulas", "content_formulas"):
+        for index, formula in enumerate(bundle.get(section) or []):
+            application = (formula.get("source_content") or {}).get("cross_industry")
+            if application is None:
+                continue
+            if not all(
+                isinstance(application.get(key), str) and application[key].strip() for key in ("name", "core_goal")
+            ):
+                add_error("CROSS_INDUSTRY_FORMULA_INVALID", "通用公式名称与核心目标不能为空", f"{section}.{index}")
+            if section == "content_formulas" and not (
+                isinstance(application.get("structure_schema"), list)
+                and application["structure_schema"]
+                and all(isinstance(line, str) and line.strip() for line in application["structure_schema"])
+            ):
+                add_error("CROSS_INDUSTRY_FORMULA_INVALID", "通用正文结构不能为空", f"{section}.{index}")
 
     if not combination_rules or any(int(item.get("schema_version") or 0) != 3 for item in combination_rules):
         add_error(
@@ -200,6 +216,21 @@ def validate_rule_bundle_for_publish(bundle: dict[str, Any]) -> dict[str, list[d
     valid_content_types = {item["code"] for item in bundle.get("content_types") or [] if item.get("enabled", True)}
     for index, item in enumerate(combination_rules):
         path = f"combination_rules.{index}"
+        if item.get("enabled", True) and (
+            not any(
+                titles.get(code, {}).get("enabled", True) for code in item.get("title_formula_candidate_codes") or []
+            )
+            or not any(
+                bodies.get(code, {}).get("enabled", True) for code in item.get("body_formula_candidate_codes") or []
+            )
+        ):
+            warnings.append(
+                {
+                    "code": "V3_NO_ENABLED_FORMULA",
+                    "message": "该组合的可用公式已全部停用，将不参与新任务匹配",
+                    "path": path,
+                }
+            )
         members = [member for member in item.get("method_members") or [] if isinstance(member, dict)]
         member_codes = {member.get("method_code") for member in members}
         unknown_methods = member_codes - set(methods)
@@ -573,6 +604,9 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
         raise _content_error(422, "CONTENT_INDUSTRY_PACK_INVALID", "行业内容包不存在、未发布或与行业不匹配")
     if industry_pack.schema_version != schema_version:
         raise _content_error(422, "CONTENT_INDUSTRY_PACK_VERSION_MISMATCH", "行业内容包与工作流版本不匹配")
+    bound_rule_id = (industry_pack.source_metadata or {}).get("rule_version_id")
+    if bound_rule_id and bound_rule_id != rule_version.id:
+        raise _content_error(409, "CONTENT_INDUSTRY_RULE_BINDING_MISMATCH", "行业包尚未同步当前规则版本")
 
     channel_profile_version_id = payload.channel_profile_version_id or (template.default_strategy or {}).get(
         "channel_profile_version_id"
@@ -1392,6 +1426,9 @@ async def activate_content_rule_version(
     current = await repo.get_published_rule_version_for_update(schema_version=3)
     if current and current.id != target.id:
         current.status = "archived"
+    from yuxi.services.content_industry_sync import sync_industry_pack_bindings
+
+    await sync_industry_pack_bindings(db, bundle=bundle, uid=str(user.uid))
     target.status = "published"
     target.published_at = utc_now_naive()
     await repo.track(
@@ -1508,9 +1545,20 @@ async def validate_content_industry_pack(
         raise _content_error(409, "CONTENT_INDUSTRY_PACK_V3_REQUIRED", "只能校验 V3 Industry Pack")
     mappings = await repo.list_industry_variable_mappings(record.id)
     groups = await repo.list_combination_groups(record.combination_overrides or [])
-    rule_bundle = await repo.get_rule_bundle(PLATFORM_RULE_V3_ID, include_disabled=True)
+    rule_version_id = (record.source_metadata or {}).get("rule_version_id") or PLATFORM_RULE_V3_ID
+    rule_bundle = await repo.get_rule_bundle(rule_version_id, include_disabled=True)
     if rule_bundle is None:
         raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "V3 平台规则尚未初始化")
+    bound_ids = set(record.combination_overrides or [])
+    available_ids = {
+        item["id"]
+        for item in rule_bundle["combination_rules"]
+        if not item.get("industry_scope") or record.slug in item["industry_scope"]
+    }
+    if bound_ids - available_ids or bound_ids != {item["id"] for item in groups}:
+        raise _content_error(
+            409, "CONTENT_INDUSTRY_RULE_REFERENCE_INVALID", "行业包引用了其他规则版本、其他行业或不存在的组合"
+        )
     report = ValidateIndustryPackHandler().execute(
         record=record,
         variable_mappings=mappings,

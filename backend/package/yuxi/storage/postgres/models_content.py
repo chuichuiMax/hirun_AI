@@ -60,6 +60,7 @@ class CreationMethod(Base):
 
 class TitleFormula(Base):
     __tablename__ = "content_title_formulas"
+    source_content = Column(JSON, nullable=False, default=dict)
 
     id = Column(String(64), primary_key=True)
     version_id = Column(
@@ -81,6 +82,7 @@ class TitleFormula(Base):
 
 class ContentFormula(Base):
     __tablename__ = "content_body_formulas"
+    source_content = Column(JSON, nullable=False, default=dict)
 
     id = Column(String(64), primary_key=True)
     version_id = Column(

@@ -18,7 +18,7 @@ class ContentTaskCreate(BaseModel):
     mode: ContentMode = "quick"
     creation_mode: CreationMode = "original"
     content_goal: str | None = None
-    content_type_code: str | None = Field(default=None, pattern=r"^CT0[1-7]$")
+    content_type_code: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,80}$")
     persona_profile_version_id: str | None = None
     channel_profile_version_id: str | None = None
     name: str | None = None
@@ -28,7 +28,7 @@ class ContentTaskCreate(BaseModel):
 class ContentTaskUpdate(BaseModel):
     name: str | None = None
     content_goal: str | None = None
-    content_type_code: str | None = Field(default=None, pattern=r"^CT0[1-7]$")
+    content_type_code: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,80}$")
     persona_profile_version_id: str | None = None
     channel_profile_version_id: str | None = None
     mode: ContentMode | None = None
@@ -38,6 +38,7 @@ class ContentTaskBatchDelete(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_ids: list[str] = Field(min_length=1, max_length=100)
+
 
 
 class ContentVisualMaterialSelection(BaseModel):
@@ -212,6 +213,7 @@ class CreationMethodInput(RuleInputBase):
 
 
 class TitleFormulaInput(RuleInputBase):
+    source_content: dict[str, Any] = Field(default_factory=dict)
     code: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
     name: str = Field(min_length=1, max_length=120)
     suitable_scenes: list[str] = Field(default_factory=list)
@@ -225,6 +227,7 @@ class TitleFormulaInput(RuleInputBase):
 
 
 class ContentFormulaInput(RuleInputBase):
+    source_content: dict[str, Any] = Field(default_factory=dict)
     code: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z][A-Za-z0-9_-]*$")
     name: str = Field(min_length=1, max_length=120)
     industry_aliases: dict[str, str] = Field(default_factory=dict)
@@ -247,6 +250,7 @@ class MethodMemberInput(RuleInputBase):
 
 
 class CombinationRuleInput(RuleInputBase):
+    enabled: bool = True
     schema_version: Literal[3] = 3
     content_goal_codes: list[str] = Field(default_factory=list)
     content_type_codes: list[str] = Field(default_factory=list)

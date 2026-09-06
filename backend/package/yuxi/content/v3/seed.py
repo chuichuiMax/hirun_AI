@@ -460,9 +460,11 @@ async def _activate_v3_seed_data(db: AsyncSession) -> None:
     workflow = await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_V3_ID)
     if rules is None or workflow is None:
         raise RuntimeError("V3 平台规则或工作流缺失")
-    rules.status = "published"
+    if rules.status == "draft":
+        rules.status = "published"
     rules.published_at = rules.published_at or now
-    workflow.status = "published"
+    if workflow.status == "draft":
+        workflow.status = "published"
     workflow.schema_version = 3
     workflow.published_at = workflow.published_at or now
 
@@ -478,7 +480,8 @@ async def _activate_v3_seed_data(db: AsyncSession) -> None:
     )
     packs_by_slug = {pack.slug: pack for pack in packs}
     for pack in packs:
-        pack.status = "published"
+        if pack.status == "draft":
+            pack.status = "published"
         pack.published_at = pack.published_at or now
 
     industries = {item["slug"]: item for item in INDUSTRIES}
@@ -501,7 +504,9 @@ async def _activate_v3_seed_data(db: AsyncSession) -> None:
                 "channel_profile_version_id": XHS_CHANNEL_VERSION_ID,
             },
             "default_knowledge_scope": [],
-            "default_workflow_version_id": PLATFORM_WORKFLOW_V3_ID,
+            "default_workflow_version_id": (
+                template.default_workflow_version_id if template else PLATFORM_WORKFLOW_V3_ID
+            ),
             "review_policy": {
                 "require_sources_for_numbers": True,
                 "block_unsupported_effect_claims": True,
