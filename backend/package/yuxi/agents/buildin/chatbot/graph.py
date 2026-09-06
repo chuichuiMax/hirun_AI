@@ -118,8 +118,10 @@ class ChatbotAgent(BaseAgent):
 
             tools = [tool for tool in tools if tool.name != "submit_content_node_result"]
             tools.append(build_content_result_tool(result_collector))
+        reasoning_effort = getattr(context, "reasoning_effort", None)
+        model_kwargs = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
         graph = create_agent(
-            model=load_chat_model(fully_specified_name=model_spec),
+            model=load_chat_model(fully_specified_name=model_spec, **model_kwargs),
             tools=tools,
             system_prompt=build_prompt_with_context(context),
             middleware=await _build_middlewares(context),

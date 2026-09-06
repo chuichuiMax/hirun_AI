@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from yuxi.agents.buildin import agent_manager
 from yuxi.agents.context import normalize_agent_context_config, prepare_agent_runtime_context
+from yuxi.agents.models import resolve_chat_model_spec
 from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.execution_trace import build_execution_preview
 from yuxi.content.model.contracts import (
@@ -89,7 +90,8 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
             "backend_id": agent.backend_id,
             "config_version": int(agent.config_version or 1),
         },
-        "model": str(getattr(context, "model", "") or ""),
+        "model": resolve_chat_model_spec(getattr(context, "model", None)),
+        "reasoning_effort": getattr(context, "reasoning_effort", None),
         "skills": list(getattr(context, "_runtime_skill_snapshots", []) or []),
         "tools": list(getattr(context, "_required_skill_tools", []) or []) + [request.result_tool_name],
         "mcps": list(getattr(context, "_required_skill_mcps", []) or []),
