@@ -993,7 +993,7 @@ async def test_save_artifact_allows_content_version_without_cover(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_save_artifact_binds_selected_reviewed_cover(monkeypatch):
+async def test_save_artifact_binds_generated_cover_despite_legacy_review(monkeypatch):
     task = SimpleNamespace(id="task-1", tenant_id=None, rule_version_id="rules-v3")
     saved = {}
 
@@ -1072,7 +1072,7 @@ async def test_save_artifact_binds_selected_reviewed_cover(monkeypatch):
             "approval_result": {"status": "approved", "reviewer_uid": "user-1"},
             "artifact_version": {"id": "artifact-version-1", "content_hash": "c" * 64},
             "selected_cover": {"asset_id": "cover-asset-1", "cover_job_id": "cover-job-1"},
-            "visual_review": {"assets": [{"asset_id": "cover-asset-1", "status": "passed"}]},
+            "visual_review": {"assets": [{"asset_id": "cover-asset-1", "status": "blocked"}]},
             "runtime_config_snapshot": {},
         }
     )
@@ -1294,3 +1294,52 @@ async def test_v3_human_gate_accepts_exact_run_node_and_state_version():
 
     assert result["selected_title"]["id"] == "good"
     assert result["state_version"] == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_id", ["foreign-cover", "generated-cover"])
+async def test_cover_gate_accepts_generated_assets_without_review(monkeypatch, selected_id):
+    captured = {}
+
+    def resume(payload):
+        captured.update(payload)
+        return {"run_id": "run-1", "node_id": "select_cover", "expected_state_version": 3, "asset_id": selected_id}
+
+    monkeypatch.setattr(content_workflow_graph_module, "interrupt", resume)
+    state = {
+        "task_id": "task-1",
+        "run_id": "run-1",
+        "state_version": 3,
+        "visual_review": {"assets": [{"asset_id": "generated-cover", "status": "blocked"}]},
+        "cover_job": {"cover_job_id": "job-1", "status": "succeeded", "asset_ids": ["generated-cover"]},
+    }
+    node = {"id": "select_cover", "interrupt_type": "cover_selection"}
+    if selected_id == "foreign-cover":
+        with pytest.raises(ValueError, match="只能选择本次生成"):
+            await ContentWorkflowAgent()._v3_human_review(node, state)
+    else:
+        result = await ContentWorkflowAgent()._v3_human_review(node, state)
+        assert result["selected_cover"]["asset_id"] == selected_id
+    assert captured["asset_ids"] == ["generated-cover"]
+    assert "asset_reviews" not in captured
+
+
+@pytest.mark.asyncio
+async def test_legacy_visual_review_node_does_not_call_agent(monkeypatch):
+    async def unexpected_call(*args, **kwargs):
+        pytest.fail("封面审核不得调用模型")
+
+    monkeypatch.setattr(AgentNodeHandler, "execute", unexpected_call)
+    node = next(item for item in WORKFLOW_V3["nodes"] if item["id"] == "visual_review")
+    result = await ContentWorkflowAgent()._execute_node(node, {}, WORKFLOW_V3)
+    assert result["visual_review"]["status"] == "skipped"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,asset_ids", [("running", ["cover"]), ("succeeded", [])])
+async def test_cover_gate_requires_successful_generation(status, asset_ids):
+    with pytest.raises(ValueError, match="封面生成成功"):
+        await ContentWorkflowAgent()._v3_human_review(
+            {"id": "select_cover", "interrupt_type": "cover_selection"},
+            {"cover_job": {"status": status, "asset_ids": asset_ids}},
+        )

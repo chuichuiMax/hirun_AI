@@ -475,6 +475,7 @@ export const buildContentNarrativeStream = (activities = [], codeLabels = {}) =>
   }
 
   for (const activity of activities) {
+    if (activity.nodeId === 'visual_review') continue
     if (activity.status === 'failed') {
       add(activity.id, `执行遇到问题：${activity.detail || '当前内容未能继续生成。'}`, 'error')
       continue

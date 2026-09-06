@@ -91,6 +91,19 @@ const coverUrl = ref('')
 const coverLoading = ref(false)
 const coverCandidateUrls = ref({})
 const coverCandidatesLoading = ref(false)
+const coverCandidates = computed(() => {
+  const interrupt = store.interrupt
+  if (interrupt?.interrupt_type !== 'cover_selection') return []
+  // 历史中断的可选 ID 受旧审核过滤，使用当前任务实际生成成功的资产恢复选择。
+  const job = store.runAudit?.external_wait
+  const assetIds = job?.status === 'succeeded'
+    ? job.result?.asset_ids || []
+    : interrupt.asset_ids || []
+  return assetIds.map(assetId => ({ assetId }))
+})
+const coverSelectionAllowed = computed(() =>
+  coverCandidates.value.some(item => item.assetId === selectedCoverAssetId.value)
+)
 const materialGalleries = ref([])
 const activeGalleryId = ref('')
 const galleryImages = ref([])
@@ -826,7 +839,7 @@ const refreshPosterTemplates = async ({ notifySelectionReset = true } = {}) => {
     if (
       selectedPosterTemplateId.value &&
       !nextTemplates.some(
-        (item) => item.poster_template_id === selectedPosterTemplateId.value && item.selectable
+        (item) => item.poster_template_id === selectedPosterTemplateId.value
       )
     ) {
       selectedPosterTemplateId.value = ''
@@ -1006,10 +1019,7 @@ watch(
 )
 
 watch(
-  () =>
-    store.interrupt?.interrupt_type === 'cover_selection'
-      ? (store.interrupt.asset_ids || []).join('|')
-      : '',
+  () => coverCandidates.value.map(item => item.assetId).join('|'),
   async (assetKey) => {
     const generation = ++coverCandidateLoadGeneration
     Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
@@ -1303,7 +1313,7 @@ const submitHumanReview = async () => {
       return
     }
     if (store.interrupt?.interrupt_type === 'cover_selection') {
-      if (!selectedCoverAssetId.value) {
+      if (!coverSelectionAllowed.value) {
         message.warning('请选择一张封面')
         return
       }
@@ -1981,23 +1991,22 @@ const openVersions = async () => {
           </div>
 
           <div v-else-if="store.interrupt?.interrupt_type === 'cover_selection'" class="human-review-card">
-            <div class="human-heading"><Send :size="20" /><div><h3>选择最终封面</h3><p>只可从通过视觉审核的资产中选择。</p></div></div>
+            <div class="human-heading"><Send :size="20" /><div><h3>选择最终封面</h3><p>选择生成的封面，确认后保存。</p></div></div>
             <a-radio-group v-model:value="selectedCoverAssetId" class="title-options cover-options">
-              <a-radio v-for="(assetId, index) in store.interrupt.asset_ids" :key="assetId" :value="assetId">
+              <a-radio v-for="(candidate, index) in coverCandidates" :key="candidate.assetId" :value="candidate.assetId">
                 <div class="cover-option">
                   <div class="cover-candidate-preview">
-                    <img v-if="coverCandidateUrls[assetId]" :src="coverCandidateUrls[assetId]" :alt="`封面候选 ${index + 1}`" />
+                    <img v-if="coverCandidateUrls[candidate.assetId]" :src="coverCandidateUrls[candidate.assetId]" :alt="`封面候选 ${index + 1}`" />
                     <div v-else class="cover-candidate-placeholder">
                       <LoaderCircle v-if="coverCandidatesLoading" class="spin" :size="22" />
                       <span v-else>封面暂时无法预览</span>
                     </div>
                   </div>
                   <strong>封面候选 {{ index + 1 }}</strong>
-                  <span>{{ assetId }}</span>
                 </div>
               </a-radio>
             </a-radio-group>
-            <a-button type="primary" @click="submitHumanReview">确认封面并保存</a-button>
+            <a-button type="primary" :disabled="!coverSelectionAllowed" @click="submitHumanReview">确认封面并保存</a-button>
           </div>
 
           <div v-else-if="store.interrupt?.interrupt_type === 'external_wait'" class="running-card external-wait-card">
@@ -2688,11 +2697,12 @@ const openVersions = async () => {
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .title-options strong, .title-options span { display: block; }
 .title-options span { margin-top: 3px; color: var(--color-text-tertiary); font-size: 12px; }
-.cover-options :deep(.ant-radio-wrapper) { align-items: center; }
+.cover-options :deep(.ant-radio-wrapper) { align-items: flex-start; max-width: 400px; }
+.cover-option { color: var(--color-text); }
 .cover-options :deep(.ant-radio + span) { min-width: 0; flex: 1; }
 .cover-option { display: grid; gap: 4px; min-width: 0; }
 .cover-candidate-preview { width: 100%; margin-bottom: 7px; overflow: hidden; border-radius: 8px; background: var(--gray-25); }
-.cover-candidate-preview img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; }
+.cover-candidate-preview img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: contain; }
 .cover-candidate-placeholder { min-height: 220px; display: flex; align-items: center; justify-content: center; color: var(--color-text-tertiary); }
 .cover-option > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .running-card { display: flex; flex-direction: column; align-items: center; text-align: center; }
