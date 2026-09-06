@@ -62,7 +62,7 @@ const userStore = useUserStore()
 const stage = ref(1)
 const creation = reactive({
   industry_template_id: '',
-  mode: window.matchMedia('(max-width: 800px)').matches ? 'quick' : 'quick',
+  mode: 'pro',
   creation_mode: 'original',
   content_goal: '',
   content_type_code: undefined,
@@ -1506,25 +1506,27 @@ const openVersions = async () => {
 
         <template v-if="!store.task">
           <div class="setup-grid">
-            <label class="field-block">
-              <span>使用模式</span>
-              <a-segmented v-model:value="creation.mode" :options="[{ label: '简化版', value: 'quick' }, { label: '专业版', value: 'pro' }]" />
-              <small>简化版由 V3 自动锁定公式；专业版会在人工节点确认公式对。</small>
-            </label>
-            <label class="field-block">
-              <span>创作模式</span>
-              <a-segmented
-                v-model:value="creation.creation_mode"
-                :options="[
-                  { label: '原创模式', value: 'original' },
-                  { label: '爆款仿写', value: 'viral_rewrite' }
-                ]"
-              />
+            <div class="field-block">
+              <span id="creation-mode-label">创作模式</span>
+              <div class="creation-mode-options" role="radiogroup" aria-labelledby="creation-mode-label">
+                <label
+                  v-for="option in [
+                    { label: '原创模式', value: 'original' },
+                    { label: '爆款仿写', value: 'viral_rewrite' }
+                  ]"
+                  :key="option.value"
+                  class="creation-mode-card"
+                  :class="{ selected: creation.creation_mode === option.value }"
+                >
+                  <input v-model="creation.creation_mode" type="radio" name="creation-mode" :value="option.value" />
+                  <span>{{ option.label }}</span>
+                </label>
+              </div>
               <small v-if="creation.creation_mode === 'viral_rewrite'">
                 系统比较已准备的完整文章参考，复用选中结构，业务事实来自本次真实资料。
               </small>
               <small v-else>根据锁定公式原创内容，并使用真实知识库补充业务事实。</small>
-            </label>
+            </div>
             <label class="field-block">
               <span>内容目标</span>
               <a-select v-model:value="creation.content_goal" placeholder="请选择内容目标">
@@ -2477,6 +2479,12 @@ const openVersions = async () => {
 .field-block > span { font-size: 13px; font-weight: 600; }
 .field-block em { margin-left: 3px; color: var(--color-error-700); font-style: normal; }
 .field-block small { color: var(--color-text-tertiary); }
+.creation-mode-options { display: flex; gap: 12px; }
+.creation-mode-card { position: relative; display: flex; align-items: center; justify-content: center; width: 112px; min-height: 64px; border: 1px solid var(--gray-200); border-radius: 8px; background: var(--gray-0); cursor: pointer; }
+.creation-mode-card input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.creation-mode-card:hover { border-color: var(--color-info-500); }
+.creation-mode-card.selected { border-color: var(--color-info-500); background: var(--color-info-50); color: var(--color-info-700); font-weight: 600; }
+.creation-mode-card:has(input:focus-visible) { outline: 2px solid var(--color-info-500); outline-offset: 2px; }
 .mode-row { display: flex; align-items: center; gap: 8px; color: var(--color-text-secondary); }
 .mode-row small { margin-left: auto; }
 .mode-row .save-error { color: var(--color-error-600); }
