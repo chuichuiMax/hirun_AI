@@ -590,6 +590,7 @@ async def get_strategy_decision(
         ).order_by(ContentNodeRun.finished_at.desc(), ContentNodeRun.id.desc()).limit(6)
     )).scalars())
     selection_row = next((row for row in rows if row.node_id == "select_creation_strategy"), None)
+    selection_input = ((selection_row.input_snapshot or {}).get("visible_payload") or {}) if selection_row else {}
     candidates = (
         ((selection_row.input_snapshot or {}).get("visible_payload") or {}).get("strategy_candidates", {})
         if selection_row else {}
@@ -603,7 +604,10 @@ async def get_strategy_decision(
         snapshot = output.get("strategy_snapshot")
         decision = (snapshot or {}).get("decision") or output.get("joint_strategy_decision")
         if decision:
+            from yuxi.services.content_strategy_presentation import build_decision_presentation
+
             return {
+                **build_decision_presentation(decision, selection_input),
                 "decision": decision, "snapshot": snapshot, "node_run_id": row.id,
                 "run_id": row.agent_run_id, **automatic_view,
             }

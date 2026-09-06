@@ -35,6 +35,7 @@ import {
 import AgentInputArea from '@/components/AgentInputArea.vue'
 import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
 import ContentWorkflowStrategyPanel from '@/components/content/ContentWorkflowStrategyPanel.vue'
+import ContentStrategyDecision from '@/components/content/ContentStrategyDecision.vue'
 import XiaohongshuAccountPublishModal from '@/components/content/XiaohongshuAccountPublishModal.vue'
 import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import { contentApi } from '@/apis/content_api'
@@ -1752,6 +1753,7 @@ const openVersions = async () => {
                       :presentation="workflowStrategyPresentation"
                       :evidence-groups="workflowEvidenceGroups"
                     />
+                    <ContentStrategyDecision :task-id="store.task?.id" :run-status="workflowRunStatus" :field-labels="evidenceFieldLabels" />
                     <div class="workflow-complete-line">
                       <CheckCircle2 :size="16" />
                       <strong>内容生成完成</strong>
@@ -1890,6 +1892,7 @@ const openVersions = async () => {
                     :evidence-groups="workflowEvidenceGroups"
                   />
                 </div>
+                  <ContentStrategyDecision :task-id="store.task?.id" :run-status="workflowRunStatus" :field-labels="evidenceFieldLabels" />
               </section>
             </Transition>
 
