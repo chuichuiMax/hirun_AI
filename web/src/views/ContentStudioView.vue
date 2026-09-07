@@ -31,7 +31,6 @@ import {
   ClipboardList,
   MessageSquare,
   X
-  WandSparkles
 } from 'lucide-vue-next'
 import AgentInputArea from '@/components/AgentInputArea.vue'
 import ContentStudioToolbar from '@/components/content/ContentStudioToolbar.vue'
@@ -1563,17 +1562,10 @@ const compileBrief = async () => {
       message.warning('请选择一个 HyCanvas 小红书模板')
       return
     }
-  if (photoComposition.value?.slots.some(slot => !slot.image_item_id)) {
-    message.warning('请填满图片组合的所有位置')
-    return
-  }
-  if (!selectedImageItemId.value) {
-    message.warning('请选择一张图库图片作为封面主图')
-    return
-  }
-  if (!selectedHyCanvasTemplateId.value) {
-    message.warning('请选择一个 HyCanvas 小红书模板')
-    return
+    if (photoComposition.value?.slots.some((slot) => !slot.image_item_id)) {
+      message.warning('请填满图片组合的所有位置')
+      return
+    }
   }
   try {
     window.clearTimeout(draftSaveTimer)
@@ -1588,9 +1580,11 @@ const compileBrief = async () => {
     message.success('业务简报已形成，可启动 V3 内容工作流')
   } catch (error) {
     const missingFields = error.response?.data?.detail?.error?.fields
-    message.error(missingFields?.length
-      ? `请补充：${missingFields.map(field => field.label || field.field).join('、')}`
-      : error.message || '请补充必填业务信息')
+    message.error(
+      missingFields?.length
+        ? `请补充：${missingFields.map((field) => field.label || field.field).join('、')}`
+        : error.message || '请补充必填业务信息'
+    )
   }
 }
 
@@ -1877,7 +1871,6 @@ const openVersions = async () => {
               </small>
               <small v-else>根据锁定公式原创内容，并使用真实知识库补充业务事实。</small>
             </div>
-            <label class="field-block">
             <label class="field-block">
               <span>使用模式</span>
               <a-segmented v-model:value="creation.mode" :options="[{ label: '简化版', value: 'quick' }, { label: '专业版', value: 'pro' }]" />

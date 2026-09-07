@@ -1,6 +1,8 @@
 # Include this inside the ai.hi-run.net server blocks, before `location /`.
 # HyCanvas has no path prefix; these unique locations share the main HTTPS host
 # so the editor works without a separate DNS record.
+#
+# Dev stack: Go API on :8005, Next.js UI on :3000 (PUBLIC_DIR is empty).
 
 location ^~ /api/v1/ {
     proxy_pass http://127.0.0.1:8005;
@@ -29,31 +31,39 @@ location ^~ /realtime {
     proxy_read_timeout 600s;
 }
 
-location ^~ /_next/ {
+location ^~ /mcp {
     proxy_pass http://127.0.0.1:8005;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-# Chinese and other UI catalogs are fetched at runtime from /locales/<tag>.json.
-# Without this proxy the Vue app returns HTML and HyCanvas falls back to English.
+# Next.js UI (dev frontend on :3000)
+location ^~ /_next/ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+}
+
 location ^~ /locales/ {
-    proxy_pass http://127.0.0.1:8005;
+    proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
 location ^~ /brand/ {
-    proxy_pass http://127.0.0.1:8005;
+    proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
 location ^~ /editor {
-    proxy_pass http://127.0.0.1:8005;
+    proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -62,7 +72,7 @@ location ^~ /editor {
 }
 
 location ^~ /dashboard {
-    proxy_pass http://127.0.0.1:8005;
+    proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -71,21 +81,14 @@ location ^~ /dashboard {
 }
 
 location ^~ /present {
-    proxy_pass http://127.0.0.1:8005;
+    proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
 location ^~ /shared {
-    proxy_pass http://127.0.0.1:8005;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-
-location ^~ /mcp {
-    proxy_pass http://127.0.0.1:8005;
+    proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
