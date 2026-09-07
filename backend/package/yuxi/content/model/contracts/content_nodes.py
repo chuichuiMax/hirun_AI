@@ -340,18 +340,16 @@ class GenerateContentInputV1(StrictContract):
             raise ValueError("正文词库包必须匹配锁定正文公式")
         form_values = (self.content_brief.get("form_values") or {}) if isinstance(self.content_brief, dict) else {}
         review_notes = str(form_values.get("mp_service_entry") or "") == "好评笔记"
-        if (
-            not review_notes
-            and title_formula_code in {f"T{index:02d}" for index in range(1, 8)}
-            and body_formula_code in {f"C{index:02d}" for index in range(1, 5)}
-        ):
         decoration = (
             not isinstance(self.strategy_snapshot, StrategySnapshotV2)
             or self.strategy_snapshot.industry_slug == "decoration"
         )
-        if decoration and title_formula_code in {f"T{index:02d}" for index in range(1, 8)} and body_formula_code in {
-            f"C{index:02d}" for index in range(1, 5)
-        }:
+        if (
+            not review_notes
+            and decoration
+            and title_formula_code in {f"T{index:02d}" for index in range(1, 8)}
+            and body_formula_code in {f"C{index:02d}" for index in range(1, 5)}
+        ):
             if bundle.get("required") is not True:
                 raise ValueError("装修标题和正文公式必须经过必选词库加载路径")
         if bundle.get("required") is True:
