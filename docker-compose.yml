@@ -437,7 +437,7 @@ services:
       PUBLIC_DIR: ""
       FRONTEND_URL: http://127.0.0.1:${HYCANVAS_DEV_FRONTEND_PORT:-3000}
       APP_URL: http://127.0.0.1:${HYCANVAS_PORT:-8005}
-      NEXT_PUBLIC_BACKEND_URL: http://127.0.0.1:${HYCANVAS_PORT:-8005}/api
+      NEXT_PUBLIC_BACKEND_URL: /api
       HYCANVAS_DEV_BACKEND_URL: http://127.0.0.1:8005
       STORAGE_DRIVER: local
       LOCAL_STORAGE_PATH: /app/.data/storage

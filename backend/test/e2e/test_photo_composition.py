@@ -1,8 +1,9 @@
-"""真实图库、组合预览、草稿恢复及 HyCanvas Worker 成图；不调用模型。"""
+"""真实图库、组合草稿恢复及封面原图 HyCanvas 成图；不调用模型。"""
 
 import asyncio
 import json
 import os
+import re
 import socket
 import uuid
 from pathlib import Path
@@ -22,7 +23,7 @@ from yuxi.utils.auth_utils import AuthUtils
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
-async def test_photo_composition_preview_persistence_and_worker():
+async def test_photo_composition_persistence_and_original_cover_overlay():
     uid = os.getenv("RULE_EDITOR_TEST_UID")
     if not uid:
         pytest.skip("需要测试管理员")
@@ -44,12 +45,20 @@ async def test_photo_composition_preview_persistence_and_worker():
                     },
                 )
             ).json()["items"]
-            assert len(items) >= 2, "测试图库需要至少两张图片"
-            primary, secondary = items[:2]
+            unique_items = [
+                item for item in items if sum(candidate["name"] == item["name"] for candidate in items) == 1
+            ]
+            assert len(unique_items) >= 4, "测试图库需要至少四张名称唯一的图片"
+            primary, secondary, *fillers = unique_items[:4]
             galleries = (
                 await client.get("/api/material-library/galleries", params={"industry_slug": "decoration"})
             ).json()
             gallery_list = galleries.get("items", galleries.get("galleries", []))
+            decoration_gallery_ids = {item["id"] for item in gallery_list}
+            decoration_gallery_ids.update(item["parent_id"] for item in gallery_list if item.get("parent_id"))
+            unique_items = [item for item in unique_items if item["category"] in decoration_gallery_ids]
+            assert len(unique_items) >= 4, "装修图库需要至少四张名称唯一的图片"
+            primary, secondary, *fillers = unique_items[:4]
             secondary_gallery = next(item for item in gallery_list if item["id"] == secondary["category"])
             templates = (await client.get("/api/content/covers/hycanvas/templates")).json()["templates"]
             template = templates[0]
@@ -99,17 +108,21 @@ async def test_photo_composition_preview_persistence_and_worker():
                     await page.goto(f"http://localhost:5173/content/tasks/{task_id}")
                     component = page.locator(".photo-composition")
                     await expect(component).to_be_visible(timeout=30000)
-                    await component.get_by_text("图片组合", exact=True).click()
-                    await expect(component.locator(".composition-slot")).to_have_count(2)
-                    await expect(component).to_contain_text("还需插入 1 张图片")
-                    await component.get_by_role("button", name="选择组合图片 2", exact=True).click()
+                    root_gallery = next(
+                        item
+                        for item in gallery_list
+                        if item["id"] == (secondary_gallery.get("parent_id") or secondary_gallery["id"])
+                    )
+                    await page.locator(".material-selector-block").get_by_role("button").filter(
+                        has_text=root_gallery["name"]
+                    ).click()
                     modal = page.locator(".gallery-modal-content")
                     if secondary_gallery.get("parent_id"):
-                        parent = next(item for item in gallery_list if item["id"] == secondary_gallery["parent_id"])
-                        await modal.get_by_role("button").filter(has_text=parent["name"]).click()
-                    await modal.get_by_role("button").filter(has_text=secondary_gallery["name"]).click()
-                    await modal.locator(".image-choice").filter(has_text=secondary["name"]).click()
-                    await modal.get_by_role("button", name="确认选择", exact=True).click()
+                        await modal.get_by_role("button").filter(has_text=secondary_gallery["name"]).click()
+                    await modal.get_by_role("button", name=secondary["name"], exact=True).click()
+                    await expect(modal).to_contain_text("已选 2 张")
+                    await modal.get_by_role("button", name=re.compile(r"确认选择\s*（2）")).click()
+                    await expect(component.locator(".composition-slot")).to_have_count(2)
                     preview = page.locator('.selected-gallery-preview-card img[alt$="合成效果"]')
                     await expect(preview).to_be_visible(timeout=30000)
                     await expect(preview).to_have_js_property("naturalWidth", 270)
@@ -139,10 +152,29 @@ async def test_photo_composition_preview_persistence_and_worker():
                     )
                     await page.set_viewport_size({"width": 720, "height": 1000})
                     assert await component.evaluate("el => el.scrollWidth <= el.clientWidth")
-                    # Changing layouts preserves the chosen primary and shows missing slots.
-                    await component.get_by_role("button", name="焦点居左", exact=True).click()
-                    await expect(component.locator(".composition-slot")).to_have_count(3)
-                    await expect(component).to_contain_text("还需插入 1 张图片")
+                    # Empty composition slots accept multiple images and fill the available positions in order.
+                    await component.get_by_role("button", name="4 张图片", exact=True).click()
+                    await expect(component.locator(".composition-slot")).to_have_count(4)
+                    await expect(component).to_contain_text("还需插入 2 张图片")
+                    await component.get_by_role("button", name="选择组合图片 3", exact=True).click()
+                    modal = page.locator(".gallery-modal-content")
+                    await expect(modal).to_contain_text("最多 2 张")
+                    for filler in fillers:
+                        while await modal.locator(".gallery-modal-back").count():
+                            await modal.locator(".gallery-modal-back").click()
+                        filler_gallery = next(item for item in gallery_list if item["id"] == filler["category"])
+                        filler_root = next(
+                            item
+                            for item in gallery_list
+                            if item["id"] == (filler_gallery.get("parent_id") or filler_gallery["id"])
+                        )
+                        await modal.get_by_role("button").filter(has_text=filler_root["name"]).click()
+                        if filler_gallery.get("parent_id"):
+                            await modal.get_by_role("button").filter(has_text=filler_gallery["name"]).click()
+                        await modal.get_by_role("button", name=filler["name"], exact=True).click()
+                    await expect(modal).to_contain_text("已选 2 张")
+                    await modal.get_by_role("button", name=re.compile(r"确认选择\s*（2）")).click()
+                    await expect(component.locator(".composition-slot img")).to_have_count(4, timeout=30000)
                     await component.get_by_role("button", name="2 张图片", exact=True).click()
                     await page.wait_for_timeout(1200)
                 finally:
@@ -151,18 +183,13 @@ async def test_photo_composition_preview_persistence_and_worker():
             value = saved["visual_material"]
             assert value["image_item_id"] == secondary["id"]
             assert value["photo_composition"]["slots"][0]["focal_x"] == 0.52
-            # Use the same preview path before generation and verify bad selections are rejected.
-            payload = {"image_item_id": value["image_item_id"], "photo_composition": value["photo_composition"]}
+            # The template overlay always uses the selected cover image, independent of the saved composition.
+            payload = {"image_item_id": value["image_item_id"]}
             response = await client.post(
                 f"/api/content/covers/hycanvas/templates/{template['id']}/preview.png", json=payload
             )
             assert response.status_code == 200, response.text[:1000]
             Path("/tmp/photo-composition-preview.png").write_bytes(response.content)
-            bad = json.loads(json.dumps(payload))
-            bad["photo_composition"]["slots"][1]["image_item_id"] = "unowned-image"
-            assert (
-                await client.post(f"/api/content/covers/hycanvas/templates/{template['id']}/preview.png", json=bad)
-            ).status_code == 422
             # Compile the UI's saved form, freezing selected source assets for the worker.
             brief["visual_material"] = {
                 key: value.get(key) for key in ["image_item_id", "hycanvas_template_id", "photo_composition"]
@@ -192,7 +219,6 @@ async def test_photo_composition_preview_persistence_and_worker():
                     image_field_label=None,
                     idempotency_key=uuid.uuid4().hex,
                     parameters={},
-                    photo_composition=visual["photo_composition"],
                 )
                 job_id = result["job"]["id"]
             for _ in range(60):
@@ -209,10 +235,13 @@ async def test_photo_composition_preview_persistence_and_worker():
             hycanvas = HyCanvasClient.from_env()
             document = await hycanvas._request("GET", f"/api/v1/designs/{design_id}/file")
             Path("/tmp/photo-composition-design.json").write_text(json.dumps(document))
-            grid = document["pages"][0]["children"][0]
-            assert grid["type"] == "grid" and len(grid["children"]) == 2
-            assert grid["locked"] is False
-            assert grid["children"][0]["children"][0]["focalPoint"]["x"] == 0.52
+            background = document["pages"][0]["children"][0]
+            assert background["type"] == "image"
+            assert background["locked"] is True
+            assert background["data"] == {
+                "background": True,
+                "source": "contentswarm-material-library",
+            }
         finally:
             try:
                 if design_id:

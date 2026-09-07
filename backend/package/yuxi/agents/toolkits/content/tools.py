@@ -616,7 +616,6 @@ async def create_content_cover_job(
                 content_task_id=task_id,
                 source_asset_id=locked_image_asset_id,
                 template_id=hycanvas_template_id,
-                photo_composition=visual_material.get("photo_composition"),
                 title=text[0],
                 fields=fields,
                 image_field_label=image_field_label,

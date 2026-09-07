@@ -48,10 +48,10 @@ export const contentApi = {
       'blob'
     ),
   getPhotoLayouts: () => apiGet('/api/content/covers/photo-layouts'),
-  getHyCanvasCompositePreview: (templateId, imageItemId, photoComposition = null) =>
+  getHyCanvasCompositePreview: (templateId, imageItemId) =>
     apiPost(
       `/api/content/covers/hycanvas/templates/${encodeURIComponent(templateId)}/preview.png`,
-      { image_item_id: imageItemId, photo_composition: photoComposition },
+      { image_item_id: imageItemId },
       {},
       true,
       'blob'
