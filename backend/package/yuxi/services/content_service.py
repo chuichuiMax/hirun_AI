@@ -1286,7 +1286,25 @@ async def get_artifact_viral_reference(db: AsyncSession, user: User, artifact_id
     if selected is None:
         raise _content_error(404, "VIRAL_REFERENCE_NOT_FOUND", "未找到本次仿写选中的爆款参考")
 
+    asset_id = (selected.get("metadata") or {}).get("asset_id")
+    if asset_id:
+        from yuxi.services.content_viral_assets import require_asset
+
+        # 新工作流的证据只包含结构蓝图，完整原文保存在选中的不可变资产版本中。
+        asset = await require_asset(db, user, asset_id)
+        source = asset.source_json
+        return {
+            "reference": {
+                "id": asset.id,
+                "content": f"{source['title']}\n\n{source['body']}",
+                "source_name": source["title"],
+                "knowledge_base_name": "",
+            }
+        }
+
     node_run = await repo.get_latest_completed_node_run(artifact.task_id, "collect_viral_candidates")
+    if node_run is None:
+        raise _content_error(404, "VIRAL_REFERENCE_SOURCE_NOT_FOUND", "未找到已选爆款的原文记录")
     collection = ((node_run.output_snapshot or {}).get("result") or {}).get("viral_candidate_collection") or {}
     candidate = next(
         (item for item in collection.get("evidence_items") or [] if item.get("id") == selected.get("id")),
