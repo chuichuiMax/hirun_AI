@@ -51,7 +51,12 @@ class PreparedReferenceDecisionV1(StrategyContract):
 
 class JointStrategyDecisionV1(StrategyContract):
     strategy: StrategyDecisionV2
-    reference: PreparedReferenceDecisionV1
+    reference: PreparedReferenceDecisionV1 = Field(
+        description=(
+            '所有模式必填。原创也必须提交 {"status":"not_requested","reason":"原创模式不选择参考"}，'
+            "不能省略 reference 或放入 strategy 内。仿写按参考候选提交选择与评价。"
+        )
+    )
 
 
 def validate_joint_strategy(payload, inputs: dict[str, Any]) -> JointStrategyDecisionV1:

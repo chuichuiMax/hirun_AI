@@ -441,6 +441,30 @@ async def test_content_node_retries_once_when_provider_ignores_forced_result_too
     assert response.result[0].tool_calls[0]["name"] == "submit_content_node_result"
 
 
+def test_forced_result_submission_preserves_rejected_result_for_correction():
+    payload = {"strategy": {"direction_code": "CT01", "creation_method_codes": ["M04"]}}
+    messages = [
+        HumanMessage(content="节点输入"),
+        AIMessage(
+            content="", tool_calls=[{"id": "call-result", "name": "submit_content_node_result", "args": payload}]
+        ),
+        ToolMessage(
+            content="结果未通过结构校验，请修正后重新提交：reference Field required",
+            tool_call_id="call-result",
+            name="submit_content_node_result",
+            status="error",
+        ),
+    ]
+
+    sanitized = ContentNodeResultMiddleware._result_submission_messages(messages)
+
+    assert all(isinstance(message, HumanMessage) for message in sanitized)
+    correction = str(sanitized[-1].content)
+    assert json.dumps(payload, ensure_ascii=False) in correction
+    assert "reference Field required" in correction
+    assert "未通过校验" in correction
+
+
 def test_forced_result_submission_removes_historical_tool_call_scaffolding():
     messages = [
         HumanMessage(content="节点输入"),
