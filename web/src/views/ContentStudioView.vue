@@ -7,6 +7,8 @@ import {
   ArrowLeft,
   BookOpenCheck,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   Clock3,
   Copy,
@@ -78,6 +80,8 @@ const approvalNote = ref('')
 const modelSpec = ref('')
 const editor = reactive({ title: '', body: '', topics: [] })
 const aiEditInstruction = ref('')
+const pendingAiEdit = ref(null)
+const aiEditHistoryElement = ref(null)
 const versionDrawerOpen = ref(false)
 const resultDetailOpen = ref(false)
 const resultPreviewTab = ref('cover')
@@ -88,6 +92,9 @@ const expandedResultIds = ref(new Set())
 const ocrModalOpen = ref(false)
 const coverUrl = ref('')
 const coverLoading = ref(false)
+const resultGallerySourceUrls = ref({})
+const resultGallerySourceLoading = ref(false)
+const resultGalleryIndex = ref(0)
 const coverCandidateUrls = ref({})
 const coverCandidatesLoading = ref(false)
 const coverCandidates = computed(() => {
@@ -104,14 +111,26 @@ const coverSelectionAllowed = computed(() =>
   coverCandidates.value.some(item => item.assetId === selectedCoverAssetId.value)
 )
 const materialGalleries = ref([])
+const photoLayouts = ref([])
 const activeGalleryId = ref('')
 const galleryImages = ref([])
 const galleryModalOpen = ref(false)
-const pendingImageItemId = ref('')
+const pendingImageItems = ref([])
 const posterTemplates = ref([])
 const selectedImageItemId = ref('')
 const photoComposition = ref(null)
 const compositionSlotIndex = ref(null)
+const compositionInsertIndexes = computed(() => {
+  if (compositionSlotIndex.value === null || !photoComposition.value) return []
+  return [
+    compositionSlotIndex.value,
+    ...photoComposition.value.slots
+      .map((slot, index) => ({ slot, index }))
+      .filter(({ slot, index }) => index !== compositionSlotIndex.value && !slot.image_item_id)
+      .map(({ index }) => index)
+  ]
+})
+const pendingImageLimit = computed(() => compositionSlotIndex.value === null ? 9 : compositionInsertIndexes.value.length)
 let compositionPreviewTimer = null
 const selectedImageGalleryId = ref('')
 const selectedImageSummary = ref(null)
@@ -146,6 +165,7 @@ let draftSaveTimer = null
 let posterTemplateSyncTimer = null
 let workflowNarrativeTimer = null
 let coverLoadGeneration = 0
+let resultGalleryLoadGeneration = 0
 let coverCandidateLoadGeneration = 0
 let materialPreviewGeneration = 0
 let selectedImagePreviewGeneration = 0
@@ -178,15 +198,62 @@ const selectedHyCanvasTemplate = computed(() =>
   hycanvasTemplates.value.find((item) => item.id === selectedHyCanvasTemplateId.value) || null
 )
 const hasViralReference = computed(() => hasSelectedViralReference(store.artifact))
+const resultVisualMaterial = computed(() => (
+  store.artifact?.runtime_config_snapshot?.visual_material ||
+  store.task?.runtime_config_snapshot?.visual_material ||
+  store.task?.brief?.visual_material ||
+  {}
+))
+const resultGallerySourceIds = computed(() => {
+  const visual = resultVisualMaterial.value
+  const selectedIds = visual.photo_composition?.slots
+    ?.map(slot => slot.image_item_id)
+    .filter(Boolean) || [visual.image_item_id].filter(Boolean)
+  const uniqueIds = [...new Set(selectedIds)]
+  return store.artifact?.cover_asset_id
+    ? uniqueIds.filter(id => id !== visual.image_item_id)
+    : uniqueIds
+})
+const resultGalleryItems = computed(() => {
+  const items = []
+  if (store.artifact?.cover_asset_id) {
+    items.push({
+      id: `cover:${store.artifact.cover_asset_id}`,
+      label: '生成封面',
+      url: coverUrl.value,
+      loading: coverLoading.value
+    })
+  }
+  resultGallerySourceIds.value.forEach((id, index) => {
+    items.push({
+      id: `material:${id}`,
+      label: `内容图片 ${index + 1}`,
+      url: resultGallerySourceUrls.value[id] || '',
+      loading: resultGallerySourceLoading.value && !resultGallerySourceUrls.value[id]
+    })
+  })
+  return items
+})
+const currentResultGalleryItem = computed(() => resultGalleryItems.value[resultGalleryIndex.value] || null)
 
 
 watch(
   () => store.artifact?.id,
   () => {
     resultPreviewTab.value = 'cover'
+    resultGalleryIndex.value = 0
+    pendingAiEdit.value = null
     viralReference.value = null
   }
 )
+
+watch(resultDetailOpen, open => {
+  if (open) resultGalleryIndex.value = 0
+})
+
+watch(() => resultGalleryItems.value.length, count => {
+  if (resultGalleryIndex.value >= count) resultGalleryIndex.value = Math.max(0, count - 1)
+})
 
 const suggestedHyCanvasValue = (field) => {
   const label = field.label || ''
@@ -474,8 +541,8 @@ const aiEditReady = computed(
 const aiEditPlaceholder = computed(() =>
   aiEditReady.value ? '告诉 AI 需要怎样调整标题、正文或话题' : '工作流成功完成后才能修改内容'
 )
-const aiEditHistory = computed(() =>
-  [...store.versions]
+const aiEditHistory = computed(() => {
+  const history = [...store.versions]
     .reverse()
     .flatMap((version) => {
       const metadata = (version.edit_diff_snapshot || []).find((item) => item.type === 'ai_edit')
@@ -489,7 +556,23 @@ const aiEditHistory = computed(() =>
         }
       ]
     })
-)
+  if (pendingAiEdit.value) {
+    history.push(
+      {
+        id: `${pendingAiEdit.value.id}-user`,
+        role: 'user',
+        content: pendingAiEdit.value.instruction
+      },
+      {
+        id: `${pendingAiEdit.value.id}-assistant`,
+        role: 'assistant',
+        status: pendingAiEdit.value.status,
+        content: pendingAiEdit.value.message
+      }
+    )
+  }
+  return history
+})
 const completionResults = computed(() => {
   const versions = [...store.versions]
   if (
@@ -620,13 +703,13 @@ const loadHyCanvasCompositePreview = async (imageItemId, templateId) => {
   if (hycanvasCompositePreviewUrl.value) URL.revokeObjectURL(hycanvasCompositePreviewUrl.value)
   hycanvasCompositePreviewUrl.value = ''
   hycanvasCompositePreviewLoading.value = Boolean(imageItemId && templateId)
-  if (!imageItemId || !templateId || photoComposition.value?.slots.some(slot => !slot.image_item_id)) {
+  if (!imageItemId || !templateId) {
     hycanvasCompositePreviewLoading.value = false
     return
   }
 
   try {
-    const file = await contentApi.getHyCanvasCompositePreview(templateId, imageItemId, photoComposition.value)
+    const file = await contentApi.getHyCanvasCompositePreview(templateId, imageItemId)
     const previewUrl = URL.createObjectURL(await file.blob())
     if (generation !== hycanvasCompositePreviewGeneration) {
       URL.revokeObjectURL(previewUrl)
@@ -717,35 +800,84 @@ const loadGalleryImages = async () => {
 }
 
 const openGallery = async (galleryId) => {
+  const openingModal = !galleryModalOpen.value
   activeGalleryId.value = galleryId
-  pendingImageItemId.value = compositionSlotIndex.value === null
-    ? selectedImageItemId.value
-    : photoComposition.value.slots[compositionSlotIndex.value].image_item_id
+  if (openingModal) {
+    const selectedIds = compositionSlotIndex.value === null
+      ? photoComposition.value?.slots.map(slot => slot.image_item_id).filter(Boolean) || [selectedImageItemId.value].filter(Boolean)
+      : [photoComposition.value.slots[compositionSlotIndex.value].image_item_id].filter(Boolean)
+    pendingImageItems.value = [...new Set(selectedIds)].map(id => (
+      id === selectedImageItemId.value && selectedImageSummary.value
+        ? selectedImageSummary.value
+        : { id }
+    ))
+  }
   galleryModalOpen.value = true
   await loadGalleryImages()
 }
 
-const confirmGalleryImage = () => {
+const togglePendingImage = (item) => {
+  const index = pendingImageItems.value.findIndex(selected => selected.id === item.id)
+  if (index !== -1) {
+    pendingImageItems.value = pendingImageItems.value.filter(selected => selected.id !== item.id)
+    return
+  }
+  if (pendingImageItems.value.length >= pendingImageLimit.value) {
+    message.warning(`当前最多选择 ${pendingImageLimit.value} 张图片`)
+    return
+  }
+  pendingImageItems.value = [...pendingImageItems.value, item]
+}
+
+const confirmGalleryImages = () => {
   if (compositionSlotIndex.value !== null) {
-    const index = compositionSlotIndex.value
-    const replacesPrimary = photoComposition.value.slots[index].image_item_id === selectedImageItemId.value
-    photoComposition.value = { ...photoComposition.value, slots: photoComposition.value.slots.map((slot, i) => i === index ? { image_item_id: pendingImageItemId.value || null, focal_x: 0.5, focal_y: 0.5 } : slot) }
-    if (replacesPrimary) {
-      selectedImageItemId.value = pendingImageItemId.value || photoComposition.value.slots.find(slot => slot.image_item_id)?.image_item_id || ''
+    const targetIndexes = compositionInsertIndexes.value
+    const replacesPrimary = targetIndexes.some(index => photoComposition.value.slots[index].image_item_id === selectedImageItemId.value)
+    const nextSlots = photoComposition.value.slots.map((slot, index) => {
+      const selectedIndex = targetIndexes.indexOf(index)
+      if (selectedIndex === -1) return slot
+      const selectedId = pendingImageItems.value[selectedIndex]?.id || null
+      return { image_item_id: selectedId, focal_x: 0.5, focal_y: 0.5 }
+    })
+    photoComposition.value = { ...photoComposition.value, slots: nextSlots }
+    if (replacesPrimary && !nextSlots.some(slot => slot.image_item_id === selectedImageItemId.value)) {
+      selectedImageItemId.value = nextSlots.find(slot => slot.image_item_id)?.image_item_id || ''
       if (!selectedImageItemId.value) photoComposition.value = null
     }
     compositionSlotIndex.value = null
     galleryModalOpen.value = false
     return
   }
-  selectedImageItemId.value = pendingImageItemId.value
-  const selectedItem = galleryImages.value.find((item) => item.id === pendingImageItemId.value)
-  if (selectedItem) {
-    selectedImageGalleryId.value = activeGalleryId.value
-    selectedImageSummary.value = selectedItem
-  } else if (!pendingImageItemId.value) {
+  const selectedItems = pendingImageItems.value
+  const primaryItem = selectedItems[0]
+  selectedImageItemId.value = primaryItem?.id || ''
+  if (primaryItem) {
+    selectedImageGalleryId.value = primaryItem.category || selectedImageGalleryId.value
+    selectedImageSummary.value = primaryItem.name
+      ? primaryItem
+      : primaryItem.id === selectedImageSummary.value?.id ? selectedImageSummary.value : null
+  } else {
     selectedImageGalleryId.value = ''
     selectedImageSummary.value = null
+  }
+  if (selectedItems.length > 1) {
+    const currentSlots = new Map(
+      (photoComposition.value?.slots || [])
+        .filter(slot => slot.image_item_id)
+        .map(slot => [slot.image_item_id, slot])
+    )
+    const layout = photoLayouts.value
+      .filter(item => item.cells.length >= selectedItems.length)
+      .sort((left, right) => left.cells.length - right.cells.length)[0]
+    photoComposition.value = {
+      layout_id: layout.id,
+      slots: layout.cells.map((_, index) => {
+        const imageItemId = selectedItems[index]?.id || null
+        return currentSlots.get(imageItemId) || { image_item_id: imageItemId, focal_x: 0.5, focal_y: 0.5 }
+      })
+    }
+  } else {
+    photoComposition.value = null
   }
   galleryModalOpen.value = false
 }
@@ -866,11 +998,13 @@ const loadVisualMaterials = async () => {
   if (!store.task) return
   materialSelectorLoading.value = true
   try {
-    const [galleryResponse] = await Promise.all([
+    const [galleryResponse, layoutResponse] = await Promise.all([
       materialLibraryApi.listGalleries(selectedIndustrySlug.value),
+      contentApi.getPhotoLayouts(),
       loadHyCanvasTemplates()
     ])
     materialGalleries.value = galleryResponse.galleries || []
+    photoLayouts.value = layoutResponse.layouts || []
     const savedCategoryId =
       store.task?.runtime_config_snapshot?.visual_material?.image_category_id ||
       store.task?.brief?.visual_material?.image_category_id
@@ -1027,6 +1161,36 @@ watch(
 )
 
 watch(
+  () => resultGallerySourceIds.value.join('|'),
+  async () => {
+    const generation = ++resultGalleryLoadGeneration
+    Object.values(resultGallerySourceUrls.value).filter(Boolean).forEach(URL.revokeObjectURL)
+    resultGallerySourceUrls.value = {}
+    const ids = resultGallerySourceIds.value
+    if (!ids.length) {
+      resultGallerySourceLoading.value = false
+      return
+    }
+    resultGallerySourceLoading.value = true
+    const entries = await Promise.all(ids.map(async id => {
+      try {
+        const response = await materialLibraryApi.getItemThumbnail(id)
+        return [id, URL.createObjectURL(await response.blob())]
+      } catch {
+        return [id, '']
+      }
+    }))
+    if (generation !== resultGalleryLoadGeneration) {
+      entries.map(([, url]) => url).filter(Boolean).forEach(URL.revokeObjectURL)
+      return
+    }
+    resultGallerySourceUrls.value = Object.fromEntries(entries)
+    resultGallerySourceLoading.value = false
+  },
+  { immediate: true }
+)
+
+watch(
   () => coverCandidates.value.map(item => item.assetId).join('|'),
   async (assetKey) => {
     const generation = ++coverCandidateLoadGeneration
@@ -1074,7 +1238,7 @@ watch(directionOptions, (options) => {
 })
 watch(selectedImageItemId, (itemId) => void loadSelectedImagePreview(itemId))
 watch(
-  [selectedImageItemId, selectedHyCanvasTemplateId, photoComposition],
+  [selectedImageItemId, selectedHyCanvasTemplateId],
   ([imageItemId, templateId]) => {
     window.clearTimeout(compositionPreviewTimer)
     compositionPreviewTimer = window.setTimeout(() => void loadHyCanvasCompositePreview(imageItemId, templateId), 350)
@@ -1221,6 +1385,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('focus', syncPosterTemplatesWhenVisible)
   document.removeEventListener('visibilitychange', syncPosterTemplatesWhenVisible)
   coverLoadGeneration += 1
+  resultGalleryLoadGeneration += 1
   coverCandidateLoadGeneration += 1
   materialPreviewGeneration += 1
   selectedImagePreviewGeneration += 1
@@ -1228,6 +1393,7 @@ onBeforeUnmount(() => {
   posterPreviewGeneration += 1
   hycanvasTemplateLoadGeneration += 1
   if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
+  Object.values(resultGallerySourceUrls.value).filter(Boolean).forEach(URL.revokeObjectURL)
   Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
   revokePreviewUrls(materialImageUrls.value)
   if (selectedImagePreviewUrl.value) URL.revokeObjectURL(selectedImagePreviewUrl.value)
@@ -1368,12 +1534,27 @@ const saveArtifact = async () => {
   }
 }
 
+const scrollAiEditHistoryToEnd = () => {
+  void nextTick(() => {
+    aiEditHistoryElement.value?.lastElementChild?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  })
+}
+
 const submitAiEdit = async () => {
   const instruction = aiEditInstruction.value.trim()
   if (!instruction || !aiEditReady.value || store.loading.refining) return
+  const pending = {
+    id: `ai-edit-${Date.now()}`,
+    instruction,
+    status: 'running',
+    message: '正在根据你的要求修改内容...'
+  }
+  aiEditInstruction.value = ''
+  pendingAiEdit.value = pending
+  scrollAiEditHistoryToEnd()
   try {
     const response = await store.aiEditArtifact(instruction, modelSpec.value)
-    aiEditInstruction.value = ''
+    pendingAiEdit.value = null
     syncEditor()
     message.success(response.reply)
   } catch (error) {
@@ -1381,7 +1562,12 @@ const submitAiEdit = async () => {
       await store.loadTask(store.task.id)
       syncEditor()
     }
-    message.error(error.message || 'AI 修改内容失败')
+    const errorMessage = error.message || 'AI 修改内容失败'
+    pendingAiEdit.value = { ...pending, status: 'failed', message: `修改失败：${errorMessage}` }
+    aiEditInstruction.value = instruction
+    message.error(errorMessage)
+  } finally {
+    scrollAiEditHistoryToEnd()
   }
 }
 
@@ -1398,6 +1584,14 @@ const copyResultText = async (value, label) => {
   } catch {
     message.error(`${label}复制失败，请稍后重试`)
   }
+}
+
+const showPreviousResultImage = () => {
+  resultGalleryIndex.value = Math.max(0, resultGalleryIndex.value - 1)
+}
+
+const showNextResultImage = () => {
+  resultGalleryIndex.value = Math.min(resultGalleryItems.value.length - 1, resultGalleryIndex.value + 1)
 }
 
 const openViralReference = async () => {
@@ -1641,8 +1835,8 @@ const openVersions = async () => {
             <a-spin :spinning="materialSelectorLoading">
               <div class="material-selector-block">
                 <div class="material-selector-title">
-                  <div><Image :size="18" /><strong>选择图库图片</strong><em>必选 · 单选</em></div>
-                  <small>从当前账号的图库中选择一张已启用图片，作为 HyCanvas 封面主图。</small>
+                  <div><Image :size="18" /><strong>选择图库图片</strong><em>必选 · 多选</em></div>
+                  <small>首张图片作为封面原图，最多可同时选择 9 张。</small>
                 </div>
                 <div v-if="rootMaterialGalleries.length" class="gallery-folder-grid" aria-label="素材图库">
                   <button
@@ -1664,7 +1858,7 @@ const openVersions = async () => {
                   </button>
                 </div>
                 <a-empty v-else description="素材库中还没有图库" />
-                <ContentPhotoComposition v-model="photoComposition" v-model:primary-image-id="selectedImageItemId" @select="selectCompositionImage" />
+                <ContentPhotoComposition v-model="photoComposition" v-model:primary-image-id="selectedImageItemId" :layouts="photoLayouts" @select="selectCompositionImage" />
                 <div v-if="selectedImageItemId" class="selected-gallery-image">
                   <div class="selected-gallery-preview-grid" aria-label="封面预览">
                     <div class="selected-gallery-preview-card">
@@ -1814,29 +2008,37 @@ const openVersions = async () => {
                     </div>
                   </div>
                 </section>
-                <div v-if="aiEditHistory.length" class="ai-edit-history" aria-live="polite">
-                  <div
-                    v-for="item in aiEditHistory"
-                    :key="item.id"
-                    class="ai-edit-message"
-                    :class="item.role"
-                  >
-                    {{ item.content }}
-                  </div>
+              </div>
+              <div ref="aiEditHistoryElement" v-if="aiEditHistory.length" class="ai-edit-history" aria-live="polite">
+                <div
+                  v-for="item in aiEditHistory"
+                  :key="item.id"
+                  class="ai-edit-message"
+                  :class="[item.role, item.status]"
+                >
+                  <template v-if="item.status === 'running'">
+                    <LoaderCircle class="spin" :size="15" />
+                    <span>{{ item.content }}</span>
+                  </template>
+                  <template v-else>{{ item.content }}</template>
                 </div>
               </div>
               <section class="workflow-chat-panel" aria-label="AI 修改内容">
                 <AgentInputArea
                   v-model="aiEditInstruction"
-                  :is-loading="store.loading.refining"
-                  :disabled="!aiEditReady"
-                  :send-button-disabled="!aiEditReady || !aiEditInstruction.trim()"
-                  :placeholder="aiEditPlaceholder"
+                  :disabled="!aiEditReady || store.loading.refining"
+                  :send-button-disabled="!aiEditReady || store.loading.refining || !aiEditInstruction.trim()"
+                  :placeholder="store.loading.refining ? 'AI 正在执行修改，请稍候' : aiEditPlaceholder"
                   @send="submitAiEdit"
                   @keydown="handleAiEditKeydown"
                 >
                   <template #toolbar>
                     <ContentStudioToolbar :has-task="Boolean(store.task)" :is-admin="userStore.isAdmin" @recognize-image="ocrModalOpen = true" />
+                  </template>
+                  <template #actions-right-extra>
+                    <span v-if="store.loading.refining" class="ai-edit-running" role="status">
+                      <LoaderCircle class="spin" :size="15" />正在执行修改
+                    </span>
                   </template>
                 </AgentInputArea>
               </section>
@@ -2298,15 +2500,46 @@ const openVersions = async () => {
                 <div class="result-detail-viral-body">{{ viralReference.content }}</div>
               </template>
             </div>
-            <div v-else-if="coverLoading" class="result-detail-cover-state">
-              <LoaderCircle class="spin" :size="24" />
-              <span>正在加载封面</span>
-            </div>
-            <img v-else-if="coverUrl" :src="coverUrl" alt="当前内容封面" />
-            <div v-else class="result-detail-cover-state empty">
-              <Image :size="30" />
-              <strong>暂无封面</strong>
-              <span>当前内容没有绑定封面，仍可继续发布。</span>
+            <div v-else class="result-detail-carousel">
+              <div v-if="currentResultGalleryItem?.loading" class="result-detail-cover-state">
+                <LoaderCircle class="spin" :size="24" />
+                <span>正在加载图片</span>
+              </div>
+              <img
+                v-else-if="currentResultGalleryItem?.url"
+                :src="currentResultGalleryItem.url"
+                :alt="currentResultGalleryItem.label"
+              />
+              <div v-else class="result-detail-cover-state empty">
+                <Image :size="30" />
+                <strong>{{ currentResultGalleryItem ? '图片暂时无法预览' : '暂无封面' }}</strong>
+                <span>{{ currentResultGalleryItem ? '请稍后刷新重试。' : '当前内容没有绑定封面，仍可继续发布。' }}</span>
+              </div>
+              <template v-if="resultGalleryItems.length > 1">
+                <button
+                  type="button"
+                  class="result-detail-carousel-arrow previous"
+                  :disabled="resultGalleryIndex === 0"
+                  aria-label="查看上一张图片"
+                  title="上一张"
+                  @click="showPreviousResultImage"
+                >
+                  <ChevronLeft :size="22" />
+                </button>
+                <button
+                  type="button"
+                  class="result-detail-carousel-arrow next"
+                  :disabled="resultGalleryIndex === resultGalleryItems.length - 1"
+                  aria-label="查看下一张图片"
+                  title="下一张"
+                  @click="showNextResultImage"
+                >
+                  <ChevronRight :size="22" />
+                </button>
+                <span class="result-detail-carousel-count">
+                  {{ resultGalleryIndex + 1 }} / {{ resultGalleryItems.length }}
+                </span>
+              </template>
             </div>
           </div>
         </section>
@@ -2431,8 +2664,8 @@ const openVersions = async () => {
           </div>
         </section>
         <div class="gallery-modal-heading">
-          <p>{{ activeMaterialGalleryChildren.length ? '当前一级图库中的图片' : '从当前图库中选择一张图片；选择将在点击“确认选择”后保存到业务简报。' }}</p>
-          <span>{{ galleryImages.length }} 张图片</span>
+          <p>{{ activeMaterialGalleryChildren.length ? '当前一级图库中的图片' : compositionSlotIndex === null ? '选择图片后统一确认，第一张为封面原图。' : '可多选图片，从当前位置开始依次填入空位。' }}</p>
+          <span>已选 {{ pendingImageItems.length }} 张 · 最多 {{ pendingImageLimit }} 张 · 共 {{ galleryImages.length }} 张</span>
         </div>
         <div v-if="galleryImagesLoading" class="material-loading-row">
           <LoaderCircle class="spin" :size="20" />正在加载当前图库
@@ -2443,27 +2676,27 @@ const openVersions = async () => {
             :key="item.id"
             type="button"
             class="image-choice"
-            :class="{ selected: pendingImageItemId === item.id }"
-            :aria-pressed="pendingImageItemId === item.id"
-            @click="pendingImageItemId = item.id"
+            :class="{ selected: pendingImageItems.some(selected => selected.id === item.id) }"
+            :aria-pressed="pendingImageItems.some(selected => selected.id === item.id)"
+            @click="togglePendingImage(item)"
           >
             <span class="choice-preview">
               <img v-if="materialImageUrls[item.id]" :src="materialImageUrls[item.id]" :alt="item.name" />
               <Image v-else :size="22" />
-              <CheckCircle2 v-if="pendingImageItemId === item.id" class="choice-check" :size="20" />
+              <CheckCircle2 v-if="pendingImageItems.some(selected => selected.id === item.id)" class="choice-check" :size="20" />
             </span>
             <strong :title="item.name">{{ item.name }}</strong>
           </button>
         </div>
         <a-empty v-else description="当前文件夹暂无可用图片" />
         <div class="gallery-modal-actions">
-          <a-button v-if="pendingImageItemId" type="link" danger @click="pendingImageItemId = ''">
+          <a-button v-if="pendingImageItems.length" type="link" danger @click="pendingImageItems = []">
             清除选择
           </a-button>
           <span />
           <a-button @click="galleryModalOpen = false">取消</a-button>
-          <a-button type="primary" :loading="galleryImagesLoading" @click="confirmGalleryImage">
-            确认选择
+          <a-button type="primary" :loading="galleryImagesLoading" @click="confirmGalleryImages">
+            确认选择<span v-if="pendingImageItems.length">（{{ pendingImageItems.length }}）</span>
           </a-button>
         </div>
       </div>
@@ -2650,14 +2883,17 @@ const openVersions = async () => {
 .completion-stage { padding: 0; border: 0; background: transparent; }
 .completion-layout { grid-template-columns: minmax(0, 1fr) 394px; gap: 24px; align-items: start; }
 .completion-left { min-width: 0; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
-.completion-conversation { min-height: calc(100vh - 180px); display: flex; flex-direction: column; }
+.completion-conversation { height: calc(100vh - 180px); min-height: 560px; display: flex; flex-direction: column; overflow: hidden; }
 .completion-narrative { margin-top: 0; }
 .workflow-complete-line { display: flex; align-items: center; gap: 8px; margin-top: 20px; color: var(--color-success-700); }
 .workflow-complete-line strong { color: var(--color-text); font-size: 14px; }
-.ai-edit-history { display: flex; flex-direction: column; gap: 8px; margin: 22px 27px 0; }
+.ai-edit-history { flex: 0 0 auto; max-height: 150px; display: flex; flex-direction: column; gap: 8px; margin: 12px 27px 0; overflow-y: auto; overscroll-behavior: contain; }
 .ai-edit-message { max-width: 78%; padding: 8px 10px; border-radius: 8px; color: var(--color-text); background: var(--gray-0); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .ai-edit-message.user { align-self: flex-end; color: var(--main-700); background: var(--main-30); }
 .ai-edit-message.assistant { align-self: flex-start; border: 1px solid var(--gray-150); }
+.ai-edit-message.assistant.running { display: inline-flex; align-items: center; gap: 7px; color: var(--color-info-700); background: var(--color-info-50); border-color: var(--color-info-100); }
+.ai-edit-message.assistant.failed { color: var(--color-error-700); background: var(--color-error-50); border-color: var(--color-error-100); }
+.ai-edit-running { display: inline-flex; align-items: center; gap: 6px; color: var(--color-info-700); font-size: 12px; white-space: nowrap; }
 .completion-results { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 0 12px 12px; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
 .completion-results-heading { min-height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 -12px 4px; padding: 0 14px; border-bottom: 1px solid var(--gray-150); }
 .completion-results-heading > div { display: flex; align-items: center; gap: 8px; }
@@ -2703,6 +2939,14 @@ const openVersions = async () => {
 .result-detail-cover-tabs button:disabled { cursor: not-allowed; opacity: 0.42; }
 .result-detail-cover-frame { min-height: 0; flex: 1; display: flex; align-items: center; justify-content: center; margin-top: 12px; overflow: hidden; }
 .result-detail-cover-frame img { display: block; width: min(100%, 400px); max-height: 100%; aspect-ratio: 3 / 4; border-radius: 6px; object-fit: contain; background: var(--gray-100); }
+.result-detail-carousel { position: relative; width: 100%; height: 100%; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.result-detail-carousel-arrow { position: absolute; top: 50%; z-index: 1; width: 38px; height: 38px; padding: 0; display: grid; place-items: center; border: 1px solid var(--gray-200); border-radius: 50%; color: var(--color-text); background: var(--gray-0); box-shadow: 0 2px 8px var(--shadow-2); cursor: pointer; transform: translateY(-50%); }
+.result-detail-carousel-arrow.previous { left: 8px; }
+.result-detail-carousel-arrow.next { right: 8px; }
+.result-detail-carousel-arrow:hover:not(:disabled) { border-color: var(--main-color); color: var(--main-700); background: var(--main-50); }
+.result-detail-carousel-arrow:focus-visible { outline: 2px solid var(--main-color); outline-offset: 2px; }
+.result-detail-carousel-arrow:disabled { cursor: not-allowed; opacity: 0.35; }
+.result-detail-carousel-count { position: absolute; bottom: 10px; left: 50%; padding: 3px 9px; border: 1px solid var(--gray-200); border-radius: 999px; color: var(--color-text-secondary); background: var(--gray-0); font-size: 12px; line-height: 1.4; transform: translateX(-50%); }
 .result-detail-cover-state { min-height: 240px; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-secondary); text-align: center; }
 .result-detail-cover-state.empty span { max-width: 240px; color: var(--color-text-tertiary); font-size: 12px; line-height: 1.6; }
 .result-detail-content { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; padding: 0 22px; background: var(--gray-0); }
@@ -2728,7 +2972,8 @@ const openVersions = async () => {
 .result-detail-viral-meta strong { min-width: 0; overflow: hidden; color: var(--color-text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .result-detail-viral-meta :deep(.ant-btn) { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; color: var(--main-700); }
 .result-detail-viral-body { min-height: 0; flex: 1; padding: 16px; overflow-y: auto; color: var(--color-text); font-size: 13px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
-.workflow-stream { min-width: 0; flex: 1; padding: 16px 24px 28px; }
+.workflow-stream { min-width: 0; min-height: 0; flex: 1 1 auto; padding: 16px 24px 28px; overflow-y: auto; overscroll-behavior: contain; }
+.completion-conversation > .ai-edit-history { flex: 0 0 auto; }
 .codex-workflow-status { min-width: 0; padding: 4px 0 10px; }
 .codex-workflow-heading { min-height: 52px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
 .codex-workflow-icon { display: inline-flex; color: var(--color-text-tertiary); }
