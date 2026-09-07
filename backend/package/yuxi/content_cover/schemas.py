@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
+from yuxi.content_cover.photo_composition import PhotoComposition
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 COVER_SIZES = {"1080x1440", "1080x1080"}
@@ -38,6 +40,7 @@ class HyCanvasDesignSync(BaseModel):
 
 
 class HyCanvasTemplatePreviewCreate(BaseModel):
+    photo_composition: PhotoComposition | None = None
     image_item_id: str = Field(min_length=1, max_length=64)
 
 

@@ -188,13 +188,29 @@ def validate_rule_bundle_for_publish(bundle: dict[str, Any]) -> dict[str, list[d
     errors: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
 
-    methods = {item["code"]: item for item in bundle.get("methods") or [] if item.get("enabled", True)}
-    titles = {item["code"]: item for item in bundle.get("title_formulas") or [] if item.get("enabled", True)}
-    bodies = {item["code"]: item for item in bundle.get("content_formulas") or [] if item.get("enabled", True)}
+    methods = {item["code"]: item for item in bundle.get("methods") or []}
+    titles = {item["code"]: item for item in bundle.get("title_formulas") or []}
+    bodies = {item["code"]: item for item in bundle.get("content_formulas") or []}
     combination_rules = bundle.get("combination_rules") or []
 
     def add_error(code: str, message: str, path: str) -> None:
         errors.append({"code": code, "message": message, "path": path})
+
+    for section in ("title_formulas", "content_formulas"):
+        for index, formula in enumerate(bundle.get(section) or []):
+            application = (formula.get("source_content") or {}).get("cross_industry")
+            if application is None:
+                continue
+            if not all(
+                isinstance(application.get(key), str) and application[key].strip() for key in ("name", "core_goal")
+            ):
+                add_error("CROSS_INDUSTRY_FORMULA_INVALID", "通用公式名称与核心目标不能为空", f"{section}.{index}")
+            if section == "content_formulas" and not (
+                isinstance(application.get("structure_schema"), list)
+                and application["structure_schema"]
+                and all(isinstance(line, str) and line.strip() for line in application["structure_schema"])
+            ):
+                add_error("CROSS_INDUSTRY_FORMULA_INVALID", "通用正文结构不能为空", f"{section}.{index}")
 
     if not combination_rules or any(int(item.get("schema_version") or 0) != 3 for item in combination_rules):
         add_error(
@@ -207,6 +223,21 @@ def validate_rule_bundle_for_publish(bundle: dict[str, Any]) -> dict[str, list[d
     valid_content_types = {item["code"] for item in bundle.get("content_types") or [] if item.get("enabled", True)}
     for index, item in enumerate(combination_rules):
         path = f"combination_rules.{index}"
+        if item.get("enabled", True) and (
+            not any(
+                titles.get(code, {}).get("enabled", True) for code in item.get("title_formula_candidate_codes") or []
+            )
+            or not any(
+                bodies.get(code, {}).get("enabled", True) for code in item.get("body_formula_candidate_codes") or []
+            )
+        ):
+            warnings.append(
+                {
+                    "code": "V3_NO_ENABLED_FORMULA",
+                    "message": "该组合的可用公式已全部停用，将不参与新任务匹配",
+                    "path": path,
+                }
+            )
         members = [member for member in item.get("method_members") or [] if isinstance(member, dict)]
         member_codes = {member.get("method_code") for member in members}
         unknown_methods = member_codes - set(methods)
@@ -265,6 +296,9 @@ def _task_name(template_name: str, content_goal: str) -> str:
 
 
 def _brief_field_value(brief: dict[str, Any], key: str) -> Any:
+    # 发布渠道由任务绑定，旧表单中的空值不能覆盖已解析的渠道版本。
+    if key == "channel_profile_version_id":
+        return brief.get(key)
     form_values = brief.get("form_values") or {}
     if key in form_values:
         return form_values[key]
@@ -274,7 +308,7 @@ def _brief_field_value(brief: dict[str, Any], key: str) -> Any:
         return brief.get("audience")
     if key in {"required_terms", "forbidden_terms"}:
         return brief.get(key)
-    if key in {"channel_profile_version_id", "persona_profile_version_id", "attachments"}:
+    if key in {"persona_profile_version_id", "attachments"}:
         return brief.get(key)
     return (brief.get("business_variables") or {}).get(key)
 
@@ -375,13 +409,22 @@ def compile_content_brief(
 
 
 async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
+    from yuxi.content.model.strategy import load_selection_policy
+
     repo = ContentRepository(db)
     version = await repo.get_published_rule_version(schema_version=3)
     if version is None:
         raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "创作规则库尚未初始化")
     rule_bundle = await repo.get_rule_bundle(version.id)
+    policy = load_selection_policy()
+    templates = await repo.list_templates()
+    from yuxi.content.v3.joint_workflow import PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID
+
+    for template in templates:
+        template["strategy_mode"] = policy["industry_modes"].get(template["slug"], policy["default_mode"])
+        template["blueprint_first"] = template["default_workflow_version_id"] == PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID
     return {
-        "industry_templates": await repo.list_templates(),
+        "industry_templates": templates,
         "content_goals": CONTENT_GOALS,
         "content_types": (rule_bundle or {}).get("content_types") or [],
         "content_variables": (await list_variables(db))["variables"],
@@ -568,6 +611,8 @@ async def preview_task_channel(
 
 
 async def create_content_task(db: AsyncSession, user: User, payload: ContentTaskCreate) -> dict[str, Any]:
+    from yuxi.content.model.strategy import load_selection_policy
+
     repo = ContentRepository(db)
     template = await repo.get_template(payload.industry_template_id)
     if template is None or template.status != "published":
@@ -596,7 +641,15 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
     bundle = await repo.get_rule_bundle(rule_version.id)
     content_types = (bundle or {}).get("content_types") or []
     content_type_code = payload.content_type_code
-    if content_types:
+    selection_policy = load_selection_policy()
+    joint = workflow_version.definition_json.get("selection_policy") in {"agent_skill_v1", "blueprint_first_v1"}
+    mode = selection_policy["industry_modes"].get(template.slug, selection_policy["default_mode"])
+    automatic = workflow_version.definition_json.get("selection_policy") == "blueprint_first_v1"
+    if automatic:
+        content_type_code = None
+    if joint and not automatic and mode == "direction_scoped" and not content_type_code:
+        raise _content_error(422, "CONTENT_DIRECTION_REQUIRED", "请先选择本次内容方向")
+    if content_types and not automatic and (not joint or mode == "direction_scoped"):
         type_map = {item["code"]: item for item in content_types}
         if content_type_code is None:
             content_type_code = next(
@@ -614,6 +667,9 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
         raise _content_error(422, "CONTENT_INDUSTRY_PACK_INVALID", "行业内容包不存在、未发布或与行业不匹配")
     if industry_pack.schema_version != schema_version:
         raise _content_error(422, "CONTENT_INDUSTRY_PACK_VERSION_MISMATCH", "行业内容包与工作流版本不匹配")
+    bound_rule_id = (industry_pack.source_metadata or {}).get("rule_version_id")
+    if bound_rule_id and bound_rule_id != rule_version.id:
+        raise _content_error(409, "CONTENT_INDUSTRY_RULE_BINDING_MISMATCH", "行业包尚未同步当前规则版本")
 
     channel_profile_version_id = payload.channel_profile_version_id or (template.default_strategy or {}).get(
         "channel_profile_version_id"
@@ -641,6 +697,7 @@ async def create_content_task(db: AsyncSession, user: User, payload: ContentTask
         "channel_profile_version_id": channel_profile_version_id,
         "content_type_code": content_type_code,
         "creation_mode": payload.creation_mode,
+        **({"selection_policy_snapshot": selection_policy, "strategy_mode": mode} if joint else {}),
     }
     task = await repo.create_task(
         task_id=f"ct_{uuid.uuid4().hex}",
@@ -718,13 +775,16 @@ async def update_content_task(db: AsyncSession, user: User, task_id: str, payloa
         raise _content_error(422, "CONTENT_GOAL_INVALID", "内容目标无效")
     next_goal = changes.get("content_goal", task.content_goal)
     next_type = changes.get("content_type_code", task.content_type_code)
-    if "content_type_code" in changes:
+    direction_scoped = (
+        (task.runtime_config_snapshot_json or {}).get("strategy_mode", "direction_scoped") == "direction_scoped"
+    )
+    if "content_type_code" in changes and direction_scoped:
         definition = await repo.get_content_type(task.rule_version_id, changes["content_type_code"])
         if definition is None:
             raise _content_error(422, "CONTENT_TYPE_INVALID", "内容类型不存在或未发布")
         if next_goal not in (definition.supported_goals or []):
             raise _content_error(422, "CONTENT_TYPE_GOAL_MISMATCH", "内容类型不支持当前内容目标")
-    elif "content_goal" in changes and next_type:
+    elif "content_goal" in changes and next_type and direction_scoped:
         definition = await repo.get_content_type(task.rule_version_id, next_type)
         if definition and next_goal not in (definition.supported_goals or []):
             raise _content_error(422, "CONTENT_TYPE_GOAL_MISMATCH", "当前内容类型不支持新的内容目标")
@@ -891,11 +951,15 @@ async def save_content_brief(
             "CONTENT_IMAGE_MATERIAL_REQUIRED",
             "请选择一张图库图片作为 HyCanvas 封面主图",
         )
+    requested_composition = (
+        selection.photo_composition.model_dump() if selection and selection.photo_composition else None
+    )
     current_visual_material = (getattr(task, "brief_json", None) or {}).get("visual_material") or {}
     if task.current_stage != "brief" and (
         task.selected_image_item_id != requested_image_item_id
         or task.selected_poster_template_id != requested_poster_template_id
         or current_visual_material.get("hycanvas_template_id") != requested_hycanvas_template_id
+        or current_visual_material.get("photo_composition") != requested_composition
     ):
         raise _content_error(
             409,
@@ -964,6 +1028,14 @@ async def save_content_brief(
                     "poster_template_version": poster.version,
                 }
             )
+    if requested_composition:
+        from yuxi.services.content_photo_composition import resolve_photo_composition
+
+        if not requested_image_item_id or not requested_hycanvas_template_id:
+            raise _content_error(422, "CONTENT_COMPOSITION_TEMPLATE_REQUIRED", "图片组合需要选择首图和封面模板")
+        visual_snapshot["photo_composition"] = await resolve_photo_composition(
+            db, user, selection.photo_composition, requested_image_item_id, complete=compile_now,
+        )
     if compile_now and requested_hycanvas_template_id:
         from yuxi.services.hycanvas_service import HyCanvasClient
 
@@ -997,6 +1069,7 @@ async def save_content_brief(
             "poster_template_name": visual_snapshot.get("poster_template_name"),
             "hycanvas_template_id": requested_hycanvas_template_id,
             "hycanvas_template_title": visual_snapshot.get("hycanvas_template_title"),
+            "photo_composition": requested_composition,
         }
         if visual_snapshot
         else None
@@ -1466,6 +1539,9 @@ async def activate_content_rule_version(
     current = await repo.get_published_rule_version_for_update(schema_version=3)
     if current and current.id != target.id:
         current.status = "archived"
+    from yuxi.services.content_industry_sync import sync_industry_pack_bindings
+
+    await sync_industry_pack_bindings(db, bundle=bundle, uid=str(user.uid))
     target.status = "published"
     target.published_at = utc_now_naive()
     await repo.track(
@@ -1582,9 +1658,20 @@ async def validate_content_industry_pack(
         raise _content_error(409, "CONTENT_INDUSTRY_PACK_V3_REQUIRED", "只能校验 V3 Industry Pack")
     mappings = await repo.list_industry_variable_mappings(record.id)
     groups = await repo.list_combination_groups(record.combination_overrides or [])
-    rule_bundle = await repo.get_rule_bundle(PLATFORM_RULE_V3_ID, include_disabled=True)
+    rule_version_id = (record.source_metadata or {}).get("rule_version_id") or PLATFORM_RULE_V3_ID
+    rule_bundle = await repo.get_rule_bundle(rule_version_id, include_disabled=True)
     if rule_bundle is None:
         raise _content_error(503, "CONTENT_RULES_NOT_INITIALIZED", "V3 平台规则尚未初始化")
+    bound_ids = set(record.combination_overrides or [])
+    available_ids = {
+        item["id"]
+        for item in rule_bundle["combination_rules"]
+        if not item.get("industry_scope") or record.slug in item["industry_scope"]
+    }
+    if bound_ids - available_ids or bound_ids != {item["id"] for item in groups}:
+        raise _content_error(
+            409, "CONTENT_INDUSTRY_RULE_REFERENCE_INVALID", "行业包引用了其他规则版本、其他行业或不存在的组合"
+        )
     report = ValidateIndustryPackHandler().execute(
         record=record,
         variable_mappings=mappings,

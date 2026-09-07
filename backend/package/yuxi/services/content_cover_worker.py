@@ -327,12 +327,18 @@ async def _run_hycanvas(job: ContentCoverJob) -> tuple[list[bytes], dict[str, An
     from yuxi.services.hycanvas_service import HyCanvasClient
 
     sources, _, _ = await _load_job_assets(job)
-    if len(sources) != 1:
-        raise RuntimeError("HyCanvas 封面任务需要且仅需要一张图库主图")
-    source = sources[0]
     request = job.request_json or {}
+    composition = request.get("photo_composition")
+    if not composition and len(sources) != 1:
+        raise RuntimeError("单图封面需要一张图库主图")
+    by_id = {source.id: source for source in sources}
+    source = by_id[request["source_asset_ids"][0]]
     client = HyCanvasClient.from_env()
     image = (await _download_asset(source), source.content_type, source.original_file_name)
+    composition_images = []
+    for slot in (composition or {}).get("slots", []):
+        asset = by_id[slot["asset_id"]]
+        composition_images.append((await _download_asset(asset), asset.content_type, asset.original_file_name))
     design = await client.create_design(
         HyCanvasDesignCreate(
             artifact_id=job.content_task_id or job.id,
@@ -343,6 +349,8 @@ async def _run_hycanvas(job: ContentCoverJob) -> tuple[list[bytes], dict[str, An
         ),
         image=image,
         image_field_label=request.get("image_field_label"),
+        photo_composition=composition,
+        composition_images=composition_images,
     )
     png, _ = await client.render_png(design["design_id"])
     return [png], {

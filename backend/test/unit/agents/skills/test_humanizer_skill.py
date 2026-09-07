@@ -6,7 +6,7 @@ from yuxi.agents.skills.buildin import BUILTIN_SKILLS
 def test_humanizer_skill_is_registered_with_required_resources():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "humanizer-zh")
 
-    assert spec.version == "1.1.0"
+    assert spec.version == "1.2.0"
     assert spec.tool_dependencies == ()
     assert spec.mcp_dependencies == ()
     assert (spec.source_dir / "SKILL.md").is_file()

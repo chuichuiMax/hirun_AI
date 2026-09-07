@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from yuxi.content.schemas import ContentBriefPayload
 from yuxi.services.content_service import compile_content_brief
 
@@ -109,3 +111,36 @@ def test_review_note_photo_ids_fall_back_to_attachments():
 
     brief = ContentBriefPayload(attachments=[{"asset_id": "photo-1", "role": "cover"}, {"asset_id": "photo-2"}])
     assert review_note_photo_ids(brief) == ["photo-1", "photo-2"]
+
+
+@pytest.mark.parametrize("form_channel", ["", "stale-channel"])
+def test_pro_brief_validates_channel_bound_to_task_instead_of_stale_form(form_channel):
+    task = SimpleNamespace(
+        id="ct_pro", content_goal="acquire", mode="pro", channel_profile_version_id="channel-xiaohongshu-v1"
+    )
+    template = SimpleNamespace(
+        slug="decoration",
+        pro_form_schema=[
+            {"key": "brand_name", "label": "品牌", "required": True},
+            {"key": "channel_profile_version_id", "label": "发布渠道", "required": True},
+        ],
+    )
+    brief = ContentBriefPayload(form_values={"brand_name": "测试品牌", "channel_profile_version_id": form_channel})
+
+    compiled, missing = compile_content_brief(task=task, template=template, brief=brief)
+
+    assert missing == []
+    assert compiled["channel_profile_version_id"] == "channel-xiaohongshu-v1"
+
+
+def test_pro_brief_requires_real_task_channel_even_if_form_claims_one():
+    task = SimpleNamespace(id="ct_pro", content_goal="acquire", mode="pro", channel_profile_version_id=None)
+    template = SimpleNamespace(
+        slug="decoration",
+        pro_form_schema=[{"key": "channel_profile_version_id", "label": "发布渠道", "required": True}],
+    )
+    brief = ContentBriefPayload(form_values={"channel_profile_version_id": "channel-xiaohongshu-v1"})
+
+    _, missing = compile_content_brief(task=task, template=template, brief=brief)
+
+    assert missing == [{"field": "channel_profile_version_id", "label": "发布渠道"}]

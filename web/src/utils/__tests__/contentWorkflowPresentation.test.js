@@ -18,6 +18,18 @@ import {
 
 assert.deepEqual(buildContentNarrativeCodeLabels(null), {})
 
+const rejectedResultTimeline = buildContentRuntimeTimeline([], [{
+  event_type: 'content.tool.failed',
+  payload: {
+    tool_name: 'submit_content_node_result',
+    output_contract: 'JointStrategyDecisionV1',
+    error_type: 'ContractDomainValidationError',
+    message: '评分引用了不存在的输入字段: content_brief.business_variables.emotion'
+  }
+}])
+assert.ok(rejectedResultTimeline[0].detail.includes('评分引用了不存在的输入字段: content_brief.business_variables.emotion'))
+assert.ok(!rejectedResultTimeline[0].detail.includes('ContractDomainValidationError'))
+
 const groupedNodeIds = CONTENT_WORKFLOW_GROUPS.flatMap((group) => group.nodes)
 assert.equal(CONTENT_WORKFLOW_GROUPS.length, 5)
 assert.equal(groupedNodeIds.length, 26)
@@ -239,7 +251,7 @@ assert.deepEqual(
   [
     '标题已生成：89㎡三居这样改，多出12㎡收纳空间',
     '正文将依次说明：说明原户型痛点；展示改造结果。',
-    '正文内容：入户与餐厅缺少集中收纳，通过玄关柜和餐边柜重新组织动线。',
+    '**正文内容**\n\n入户与餐厅缺少集中收纳，通过玄关柜和餐边柜重新组织动线。',
     '建议话题：#杭州装修 #收纳设计'
   ]
 )
@@ -283,7 +295,7 @@ const cumulativeNarrativeText = cumulativeNarrative.map((item) => item.text).joi
 assert.match(cumulativeNarrativeText, /杭州装修案例.*3 条相关资料/)
 assert.match(cumulativeNarrativeText, /识别出的内容价值.*收纳焦虑/)
 assert.match(cumulativeNarrativeText, /标题已生成：89㎡三居这样改/)
-assert.match(cumulativeNarrativeText, /正文内容：入户与餐厅缺少集中收纳/)
+assert.match(cumulativeNarrativeText, /\*\*正文内容\*\*\n\n入户与餐厅缺少集中收纳/)
 assert.match(cumulativeNarrativeText, /已完成 6 项规则检查.*没有发现阻断问题/)
 assert.ok(!/Skill|工具调用|content-strategy-agent/.test(cumulativeNarrativeText))
 
@@ -606,3 +618,12 @@ assert.deepEqual(persistedSkillSummary.skills[0], {
 assert.equal(formatElapsedDuration(141000), '2分21秒')
 
 console.log('contentWorkflowPresentation: all assertions passed')
+
+const jointGroups = buildContentWorkflowGroups([
+  { node_id: 'prepare_strategy_candidates', status: 'completed' },
+  { node_id: 'select_creation_strategy', status: 'completed' },
+  { node_id: 'lock_creation_strategy', status: 'completed' }
+])
+const jointStrategy = jointGroups.find(group => group.id === 'strategy')
+assert.ok(jointStrategy)
+assert.ok(!jointStrategy.nodes.some(node => ['collect_viral_candidates', 'select_viral_reference'].includes(node.id)))

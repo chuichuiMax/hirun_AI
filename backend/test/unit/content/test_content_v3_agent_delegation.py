@@ -1154,10 +1154,12 @@ def test_parallel_research_agents_receive_only_their_knowledge_scope(node_id, ex
 
 
 def test_formal_content_agent_catalog_and_conflict_policy():
-    assert len(CONTENT_AGENT_SPECS) == 12
+    assert len(CONTENT_AGENT_SPECS) == 14
     assert {item.slug for item in CONTENT_AGENT_SPECS} == {
         "content-strategy-agent",
         "content-research-agent",
+        "content-joint-strategy-agent",
+        "content-viral-asset-agent",
         "content-business-rule-research-agent",
         "content-price-research-agent",
         "content-compliance-research-agent",
@@ -1183,7 +1185,9 @@ def test_formal_content_agent_catalog_and_conflict_policy():
     assert research_spec.model_call_timeout_seconds == 60
     assert research_spec.model_retry_times == 1
     assert research_spec.config_version == 6
-    specialist_specs = [item for item in CONTENT_AGENT_SPECS if item.inherit_context_from == "content-research-agent"]
+    new_agents = {"content-joint-strategy-agent", "content-viral-asset-agent"}
+    specialist_specs = [item for item in CONTENT_AGENT_SPECS
+                        if item.inherit_context_from == "content-research-agent" and item.slug not in new_agents]
     assert len(specialist_specs) == 5
     assert all(item.reasoning_effort == "low" for item in specialist_specs)
     assert all(item.model_call_timeout_seconds <= 65 for item in specialist_specs)
@@ -1197,6 +1201,12 @@ def test_formal_content_agent_catalog_and_conflict_policy():
     assert all(item.config_version >= 2 for item in specialist_specs)
     research_collectors = [item for item in specialist_specs if item.slug != "content-viral-selection-agent"]
     assert all(item.skill_tools == ("query_kb",) for item in research_collectors)
+    joint = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-joint-strategy-agent")
+    preparation = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-viral-asset-agent")
+    assert joint.reasoning_effort == preparation.reasoning_effort == "low"
+    assert joint.model_call_timeout_seconds == 65
+    assert preparation.model_call_timeout_seconds == 100
+    assert joint.skill_tools == preparation.skill_tools == ()
     generation_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-generation-agent")
     assert generation_spec.skills == (
         "content-title-generator",

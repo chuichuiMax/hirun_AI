@@ -18,17 +18,18 @@ type InstantiateImage struct {
 // InstantiateInput describes one automation-created design. Fields are keyed
 // by the human-readable labels declared in the template's fillableFields.
 type InstantiateInput struct {
-	WorkspaceID string
-	Title       string
-	Fields      map[string]string
-	Images      map[string]InstantiateImage
-	Background  *InstantiateImage
+	WorkspaceID      string
+	Title            string
+	Fields           map[string]string
+	Images           map[string]InstantiateImage
+	Background       *InstantiateImage
+	PhotoComposition *PhotoComposition
 }
 
 // PreviewWithBackground applies the same ContentSwarm background transform as
 // Instantiate without creating a design. The returned file is only rendered
 // in memory by the HTTP preview endpoint.
-func (s *Service) PreviewWithBackground(ctx context.Context, userID, templateID string, image InstantiateImage) (map[string]any, Template, error) {
+func (s *Service) PreviewWithBackground(ctx context.Context, userID, templateID string, image InstantiateImage, compositions ...*PhotoComposition) (map[string]any, Template, error) {
 	template, err := s.Get(ctx, userID, templateID)
 	if err != nil {
 		return nil, Template{}, err
@@ -37,7 +38,11 @@ func (s *Service) PreviewWithBackground(ctx context.Context, userID, templateID 
 	if err != nil {
 		return nil, Template{}, err
 	}
-	if err := applyBackgroundImage(file, image); err != nil {
+	if len(compositions) > 0 && compositions[0] != nil {
+		if err := applyPhotoComposition(file, compositions[0]); err != nil {
+			return nil, Template{}, err
+		}
+	} else if err := applyBackgroundImage(file, image); err != nil {
 		return nil, Template{}, err
 	}
 	return file, template, nil
@@ -76,7 +81,11 @@ func (s *Service) Instantiate(ctx context.Context, userID, templateID string, in
 	if err := fillImageFields(file, template.FillableFields, in.Images); err != nil {
 		return "", err
 	}
-	if in.Background != nil {
+	if in.PhotoComposition != nil {
+		if err := applyPhotoComposition(file, in.PhotoComposition); err != nil {
+			return "", err
+		}
+	} else if in.Background != nil {
 		if err := applyBackgroundImage(file, *in.Background); err != nil {
 			return "", err
 		}

@@ -22,5 +22,8 @@ version: 2.2.0
 8. 正文控制在 200～650 字；每个事实段落通过 `paragraph_evidence` 关联实际使用的 Evidence ID。若 EvidenceBundle 中存在允许用于正文的业务知识证据，必须至少引用其中一条，不能只写事实不挂 ID。关联价格知识证据的段落必须真实出现该证据中的至少一个具体价格值，不能只挂 Evidence ID。
 9. 如果 `payload.validation_report.status=blocked` 或 `payload.review_report.status=blocked`，读取全部阻断检查并在上一稿 `payload.content_draft` / `payload.content_outline` 上定点修改；保留仍然有效的 `paragraph_evidence`，不得为了绕开审核而清空知识库证据引用。
 10. 简化工作流严格提交 `GeneratedContentResultV1`，正文放入 `draft`；旧工作流仍提交 `ContentDraftResultV1`。
+8. 正文控制在 200～650 字；每个事实段落通过 `paragraph_evidence` 关联实际使用的 Evidence ID。关联价格知识证据的段落必须真实出现该证据中的至少一个具体价格值，不能只挂 Evidence ID。
+   - 公式规定的是语义顺序，不要求把每个结构段写成单一长段。在 `generate_content` 节点中，原创正文内已有多个并列改造、材料或验收事项时，必须按已激活的 `viral-layout-formatter` 拆成逐项短行，并按 `content-human-expression` 给独立事项落实语义 Emoji；一组短行仍属于原结构段，证据引用保持对应，不能为了少换行或“平台无关”把条目重新合并。仿写继续保留冻结蓝图的列表类型。
+9. 简化工作流严格提交 `GeneratedContentResultV1`，正文放入 `draft`；旧工作流仍提交 `ContentDraftResultV1`。
 
-保持平台无关正文；话题提供 3～8 个，不执行发布。
+事实口径保持一致，呈现方式遵守当前 `channel_profile`：允许 Emoji 的社交渠道落实情绪与数据、事项导航，明确禁用时不用；不得用“平台无关”要求抹去渠道排版与人设表达。话题提供 3～8 个，不执行发布。

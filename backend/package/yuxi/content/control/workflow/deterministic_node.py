@@ -34,6 +34,7 @@ from yuxi.content.validators import validate_content
 from yuxi.content.control.workflow.external_wait import skip_formula_lexicon_pipeline
 from yuxi.content.v3.body_calling import SOURCE_METADATA as BODY_CALLING_SOURCE
 from yuxi.content.v3.body_calling import get_decoration_body_calling
+from yuxi.content.industry_matrix import resolve_industry_formula
 from yuxi.content.v3.formula_lexicons import get_formula_lexicon_requirements
 from yuxi.services.run_queue_service import append_run_stream_event
 from yuxi.storage.postgres.models_content import ContentFormula, ContentTask, CreationMethod, TitleFormula
@@ -194,6 +195,14 @@ class V3DeterministicNodeHandler:
         state: dict[str, Any],
         node_run_id: str,
     ) -> dict[str, Any]:
+        if node["id"] == "prepare_strategy_candidates":
+            from yuxi.content.control.workflow.joint_strategy import prepare_strategy_candidates
+
+            return await prepare_strategy_candidates(db=db, state=state, node_run_id=node_run_id)
+        if node["id"] == "lock_creation_strategy" and state.get("joint_strategy_decision"):
+            from yuxi.content.control.workflow.joint_strategy import lock_joint_strategy
+
+            return await lock_joint_strategy(db=db, state=state, node_run_id=node_run_id)
         handlers = {
             "compile_runtime_snapshot": self._compile_runtime_snapshot,
             "ingest_real_materials": self._ingest_real_materials,
@@ -411,6 +420,27 @@ class V3DeterministicNodeHandler:
             if use_decoration_formulas
             else None
         )
+        # 已导入原文的版本以可编辑规则为准，同时保留词库调用与段落标识。
+        if body_calling is not None and body_formula.source_content:
+            body_calling["sections"] = [
+                {
+                    **(
+                        body_calling["sections"][index]
+                        if index < len(body_calling["sections"])
+                        else {
+                            "id": f"section_{index + 1}",
+                            "lexicon_calls": [],
+                            "fact_source": "evidence",
+                        }
+                    ),
+                    "name": paragraph.split("：", 1)[0],
+                    "instruction": paragraph,
+                    "fill_rule": paragraph,
+                }
+                for index, paragraph in enumerate(body_formula.structure_schema)
+            ]
+            body_calling["formula_name"] = body_formula.name
+            body_calling["reference_examples"] = body_formula.reference_examples
         body_structure = (
             [section["name"] for section in body_calling["sections"]]
             if body_calling is not None
@@ -437,6 +467,7 @@ class V3DeterministicNodeHandler:
                 "code": title_formula.code,
                 "name": title_formula.name,
                 "core_goal": title_formula.core_goal,
+                "source_content": title_formula.source_content or {},
                 "reference_examples": title_formula.reference_examples or [],
                 "variable_schema": title_formula.variable_schema or [],
                 "compatible_methods": title_formula.compatible_methods or [],
@@ -448,6 +479,7 @@ class V3DeterministicNodeHandler:
             "body_formula": {
                 "code": body_formula.code,
                 "name": body_formula.name,
+                "source_content": body_formula.source_content or {},
                 "structure_schema": body_structure,
                 "reference_examples": (
                     body_calling["reference_examples"]
@@ -465,6 +497,10 @@ class V3DeterministicNodeHandler:
             "match_snapshot_id": match_snapshot.id,
             "formula_snapshot_id": formula_snapshot.id,
         }
+        for section in ("title_formula", "body_formula"):
+            strategy_payload[section] = resolve_industry_formula(
+                strategy_payload[section], industry_slug=context.industry_slug, scenario=group.scenario_description
+            )
         canonical = json.dumps(strategy_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         strategy_payload["snapshot_hash"] = hashlib.sha256(canonical.encode()).hexdigest()
         strategy_snapshot = StrategySnapshotV1.model_validate(strategy_payload).model_dump(mode="json")
@@ -519,7 +555,7 @@ class V3DeterministicNodeHandler:
             or (state.get("industry_pack") or {}).get("id")
             or ""
         )
-        if skip_formula_lexicon_pipeline(state) or industry_pack_id != "industry-pack-decoration-v3":
+        if not industry_pack_id.startswith("industry-pack-decoration-v"):
             return {
                 "formula_lexicon_bundle": {
                     "required": False,
@@ -603,7 +639,11 @@ class V3DeterministicNodeHandler:
         template = await repo.get_template(task.industry_template_version_id)
         industry_slug = template.slug if template else None
         industry_pack = next(
-            (item for item in await repo.list_industry_packs() if item["id"] == task.industry_pack_version_id),
+            (
+                item
+                for item in await repo.list_industry_packs(published_only=False)
+                if item["id"] == task.industry_pack_version_id
+            ),
             {},
         )
         channel_profile = next(

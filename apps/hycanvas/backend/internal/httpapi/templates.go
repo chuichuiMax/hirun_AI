@@ -41,7 +41,8 @@ func mountTemplates(api chi.Router, tm *templates.Service, acct *accounts.Servic
 func templatesBackgroundPreviewHandler(tm *templates.Service, up *uploads.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Background struct {
+			PhotoComposition *templates.PhotoComposition `json:"photoComposition"`
+			Background       struct {
 				Filename    string `json:"filename"`
 				ContentType string `json:"contentType"`
 				DataBase64  string `json:"dataBase64"`
@@ -54,7 +55,7 @@ func templatesBackgroundPreviewHandler(tm *templates.Service, up *uploads.Servic
 		u := userFrom(r.Context())
 		file, template, err := tm.PreviewWithBackground(r.Context(), u.ID, chi.URLParam(r, "id"), templates.InstantiateImage{
 			Filename: body.Background.Filename, ContentType: body.Background.ContentType, DataBase64: body.Background.DataBase64,
-		})
+		}, body.PhotoComposition)
 		if err != nil {
 			templatesProblem(w, r, err)
 			return
@@ -279,10 +280,11 @@ func templatesApplyHandler(tm *templates.Service) http.HandlerFunc {
 func templatesInstantiateHandler(tm *templates.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			WorkspaceID string            `json:"workspaceId"`
-			Title       string            `json:"title"`
-			Fields      map[string]string `json:"fields"`
-			Background  *struct {
+			PhotoComposition *templates.PhotoComposition `json:"photoComposition"`
+			WorkspaceID      string                      `json:"workspaceId"`
+			Title            string                      `json:"title"`
+			Fields           map[string]string           `json:"fields"`
+			Background       *struct {
 				Filename    string `json:"filename"`
 				ContentType string `json:"contentType"`
 				DataBase64  string `json:"dataBase64"`
@@ -315,11 +317,12 @@ func templatesInstantiateHandler(tm *templates.Service) http.HandlerFunc {
 			}
 		}
 		designID, err := tm.Instantiate(r.Context(), u.ID, chi.URLParam(r, "id"), templates.InstantiateInput{
-			WorkspaceID: body.WorkspaceID,
-			Title:       body.Title,
-			Fields:      body.Fields,
-			Images:      images,
-			Background:  background,
+			WorkspaceID:      body.WorkspaceID,
+			Title:            body.Title,
+			Fields:           body.Fields,
+			Images:           images,
+			Background:       background,
+			PhotoComposition: body.PhotoComposition,
 		})
 		if err != nil {
 			templatesProblem(w, r, err)

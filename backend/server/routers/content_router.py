@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.content.schemas import (
@@ -40,6 +40,12 @@ from yuxi.content.control.strategy.recommend_v3 import (
     StrategyPreviewActor,
 )
 from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
+from yuxi.content.model.viral_assets import ViralAssetImport
+from yuxi.repositories.viral_asset_repository import asset_dict
+from yuxi.services.content_viral_assets import (
+    check_asset_source, import_viral_assets, list_viral_assets,
+    preparation_skill_hash, require_asset, retry_viral_asset,
+)
 from yuxi.services.agent_run_service import cancel_agent_run_view, stream_agent_run_events
 from yuxi.services.content_ocr_service import (
     create_content_ocr_result,
@@ -463,6 +469,151 @@ async def compile_brief(
     return await save_content_brief(db, current_user, task_id, payload.brief, compile_now=True)
 
 
+@content.get("/viral-assets")
+async def get_viral_assets(
+    industry_slug: str | None = None,
+    ready_only: bool = False,
+    limit: int = Query(default=100, ge=1, le=100),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_viral_assets(db, current_user, industry_slug=industry_slug, ready_only=ready_only, limit=limit)
+
+
+@content.post("/viral-assets/import")
+async def import_viral_asset_file(
+    payload: ViralAssetImport,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await import_viral_assets(db, current_user, payload)
+
+
+@content.get("/viral-file-jobs")
+async def get_viral_file_jobs(
+    current_user: User = Depends(get_required_user), db: AsyncSession = Depends(get_db),
+):
+    from yuxi.services.viral_document_service import list_reference_file_jobs
+    return await list_reference_file_jobs(db, current_user)
+
+
+@content.post("/viral-file-jobs")
+async def prepare_viral_files(
+    payload: dict = Body(...), current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db),
+):
+    from yuxi.services.viral_document_service import schedule_reference_file
+    kb_id, file_ids = payload.get("kb_id"), payload.get("file_ids")
+    if not isinstance(kb_id, str) or not isinstance(file_ids, list) or not 1 <= len(file_ids) <= 100:
+        raise HTTPException(422, "请选择知识库和 1—100 个原文文件")
+    if any(not isinstance(item, str) or not item for item in file_ids):
+        raise HTTPException(422, "原文文件标识无效")
+    retry = payload.get("retry", False)
+    if not isinstance(retry, bool):
+        raise HTTPException(422, "重试标记必须为布尔值")
+    items, errors = [], []
+    for file_id in dict.fromkeys(file_ids):
+        try:
+            items.append(await schedule_reference_file(db, current_user, kb_id, file_id, retry=retry))
+        except HTTPException as exc:
+            errors.append({"file_id": file_id, "message": str(exc.detail)})
+    return {"items": items, "errors": errors}
+
+
+@content.get("/viral-assets/{asset_id}")
+async def get_viral_asset(
+    asset_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    asset = await require_asset(db, current_user, asset_id)
+    if asset.status == "ready" and not await check_asset_source(db, asset):
+        asset.status, asset.error_message = "invalidated", "原文已更新，请重新准备"
+        await db.commit()
+    elif asset.status == "ready" and asset.preparation_skill_hash != preparation_skill_hash():
+        asset.status, asset.error_message = "invalidated", "准备标准已更新，请重新导入"
+        await db.commit()
+    return {"asset": asset_dict(asset, include_source=True)}
+
+
+@content.post("/viral-assets/{asset_id}/retry")
+async def retry_viral_asset_preparation(
+    asset_id: str,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await retry_viral_asset(db, current_user, asset_id)
+
+
+@content.get("/tasks/{task_id}/strategy/candidates")
+async def get_strategy_candidates(
+    task_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await PostgresStrategyPreviewRepository(db).load_candidates(
+            task_id=task_id,
+            actor=StrategyPreviewActor(
+                uid=str(current_user.uid),
+                role=current_user.role,
+                tenant_id=str(current_user.department_id) if current_user.department_id is not None else None,
+            ),
+        )
+    except ContentApplicationError as exc:
+        raise present_content_error(exc) from exc
+
+
+@content.get("/tasks/{task_id}/strategy/decision")
+async def get_strategy_decision(
+    task_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import select
+    from yuxi.storage.postgres.models_business import AgentRun
+    from yuxi.storage.postgres.models_content import ContentNodeRun
+
+    task = await ContentRepository(db).get_task_for_user(task_id, current_user)
+    if task is None:
+        raise HTTPException(404, "内容任务不存在")
+    run_ids = []
+    run = await db.get(AgentRun, task.latest_run_id) if task.latest_run_id else None
+    while run and run.thread_id == task_id and run.id not in run_ids:
+        run_ids.append(run.id)
+        run = await db.get(AgentRun, run.parent_run_id) if run.parent_run_id else None
+    rows = list((await db.execute(
+        select(ContentNodeRun).where(
+            ContentNodeRun.task_id == task_id,
+            ContentNodeRun.agent_run_id.in_(run_ids),
+            ContentNodeRun.node_id.in_(["select_creation_strategy", "lock_creation_strategy"]),
+            ContentNodeRun.status == "completed",
+        ).order_by(ContentNodeRun.finished_at.desc(), ContentNodeRun.id.desc()).limit(6)
+    )).scalars())
+    selection_row = next((row for row in rows if row.node_id == "select_creation_strategy"), None)
+    selection_input = ((selection_row.input_snapshot or {}).get("visible_payload") or {}) if selection_row else {}
+    candidates = (
+        ((selection_row.input_snapshot or {}).get("visible_payload") or {}).get("strategy_candidates", {})
+        if selection_row else {}
+    )
+    automatic_view = {
+        "automatic_direction": candidates.get("auto_direction", False),
+        "direction_names": {item["code"]: item["name"] for item in candidates.get("direction_options", [])},
+    } if candidates.get("auto_direction") else {}
+    for row in rows:
+        output = (row.output_snapshot or {}).get("result") or {}
+        snapshot = output.get("strategy_snapshot")
+        decision = (snapshot or {}).get("decision") or output.get("joint_strategy_decision")
+        if decision:
+            from yuxi.services.content_strategy_presentation import build_decision_presentation
+
+            return {
+                **build_decision_presentation(decision, selection_input),
+                "decision": decision, "snapshot": snapshot, "node_run_id": row.id,
+                "run_id": row.agent_run_id, **automatic_view,
+            }
+    return {"decision": None, "snapshot": None, **automatic_view}
+
+
 @content.post("/tasks/{task_id}/strategy/recommend-v3")
 async def recommend_strategy_v3(
     task_id: str,
@@ -680,7 +831,7 @@ async def get_admin_rule_bundle(
 @content.post("/admin/rules/drafts")
 async def create_rule_draft(
     payload: RuleDraftCreate,
-    current_user: User = Depends(get_superadmin_user),
+    current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await create_content_rule_draft(db, current_user, payload)
@@ -690,7 +841,7 @@ async def create_rule_draft(
 async def save_rule_draft(
     version_id: str,
     payload: RuleBundleUpdate,
-    current_user: User = Depends(get_superadmin_user),
+    current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await save_content_rule_draft(db, current_user, version_id, payload)
@@ -699,7 +850,7 @@ async def save_rule_draft(
 @content.delete("/admin/rules/{version_id}")
 async def discard_rule_draft(
     version_id: str,
-    current_user: User = Depends(get_superadmin_user),
+    current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await discard_content_rule_draft(db, current_user, version_id)
@@ -709,7 +860,7 @@ async def discard_rule_draft(
 async def publish_rule_version(
     version_id: str,
     payload: RuleVersionAction,
-    current_user: User = Depends(get_superadmin_user),
+    current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await activate_content_rule_version(

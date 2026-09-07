@@ -626,6 +626,14 @@ class PostgresManager(metaclass=SingletonMeta):
 
         self._check_initialized()
         stmts = [
+            "ALTER TABLE IF EXISTS content_viral_article_versions "
+            "DROP CONSTRAINT IF EXISTS content_viral_article_versions_file_id_fkey",
+            "ALTER TABLE IF EXISTS content_viral_article_versions "
+            "DROP CONSTRAINT IF EXISTS content_viral_article_versions_kb_id_fkey",
+            "ALTER TABLE IF EXISTS content_title_formulas "
+            "ADD COLUMN IF NOT EXISTS source_content JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE IF EXISTS content_body_formulas "
+            "ADD COLUMN IF NOT EXISTS source_content JSONB NOT NULL DEFAULT '{}'::jsonb",
             """
             ALTER TABLE IF EXISTS content_combination_rules
             ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 2

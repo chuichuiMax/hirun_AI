@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from typing import Any
 
 from sqlalchemy import select
@@ -78,6 +79,8 @@ def _review_report_without_decoration_formulas(result: dict[str, Any]) -> dict[s
 class AgentNodeResultMapper:
     @staticmethod
     def to_state(node_id: str, result: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        if node_id == "select_creation_strategy" and "strategy" in result:
+            return {"joint_strategy_decision": result, "strategy_selection": result["strategy"]}
         if node_id == "select_creation_strategy":
             return {
                 "selected_angle": {
@@ -418,6 +421,10 @@ class AgentNodeHandler:
             skip_formula_lexicon_usage=skip_formula_lexicon_pipeline(state),
             channel_profile=state.get("channel_profile") or {},
         )
+        required_skills = tuple(node["required_skills"])
+        if node["output_contract"] == "JointStrategyDecisionV1":
+            domain_context = replace(domain_context, joint_strategy_input=assembly.payload)
+            required_skills = (*required_skills, state["strategy_candidates"]["selection_skill"])
         prohibited_actions = list(PROHIBITED_ACTIONS.get(node["id"], ()))
         if skip_formula_lexicon_pipeline(state) and node["id"] == "semantic_review":
             prohibited_actions.extend(
@@ -436,7 +443,7 @@ class AgentNodeHandler:
                 node_run=node_run,
                 user=user,
                 agent_slug=node["agent_slug"],
-                required_skills=tuple(node["required_skills"]),
+                required_skills=required_skills,
                 input_contract=assembly.contract_name,
                 input_payload=assembly.payload,
                 input_snapshot_hash=assembly.snapshot_hash,
