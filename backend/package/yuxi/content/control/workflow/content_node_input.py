@@ -46,6 +46,15 @@ class ContentNodeInputAssembler:
                 f"节点 {node['id']} 输入不符合 {contract_name}: {field_path} {message}".strip(),
                 "invalid",
             ) from exc
+        if contract_name == "JointStrategyInputV1":
+            # 路径紧邻事实值，模型无需自行计数；只标注可见副本，不改冻结证据。
+            for index, item in enumerate(payload["evidence_bundle"].get("items", [])):
+                if (
+                    item.get("value") not in (None, "", [], {})
+                    and item.get("evidence_type", item.get("type")) != "style_reference"
+                    and (item.get("metadata") or {}).get("material_type") != "viral_example"
+                ):
+                    item["input_path"] = f"evidence_bundle.items.{index}.value"
         canonical = json.dumps(
             {"contract": contract_name, "payload": payload},
             ensure_ascii=False,

@@ -37,6 +37,29 @@ STRATEGY = {
 }
 
 
+def test_joint_strategy_labels_exact_evidence_paths_without_mutating_frozen_bundle():
+    from yuxi.content.model.contracts.strategy import resolve_input_path
+    from yuxi.content.v3.joint_workflow import WORKFLOW_JOINT
+
+    node = next(item for item in WORKFLOW_JOINT["nodes"] if item["id"] == "select_creation_strategy")
+    state = {
+        "content_brief": {"form_values": {"pain": "收纳不足"}},
+        "evidence_bundle": {"items": [{"value": ""}, {"value": "增加12㎡收纳空间"}]},
+        "strategy_candidates": {"industry_slug": "decoration"},
+        "reference_candidates": [],
+        "runtime_config_snapshot": {"creation_mode": "original"},
+    }
+    original = deepcopy(state)
+
+    assembly = ContentNodeInputAssembler.build(node=node, state=state)
+
+    items = assembly.payload["evidence_bundle"]["items"]
+    assert items[1]["input_path"] == "evidence_bundle.items.1.value"
+    assert resolve_input_path(assembly.payload, items[1]["input_path"]) == "增加12㎡收纳空间"
+    assert "input_path" not in items[0]
+    assert state == original
+
+
 STRATEGY["snapshot_hash"] = hashlib.sha256(
     json.dumps(STRATEGY, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()
@@ -263,6 +286,9 @@ def test_input_contract_registry_contains_every_agent_payload_contract():
         "AnalyzeContentValueInputV1",
         "AnalyzeAndSelectDirectionInputV1",
         "SelectCreationStrategyInputV1",
+        "SelectStrategyInputV2",
+        "JointStrategyInputV1",
+        "ViralAssetPreparationInputV1",
         "SelectContentDirectionInputV1",
         "ExplainStrategyInputV1",
         "CollectMissingEvidenceInputV1",
