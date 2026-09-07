@@ -571,7 +571,8 @@ const initializeFormValues = () => {
     ? {}
     : testFormDefaults[store.template?.slug || selectedTemplate.value?.slug] || {}
   activeFields.value.forEach((field) => {
-    if (hasSavedValues && saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
+    if (field.type === 'channel') formValues[field.key] = store.task?.channel_profile_version_id || ''
+    else if (hasSavedValues && saved[field.key] !== undefined) formValues[field.key] = saved[field.key]
     else if (defaults[field.key] !== undefined) formValues[field.key] = defaults[field.key]
     else if (field.type === 'tags') formValues[field.key] = []
     else formValues[field.key] = ''
@@ -1242,7 +1243,10 @@ const compileBrief = async () => {
     stage.value = 2
     message.success('业务简报已形成，可启动 V3 内容工作流')
   } catch (error) {
-    message.error(error.message || '请补充必填业务信息')
+    const missingFields = error.response?.data?.detail?.error?.fields
+    message.error(missingFields?.length
+      ? `请补充：${missingFields.map(field => field.label || field.field).join('、')}`
+      : error.message || '请补充必填业务信息')
   }
 }
 
@@ -1579,6 +1583,13 @@ const openVersions = async () => {
                     v-model:value="formValues[field.key]"
                     :rows="3"
                     :placeholder="field.placeholder || `请输入${field.label}`"
+                  />
+                  <a-select
+                    v-else-if="field.type === 'channel'"
+                    :value="store.task.channel_profile_version_id"
+                    :options="(store.bootstrap?.channel_profiles || []).map(channel => ({ value: channel.id, label: channel.name }))"
+                    disabled
+                    placeholder="任务尚未绑定发布渠道"
                   />
                   <a-select
                     v-else-if="field.type === 'tags'"

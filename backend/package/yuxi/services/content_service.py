@@ -289,6 +289,9 @@ def _task_name(template_name: str, content_goal: str) -> str:
 
 
 def _brief_field_value(brief: dict[str, Any], key: str) -> Any:
+    # 发布渠道由任务绑定，旧表单中的空值不能覆盖已解析的渠道版本。
+    if key == "channel_profile_version_id":
+        return brief.get(key)
     form_values = brief.get("form_values") or {}
     if key in form_values:
         return form_values[key]
@@ -298,7 +301,7 @@ def _brief_field_value(brief: dict[str, Any], key: str) -> Any:
         return brief.get("audience")
     if key in {"required_terms", "forbidden_terms"}:
         return brief.get(key)
-    if key in {"channel_profile_version_id", "persona_profile_version_id", "attachments"}:
+    if key in {"persona_profile_version_id", "attachments"}:
         return brief.get(key)
     return (brief.get("business_variables") or {}).get(key)
 
