@@ -6,13 +6,17 @@ import uuid
 import pytest
 
 from scripts.migrate_joint_strategy import migrate
-from yuxi.content.v3.joint_workflow import PLATFORM_WORKFLOW_JOINT_ID, PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID
+from yuxi.content.v3.joint_workflow import (
+    PLATFORM_WORKFLOW_JOINT_ID, PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID, PLATFORM_WORKFLOW_PRICE_RECOVERY_ID,
+)
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_content import ContentWorkflowVersion, IndustryTemplateVersion
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("workflow_id", [PLATFORM_WORKFLOW_JOINT_ID, PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID])
+@pytest.mark.parametrize("workflow_id", [
+    PLATFORM_WORKFLOW_JOINT_ID, PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID, PLATFORM_WORKFLOW_PRICE_RECOVERY_ID,
+])
 async def test_explicit_template_switch_and_rollback_preserve_history(workflow_id):
     pg_manager.initialize()
     async with pg_manager.AsyncSession() as db:

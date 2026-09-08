@@ -49,6 +49,7 @@ class ContentWorkflowState(TypedDict, total=False):
     strategy_catalog: dict[str, Any]
     reference_candidates: list[dict[str, Any]]
     reference_search_queries: list[str]
+    strategy_price_evidence_collection: dict[str, Any]
     joint_strategy_decision: dict[str, Any]
     strategy_selection: dict[str, Any]
     match_decision_snapshot: dict[str, Any]

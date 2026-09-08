@@ -221,8 +221,25 @@ async def test_graph_initialization_failure_marks_run_and_task_failed(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_failed_node_retry_continues_from_checkpoint(monkeypatch):
+@pytest.mark.parametrize("price_recovery,reference_status,has_prices,requested_node,expected_predecessor", [
+    (False, None, False, "generate_body", None),
+    (True, "needs_input", True, "lock_creation_strategy", "merge_strategy_prices"),
+    (True, "no_candidate", True, None, "merge_strategy_prices"),
+    (False, "needs_input", True, "lock_creation_strategy", None),
+    (True, "selected", True, "lock_creation_strategy", None),
+    (True, "needs_input", False, "lock_creation_strategy", None),
+])
+async def test_failed_node_retry_continues_from_checkpoint(
+    monkeypatch, price_recovery, reference_status, has_prices, requested_node, expected_predecessor,
+):
     graph = FakeGraph()
+    graph.pending_node = requested_node or "lock_creation_strategy"
+    graph.values = {
+        "joint_strategy_decision": {"reference": {"status": reference_status}},
+        "strategy_price_evidence_collection": {
+            "evidence_items": [{"id": "price", "verified_status": "user_confirmed"}] if has_prices else [],
+        },
+    }
     statuses = []
 
     run = SimpleNamespace(
@@ -231,7 +248,7 @@ async def test_failed_node_retry_continues_from_checkpoint(monkeypatch):
         uid="user-1",
         request_id="request-1",
         checkpoint_thread_id="content:task-1",
-        input_payload={"action": "retry", "node_id": "generate_body", "model_spec": None},
+        input_payload={"action": "retry", "node_id": requested_node, "model_spec": None},
     )
     task = SimpleNamespace(
         id="task-1",
@@ -243,7 +260,9 @@ async def test_failed_node_retry_continues_from_checkpoint(monkeypatch):
         strategy_json={},
         evidence_json={"items": []},
     )
-    workflow = SimpleNamespace(definition_json={"schema_version": 3, "nodes": [], "edges": []})
+    workflow = SimpleNamespace(definition_json={
+        "schema_version": 3, "nodes": [], "edges": [], "price_recovery": price_recovery,
+    })
 
     async def load_run(run_id):
         return run, task, workflow, {"version": {"id": "rules-v3"}}
@@ -274,6 +293,7 @@ async def test_failed_node_retry_continues_from_checkpoint(monkeypatch):
     await content_run_worker.process_content_run({"job_try": 1}, run.id)
 
     assert graph.invoked_with is None
+    assert graph.updated_as_node == expected_predecessor
     assert graph.updated_state == {
         "run_id": run.id,
         "uid": run.uid,

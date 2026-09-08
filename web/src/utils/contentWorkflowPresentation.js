@@ -19,6 +19,10 @@ export const CONTENT_WORKFLOW_NODE_LABELS = {
   collect_viral_candidates: '爆款候选检索 Agent',
   select_viral_reference: '爆款匹配与结构解析 Agent',
   merge_research_evidence: '汇总并校验调研证据',
+  research_strategy_prices: '检索报价明细',
+  confirm_strategy_prices: '确认引用报价',
+  merge_strategy_prices: '合并报价证据',
+  reselect_creation_strategy: '补证后复评策略',
   confirm_high_risk_facts: '人工确认高风险事实',
   freeze_evidence_bundle: '冻结证据包',
   prepare_formula_selection: '校验有效公式对',
@@ -616,6 +620,18 @@ export const buildContentStrategyPresentation = (
   }
 }
 
+export const findContentStrategyNarrativeAnchor = (activities = [], codeLabels = {}) => {
+  for (let index = 0; index < activities.length; index += 1) {
+    const prefix = activities.slice(0, index + 1)
+    if (buildContentStrategyPresentation(prefix, codeLabels).formulaCodes.length) {
+      return buildContentNarrativeStream(prefix, codeLabels)
+        .map((item) => item.text)
+        .join('\n\n').length
+    }
+  }
+  return null
+}
+
 export const buildContentEvidenceUsageSnapshot = (generatedContent = {}) => {
   const usagesByEvidence = new Map()
   const addUsage = (evidenceId, usage) => {
@@ -716,6 +732,10 @@ export const CONTENT_WORKFLOW_GROUPS = [
     description: 'Agent 一次选择创作手法与公式，固定规则负责校验锁定',
     nodes: [
       'select_creation_strategy',
+      'research_strategy_prices',
+      'confirm_strategy_prices',
+      'merge_strategy_prices',
+      'reselect_creation_strategy',
       'lock_creation_strategy',
       'load_formula_lexicons',
       'collect_business_rule_evidence',
@@ -732,6 +752,11 @@ export const CONTENT_WORKFLOW_GROUPS = [
         id: 'select_creation_strategy',
         label: 'Agent 匹配创作手法、标题公式和正文公式',
         nodes: ['select_creation_strategy']
+      },
+      {
+        id: 'strategy_price_recovery',
+        label: '检索、确认报价并复评策略',
+        nodes: ['research_strategy_prices', 'confirm_strategy_prices', 'merge_strategy_prices', 'reselect_creation_strategy']
       },
       {
         id: 'lock_creation_strategy',

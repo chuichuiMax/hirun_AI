@@ -70,7 +70,9 @@ class PostgresStrategyPreviewRepository:
         from yuxi.content.model.strategy import build_strategy_candidates
 
         task, industry_slug, bundle = await self._load_strategy_source(task_id, actor)
-        auto_direction = auto_direction or task.workflow_version_id == "content-workflow-blueprint-first-v1"
+        from yuxi.content.v3.joint_workflow import BLUEPRINT_FIRST_WORKFLOW_IDS
+
+        auto_direction = auto_direction or task.workflow_version_id in BLUEPRINT_FIRST_WORKFLOW_IDS
         try:
             candidates = build_strategy_candidates(
                 bundle,

@@ -202,7 +202,17 @@ async def _ensure_workflow_v3(db: AsyncSession) -> None:
     from yuxi.content.v3.joint_workflow import (
         PLATFORM_WORKFLOW_JOINT_ID, WORKFLOW_JOINT,
         PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID, WORKFLOW_BLUEPRINT_FIRST,
+        PLATFORM_WORKFLOW_PRICE_RECOVERY_ID, WORKFLOW_PRICE_RECOVERY,
     )
+
+    if await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_PRICE_RECOVERY_ID) is None:
+        db.add(ContentWorkflowVersion(
+            id=PLATFORM_WORKFLOW_PRICE_RECOVERY_ID, slug="enterprise-content", tenant_id=None, version=18,
+            schema_version=3, status="draft", definition_json=deepcopy(WORKFLOW_PRICE_RECOVERY),
+            definition_hash=workflow_definition_hash(WORKFLOW_PRICE_RECOVERY),
+            input_schema={"type": "ContentBrief", "version": 3},
+            output_schema={"type": "ContentArtifact", "version": 3}, created_by="system",
+        ))
 
     if await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID) is None:
         db.add(ContentWorkflowVersion(

@@ -18,6 +18,7 @@ from yuxi.content.v3.joint_workflow import (
     WORKFLOW_JOINT,
     PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID,
     WORKFLOW_BLUEPRINT_FIRST,
+    PLATFORM_WORKFLOW_PRICE_RECOVERY_ID, WORKFLOW_PRICE_RECOVERY,
 )
 from yuxi.repositories.agent_repository import AgentRepository
 from yuxi.agents.skills.repository import SkillRepository
@@ -32,6 +33,7 @@ async def migrate(db, *, template_ids=None, plan=None, rollback=False, workflow_
     definition = {
         PLATFORM_WORKFLOW_JOINT_ID: WORKFLOW_JOINT,
         PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID: WORKFLOW_BLUEPRINT_FIRST,
+        PLATFORM_WORKFLOW_PRICE_RECOVERY_ID: WORKFLOW_PRICE_RECOVERY,
     }[workflow_id]
     target = (
         await db.execute(
@@ -129,7 +131,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--workflow-id",
         default=PLATFORM_WORKFLOW_JOINT_ID,
-        choices=[PLATFORM_WORKFLOW_JOINT_ID, PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID],
+        choices=[PLATFORM_WORKFLOW_JOINT_ID, PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID, PLATFORM_WORKFLOW_PRICE_RECOVERY_ID],
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply")

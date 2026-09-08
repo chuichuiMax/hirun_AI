@@ -22,6 +22,8 @@ from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import ContentNodeRun, ContentTask
 
 PROHIBITED_ACTIONS = {
+    "research_strategy_prices": ("只检索价格库", "不得把标准单价转换为本项目成交金额", "不得代替人工确认"),
+    "reselect_creation_strategy": ("不得再次查询知识库", "不得把标准单价映射为实际成交明细", "不生成正文"),
     "select_creation_strategy": ("不提交规则库外的组合组、创作手法或公式", "不编造事实", "不生成正文"),
     "analyze_and_select_direction": ("不锁定组合组", "不选公式", "不修改工作流"),
     "analyze_content_value": ("不锁定组合组", "不选公式", "不修改工作流"),
@@ -79,7 +81,7 @@ def _review_report_without_decoration_formulas(result: dict[str, Any]) -> dict[s
 class AgentNodeResultMapper:
     @staticmethod
     def to_state(node_id: str, result: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        if node_id == "select_creation_strategy" and "strategy" in result:
+        if node_id in {"select_creation_strategy", "reselect_creation_strategy"} and "strategy" in result:
             return {"joint_strategy_decision": result, "strategy_selection": result["strategy"]}
         if node_id == "select_creation_strategy":
             return {
@@ -147,6 +149,8 @@ class AgentNodeResultMapper:
             return {"evidence_collection": result}
         if node_id == "collect_business_rule_evidence":
             return {"business_rule_evidence_collection": result}
+        if node_id == "research_strategy_prices":
+            return {"strategy_price_evidence_collection": result}
         if node_id == "collect_price_evidence":
             return {"price_evidence_collection": result}
         if node_id == "collect_compliance_evidence":
@@ -276,6 +280,27 @@ class AgentNodeHandler:
         ).scalar_one_or_none()
         if node_run is None or task is None or user is None:
             raise ValueError("Agent 节点缺少任务、用户或节点 Run")
+
+        if node["id"] == "research_strategy_prices" and not (
+            (state.get("joint_strategy_decision") or {}).get("price_research_questions")
+        ):
+            return {"strategy_price_evidence_collection": {
+                "evidence_items": [], "citations": [], "unresolved_questions": [],
+                "skipped": True, "skip_reason": "策略未发现需要检索的报价缺口",
+            }}
+        if node["id"] == "reselect_creation_strategy" and (
+            state["strategy_price_evidence_collection"].get("skipped")
+        ):
+            return {"joint_strategy_decision": state["joint_strategy_decision"],
+                    "strategy_selection": state["strategy_selection"]}
+        if node["id"] == "collect_price_evidence" and (
+            state.get("strategy_price_evidence_collection") is not None
+            and not state["strategy_price_evidence_collection"].get("skipped")
+        ):
+            return {"price_evidence_collection": {
+                "evidence_items": [], "citations": [], "unresolved_questions": [],
+                "skipped": True, "skip_reason": "策略锁定前已完成本次价格检索，证据已合并",
+            }}
 
         research_result_fields = {
             "collect_business_rule_evidence": "business_rule_evidence_collection",
@@ -422,7 +447,7 @@ class AgentNodeHandler:
             channel_profile=state.get("channel_profile") or {},
         )
         required_skills = tuple(node["required_skills"])
-        if node["output_contract"] == "JointStrategyDecisionV1":
+        if node["output_contract"] in {"JointStrategyDecisionV1", "JointStrategyDecisionV2"}:
             domain_context = replace(domain_context, joint_strategy_input=assembly.payload)
             required_skills = (*required_skills, state["strategy_candidates"]["selection_skill"])
         prohibited_actions = list(PROHIBITED_ACTIONS.get(node["id"], ()))

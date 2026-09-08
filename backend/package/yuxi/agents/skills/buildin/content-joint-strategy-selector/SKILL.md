@@ -28,3 +28,15 @@ description: 在一个有限决策中选择行业公式、独立创作手法及�
 因缺资料淘汰候选时，用 `reason` 说明缺什么，`input_paths` 填 `[]`；如有其他实际证据，也可引用。不能把缺失字段写入路径。合格候选必须引用实际支持其选择的输入；未知软偏好按 0 分处理，不能补造字段。
 
 例如本次只有 `content_brief.form_values.pain`，没有情绪素材：可以引用 pain 说明真实痛点；若某候选必需情绪素材则淘汰，并在理由说明“未提供情绪素材”。不能提交 `content_brief.business_variables.emotion`，也不能为凑证据把无关字段当作情绪证明。此规则同样适用于参考卡评分和 `slot_mapping`。
+
+
+## 报价补证版决策（仅输出契约 JointStrategyDecisionV2）
+
+- `strategy` 和 `reference` 的资料缺口分别判断：公式与手法可选时 strategy.status=selected、strategy.unresolved_questions=[]；只有参考缺报价时，把问题写在 reference.unresolved_questions，不能复制到已选中的 strategy。若公式自身也缺必要事实，则 strategy.status=needs_input，不得同时标记 selected。
+- V2 在 strategy/reference 之外还必须提交 `price_research_questions`；没有报价缺口时填 []。V1 不提交此字段。
+- 参考因缺价格、分项单价或费用范围而不合格时，仍如实提交 needs_input/no_candidate，同时把价格库可以回答的问题写入该数组，例如“杭州设计、拆改、水电、泥木、油漆的标准单价、单位和包含范围”。系统随后会委派价格调研 Agent；你不能自行调用知识库。
+- 只有项目总预算不能充当分项明细。标准单价也不能证明本项目工程量、分项总额、合同成交或最终结算。
+- `ReevaluateJointStrategyInputV1` 表示本次已经完成价格检索。读取 `strategy_price_evidence_collection` 的来源和未解决问题、更新后的 evidence_bundle，再重新比较同一批候选。禁止再次要求检索相同资料。
+- 标准单价可独立支撑“报价明细、分项价格、工价清单、价格透明”以及“标准单价/工价参考”槽位，必须保持地区、范围、单位与“标准参考”表述。简报另有项目总预算时，两者可以并列展示，不要求单价与总预算对应、相加一致，也不要求工程量或分项小计。不能仅因槽位名含“本项目报价明细”就认定必须是成交明细；判断其实际表达是否明确要求成交或结算。
+- 已有适用标准单价且内容可以按标准参考表达时，认定价格槽位可填充，清空已解决的价格问题；不得因没有工程量、实际报价或未覆盖所有装修类别继续返回 needs_input。只有用户明确要写实际成交/结算，或参考核心是不可改为标准参考的真实结算、实际分项费用或节省结果时，才要求对应工程量、分项金额等缺失依据；不能用标准价证明这些实际结果。
+- 仍无合格参考时如实保留 needs_input/no_candidate，不降级原创、不为了继续而选择不适用的参考。

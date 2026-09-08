@@ -26,13 +26,13 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     ),
     BuiltinSkillSpec(
         slug="content-joint-strategy-selector",
-        version="1.2.0",
+        version="1.4.0",
         source_dir=_SKILLS_ROOT / "content-joint-strategy-selector",
         description="按行业规则一次选择公式、独立手法及已准备的文章级参考。",
     ),
     BuiltinSkillSpec(
         slug="prepared-viral-reference-selector",
-        version="1.2.0",
+        version="1.3.0",
         source_dir=_SKILLS_ROOT / "prepared-viral-reference-selector",
         description="基于本次输入评分选择已准备参考卡，不阅读全文或重新提取蓝图。",
     ),
@@ -91,7 +91,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-price-researcher",
         source_dir=_SKILLS_ROOT / "content-price-researcher",
         description="只检索价格库并保留适用范围、计价单位和价格口径。",
-        version="1.1.0",
+        version="1.3.0",
         tool_dependencies=("query_kb",),
     ),
     BuiltinSkillSpec(
@@ -131,7 +131,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-body-generator",
         source_dir=_SKILLS_ROOT / "content-body-generator",
         description="使用人工锁定标题、正文公式和同源证据生成正文与话题。",
-        version="2.3.0",
+        version="2.4.0",
     ),
     BuiltinSkillSpec(
         slug="content-human-expression",
@@ -146,7 +146,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
             "按已冻结的唯一爆款结构蓝图重构标题、大纲和正文，"
             "保留真实 Emoji 的位置和功能，并使用真实业务证据替换原文内容。"
         ),
-        version="1.6.0",
+        version="1.7.0",
     ),
     BuiltinSkillSpec(
         slug="viral-layout-formatter",
@@ -170,7 +170,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-reviewer",
         source_dir=_SKILLS_ROOT / "content-reviewer",
         description="审核公式执行、事实一致性、人设语气和内容风险。",
-        version="1.9.0",
+        version="1.10.0",
         tool_dependencies=(
             "query_kb",
             "open_kb_document",

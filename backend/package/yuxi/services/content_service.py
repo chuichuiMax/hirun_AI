@@ -421,11 +421,11 @@ async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
     rule_bundle = await repo.get_rule_bundle(version.id)
     policy = load_selection_policy()
     templates = await repo.list_templates()
-    from yuxi.content.v3.joint_workflow import PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID
+    from yuxi.content.v3.joint_workflow import BLUEPRINT_FIRST_WORKFLOW_IDS
 
     for template in templates:
         template["strategy_mode"] = policy["industry_modes"].get(template["slug"], policy["default_mode"])
-        template["blueprint_first"] = template["default_workflow_version_id"] == PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID
+        template["blueprint_first"] = template["default_workflow_version_id"] in BLUEPRINT_FIRST_WORKFLOW_IDS
     return {
         "industry_templates": templates,
         "content_goals": CONTENT_GOALS,
@@ -988,7 +988,7 @@ async def save_content_brief(
     )
     if requested_image_item_id:
         owner_uid = str(user.uid)
-        material_repo = MaterialLibraryRepository(db)
+        material_repo = MaterialLibraryRepository(db, include_shared=True)
         image_item = await material_repo.get_item_for_user(requested_image_item_id, owner_uid, for_update=True)
         if image_item is None or image_item.material_type != "image" or image_item.status != "enabled":
             raise _content_error(
@@ -1003,8 +1003,10 @@ async def save_content_brief(
                 "该图库图片已被其他内容任务使用，请选择其他图片",
             )
         image_asset = await material_repo.get_asset(image_item.asset_id, owner_uid, for_update=True)
+        image_asset = await material_repo.get_asset(image_item.asset_id, image_item.owner_uid, for_update=True)
         if image_asset is None or image_asset.role not in {"source", "library_image"}:
             raise _content_error(422, "CONTENT_IMAGE_ASSET_INVALID", "所选图库图片的文件记录无效")
+        await ContentCoverRepository(db).retain_material_use([image_asset.id], owner_uid)
         visual_snapshot = {
             "image_item_id": image_item.id,
             "image_asset_id": image_asset.id,
@@ -1393,7 +1395,25 @@ async def get_artifact_viral_reference(db: AsyncSession, user: User, artifact_id
     if selected is None:
         raise _content_error(404, "VIRAL_REFERENCE_NOT_FOUND", "未找到本次仿写选中的爆款参考")
 
+    asset_id = (selected.get("metadata") or {}).get("asset_id")
+    if asset_id:
+        from yuxi.services.content_viral_assets import require_asset
+
+        # 新工作流的证据只包含结构蓝图，完整原文保存在选中的不可变资产版本中。
+        asset = await require_asset(db, user, asset_id)
+        source = asset.source_json
+        return {
+            "reference": {
+                "id": asset.id,
+                "content": f"{source['title']}\n\n{source['body']}",
+                "source_name": source["title"],
+                "knowledge_base_name": "",
+            }
+        }
+
     node_run = await repo.get_latest_completed_node_run(artifact.task_id, "collect_viral_candidates")
+    if node_run is None:
+        raise _content_error(404, "VIRAL_REFERENCE_SOURCE_NOT_FOUND", "未找到已选爆款的原文记录")
     collection = ((node_run.output_snapshot or {}).get("result") or {}).get("viral_candidate_collection") or {}
     candidate = next(
         (item for item in collection.get("evidence_items") or [] if item.get("id") == selected.get("id")),

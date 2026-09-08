@@ -195,6 +195,20 @@ class V3DeterministicNodeHandler:
         state: dict[str, Any],
         node_run_id: str,
     ) -> dict[str, Any]:
+        if node["id"] == "merge_strategy_prices":
+            collection = state["strategy_price_evidence_collection"]
+            result = await self._freeze_evidence_bundle(
+                db=db, state={**state, "evidence_collection": collection}, node_run_id=node_run_id,
+            )
+            candidates = dict(state["strategy_candidates"])
+            candidates["available_input_paths"] = list(dict.fromkeys([
+                *(candidates.get("available_input_paths") or []),
+                *(f"evidence_bundle.items.{index}.value"
+                  for index, item in enumerate(result["evidence_bundle"]["items"])
+                  if item.get("value") not in (None, "", [], {})
+                  and (item.get("metadata") or {}).get("material_type") != "viral_example"),
+            ]))
+            return {**result, "strategy_candidates": candidates}
         if node["id"] == "prepare_strategy_candidates":
             from yuxi.content.control.workflow.joint_strategy import prepare_strategy_candidates
 

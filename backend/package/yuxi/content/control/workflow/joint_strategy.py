@@ -24,8 +24,10 @@ async def prepare_strategy_candidates(*, db, state, node_run_id):
     from yuxi.services.agent_runtime_service import resolve_agent_runtime_context
 
     del node_run_id
+    from yuxi.content.v3.joint_workflow import BLUEPRINT_FIRST_WORKFLOW_IDS
+
     auto_direction = (
-        state["runtime_config_snapshot"].get("workflow_version_id") == "content-workflow-blueprint-first-v1"
+        state["runtime_config_snapshot"].get("workflow_version_id") in BLUEPRINT_FIRST_WORKFLOW_IDS
     )
     user = (await db.execute(select(User).where(User.uid == state["uid"], User.is_deleted == 0))).scalar_one()
     result = await PostgresStrategyPreviewRepository(db).load_candidates(
@@ -221,7 +223,7 @@ async def lock_joint_strategy(*, db, state, node_run_id):
         "body_formula": body,
         "rule_version_id": decision.rule_version_id,
         "policy_hash": decision.policy_hash,
-        "decision": result.model_dump(mode="json"),
+        "decision": result.model_dump(mode="json", exclude={"price_research_questions"}),
         "reference_snapshot": reference_snapshot,
     }
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

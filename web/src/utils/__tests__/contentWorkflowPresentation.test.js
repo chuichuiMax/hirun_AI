@@ -13,6 +13,7 @@ import {
   buildFormulaPresentation,
   buildContentRuntimeTimeline,
   buildContentWorkflowGroups,
+  findContentStrategyNarrativeAnchor,
   formatElapsedDuration
 } from '../contentWorkflowPresentation.js'
 
@@ -32,8 +33,8 @@ assert.ok(!rejectedResultTimeline[0].detail.includes('ContractDomainValidationEr
 
 const groupedNodeIds = CONTENT_WORKFLOW_GROUPS.flatMap((group) => group.nodes)
 assert.equal(CONTENT_WORKFLOW_GROUPS.length, 5)
-assert.equal(groupedNodeIds.length, 26)
-assert.equal(new Set(groupedNodeIds).size, 26)
+assert.equal(groupedNodeIds.length, 30)
+assert.equal(new Set(groupedNodeIds).size, 30)
 assert.ok(groupedNodeIds.every((nodeId) => CONTENT_WORKFLOW_NODE_LABELS[nodeId]))
 assert.equal(CONTENT_WORKFLOW_NODE_LABELS.load_formula_lexicons, '加载公式必选词库')
 assert.deepEqual(CONTENT_WORKFLOW_GROUPS.at(-1).nodes, [
@@ -60,7 +61,14 @@ assert.equal(groups[1].isOpen, true)
 assert.equal(groups[1].currentNode.id, 'select_creation_strategy')
 assert.equal(groups[1].currentText, '当前：Agent 匹配创作手法、标题公式和正文公式')
 assert.equal(groups[1].completedCount, 0)
-assert.equal(groups[1].totalCount, 9)
+assert.equal(groups[1].totalCount, 10)
+
+const priceRecoveryGroup = buildContentWorkflowGroups([
+  { node_id: 'research_strategy_prices', status: 'completed' },
+  { node_id: 'confirm_strategy_prices', status: 'waiting_human' }
+])[1]
+assert.equal(priceRecoveryGroup.status, 'running')
+assert.equal(priceRecoveryGroup.currentNode.id, 'strategy_price_recovery')
 
 const parallelResearchGroups = buildContentWorkflowGroups([
   { node_id: 'collect_business_rule_evidence', status: 'completed' },
@@ -398,6 +406,42 @@ assert.deepEqual(strategyPresentation.rows[2], {
   type: '场景增强',
   purpose: '补充真实场景，增强内容代入感'
 })
+const strategyAnchorActivities = [
+  {
+    id: 'before-strategy',
+    nodeId: 'select_creation_strategy',
+    eventType: 'content.agent.started',
+    status: 'running'
+  },
+  {
+    id: 'strategy-result',
+    nodeId: 'select_creation_strategy',
+    eventType: 'content.agent.completed',
+    status: 'completed',
+    outputPreview: {
+      selected_direction_code: 'CT01',
+      creation_method_codes: ['S01'],
+      title_formula_code: 'T01',
+      body_formula_code: 'C02'
+    }
+  },
+  {
+    id: 'after-strategy',
+    nodeId: 'collect_business_rule_evidence',
+    eventType: 'content.agent.started',
+    status: 'running'
+  }
+]
+const strategyAnchor = findContentStrategyNarrativeAnchor(strategyAnchorActivities, codeLabels)
+const strategyAnchoredNarrative = buildContentNarrativeStream(strategyAnchorActivities, codeLabels)
+  .map((item) => item.text)
+  .join('\n\n')
+assert.equal(
+  strategyAnchoredNarrative.slice(0, strategyAnchor),
+  '正在结合目标受众、业务优势和现有证据，判断最值得表达的内容方向。'
+)
+assert.match(strategyAnchoredNarrative.slice(strategyAnchor), /正在检索与当前主题/)
+assert.equal(findContentStrategyNarrativeAnchor([], codeLabels), null)
 assert.equal(
   buildContentStrategyPresentation([], codeLabels, {
     content_direction: 'CT01',

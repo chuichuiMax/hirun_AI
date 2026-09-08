@@ -55,6 +55,7 @@ export function returnToContentSwarm(): boolean {
 }
 
 export type ContentSwarmGallery = {
+  visibility?: "private" | "enterprise";
   id: string;
   name: string;
   parent_id?: string | null;
