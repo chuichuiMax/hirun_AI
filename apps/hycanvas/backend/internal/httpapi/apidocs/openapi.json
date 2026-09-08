@@ -186,6 +186,34 @@
             "type": "boolean"
           }
         }
+      },
+      "Template": {
+        "type": "object",
+        "required": ["id", "title", "previewUrls", "pageCount"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "previewUrls": { "type": "array", "items": { "type": "string" } },
+          "pageCount": { "type": "integer" },
+          "format": { "type": "object" },
+          "categories": { "type": "array", "items": { "type": "string" } },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "fillableFields": { "type": "array", "items": {} },
+          "createdAt": { "type": "string" },
+          "updatedAt": { "type": "string" }
+        }
+      },
+      "TemplateCategory": {
+        "type": "object",
+        "required": ["id", "name", "templates"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "templates": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Template" }
+          }
+        }
       }
     }
   },
@@ -529,6 +557,32 @@
         "responses": {
           "200": {
             "description": "Audit entries: { id, keyId, workspaceId, userId, surface, designId, at }."
+          }
+        }
+      }
+    },
+    "/templates/catalog": {
+      "get": {
+        "summary": "List all templates grouped by category",
+        "description": "Public endpoint; no authentication or workspace id is required. Categories with no templates are returned with an empty templates array; templates without a category are omitted.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "All categorized templates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["categories"],
+                  "properties": {
+                    "categories": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/TemplateCategory" }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

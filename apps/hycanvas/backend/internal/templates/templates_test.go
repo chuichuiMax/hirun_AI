@@ -620,6 +620,20 @@ func TestTemplates_DB(t *testing.T) {
 	if err != nil || len(inCol) != 1 || inCol[0].ID != wsTmpl.ID {
 		t.Fatalf("collection filter wrong: %+v err=%v", inCol, err)
 	}
+	catalog, err := svc.PublicCategorizedCatalog(ctx)
+	if err != nil {
+		t.Fatalf("PublicCategorizedCatalog: %v", err)
+	}
+	var catalogCategory *Category
+	for i := range catalog {
+		if catalog[i].ID == col.ID {
+			catalogCategory = &catalog[i]
+			break
+		}
+	}
+	if catalogCategory == nil || catalogCategory.Name != col.Name || len(catalogCategory.Templates) != 1 || catalogCategory.Templates[0].ID != wsTmpl.ID {
+		t.Fatalf("categorized catalog wrong: %+v", catalog)
+	}
 	if err := svc.DeleteCollection(ctx, owner.ID, col.ID); err != nil {
 		t.Fatalf("DeleteCollection: %v", err)
 	}
