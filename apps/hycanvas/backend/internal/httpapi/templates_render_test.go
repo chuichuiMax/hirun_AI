@@ -2,12 +2,56 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"image/png"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"hycanvas/backend/internal/apikeys"
+	"hycanvas/backend/internal/templates"
 )
+
+type publicCatalogDB struct{}
+
+func (publicCatalogDB) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
+func (publicCatalogDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+func (publicCatalogDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	return &publicCatalogRows{collectionQuery: bytes.Contains([]byte(sql), []byte("template_collections"))}, nil
+}
+
+type publicCatalogRows struct {
+	collectionQuery bool
+	read            bool
+}
+
+func (r *publicCatalogRows) Close()                                       {}
+func (r *publicCatalogRows) Err() error                                   { return nil }
+func (r *publicCatalogRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *publicCatalogRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *publicCatalogRows) RawValues() [][]byte                          { return nil }
+func (r *publicCatalogRows) Conn() *pgx.Conn                              { return nil }
+func (r *publicCatalogRows) NextResultSet() bool                          { return false }
+func (r *publicCatalogRows) Values() ([]any, error)                       { return nil, nil }
+func (r *publicCatalogRows) Next() bool {
+	if r.read {
+		return false
+	}
+	r.read = true
+	return r.collectionQuery
+}
+func (r *publicCatalogRows) Scan(dest ...any) error {
+	*(dest[0].(*string)) = "category-1"
+	*(dest[1].(*string)) = "workspace-1"
+	*(dest[2].(*string)) = "内容报价"
+	return nil
+}
 
 func TestRenderTemplatePreviewCreatesScaledPNG(t *testing.T) {
 	file := map[string]any{
@@ -47,5 +91,26 @@ func TestTemplateBackgroundPreviewAPIKeyRouteRequiresExportScope(t *testing.T) {
 	}
 	if route.scope != apikeys.ScopeExport || designID != "" {
 		t.Fatalf("template background preview route = scope %q design %q", route.scope, designID)
+	}
+}
+
+func TestTemplateCatalogIsPublicAndNeedsNoWorkspaceID(t *testing.T) {
+	service := templates.NewService(publicCatalogDB{}, nil, nil)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/templates/catalog", nil)
+
+	templatesCatalogHandler(service).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Categories []templates.Category `json:"categories"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Categories) != 1 || response.Categories[0].Name != "内容报价" || response.Categories[0].Templates == nil {
+		t.Fatalf("response = %+v", response)
 	}
 }
