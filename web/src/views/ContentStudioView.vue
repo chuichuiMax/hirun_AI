@@ -52,7 +52,8 @@ import {
   buildContentNarrativeStream,
   buildKnowledgeEvidenceGroups,
   buildContentStrategyPresentation,
-  buildContentWorkflowGroups
+  buildContentWorkflowGroups,
+  findContentStrategyNarrativeAnchor
 } from '@/utils/contentWorkflowPresentation'
 
 const route = useRoute()
@@ -492,6 +493,10 @@ const workflowStrategyPresentation = computed(() =>
     store.artifact?.strategy_snapshot || store.task?.strategy || {}
   )
 )
+const workflowEvidenceOnlyPresentation = computed(() => ({
+  ...workflowStrategyPresentation.value,
+  formulaCodes: []
+}))
 const workflowEvidenceUsageSnapshot = computed(() => {
   const persisted = store.artifact?.evidence_usage_snapshot
   if (persisted?.items?.length) return persisted
@@ -515,6 +520,23 @@ const activeWorkflowNarrative = computed(() =>
 const activeWorkflowNarrativeText = computed(() =>
   accumulatedWorkflowNarrative.value.join('\n\n')
 )
+const workflowStrategyNarrativeAnchor = ref(null)
+const workflowStrategyPanelVisible = computed(
+  () =>
+    workflowStrategyPresentation.value.formulaCodes.length > 0 &&
+    workflowStrategyNarrativeAnchor.value !== null &&
+    streamedWorkflowNarrative.value.length >= workflowStrategyNarrativeAnchor.value
+)
+const streamedWorkflowNarrativeBeforeStrategy = computed(() => {
+  const anchor = workflowStrategyNarrativeAnchor.value
+  if (anchor === null) return streamedWorkflowNarrative.value
+  return streamedWorkflowNarrative.value.slice(0, anchor)
+})
+const streamedWorkflowNarrativeAfterStrategy = computed(() => {
+  const anchor = workflowStrategyNarrativeAnchor.value
+  if (anchor === null || streamedWorkflowNarrative.value.length <= anchor) return ''
+  return streamedWorkflowNarrative.value.slice(anchor).trimStart()
+})
 const workflowNarrativeActive = computed(
   () =>
     streamedWorkflowNarrative.value.length < activeWorkflowNarrativeText.value.length ||
@@ -1095,6 +1117,7 @@ watch(
     followWorkflowOutput.value = true
     accumulatedWorkflowNarrative.value = []
     streamedWorkflowNarrative.value = ''
+    workflowStrategyNarrativeAnchor.value = null
   }
 )
 
@@ -1186,6 +1209,23 @@ watch(
     }
   },
   { immediate: true }
+)
+
+watch(
+  [workflowStrategyPresentation, activeWorkflowNarrativeText, workflowNarrativeActivities],
+  ([presentation, narrativeText, activities]) => {
+    if (
+      workflowStrategyNarrativeAnchor.value === null &&
+      presentation.formulaCodes.length
+    ) {
+      workflowStrategyNarrativeAnchor.value =
+        findContentStrategyNarrativeAnchor(
+          activities,
+          workflowNarrativeCodeLabels.value
+        ) ?? narrativeText.length
+    }
+  },
+  { immediate: true, flush: 'post' }
 )
 
 watch(
@@ -2156,11 +2196,19 @@ const openVersions = async () => {
               <div class="workflow-stream">
                 <section class="codex-workflow-status completed" aria-live="polite">
                   <div class="workflow-narrative completion-narrative">
-                    <div v-if="streamedWorkflowNarrative" class="workflow-narrative-copy-wrap">
-                      <MarkdownPreview compact :content="streamedWorkflowNarrative" />
+                    <div v-if="streamedWorkflowNarrativeBeforeStrategy" class="workflow-narrative-copy-wrap">
+                      <MarkdownPreview compact :content="streamedWorkflowNarrativeBeforeStrategy" />
                     </div>
                     <ContentWorkflowStrategyPanel
+                      v-if="workflowStrategyPanelVisible"
                       :presentation="workflowStrategyPresentation"
+                      :evidence-groups="[]"
+                    />
+                    <div v-if="streamedWorkflowNarrativeAfterStrategy" class="workflow-narrative-copy-wrap">
+                      <MarkdownPreview compact :content="streamedWorkflowNarrativeAfterStrategy" />
+                    </div>
+                    <ContentWorkflowStrategyPanel
+                      :presentation="workflowEvidenceOnlyPresentation"
                       :evidence-groups="workflowEvidenceGroups"
                     />
                     <ContentStrategyDecision :task-id="store.task?.id" :run-status="workflowRunStatus" :field-labels="evidenceFieldLabels" />
@@ -2291,13 +2339,19 @@ const openVersions = async () => {
                   </span>
                 </div>
                 <div class="workflow-narrative" aria-live="polite" aria-atomic="false">
-                  <div v-if="streamedWorkflowNarrative" class="workflow-narrative-copy-wrap">
-                    <MarkdownPreview compact :content="streamedWorkflowNarrative" />
-                    <span
-                      v-if="workflowNarrativeActive"
-                      class="workflow-thinking-indicator"
-                      role="status"
-                    >
+                  <div v-if="streamedWorkflowNarrativeBeforeStrategy" class="workflow-narrative-copy-wrap">
+                    <MarkdownPreview compact :content="streamedWorkflowNarrativeBeforeStrategy" />
+                  </div>
+                  <ContentWorkflowStrategyPanel
+                    v-if="workflowStrategyPanelVisible"
+                    :presentation="workflowStrategyPresentation"
+                    :evidence-groups="[]"
+                  />
+                  <div v-if="streamedWorkflowNarrativeAfterStrategy" class="workflow-narrative-copy-wrap">
+                    <MarkdownPreview compact :content="streamedWorkflowNarrativeAfterStrategy" />
+                  </div>
+                  <div v-if="workflowNarrativeActive && streamedWorkflowNarrative" class="workflow-thinking-row">
+                    <span class="workflow-thinking-indicator" role="status">
                       <LoaderCircle class="spin" :size="14" aria-hidden="true" />
                       <span>正在思考</span>
                       <span class="workflow-thinking-dots" aria-hidden="true">
@@ -2305,12 +2359,12 @@ const openVersions = async () => {
                       </span>
                     </span>
                   </div>
-                  <div v-else class="workflow-awaiting-event">
+                  <div v-else-if="!streamedWorkflowNarrative" class="workflow-awaiting-event">
                     <LoaderCircle class="spin" :size="15" />
                     <span>正在分析现有资料，稍后会在这里持续输出有效信息…</span>
                   </div>
                   <ContentWorkflowStrategyPanel
-                    :presentation="workflowStrategyPresentation"
+                    :presentation="workflowEvidenceOnlyPresentation"
                     :evidence-groups="workflowEvidenceGroups"
                   />
                 </div>
@@ -3155,6 +3209,8 @@ const openVersions = async () => {
 .workflow-narrative :deep(.yk-markdown-preview ul > li) { min-height: 0; margin: 0; padding: 0; line-height: 1.65; }
 .workflow-narrative :deep(.yk-markdown-preview ul > li + li) { margin-top: 2px; }
 .workflow-narrative :deep(.yk-markdown-preview ul > li > p) { display: inline; margin: 0; padding: 0; line-height: inherit; }
+.workflow-thinking-row { margin-top: 10px; }
+.workflow-thinking-row .workflow-thinking-indicator { margin-left: 0; }
 .workflow-thinking-indicator { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; color: var(--color-info-700); font-size: 12px; line-height: 1; vertical-align: 0.05em; white-space: nowrap; }
 .workflow-thinking-indicator > svg { flex: 0 0 auto; }
 .workflow-thinking-dots { display: inline-flex; align-items: center; gap: 2px; height: 12px; }

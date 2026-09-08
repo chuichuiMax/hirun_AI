@@ -13,6 +13,7 @@ import {
   buildFormulaPresentation,
   buildContentRuntimeTimeline,
   buildContentWorkflowGroups,
+  findContentStrategyNarrativeAnchor,
   formatElapsedDuration
 } from '../contentWorkflowPresentation.js'
 
@@ -398,6 +399,42 @@ assert.deepEqual(strategyPresentation.rows[2], {
   type: '场景增强',
   purpose: '补充真实场景，增强内容代入感'
 })
+const strategyAnchorActivities = [
+  {
+    id: 'before-strategy',
+    nodeId: 'select_creation_strategy',
+    eventType: 'content.agent.started',
+    status: 'running'
+  },
+  {
+    id: 'strategy-result',
+    nodeId: 'select_creation_strategy',
+    eventType: 'content.agent.completed',
+    status: 'completed',
+    outputPreview: {
+      selected_direction_code: 'CT01',
+      creation_method_codes: ['S01'],
+      title_formula_code: 'T01',
+      body_formula_code: 'C02'
+    }
+  },
+  {
+    id: 'after-strategy',
+    nodeId: 'collect_business_rule_evidence',
+    eventType: 'content.agent.started',
+    status: 'running'
+  }
+]
+const strategyAnchor = findContentStrategyNarrativeAnchor(strategyAnchorActivities, codeLabels)
+const strategyAnchoredNarrative = buildContentNarrativeStream(strategyAnchorActivities, codeLabels)
+  .map((item) => item.text)
+  .join('\n\n')
+assert.equal(
+  strategyAnchoredNarrative.slice(0, strategyAnchor),
+  '正在结合目标受众、业务优势和现有证据，判断最值得表达的内容方向。'
+)
+assert.match(strategyAnchoredNarrative.slice(strategyAnchor), /正在检索与当前主题/)
+assert.equal(findContentStrategyNarrativeAnchor([], codeLabels), null)
 assert.equal(
   buildContentStrategyPresentation([], codeLabels, {
     content_direction: 'CT01',

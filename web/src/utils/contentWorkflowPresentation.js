@@ -616,6 +616,18 @@ export const buildContentStrategyPresentation = (
   }
 }
 
+export const findContentStrategyNarrativeAnchor = (activities = [], codeLabels = {}) => {
+  for (let index = 0; index < activities.length; index += 1) {
+    const prefix = activities.slice(0, index + 1)
+    if (buildContentStrategyPresentation(prefix, codeLabels).formulaCodes.length) {
+      return buildContentNarrativeStream(prefix, codeLabels)
+        .map((item) => item.text)
+        .join('\n\n').length
+    }
+  }
+  return null
+}
+
 export const buildContentEvidenceUsageSnapshot = (generatedContent = {}) => {
   const usagesByEvidence = new Map()
   const addUsage = (evidenceId, usage) => {
