@@ -3,6 +3,7 @@ from yuxi.content.service_entry_form import (
     configured_business_variable_fields,
     configured_form_fields,
     map_service_entry_form_values,
+    prioritize_form_fields,
 )
 
 
@@ -109,13 +110,13 @@ def test_configured_business_variable_fields_filters_by_content_type_and_require
         select_options={"目标人群": ["毛坯", "精装房", "旧房改造", "别墅"]},
     )
     assert [(item["key"], item["required"], item["type"]) for item in fields] == [
+        ("外框面积", True, "select"),
         ("目标人群", True, "select"),
         ("楼盘信息", False, "text"),
-        ("外框面积", True, "select"),
     ]
-    assert fields[0]["name"] == "目标人群"
-    assert fields[0]["options"] == ["毛坯", "精装房", "旧房改造", "别墅"]
-    assert fields[0]["placeholder"] == "请选择目标人群"
+    assert fields[1]["name"] == "目标人群"
+    assert fields[1]["options"] == ["毛坯", "精装房", "旧房改造", "别墅"]
+    assert fields[1]["placeholder"] == "请选择目标人群"
 
     with_resident = configured_business_variable_fields(
         [
@@ -145,7 +146,9 @@ def test_configured_business_variable_fields_filters_by_content_type_and_require
         content_type_id="ct-process",
         port="pc",
     )
-    assert text_fields[0]["type"] == "text"
+    assert text_fields[0]["key"] == "外框面积"
+    assert text_fields[1]["type"] == "text"
+    assert text_fields[1]["key"] == "目标人群"
 
     empty = configured_business_variable_fields(
         bindings,
@@ -162,6 +165,29 @@ def test_configured_business_variable_fields_filters_by_content_type_and_require
         port="pc",
     )
     assert [item["key"] for item in review_fields] == ["设计师"]
+
+
+def test_prioritize_form_fields_puts_frame_and_quote_keys_first():
+    fields = prioritize_form_fields(
+        [
+            {"key": "目标人群"},
+            {"key": "主材"},
+            {"key": "楼盘信息"},
+            {"key": "基础"},
+            {"key": "外框面积"},
+            {"key": "木制品"},
+            {"key": "项目阶段"},
+        ]
+    )
+    assert [item["key"] for item in fields] == [
+        "外框面积",
+        "基础",
+        "木制品",
+        "主材",
+        "目标人群",
+        "楼盘信息",
+        "项目阶段",
+    ]
 
 
 def test_catalog_select_options_merges_audience_and_resident_population():

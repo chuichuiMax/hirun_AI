@@ -4,12 +4,35 @@ from typing import Any
 
 BRAND_NAME = "鸿扬家居"
 DECORATION_QUOTE_KEYS = ("基础", "木制品", "主材")
+# PC / 小程序业务变量表单：存在则固定排在最前（其余保持原相对顺序）
+FORM_FIELD_PRIORITY_KEYS = ("外框面积", "基础", "木制品", "主材")
 REVIEW_NOTE_ROLE_KEYS = ("设计师", "预算师", "项目经理", "客户经理", "工匠")
 REVIEW_NOTES_WRITING_INSTRUCTION = (
     "以业主第一人称评价设计师、预算师、项目经理、客户经理等项目成员；"
     "检索并模仿「好评知识库」中已有文章的语气、结构和用词；"
     "写内部可归档的真实好评，不要写成获客种草、员工自荐或销售转化文案。"
 )
+
+
+def prioritize_form_fields(
+    fields: list[dict[str, Any]],
+    *,
+    name_keys: tuple[str, ...] = ("key", "name", "label", "variable_name"),
+) -> list[dict[str, Any]]:
+    """Stable-sort so priority field names appear first when present."""
+    rank = {name: index for index, name in enumerate(FORM_FIELD_PRIORITY_KEYS)}
+    fallback = len(FORM_FIELD_PRIORITY_KEYS)
+
+    def field_name(item: dict[str, Any]) -> str:
+        for key in name_keys:
+            value = str(item.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    indexed = list(enumerate(fields))
+    indexed.sort(key=lambda pair: (rank.get(field_name(pair[1]), fallback), pair[0]))
+    return [item for _, item in indexed]
 
 
 def configured_form_fields(
@@ -162,7 +185,7 @@ def configured_business_variable_fields(
         if options:
             field["options"] = options
         fields.append(field)
-    return fields
+    return prioritize_form_fields(fields)
 
 
 def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any]) -> dict[str, Any]:

@@ -484,6 +484,20 @@ const fieldSelectOptions = computed(() => {
   }
 })
 const DECORATION_QUOTE_KEYS = ['基础', '木制品', '主材']
+const FORM_FIELD_PRIORITY_KEYS = ['外框面积', '基础', '木制品', '主材']
+
+function prioritizeFormFields(fields) {
+  const rank = Object.fromEntries(FORM_FIELD_PRIORITY_KEYS.map((name, index) => [name, index]))
+  const fallback = FORM_FIELD_PRIORITY_KEYS.length
+  return fields
+    .map((field, index) => ({ field, index }))
+    .sort((a, b) => {
+      const aRank = rank[a.field.key] ?? fallback
+      const bRank = rank[b.field.key] ?? fallback
+      return aRank - bRank || a.index - b.index
+    })
+    .map((item) => item.field)
+}
 const FRAME_AREA_QUOTES = {
   '50-70㎡': { 基础: '4-5万', 木制品: '2-3万', 主材: '2-3万' },
   '90-110㎡': { 基础: '7-8万', 木制品: '3-4万', 主材: '4-5万' },
@@ -556,7 +570,7 @@ const activeFields = computed(() => {
   const bindings = store.businessVariableBindings || []
   const entry = studioServiceEntry.value
   const contentTypeId = selectedContentTypeId.value
-  return bindings
+  const fields = bindings
     .filter((item) => {
       if (!item.enabled || item.service_entry !== entry) return false
       if (!(item.ports || []).includes('pc')) return false
@@ -584,6 +598,7 @@ const activeFields = computed(() => {
             : FIELD_PLACEHOLDERS[name] || `请输入${name}`
       }
     })
+  return prioritizeFormFields(fields)
 })
 const processNameNeedsTypeHint = computed(() => {
   const hasTypeField = activeFields.value.some((field) => field.key === '工艺类型')
