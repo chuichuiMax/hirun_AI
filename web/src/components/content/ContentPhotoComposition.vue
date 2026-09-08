@@ -81,7 +81,7 @@ onBeforeUnmount(() => { generation++; Object.values(urls.value).filter(Boolean).
         </button>
       </div>
       <p>点击位置可一次插入多张图库图片并依次填入空位，也可拖动换位。设置首图后，它会进入布局的主要位置。</p>
-      <div class="composition-slots" :style="{ gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))` }">
+      <div class="composition-slots" :style="{ gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`, aspectRatio: `${layout.cols} / ${layout.rows}` }">
         <div v-for="(slot, index) in modelValue.slots" :key="index" class="composition-slot" :style="cellStyle(layout.cells[index])" draggable="true" @dragstart="dragging = index" @dragend="dragging = null" @dragover.prevent @drop.prevent="swap(dragging, index)">
           <button class="slot-image" type="button" :aria-label="`选择组合图片 ${index + 1}`" @click="emit('select', index)">
             <img v-if="urls[slot.image_item_id]" :src="urls[slot.image_item_id]" :alt="`组合图片 ${index + 1}`" :style="{ objectPosition: `${slot.focal_x * 100}% ${slot.focal_y * 100}%` }" />
@@ -111,7 +111,7 @@ onBeforeUnmount(() => { generation++; Object.values(urls.value).filter(Boolean).
 p, small { color: var(--color-text-secondary); margin: 0; }
 .composition-layouts { display: flex; flex-wrap: wrap; gap: 8px; button { background: var(--gray-0); border: 1px solid var(--gray-200); color: var(--color-text); border-radius: 8px; padding: 10px; display: grid; justify-items: center; gap: 8px; cursor: pointer; &.selected { border-color: var(--main-color); background: var(--main-10); } } }
 .layout-icon { display: grid; gap: 3px; width: 36px; height: 32px; i { background: var(--gray-400); border-radius: 2px; } }
-.composition-slots { display: grid; gap: 8px; max-width: 660px; aspect-ratio: 3 / 4; }
+.composition-slots { display: grid; gap: 8px; max-width: 660px; }
 .composition-slot { display: flex; min-height: 0; min-width: 0; flex-direction: column; border: 1px solid var(--gray-200); border-radius: 8px; overflow: hidden; }
 .slot-image { flex: 1; min-height: 0; width: 100%; padding: 0; border: 0; background: var(--gray-25); cursor: pointer; img { width: 100%; height: 100%; object-fit: cover; display: block; } span { display: grid; justify-items: center; gap: 8px; color: var(--color-text-secondary); } }
 .slot-actions { display: flex; gap: 4px; padding: 6px; align-items: center; flex-wrap: wrap; button { background: transparent; border: 0; color: var(--main-color); cursor: pointer; padding: 2px; } }

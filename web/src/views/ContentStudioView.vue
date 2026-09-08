@@ -92,8 +92,12 @@ const expandedResultIds = ref(new Set())
 const ocrModalOpen = ref(false)
 const coverUrl = ref('')
 const coverLoading = ref(false)
+const resultVersionCoverUrls = ref({})
+const resultVersionCoverLoading = ref({})
 const resultGallerySourceUrls = ref({})
 const resultGallerySourceLoading = ref(false)
+const resultCompositionUrl = ref('')
+const resultCompositionLoading = ref(false)
 const resultGalleryIndex = ref(0)
 const coverCandidateUrls = ref({})
 const coverCandidatesLoading = ref(false)
@@ -165,7 +169,9 @@ let draftSaveTimer = null
 let posterTemplateSyncTimer = null
 let workflowNarrativeTimer = null
 let coverLoadGeneration = 0
+let resultVersionCoverGeneration = 0
 let resultGalleryLoadGeneration = 0
+let resultCompositionGeneration = 0
 let coverCandidateLoadGeneration = 0
 let materialPreviewGeneration = 0
 let selectedImagePreviewGeneration = 0
@@ -204,7 +210,14 @@ const resultVisualMaterial = computed(() => (
   store.task?.brief?.visual_material ||
   {}
 ))
+const resultPhotoComposition = computed(() => {
+  const composition = resultVisualMaterial.value?.photo_composition
+  return composition?.slots?.length ? composition : null
+})
 const resultGallerySourceIds = computed(() => {
+  if (resultPhotoComposition.value) {
+    return [...new Set(resultPhotoComposition.value.slots.map(slot => slot.image_item_id).filter(Boolean))]
+  }
   const visual = resultVisualMaterial.value
   const selectedIds = visual.photo_composition?.slots
     ?.map(slot => slot.image_item_id)
@@ -224,14 +237,23 @@ const resultGalleryItems = computed(() => {
       loading: coverLoading.value
     })
   }
-  resultGallerySourceIds.value.forEach((id, index) => {
+  if (resultPhotoComposition.value) {
     items.push({
-      id: `material:${id}`,
-      label: `内容图片 ${index + 1}`,
-      url: resultGallerySourceUrls.value[id] || '',
-      loading: resultGallerySourceLoading.value && !resultGallerySourceUrls.value[id]
+      id: 'composition',
+      label: '图片组合',
+      url: resultCompositionUrl.value,
+      loading: resultCompositionLoading.value
     })
-  })
+  } else {
+    resultGallerySourceIds.value.forEach((id, index) => {
+      items.push({
+        id: `material:${id}`,
+        label: `内容图片 ${index + 1}`,
+        url: resultGallerySourceUrls.value[id] || '',
+        loading: resultGallerySourceLoading.value && !resultGallerySourceUrls.value[id]
+      })
+    })
+  }
   return items
 })
 const currentResultGalleryItem = computed(() => resultGalleryItems.value[resultGalleryIndex.value] || null)
@@ -609,6 +631,12 @@ const resultLocation = computed(() => {
   return String(value || '').trim()
 })
 const resultTime = (item) => formatDateTime(item.created_at || store.task?.updated_at)
+const resultCoverUrl = (item) => (
+  item.isCurrent ? coverUrl.value : resultVersionCoverUrls.value[item.id] || ''
+)
+const resultCoverLoading = (item) => (
+  item.isCurrent ? coverLoading.value : Boolean(resultVersionCoverLoading.value[item.id])
+)
 const isResultExpanded = (id) => expandedResultIds.value.has(id)
 const toggleResultExpanded = (id) => {
   const next = new Set(expandedResultIds.value)
@@ -1161,6 +1189,40 @@ watch(
 )
 
 watch(
+  () => completionResults.value
+    .filter(item => !item.isCurrent && item.cover_asset_id)
+    .map(item => `${item.id}:${item.cover_asset_id}`)
+    .join('|'),
+  async () => {
+    const generation = ++resultVersionCoverGeneration
+    Object.values(resultVersionCoverUrls.value).filter(Boolean).forEach(URL.revokeObjectURL)
+    resultVersionCoverUrls.value = {}
+    resultVersionCoverLoading.value = {}
+
+    const items = completionResults.value.filter(item => !item.isCurrent && item.cover_asset_id)
+    if (!items.length) return
+
+    resultVersionCoverLoading.value = Object.fromEntries(items.map(item => [item.id, true]))
+    const entries = await Promise.all(items.map(async item => {
+      try {
+        const response = await contentApi.getCoverAssetFile(item.cover_asset_id)
+        return [item.id, URL.createObjectURL(await response.blob())]
+      } catch {
+        return [item.id, '']
+      }
+    }))
+
+    if (generation !== resultVersionCoverGeneration) {
+      entries.map(([, url]) => url).filter(Boolean).forEach(URL.revokeObjectURL)
+      return
+    }
+    resultVersionCoverUrls.value = Object.fromEntries(entries)
+    resultVersionCoverLoading.value = Object.fromEntries(items.map(item => [item.id, false]))
+  },
+  { immediate: true }
+)
+
+watch(
   () => resultGallerySourceIds.value.join('|'),
   async () => {
     const generation = ++resultGalleryLoadGeneration
@@ -1186,6 +1248,102 @@ watch(
     }
     resultGallerySourceUrls.value = Object.fromEntries(entries)
     resultGallerySourceLoading.value = false
+  },
+  { immediate: true }
+)
+
+const loadCompositionImage = (url) => new Promise((resolve, reject) => {
+  const image = new window.Image()
+  image.onload = () => resolve(image)
+  image.onerror = reject
+  image.src = url
+})
+
+const renderResultComposition = async (composition, sourceUrls) => {
+  const slots = composition?.slots || []
+  const cols = 2
+  const rows = Math.max(1, Math.ceil(slots.length / cols))
+  const gap = Math.max(0, Number(composition?.gap) || 0)
+  const images = await Promise.all(slots.map(slot => {
+    const url = sourceUrls[slot.image_item_id]
+    return url ? loadCompositionImage(url) : null
+  }))
+  const canvasWidth = 1200
+  const trackWidth = (canvasWidth - gap) / cols
+  const trackHeight = trackWidth
+  const canvasHeight = Math.max(1, Math.round(trackHeight * rows + gap * (rows - 1)))
+  const canvas = document.createElement('canvas')
+  canvas.width = canvasWidth
+  canvas.height = canvasHeight
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('无法创建组合图片预览')
+  context.fillStyle = '#f5f6f8'
+  context.fillRect(0, 0, canvasWidth, canvasHeight)
+
+  slots.forEach((slot, index) => {
+    const image = images[index]
+    if (!image) return
+    const x = (index % cols) * (trackWidth + gap)
+    const y = Math.floor(index / cols) * (trackHeight + gap)
+    const width = trackWidth
+    const height = trackHeight
+    const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight)
+    const drawWidth = image.naturalWidth * scale
+    const drawHeight = image.naturalHeight * scale
+    const focalX = Math.min(1, Math.max(0, Number(slot.focal_x) || 0.5))
+    const focalY = Math.min(1, Math.max(0, Number(slot.focal_y) || 0.5))
+    const offsetX = (width - drawWidth) * focalX
+    const offsetY = (height - drawHeight) * focalY
+    context.save()
+    context.beginPath()
+    context.rect(x, y, width, height)
+    context.clip()
+    context.drawImage(image, x + offsetX, y + offsetY, drawWidth, drawHeight)
+    context.restore()
+  })
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (!blob) {
+        reject(new Error('组合图片生成失败'))
+        return
+      }
+      resolve(URL.createObjectURL(blob))
+    }, 'image/png')
+  })
+}
+
+watch(
+  () => [
+    JSON.stringify(resultPhotoComposition.value || null),
+    resultGallerySourceIds.value.join('|'),
+    ...resultGallerySourceIds.value.map(id => resultGallerySourceUrls.value[id] || '')
+  ].join('|'),
+  async () => {
+    const generation = ++resultCompositionGeneration
+    if (resultCompositionUrl.value) URL.revokeObjectURL(resultCompositionUrl.value)
+    resultCompositionUrl.value = ''
+    const composition = resultPhotoComposition.value
+    if (!composition) {
+      resultCompositionLoading.value = false
+      return
+    }
+    if (resultGallerySourceLoading.value || resultGallerySourceIds.value.some(id => !resultGallerySourceUrls.value[id])) {
+      resultCompositionLoading.value = true
+      return
+    }
+    resultCompositionLoading.value = true
+    try {
+      const nextUrl = await renderResultComposition(composition, resultGallerySourceUrls.value)
+      if (generation !== resultCompositionGeneration) {
+        URL.revokeObjectURL(nextUrl)
+        return
+      }
+      resultCompositionUrl.value = nextUrl
+    } catch (error) {
+      if (generation === resultCompositionGeneration) message.warning(error.message || '图片组合预览生成失败')
+    } finally {
+      if (generation === resultCompositionGeneration) resultCompositionLoading.value = false
+    }
   },
   { immediate: true }
 )
@@ -1385,7 +1543,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('focus', syncPosterTemplatesWhenVisible)
   document.removeEventListener('visibilitychange', syncPosterTemplatesWhenVisible)
   coverLoadGeneration += 1
+  resultVersionCoverGeneration += 1
   resultGalleryLoadGeneration += 1
+  resultCompositionGeneration += 1
   coverCandidateLoadGeneration += 1
   materialPreviewGeneration += 1
   selectedImagePreviewGeneration += 1
@@ -1393,7 +1553,9 @@ onBeforeUnmount(() => {
   posterPreviewGeneration += 1
   hycanvasTemplateLoadGeneration += 1
   if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
+  Object.values(resultVersionCoverUrls.value).filter(Boolean).forEach(URL.revokeObjectURL)
   Object.values(resultGallerySourceUrls.value).filter(Boolean).forEach(URL.revokeObjectURL)
+  if (resultCompositionUrl.value) URL.revokeObjectURL(resultCompositionUrl.value)
   Object.values(coverCandidateUrls.value).forEach((url) => URL.revokeObjectURL(url))
   revokePreviewUrls(materialImageUrls.value)
   if (selectedImagePreviewUrl.value) URL.revokeObjectURL(selectedImagePreviewUrl.value)
@@ -2083,14 +2245,14 @@ const openVersions = async () => {
                     </div>
                     <div class="completion-result-media">
                       <img
-                        v-if="item.isCurrent && coverUrl"
+                        v-if="resultCoverUrl(item)"
                         class="completion-result-cover"
-                        :src="coverUrl"
-                        alt="当前内容封面"
+                        :src="resultCoverUrl(item)"
+                        :alt="`${item.isCurrent ? '当前' : '历史'}内容封面`"
                       />
                       <div v-else class="completion-result-cover-placeholder">
                         <Image :size="20" />
-                        <span>{{ item.isCurrent && coverLoading ? '封面加载中' : '暂无封面' }}</span>
+                        <span>{{ resultCoverLoading(item) ? '封面加载中' : '暂无封面' }}</span>
                       </div>
                     </div>
                   </div>
@@ -2476,7 +2638,10 @@ const openVersions = async () => {
               </button>
             </div>
           </div>
-          <div class="result-detail-cover-frame">
+          <div
+            class="result-detail-cover-frame"
+            :class="{ 'is-composition': currentResultGalleryItem?.id === 'composition' }"
+          >
             <div v-if="resultPreviewTab === 'viral-reference'" class="result-detail-viral-reference">
               <div v-if="viralReferenceLoading" class="result-detail-cover-state">
                 <LoaderCircle class="spin" :size="24" />
@@ -2507,6 +2672,7 @@ const openVersions = async () => {
               </div>
               <img
                 v-else-if="currentResultGalleryItem?.url"
+                :class="{ 'is-composition': currentResultGalleryItem.id === 'composition' }"
                 :src="currentResultGalleryItem.url"
                 :alt="currentResultGalleryItem.label"
               />
@@ -2937,8 +3103,11 @@ const openVersions = async () => {
 .result-detail-cover-tabs button.active { background: var(--color-bg-container); color: var(--main-700); box-shadow: 0 1px 4px var(--shadow-1); font-weight: 600; }
 .result-detail-cover-tabs button:not(.active):hover:not(:disabled) { color: var(--main-700); background: var(--main-50); }
 .result-detail-cover-tabs button:disabled { cursor: not-allowed; opacity: 0.42; }
-.result-detail-cover-frame { min-height: 0; flex: 1; display: flex; align-items: center; justify-content: center; margin-top: 12px; overflow: hidden; }
+.result-detail-cover-frame { position: relative; min-height: 0; flex: 1; display: flex; align-items: center; justify-content: center; margin-top: 12px; overflow: hidden; }
 .result-detail-cover-frame img { display: block; width: min(100%, 400px); max-height: 100%; aspect-ratio: 3 / 4; border-radius: 6px; object-fit: contain; background: var(--gray-100); }
+.result-detail-cover-frame.is-composition { align-items: flex-start; overflow-y: auto; overscroll-behavior: contain; }
+.result-detail-cover-frame.is-composition .result-detail-carousel { min-height: 100%; height: auto; align-items: flex-start; padding: 0 0 44px; box-sizing: border-box; }
+.result-detail-cover-frame.is-composition img.is-composition { width: 100%; max-width: none; max-height: none; aspect-ratio: auto; height: auto; flex: 0 0 auto; }
 .result-detail-carousel { position: relative; width: 100%; height: 100%; min-height: 0; display: flex; align-items: center; justify-content: center; }
 .result-detail-carousel-arrow { position: absolute; top: 50%; z-index: 1; width: 38px; height: 38px; padding: 0; display: grid; place-items: center; border: 1px solid var(--gray-200); border-radius: 50%; color: var(--color-text); background: var(--gray-0); box-shadow: 0 2px 8px var(--shadow-2); cursor: pointer; transform: translateY(-50%); }
 .result-detail-carousel-arrow.previous { left: 8px; }
