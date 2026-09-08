@@ -96,25 +96,9 @@ async def preview_hycanvas_template(
     db: AsyncSession = Depends(get_db),
 ):
     image = await get_material_file(db, current_user, payload.image_item_id)
-    composition = None
-    images = []
-    if payload.photo_composition:
-        from yuxi.services.content_photo_composition import resolve_photo_composition
-
-        composition = await resolve_photo_composition(
-            db,
-            current_user,
-            payload.photo_composition,
-            payload.image_item_id,
-            complete=True,
-        )
-        for slot in composition["slots"]:
-            images.append(await get_material_file(db, current_user, slot["image_item_id"]))
     content, content_type = await HyCanvasClient.from_env().render_template_with_background_png(
         template_id,
         image,
-        photo_composition=composition,
-        composition_images=images,
     )
     return Response(content=content, media_type=content_type, headers={"Cache-Control": "no-store"})
 

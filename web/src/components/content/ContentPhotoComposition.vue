@@ -1,23 +1,24 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { message } from 'ant-design-vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ImagePlus, GripVertical } from 'lucide-vue-next'
-import { contentApi } from '@/apis/content_api'
 import { materialLibraryApi } from '@/apis/material_library_api'
 
-const props = defineProps({ modelValue: Object, primaryImageId: String })
+const props = defineProps({
+  modelValue: Object,
+  primaryImageId: String,
+  layouts: { type: Array, default: () => [] }
+})
 const emit = defineEmits(['update:modelValue', 'update:primaryImageId', 'select'])
-const layouts = ref([])
 const urls = ref({})
 const cropIndex = ref(null)
 const dragging = ref(null)
 let generation = 0
-const layout = computed(() => layouts.value.find(item => item.id === props.modelValue?.layout_id))
+const layout = computed(() => props.layouts.find(item => item.id === props.modelValue?.layout_id))
 const missing = computed(() => props.modelValue?.slots.filter(slot => !slot.image_item_id).length || 0)
 const emptySlot = (id = null) => ({ image_item_id: id, focal_x: 0.5, focal_y: 0.5 })
 const cellStyle = cell => ({ gridRow: `${cell.row + 1} / span ${cell.rowSpan}`, gridColumn: `${cell.col + 1} / span ${cell.colSpan}` })
 function setLayout(id) {
-  const next = layouts.value.find(item => item.id === id)
+  const next = props.layouts.find(item => item.id === id)
   const old = props.modelValue?.slots || []
   const primary = old.find(slot => slot.image_item_id === props.primaryImageId) || emptySlot(props.primaryImageId)
   const remaining = old.filter(slot => slot !== primary && slot.image_item_id !== props.primaryImageId)
@@ -58,10 +59,6 @@ watch(() => props.modelValue?.slots.map(slot => slot.image_item_id).join('|'), a
   Object.values(urls.value).filter(Boolean).forEach(URL.revokeObjectURL)
   urls.value = next
 }, { immediate: true })
-onMounted(async () => {
-  try { layouts.value = (await contentApi.getPhotoLayouts()).layouts }
-  catch (error) { message.error(error.message || '图片组合布局加载失败') }
-})
 onBeforeUnmount(() => { generation++; Object.values(urls.value).filter(Boolean).forEach(URL.revokeObjectURL) })
 </script>
 
@@ -83,8 +80,8 @@ onBeforeUnmount(() => { generation++; Object.values(urls.value).filter(Boolean).
           </span>{{ item.name }}
         </button>
       </div>
-      <p>点击位置插入或替换图库图片，可拖动换位。设置首图后，它会进入布局的主要位置。</p>
-      <div class="composition-slots" :style="{ gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))` }">
+      <p>点击位置可一次插入多张图库图片并依次填入空位，也可拖动换位。设置首图后，它会进入布局的主要位置。</p>
+      <div class="composition-slots" :style="{ gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${layout.rows}, minmax(0, 1fr))`, aspectRatio: `${layout.cols} / ${layout.rows}` }">
         <div v-for="(slot, index) in modelValue.slots" :key="index" class="composition-slot" :style="cellStyle(layout.cells[index])" draggable="true" @dragstart="dragging = index" @dragend="dragging = null" @dragover.prevent @drop.prevent="swap(dragging, index)">
           <button class="slot-image" type="button" :aria-label="`选择组合图片 ${index + 1}`" @click="emit('select', index)">
             <img v-if="urls[slot.image_item_id]" :src="urls[slot.image_item_id]" :alt="`组合图片 ${index + 1}`" :style="{ objectPosition: `${slot.focal_x * 100}% ${slot.focal_y * 100}%` }" />
@@ -114,7 +111,7 @@ onBeforeUnmount(() => { generation++; Object.values(urls.value).filter(Boolean).
 p, small { color: var(--color-text-secondary); margin: 0; }
 .composition-layouts { display: flex; flex-wrap: wrap; gap: 8px; button { background: var(--gray-0); border: 1px solid var(--gray-200); color: var(--color-text); border-radius: 8px; padding: 10px; display: grid; justify-items: center; gap: 8px; cursor: pointer; &.selected { border-color: var(--main-color); background: var(--main-10); } } }
 .layout-icon { display: grid; gap: 3px; width: 36px; height: 32px; i { background: var(--gray-400); border-radius: 2px; } }
-.composition-slots { display: grid; gap: 8px; max-width: 660px; aspect-ratio: 3 / 4; }
+.composition-slots { display: grid; gap: 8px; max-width: 660px; }
 .composition-slot { display: flex; min-height: 0; min-width: 0; flex-direction: column; border: 1px solid var(--gray-200); border-radius: 8px; overflow: hidden; }
 .slot-image { flex: 1; min-height: 0; width: 100%; padding: 0; border: 0; background: var(--gray-25); cursor: pointer; img { width: 100%; height: 100%; object-fit: cover; display: block; } span { display: grid; justify-items: center; gap: 8px; color: var(--color-text-secondary); } }
 .slot-actions { display: flex; gap: 4px; padding: 6px; align-items: center; flex-wrap: wrap; button { background: transparent; border: 0; color: var(--main-color); cursor: pointer; padding: 2px; } }

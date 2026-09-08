@@ -24,7 +24,7 @@ interface DashboardPageProps {
 // render this same page component, so client-side navigation between sections
 // keeps the mounted DashboardApp (and its loaded data) alive.
 export const getStaticPaths: GetStaticPaths = async () => ({
-  paths: dashboardViews.map((v) => ({ params: { view: v === "home" ? [] : [v] } })),
+  paths: dashboardViews.map((v) => ({ params: { view: v === "home" ? false : [v] } })),
   fallback: false,
 });
 

@@ -35,7 +35,7 @@ def test_incomplete_draft_allowed_but_cannot_generate():
 
 
 @pytest.mark.asyncio
-async def test_preview_and_generation_share_exact_composition_payload():
+async def test_template_overlay_preview_and_generation_use_original_cover_image():
     bodies = []
 
     async def handler(request):
@@ -51,20 +51,12 @@ async def test_preview_and_generation_share_exact_composition_payload():
         workspace_id="workspace",
         transport=httpx.MockTransport(handler),
     )
-    value = PhotoComposition(
-        layout_id="grid-2", slots=[{"image_item_id": "a", "focal_x": 0.2}, {"image_item_id": "b", "focal_y": 0.8}]
-    )
-    composition = {**value.render_layout(), "slots": [slot.model_dump() for slot in value.slots]}
-    images = [(b"a", "image/png", "a.png"), (b"b", "image/png", "b.png")]
-    await client.render_template_with_background_png(
-        "template", images[0], photo_composition=composition, composition_images=images
-    )
+    image = (b"cover", "image/png", "cover.png")
+    await client.render_template_with_background_png("template", image)
     await client.create_design(
         HyCanvasDesignCreate(artifact_id="task", template_id="xiaohongshu-grid", title="案例", fields={}),
-        image=images[0],
-        photo_composition=composition,
-        composition_images=images,
+        image=image,
     )
-    assert bodies[0]["photoComposition"] == bodies[1]["photoComposition"]
-    assert bodies[1]["backgroundImage"] is None
-    assert bodies[1]["photoComposition"]["images"][1]["focalY"] == 0.8
+    assert all("photoComposition" not in body for body in bodies)
+    assert all(body["backgroundImage"]["filename"] == "cover.png" for body in bodies)
+    assert all(body["backgroundImage"]["dataBase64"] == "Y292ZXI=" for body in bodies)
