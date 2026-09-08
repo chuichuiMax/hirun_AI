@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +153,103 @@ func TestFillTextFieldsPreservesStyle(t *testing.T) {
 	}
 	if asStr(asObj(paragraph["style"])["align"]) != "center" {
 		t.Fatal("paragraph style should be preserved")
+	}
+}
+
+func TestFillTextFieldsRestoresCompleteTypographyContract(t *testing.T) {
+	originalStyle := map[string]any{
+		"fontFamily": "Noto Sans SC", "fontStyle": "ExtraBold Italic", "fontSize": 72.0,
+		"axes":          map[string]any{"wght": 800.0, "wdth": 87.5, "slnt": -8.0},
+		"fill":          map[string]any{"type": "solid", "color": map[string]any{"srgb": map[string]any{"r": 1.0, "g": 0.5, "b": 0.0, "a": 0.8}}},
+		"letterSpacing": 2.5, "kerning": "optical",
+		"lineHeight":    map[string]any{"mode": "absolute", "value": 88.0},
+		"baselineShift": 3.0, "case": "smallcaps",
+		"decoration": []any{"underline", "strikethrough"}, "script": "super",
+		"language": "zh-CN", "features": map[string]any{"liga": 0.0}, "link": "https://example.com",
+	}
+	paragraphStyle := map[string]any{
+		"align": "justify", "direction": "ltr", "indentStart": 12.0, "indentEnd": 4.0,
+		"firstLineIndent": 8.0, "spaceBefore": 3.0, "spaceAfter": 6.0,
+		"list": map[string]any{"type": "bullet", "level": 1.0, "marker": "•"}, "tabStops": []any{40.0, 80.0},
+	}
+	box := map[string]any{
+		"mode": "fixed", "width": 320.0, "height": 120.0,
+		"columns": map[string]any{"count": 2.0, "gutter": 16.0},
+		"padding": map[string]any{"t": 5.0, "r": 6.0, "b": 7.0, "l": 8.0},
+		"autoFit": map[string]any{"enabled": true, "min": 18.0, "max": 72.0}, "verticalAlign": "middle",
+	}
+	effects := []any{map[string]any{
+		"kind": "shadow", "dx": 4.0, "dy": 5.0, "blur": 6.0, "opacity": 0.4,
+		"color": map[string]any{"type": "solid", "color": map[string]any{"srgb": map[string]any{"r": 0.0, "g": 0.0, "b": 0.0, "a": 1.0}}},
+	}}
+	file := map[string]any{"pages": []any{map[string]any{"children": []any{map[string]any{
+		"id": "title-node", "type": "text", "box": deepCloneValue(box), "textEffects": deepCloneValue(effects),
+		"content": []any{map[string]any{
+			"runs":  []any{map[string]any{"text": "旧标题", "style": deepCloneValue(originalStyle)}},
+			"style": deepCloneValue(paragraphStyle),
+		}},
+	}}}}}
+	field := map[string]any{"nodeId": "title-node", "kind": "text", "label": "主标题"}
+	if err := normalizeTemplateTypography(file, []any{field}); err != nil {
+		t.Fatalf("normalizeTemplateTypography: %v", err)
+	}
+
+	node := asObj(asArr(asObj(asArr(file["pages"])[0])["children"])[0])
+	run := asObj(asArr(asObj(asArr(node["content"])[0])["runs"])[0])
+	asObj(run["style"])["fontFamily"] = "system"
+	asObj(run["style"])["axes"] = map[string]any{"wght": 400.0}
+	asObj(run["style"])["decoration"] = []any{}
+	asObj(asArr(node["content"])[0])["style"] = map[string]any{"align": "left", "direction": "auto"}
+	node["box"] = map[string]any{"mode": "fixed", "width": 320.0, "height": 120.0}
+	node["textEffects"] = []any{}
+
+	if err := fillTextFields(file, []any{field}, map[string]string{"主标题": "替换标题"}); err != nil {
+		t.Fatalf("fillTextFields: %v", err)
+	}
+	if asStr(run["text"]) != "替换标题" {
+		t.Fatalf("text = %q", asStr(run["text"]))
+	}
+	if !reflect.DeepEqual(asObj(run["style"]), originalStyle) {
+		t.Fatalf("run style was not restored\ngot:  %#v\nwant: %#v", asObj(run["style"]), originalStyle)
+	}
+	if !reflect.DeepEqual(asObj(asObj(asArr(node["content"])[0])["style"]), paragraphStyle) {
+		t.Fatalf("paragraph style was not restored: %#v", asObj(asObj(asArr(node["content"])[0])["style"]))
+	}
+	if !reflect.DeepEqual(asObj(node["box"]), box) || !reflect.DeepEqual(asArr(node["textEffects"]), effects) {
+		t.Fatalf("text box or effects were not restored: box=%#v effects=%#v", node["box"], node["textEffects"])
+	}
+}
+
+func TestFillTextFieldsRestoresLegacyTypographyContract(t *testing.T) {
+	file := map[string]any{"pages": []any{map[string]any{"children": []any{map[string]any{
+		"id": "title-node", "type": "text",
+		"content": []any{map[string]any{
+			"runs":  []any{map[string]any{"text": "旧标题", "style": map[string]any{"fontFamily": "system", "fontStyle": "Regular", "fontSize": 20.0}}},
+			"style": map[string]any{"align": "left", "direction": "auto"},
+		}},
+	}}}}}
+	field := map[string]any{
+		"nodeId": "title-node", "kind": "text", "label": "主标题",
+		"typography": map[string]any{
+			"paragraphAlign": "center",
+			"runs": []any{map[string]any{
+				"fontFamily": "Noto Sans SC", "fontStyle": "ExtraBold", "fontWeight": 800.0,
+				"fontSize": 64.0, "letterSpacing": 2.0,
+				"lineHeight": map[string]any{"mode": "multiple", "value": 1.1},
+			}},
+		},
+	}
+	if err := fillTextFields(file, []any{field}, map[string]string{"主标题": "新标题"}); err != nil {
+		t.Fatalf("fillTextFields: %v", err)
+	}
+	node := asObj(asArr(asObj(asArr(file["pages"])[0])["children"])[0])
+	paragraph := asObj(asArr(node["content"])[0])
+	style := asObj(asObj(asArr(paragraph["runs"])[0])["style"])
+	if asStr(style["fontFamily"]) != "Noto Sans SC" || asNum(asObj(style["axes"])["wght"]) != 800 || asNum(style["fontSize"]) != 64 {
+		t.Fatalf("legacy typography was not restored: %#v", style)
+	}
+	if asStr(asObj(paragraph["style"])["align"]) != "center" {
+		t.Fatalf("legacy paragraph alignment was not restored: %#v", paragraph["style"])
 	}
 }
 

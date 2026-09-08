@@ -399,9 +399,11 @@ func normalizeTemplateTypography(file map[string]any, fields []any) error {
 			return ErrBadRequest
 		}
 		runSnapshots := []any{}
+		paragraphSnapshots := []any{}
 		paragraphAlign := ""
 		for _, paragraphRaw := range asArr(node["content"]) {
 			paragraph := asObj(paragraphRaw)
+			paragraphRuns := []any{}
 			if paragraphAlign == "" {
 				paragraphAlign = asStr(asObj(paragraph["style"])["align"])
 			}
@@ -433,14 +435,25 @@ func normalizeTemplateTypography(file map[string]any, fields []any) error {
 					snapshot["lineHeight"] = value
 				}
 				runSnapshots = append(runSnapshots, snapshot)
+				paragraphRuns = append(paragraphRuns, map[string]any{"style": deepCloneValue(style)})
 			}
+			paragraphSnapshots = append(paragraphSnapshots, map[string]any{
+				"style": deepCloneValue(asObj(paragraph["style"])),
+				"runs":  paragraphRuns,
+			})
 		}
 		if len(runSnapshots) == 0 {
 			return ErrBadRequest
 		}
-		typography := map[string]any{"runs": runSnapshots}
+		typography := map[string]any{"runs": runSnapshots, "paragraphs": paragraphSnapshots}
 		if paragraphAlign != "" {
 			typography["paragraphAlign"] = paragraphAlign
+		}
+		if box := asObj(node["box"]); box != nil {
+			typography["box"] = deepCloneValue(box)
+		}
+		if effects, ok := node["textEffects"].([]any); ok {
+			typography["textEffects"] = deepCloneValue(effects)
 		}
 		field["typography"] = typography
 	}
