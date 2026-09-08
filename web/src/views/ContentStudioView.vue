@@ -465,7 +465,7 @@ const FIELD_SELECT_OPTIONS = {
   ],
   项目阶段: ['拆改阶段', '水电阶段', '泥木阶段', '油漆阶段', '竣工交付']
 }
-const PROCESS_NAME_GUARD_HINT = '请先选择工艺类型，若没有工艺类型变量，请联系管理员配置'
+const PROCESS_NAME_GUARD_HINT = '请先选择工艺类型，或没有工艺类型，请联系管理员配置'
 const targetAudienceOptions = computed(() => store.bootstrap?.target_audiences || [])
 const residentPopulationOptions = computed(() => store.bootstrap?.resident_populations || [])
 const processTypeOptions = computed(() => store.bootstrap?.process_types || [])
@@ -583,6 +583,11 @@ const activeFields = computed(() => {
             : FIELD_PLACEHOLDERS[name] || `请输入${name}`
       }
     })
+})
+const processNameNeedsTypeHint = computed(() => {
+  const hasTypeField = activeFields.value.some((field) => field.key === '工艺类型')
+  const selectedType = String(formValues['工艺类型'] || '').trim()
+  return !hasTypeField || !selectedType
 })
 const isQuickMode = computed(() => studioEdition.value === 'quick')
 const titleOptions = computed(
@@ -865,9 +870,7 @@ const onBusinessSelectChange = (key, value) => {
 
 const guardProcessNameSelect = (fieldKey, open) => {
   if (!open || fieldKey !== '工艺名称') return
-  const hasTypeField = activeFields.value.some((field) => field.key === '工艺类型')
-  const selectedType = String(formValues['工艺类型'] || '').trim()
-  if (!hasTypeField || !selectedType) message.warning(PROCESS_NAME_GUARD_HINT)
+  if (processNameNeedsTypeHint.value) message.warning(PROCESS_NAME_GUARD_HINT)
 }
 
 const initializeFormValues = () => {
@@ -2379,7 +2382,11 @@ const openVersions = async () => {
                         :options="(field.options || []).map((item) => ({ label: item, value: item }))"
                         @openChange="(open) => guardProcessNameSelect(field.key, open)"
                         @change="(value) => onBusinessSelectChange(field.key, value)"
-                      />
+                      >
+                        <template v-if="field.key === '工艺名称' && processNameNeedsTypeHint" #notFoundContent>
+                          <span class="process-name-empty-hint">{{ PROCESS_NAME_GUARD_HINT }}</span>
+                        </template>
+                      </a-select>
                       <a-select
                         v-else-if="field.type === 'tags'"
                         v-model:value="formValues[field.key]"
@@ -3475,6 +3482,14 @@ const openVersions = async () => {
 .field-block > span { font-size: 13px; font-weight: 600; }
 .field-block em { margin-left: 3px; color: var(--color-error-700); font-style: normal; }
 .field-block small { color: var(--color-text-tertiary); }
+.process-name-empty-hint {
+  display: inline-block;
+  max-width: 260px;
+  padding: 4px 0;
+  white-space: normal;
+  line-height: 1.5;
+  color: var(--color-text-tertiary);
+}
 .creation-mode-options { display: flex; gap: 12px; }
 .creation-mode-card { position: relative; display: flex; align-items: center; justify-content: center; width: 112px; min-height: 64px; border: 1px solid var(--gray-200); border-radius: 8px; background: var(--gray-0); cursor: pointer; }
 .creation-mode-card input { position: absolute; width: 1px; height: 1px; opacity: 0; }

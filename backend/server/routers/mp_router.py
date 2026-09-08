@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -177,10 +177,11 @@ async def mp_gallery_item_file(
 @mp.post("/content/uploads/cover")
 async def mp_upload_cover(
     file: UploadFile = File(...),
+    category: str = Form("uncategorized"),
     ctx: MpContext = Depends(get_mp_context),
     db: AsyncSession = Depends(get_db),
 ):
-    return await upload_cover(db, ctx, file)
+    return await upload_cover(db, ctx, file, category=category)
 
 
 @mp.get("/content/covers/{asset_id}/file")

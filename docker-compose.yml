@@ -388,13 +388,20 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - POSTGRES_DB=${POSTGRES_DB:-yuxi}
       - TZ=${TZ:-Asia/Shanghai}
+    # Windows Docker 默认 /dev/shm 过小，后端连接高峰时易导致 postmaster 子进程异常退出并反复 recovery。
+    shm_size: 256mb
     volumes:
       - ./docker/volumes/postgresql:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-yuxi} || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-yuxi} && psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-yuxi} -tAc \"SELECT NOT pg_is_in_recovery()\" | grep -qx t"
+        ]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 30
+      start_period: 30s
     networks:
       - app-network
     restart: unless-stopped
