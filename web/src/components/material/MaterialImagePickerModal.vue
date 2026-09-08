@@ -185,7 +185,7 @@ onBeforeUnmount(() => {
               @click="chooseGallery(gallery.id)"
             >
               <FolderOpen :size="16" />
-              <span>{{ gallery.name }}</span>
+              <span>{{ gallery.visibility === 'enterprise' ? '企业共享 · ' : '' }}{{ gallery.name }}</span>
               <small>{{ gallery.direct_count || 0 }}</small>
             </button>
             <div v-if="galleryChildren(gallery.id).length" class="gallery-tree-children">
@@ -235,7 +235,7 @@ onBeforeUnmount(() => {
               <ImageIcon v-else :size="24" />
               <CheckCircle2 v-if="pendingItem?.id === item.id" class="selected-check" :size="21" />
             </span>
-            <strong :title="item.name">{{ item.name }}</strong>
+            <strong :title="item.name">{{ item.visibility === 'enterprise' ? '企业共享 · ' : '' }}{{ item.name }}</strong>
             <small>{{ item.width }} × {{ item.height }}</small>
           </button>
         </div>

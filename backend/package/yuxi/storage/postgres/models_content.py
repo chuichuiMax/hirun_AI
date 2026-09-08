@@ -1087,6 +1087,7 @@ class ContentMaterialLibraryItem(Base):
     asset_id = Column(String(64), ForeignKey("content_cover_assets.id", ondelete="CASCADE"), nullable=False, index=True)
     material_type = Column(String(32), nullable=False, index=True)
     display_name = Column(String(255), nullable=False)
+    category_owner_uid = Column(String(255), nullable=True)
     category = Column(String(80), nullable=False, default="未分类", index=True)
     tags_json = Column(JSON, nullable=False, default=list)
     status = Column(String(32), nullable=False, default="enabled", index=True)
@@ -1118,6 +1119,7 @@ class ContentMaterialLibraryItem(Base):
         return {
             "id": self.id,
             "asset_id": self.asset_id,
+            "uploaded_by": self.owner_uid,
             "material_type": self.material_type,
             "name": self.display_name,
             "category": self.category,
@@ -1126,6 +1128,15 @@ class ContentMaterialLibraryItem(Base):
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
         }
+
+
+class ContentMaterialUsage(Base):
+    """已授权用于创作的原图引用；下架图库不破坏既有任务。"""
+
+    __tablename__ = "content_material_usages"
+    asset_id = Column(String(64), ForeignKey("content_cover_assets.id", ondelete="RESTRICT"), primary_key=True)
+    user_uid = Column(String(255), primary_key=True)
+    created_at = Column(DateTime, default=utc_now_naive)
 
 
 class ContentMaterialCategory(Base):
@@ -1137,6 +1148,7 @@ class ContentMaterialCategory(Base):
     material_type = Column(String(32), primary_key=True, index=True)
     id = Column(String(64), primary_key=True)
     tenant_id = Column(String(64), nullable=True, index=True)
+    visibility = Column(String(20), nullable=False, default="private", server_default="private")
     parent_id = Column(String(64), nullable=True, index=True)
     industry_slug = Column(String(80), nullable=False, default="uncategorized", index=True)
     name = Column(String(80), nullable=False)
@@ -1179,6 +1191,8 @@ class ContentMaterialCategory(Base):
         return {
             "id": self.id,
             "code": self.id,
+            "visibility": self.visibility or "private",
+            "owner_uid": self.owner_uid,
             "material_type": self.material_type,
             "parent_id": self.parent_id,
             "level": 2 if self.parent_id else 1,

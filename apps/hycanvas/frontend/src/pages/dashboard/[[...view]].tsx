@@ -24,12 +24,12 @@ interface DashboardPageProps {
 // render this same page component, so client-side navigation between sections
 // keeps the mounted DashboardApp (and its loaded data) alive.
 export const getStaticPaths: GetStaticPaths = async () => ({
-  paths: dashboardViews.map((v) => ({ params: { view: v === "home" ? false : [v] } })),
+  paths: dashboardViews.map((v) => ({ params: { view: v === "home" ? [] : [v] } })),
   fallback: false,
 });
 
 export const getStaticProps: GetStaticProps<DashboardPageProps> = async ({ params }) => {
-  const slug = Array.isArray(params?.view) ? params.view[0] : "home";
+  const slug = Array.isArray(params?.view) ? (params.view[0] ?? "home") : "home";
   return { props: { view: slug as DashboardView } };
 };
 

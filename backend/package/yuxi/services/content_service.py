@@ -891,7 +891,7 @@ async def save_content_brief(
     )
     if requested_image_item_id:
         owner_uid = str(user.uid)
-        material_repo = MaterialLibraryRepository(db)
+        material_repo = MaterialLibraryRepository(db, include_shared=True)
         image_item = await material_repo.get_item_for_user(requested_image_item_id, owner_uid, for_update=True)
         if image_item is None or image_item.material_type != "image" or image_item.status != "enabled":
             raise _content_error(
@@ -899,9 +899,10 @@ async def save_content_brief(
                 "CONTENT_IMAGE_MATERIAL_INVALID",
                 "所选图库图片不存在、已停用或无权访问",
             )
-        image_asset = await material_repo.get_asset(image_item.asset_id, owner_uid, for_update=True)
+        image_asset = await material_repo.get_asset(image_item.asset_id, image_item.owner_uid, for_update=True)
         if image_asset is None or image_asset.role not in {"source", "library_image"}:
             raise _content_error(422, "CONTENT_IMAGE_ASSET_INVALID", "所选图库图片的文件记录无效")
+        await ContentCoverRepository(db).retain_material_use([image_asset.id], owner_uid)
         visual_snapshot = {
             "image_item_id": image_item.id,
             "image_asset_id": image_asset.id,

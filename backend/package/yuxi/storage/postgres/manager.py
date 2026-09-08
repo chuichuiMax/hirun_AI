@@ -388,6 +388,15 @@ class PostgresManager(metaclass=SingletonMeta):
         """确保业务 schema 包含后续新增字段（运行时 schema 演进）。"""
         self._check_initialized()
         stmts = [
+            (
+                "ALTER TABLE IF EXISTS content_material_categories "
+                "ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'private'"
+            ),
+            (
+                "ALTER TABLE IF EXISTS content_material_library_items "
+                "ADD COLUMN IF NOT EXISTS category_owner_uid VARCHAR(255)"
+            ),
+            "CREATE INDEX IF NOT EXISTS idx_material_category_visibility ON content_material_categories(visibility)",
             "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS parent_id VARCHAR(64)",
             (
                 "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS "

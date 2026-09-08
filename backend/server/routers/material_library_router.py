@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from urllib.parse import quote
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import Response
@@ -102,6 +103,7 @@ async def material_items(
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
     sort: str = Query("newest"),
+    scope: Literal["private", "enterprise"] | None = Query(None),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -115,6 +117,7 @@ async def material_items(
         page=page,
         page_size=page_size,
         sort=sort,
+        scope=scope,
     )
 
 
@@ -140,7 +143,7 @@ async def material_item_file(
         content=data,
         media_type=content_type,
         headers={
-            "Cache-Control": "private, max-age=3600",
+            "Cache-Control": "private, no-cache",
             "Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}",
         },
     )
@@ -158,7 +161,7 @@ async def material_item_thumbnail(
         content=data,
         media_type="image/jpeg",
         headers={
-            "Cache-Control": "private, max-age=86400",
+            "Cache-Control": "private, no-cache",
             "Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}.thumb.jpg",
         },
     )
