@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
+  ClipboardList,
   Clock3,
   Copy,
   ExternalLink,
@@ -20,6 +21,7 @@ import {
   Image,
   LayoutTemplate,
   LoaderCircle,
+  MessageSquare,
   PencilLine,
   Play,
   RefreshCw,
@@ -31,11 +33,6 @@ import {
   WandSparkles,
   X,
   ZoomIn
-  UserRoundCog,
-  WandSparkles,
-  ClipboardList,
-  MessageSquare,
-  X
 } from 'lucide-vue-next'
 import AgentInputArea from '@/components/AgentInputArea.vue'
 import ContentStudioToolbar from '@/components/content/ContentStudioToolbar.vue'
@@ -69,7 +66,6 @@ const stage = ref(1)
 const creation = reactive({
   industry_template_id: '',
   service_entry: '装修家居',
-  mode: window.matchMedia('(max-width: 800px)').matches ? 'quick' : 'quick',
   mode: 'pro',
   creation_mode: 'original',
   content_goal: '',
@@ -1106,21 +1102,15 @@ const openGallery = async (galleryId) => {
 }
 
 const isGalleryImageUsed = (item) => Boolean(item?.in_use)
-const pendingGalleryImageUsed = computed(() => {
-  const item = galleryImages.value.find((row) => row.id === pendingImageItemId.value)
-  return Boolean(item && isGalleryImageUsed(item))
-})
+const pendingGalleryImageUsed = computed(() =>
+  pendingImageItems.value.some((item) => isGalleryImageUsed(item))
+)
 
-const selectGalleryImage = (item) => {
+const togglePendingImage = (item) => {
   if (isGalleryImageUsed(item)) {
     message.warning('该图片已被其他内容任务使用')
     return
   }
-  pendingImageItemId.value = item.id
-}
-
-const confirmGalleryImage = () => {
-const togglePendingImage = (item) => {
   const index = pendingImageItems.value.findIndex(selected => selected.id === item.id)
   if (index !== -1) {
     pendingImageItems.value = pendingImageItems.value.filter(selected => selected.id !== item.id)
@@ -1134,6 +1124,10 @@ const togglePendingImage = (item) => {
 }
 
 const confirmGalleryImages = () => {
+  if (pendingGalleryImageUsed.value) {
+    message.warning('所选图片包含已被其他内容任务使用的素材')
+    return
+  }
   if (compositionSlotIndex.value !== null) {
     const targetIndexes = compositionInsertIndexes.value
     const replacesPrimary = targetIndexes.some(index => photoComposition.value.slots[index].image_item_id === selectedImageItemId.value)
@@ -1152,17 +1146,6 @@ const confirmGalleryImages = () => {
     galleryModalOpen.value = false
     return
   }
-  selectedImageItemId.value = pendingImageItemId.value
-  const selectedItem = galleryImages.value.find((item) => item.id === pendingImageItemId.value)
-  if (selectedItem && isGalleryImageUsed(selectedItem)) {
-    message.warning('该图片已被其他内容任务使用')
-    return
-  }
-  selectedImageItemId.value = pendingImageItemId.value
-  if (selectedItem) {
-    selectedImageGalleryId.value = activeGalleryId.value
-    selectedImageSummary.value = selectedItem
-  } else if (!pendingImageItemId.value) {
   const selectedItems = pendingImageItems.value
   const primaryItem = selectedItems[0]
   selectedImageItemId.value = primaryItem?.id || ''
@@ -3313,21 +3296,24 @@ const openVersions = async () => {
             :key="item.id"
             type="button"
             class="image-choice"
-            :class="{ selected: pendingImageItemId === item.id, used: isGalleryImageUsed(item) }"
+            :class="{
+              selected: pendingImageItems.some(selected => selected.id === item.id),
+              used: isGalleryImageUsed(item)
+            }"
             :disabled="isGalleryImageUsed(item)"
-            :aria-pressed="pendingImageItemId === item.id"
-            :aria-disabled="isGalleryImageUsed(item)"
-            @click="selectGalleryImage(item)"
-            :class="{ selected: pendingImageItems.some(selected => selected.id === item.id) }"
             :aria-pressed="pendingImageItems.some(selected => selected.id === item.id)"
+            :aria-disabled="isGalleryImageUsed(item)"
             @click="togglePendingImage(item)"
           >
             <span class="choice-preview">
               <img v-if="materialImageUrls[item.id]" :src="materialImageUrls[item.id]" :alt="item.name" />
               <Image v-else :size="22" />
-              <CheckCircle2 v-if="pendingImageItems.some(selected => selected.id === item.id)" class="choice-check" :size="20" />
               <span v-if="isGalleryImageUsed(item)" class="image-used-badge">已使用</span>
-              <CheckCircle2 v-else-if="pendingImageItemId === item.id" class="choice-check" :size="20" />
+              <CheckCircle2
+                v-else-if="pendingImageItems.some(selected => selected.id === item.id)"
+                class="choice-check"
+                :size="20"
+              />
             </span>
             <strong :title="item.name">{{ item.name }}</strong>
           </button>
@@ -3343,10 +3329,8 @@ const openVersions = async () => {
             type="primary"
             :loading="galleryImagesLoading"
             :disabled="pendingGalleryImageUsed"
-            @click="confirmGalleryImage"
+            @click="confirmGalleryImages"
           >
-            确认选择
-          <a-button type="primary" :loading="galleryImagesLoading" @click="confirmGalleryImages">
             确认选择<span v-if="pendingImageItems.length">（{{ pendingImageItems.length }}）</span>
           </a-button>
         </div>
