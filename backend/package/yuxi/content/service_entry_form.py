@@ -69,10 +69,40 @@ FIELD_SELECT_OPTIONS: dict[str, list[str]] = {
 }
 
 FIELD_PLACEHOLDERS: dict[str, str] = {
-    "目标人群": "示例：毛坯装修三口之家",
+    "目标人群": "请选择目标人群",
+    "居住人口": "请选择居住人口",
+    "工艺类型": "请选择工艺类型",
+    "工艺名称": "请选择工艺名称",
     "楼盘信息": "示例：洋湖天序",
     "项目阶段": "请选择项目阶段",
 }
+
+
+def catalog_select_options(
+    *,
+    target_audiences: list[str] | None = None,
+    resident_populations: list[str] | None = None,
+    process_types: list[str] | None = None,
+    process_names_by_type: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]] | None:
+    options: dict[str, list[str]] = {}
+    if target_audiences:
+        options["目标人群"] = list(target_audiences)
+    if resident_populations:
+        options["居住人口"] = list(resident_populations)
+    if process_types:
+        options["工艺类型"] = list(process_types)
+    if process_names_by_type:
+        # 字段标记为下拉；前端会按所选工艺类型再筛选具体工艺名称。
+        flattened: list[str] = []
+        for names in process_names_by_type.values():
+            for name in names:
+                if name and name not in flattened:
+                    flattened.append(name)
+        if flattened:
+            options["工艺名称"] = flattened
+    return options or None
+
 
 REGION_FIELD_NAMES = frozenset({"所在区域"})
 
@@ -83,9 +113,11 @@ def configured_business_variable_fields(
     service_entry: str,
     content_type_id: str | None,
     port: str,
+    select_options: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build studio/MP form fields from business-variable bindings."""
     wanted_type_id = (content_type_id or "").strip()
+    option_catalog = {**FIELD_SELECT_OPTIONS, **(select_options or {})}
     fields: list[dict[str, Any]] = []
     for item in bindings:
         if not item.get("enabled"):
@@ -103,7 +135,7 @@ def configured_business_variable_fields(
         name = str(item.get("variable_name") or "").strip()
         if not name:
             continue
-        options = FIELD_SELECT_OPTIONS.get(name)
+        options = option_catalog.get(name)
         if name in REGION_FIELD_NAMES:
             field_type = "region"
             placeholder = "请选择所在区域"

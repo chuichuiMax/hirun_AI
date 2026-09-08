@@ -56,6 +56,8 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
             _entry("persona", "人设管理", _CRUD),
             _entry("permission", "权限配置", _CRUD),
             _entry("content_type", "内容类型配置", _CRUD),
+            _entry("target_audience", "目标人群配置", _CRUD),
+            _entry("resident_population", "居住人口配置", _CRUD),
             _entry("variable", "变量配置", _CRUD),
         ],
     },
@@ -63,12 +65,7 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
 
 
 def all_permission_keys() -> set[str]:
-    return {
-        action["key"]
-        for module in PERMISSION_CATALOG
-        for item in module["lists"]
-        for action in item["actions"]
-    }
+    return {action["key"] for module in PERMISSION_CATALOG for item in module["lists"] for action in item["actions"]}
 
 
 def normalize_grants(grants: list[str] | None, *, strict: bool = True) -> list[str]:

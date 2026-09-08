@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.content.generation import SKILL_VERSIONS, refine_generated_content, review_generated_content
 from yuxi.content.rules import CONTENT_GOALS
 from yuxi.content.service_entry_form import (
+    catalog_select_options,
     configured_business_variable_fields,
     map_service_entry_form_values,
 )
@@ -53,6 +54,12 @@ from yuxi.repositories.material_library_repository import MaterialLibraryReposit
 from yuxi.services.run_queue_service import get_arq_pool, list_run_stream_events
 from yuxi.services.business_variable_service import list_business_variables
 from yuxi.services.content_type_service import list_content_types
+from yuxi.services.target_audience_service import list_enabled_target_audience_names
+from yuxi.services.resident_population_service import list_enabled_resident_population_names
+from yuxi.services.process_standard_service import (
+    list_enabled_process_names_by_type,
+    list_enabled_process_type_names,
+)
 from yuxi.services.variable_service import SERVICE_ENTRIES, list_variables
 from yuxi.storage.postgres.models_business import AgentRun, User
 from yuxi.storage.postgres.models_content import ContentArtifactVersion, ContentTask
@@ -321,11 +328,7 @@ def review_note_photo_ids(brief: ContentBriefPayload) -> list[str]:
     if cover_id:
         ids.insert(0, cover_id)
     if not ids:
-        ids = [
-            str(item.get("asset_id") or "").strip()
-            for item in (brief.attachments or [])
-            if isinstance(item, dict)
-        ]
+        ids = [str(item.get("asset_id") or "").strip() for item in (brief.attachments or []) if isinstance(item, dict)]
     return list(dict.fromkeys(item for item in ids if item))
 
 
@@ -429,6 +432,10 @@ async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
         "content_types": (rule_bundle or {}).get("content_types") or [],
         "content_variables": (await list_variables(db))["variables"],
         "managed_content_types": (await list_content_types(db))["content_types"],
+        "target_audiences": await list_enabled_target_audience_names(db),
+        "resident_populations": await list_enabled_resident_population_names(db),
+        "process_types": await list_enabled_process_type_names(db),
+        "process_names_by_type": await list_enabled_process_names_by_type(db),
         "business_variable_bindings": (await list_business_variables(db))["business_variables"],
         "industry_packs": await repo.list_industry_packs(),
         "channel_profiles": await repo.list_channel_profiles(),
@@ -775,9 +782,9 @@ async def update_content_task(db: AsyncSession, user: User, task_id: str, payloa
         raise _content_error(422, "CONTENT_GOAL_INVALID", "内容目标无效")
     next_goal = changes.get("content_goal", task.content_goal)
     next_type = changes.get("content_type_code", task.content_type_code)
-    direction_scoped = (
-        (task.runtime_config_snapshot_json or {}).get("strategy_mode", "direction_scoped") == "direction_scoped"
-    )
+    direction_scoped = (task.runtime_config_snapshot_json or {}).get(
+        "strategy_mode", "direction_scoped"
+    ) == "direction_scoped"
     if "content_type_code" in changes and direction_scoped:
         definition = await repo.get_content_type(task.rule_version_id, changes["content_type_code"])
         if definition is None:
@@ -919,11 +926,21 @@ async def save_content_brief(
     if service_entry in SERVICE_ENTRIES and not (brief.form_values or {}).get("mp_content_code"):
         if compile_now and service_entry == "装修家居" and not content_type_id:
             raise _content_error(422, "CONTENT_TYPE_REQUIRED", "请选择内容类型")
+        target_audiences = await list_enabled_target_audience_names(db) if service_entry == "装修家居" else []
+        resident_populations = await list_enabled_resident_population_names(db) if service_entry == "装修家居" else []
+        process_types = await list_enabled_process_type_names(db) if service_entry == "装修家居" else []
+        process_names_by_type = await list_enabled_process_names_by_type(db) if service_entry == "装修家居" else {}
         form_fields = configured_business_variable_fields(
             (await list_business_variables(db))["business_variables"],
             service_entry=str(service_entry),
             content_type_id=content_type_id or None,
             port="pc",
+            select_options=catalog_select_options(
+                target_audiences=target_audiences,
+                resident_populations=resident_populations,
+                process_types=process_types,
+                process_names_by_type=process_names_by_type,
+            ),
         )
     compiled, missing = compile_content_brief(task=task, template=template, brief=brief, form_fields=form_fields)
     if compile_now and service_entry == "好评笔记":
@@ -938,8 +955,7 @@ async def save_content_brief(
             "cover_asset_ids": photo_ids,
         }
         compiled["attachments"] = [
-            {"asset_id": item, "role": "cover" if index == 0 else "photo"}
-            for index, item in enumerate(photo_ids)
+            {"asset_id": item, "role": "cover" if index == 0 else "photo"} for index, item in enumerate(photo_ids)
         ]
     selection = brief.visual_material
     requested_image_item_id = selection.image_item_id if selection else None
@@ -1034,7 +1050,11 @@ async def save_content_brief(
         if not requested_image_item_id or not requested_hycanvas_template_id:
             raise _content_error(422, "CONTENT_COMPOSITION_TEMPLATE_REQUIRED", "图片组合需要选择首图和封面模板")
         visual_snapshot["photo_composition"] = await resolve_photo_composition(
-            db, user, selection.photo_composition, requested_image_item_id, complete=compile_now,
+            db,
+            user,
+            selection.photo_composition,
+            requested_image_item_id,
+            complete=compile_now,
         )
     if compile_now and requested_hycanvas_template_id:
         from yuxi.services.hycanvas_service import HyCanvasClient

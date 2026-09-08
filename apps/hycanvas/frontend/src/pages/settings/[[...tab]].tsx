@@ -26,7 +26,9 @@ interface SettingsPageProps {
 // this same page component, so switching tabs keeps SettingsApp mounted.
 export const getStaticPaths: GetStaticPaths = async () => ({
   paths: settingsTabs.map((t) => ({ params: { tab: t === "account" ? [] : [t] } })),
-  fallback: false,
+  // Match dashboard: keep export builds strict, but let Turbopack serve these
+  // optional catch-all routes during local ContentFlow embeds.
+  fallback: process.env.NODE_ENV === "development" ? "blocking" : false,
 });
 
 export const getStaticProps: GetStaticProps<SettingsPageProps> = async ({ params }) => {

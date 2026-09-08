@@ -121,6 +121,42 @@ async def test_list_process_standards_filters_by_name(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_enabled_process_type_names(monkeypatch):
+    from yuxi.services import process_standard_service as service
+
+    class FakeRepo:
+        async def list_enabled_names(self):
+            return ["安全用电系统", "暖通舒适系统"]
+
+    async def fake_ensure(_db):
+        return None
+
+    monkeypatch.setattr(service, "ensure_default_process_standards", fake_ensure)
+    monkeypatch.setattr(service, "ProcessStandardRepository", lambda _db: FakeRepo())
+
+    result = await service.list_enabled_process_type_names(object())
+    assert result == ["安全用电系统", "暖通舒适系统"]
+
+
+@pytest.mark.asyncio
+async def test_list_enabled_process_names_by_type(monkeypatch):
+    from yuxi.services import process_standard_service as service
+
+    class FakeRepo:
+        async def list_enabled_names_by_type(self):
+            return {"暖通舒适系统": ["HYB-地暖高流地坪工艺"]}
+
+    async def fake_ensure(_db):
+        return None
+
+    monkeypatch.setattr(service, "ensure_default_process_standards", fake_ensure)
+    monkeypatch.setattr(service, "ProcessStandardRepository", lambda _db: FakeRepo())
+
+    result = await service.list_enabled_process_names_by_type(object())
+    assert result == {"暖通舒适系统": ["HYB-地暖高流地坪工艺"]}
+
+
+@pytest.mark.asyncio
 async def test_create_process_standard_rejects_duplicate(monkeypatch):
     from types import SimpleNamespace
 

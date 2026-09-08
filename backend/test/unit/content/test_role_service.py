@@ -46,6 +46,8 @@ def test_permission_catalog_keys_are_unique():
     assert "employee.view_list" in keys
     assert "permission.create" in keys
     assert "content_type.view_list" in keys
+    assert "target_audience.view_list" in keys
+    assert "resident_population.view_list" in keys
     assert "variable.view_list" in keys
     assert not any(key.startswith("cover.") for key in keys)
     assert len(keys) == len(set(keys))

@@ -27,6 +27,8 @@ from yuxi.content.schemas import (
 )
 from yuxi.content.service_entry_form import (
     BRAND_NAME,
+    FIELD_SELECT_OPTIONS,
+    catalog_select_options,
     configured_business_variable_fields,
     map_service_entry_form_values,
 )
@@ -36,8 +38,14 @@ from yuxi.repositories.employee_repository import EmployeeRepository
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
 from yuxi.services.agent_run_service import stream_agent_run_events
 from yuxi.services.business_variable_service import list_business_variables
-from yuxi.services.content_cover_service import create_cover_asset, get_cover_asset_file
-from yuxi.services.material_library_service import get_material_file, list_image_galleries, list_material_items
+from yuxi.repositories.content_cover_repository import ContentCoverRepository
+from yuxi.services.content_cover_service import get_cover_asset_file, serialize_asset
+from yuxi.services.material_library_service import (
+    get_material_file,
+    import_material_images,
+    list_image_galleries,
+    list_material_items,
+)
 from yuxi.services.content_service import (
     create_content_run,
     create_content_task,
@@ -51,6 +59,12 @@ from yuxi.services.content_service import (
     save_content_brief,
 )
 from yuxi.services.content_type_service import ensure_default_content_types, list_content_types
+from yuxi.services.target_audience_service import list_enabled_target_audience_names
+from yuxi.services.resident_population_service import list_enabled_resident_population_names
+from yuxi.services.process_standard_service import (
+    list_enabled_process_names_by_type,
+    list_enabled_process_type_names,
+)
 from yuxi.services.employee_service import ensure_platform_user
 from yuxi.services.run_queue_service import get_redis_client, list_run_stream_events
 from yuxi.services.user_identity_service import is_valid_phone_number, normalize_phone_number
@@ -574,22 +588,40 @@ async def login_by_sms(db: AsyncSession, payload: SmsLoginPayload) -> dict[str, 
     return await _issue_token(db, employee)
 
 
-async def _wechat_access_token(appid: str, secret: str) -> str:
+_WECHAT_STABLE_TOKEN_CACHE_KEY = "mp:wx:stable_access_token"
+
+
+def _wechat_token_stale(errmsg: str | None) -> bool:
+    text = (errmsg or "").lower()
+    return "access_token is invalid or not latest" in text or "invalid credential" in text
+
+
+async def _wechat_access_token(appid: str, secret: str, *, force_refresh: bool = False) -> str:
+    """使用微信稳定版 access_token，避免多环境互相刷新普通 token 导致一键登录失败。"""
+
     redis = await get_redis_client()
-    cached = await redis.get("mp:wx:access_token")
-    if cached:
-        return cached.decode() if isinstance(cached, bytes) else str(cached)
+    if not force_refresh:
+        cached = await redis.get(_WECHAT_STABLE_TOKEN_CACHE_KEY)
+        if cached:
+            return cached.decode() if isinstance(cached, bytes) else str(cached)
     async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(
-            "https://api.weixin.qq.com/cgi-bin/token",
-            params={"grant_type": "client_credential", "appid": appid, "secret": secret},
+        response = await client.post(
+            "https://api.weixin.qq.com/cgi-bin/stable_token",
+            json={
+                "grant_type": "client_credential",
+                "appid": appid,
+                "secret": secret,
+                "force_refresh": force_refresh,
+            },
         )
     body = response.json()
     token = body.get("access_token")
     if not token:
         raise _mp_error(503, "WECHAT_TOKEN_FAILED", body.get("errmsg") or "获取微信凭证失败")
     expires = max(int(body.get("expires_in") or 7200) - 200, 60)
-    await redis.setex("mp:wx:access_token", expires, token)
+    await redis.setex(_WECHAT_STABLE_TOKEN_CACHE_KEY, expires, token)
+    # 清掉旧版普通 token 缓存，避免其它路径误用已失效凭证。
+    await redis.delete("mp:wx:access_token")
     return token
 
 
@@ -625,13 +657,22 @@ async def _resolve_wechat_phone(payload: WechatPhonePayload, session: dict[str, 
                 return _require_phone(fallback_phone)
             raise _mp_error(422, "WECHAT_PHONE_REQUIRED", "未读取到微信手机号")
         token = await _wechat_access_token(appid, secret)
+        body: dict[str, Any]
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 "https://api.weixin.qq.com/wxa/business/getuserphonenumber",
                 params={"access_token": token},
                 json={"code": code},
             )
-        body = response.json()
+            body = response.json()
+            if body.get("errcode") and _wechat_token_stale(body.get("errmsg")):
+                token = await _wechat_access_token(appid, secret, force_refresh=True)
+                response = await client.post(
+                    "https://api.weixin.qq.com/wxa/business/getuserphonenumber",
+                    params={"access_token": token},
+                    json={"code": code},
+                )
+                body = response.json()
         if body.get("errcode"):
             if fallback_phone and not _is_production():
                 return _require_phone(fallback_phone)
@@ -798,6 +839,16 @@ async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any
     content_types: list[dict[str, Any]] = []
     flat_variables: list[dict[str, Any]] = []
     requires_content_type = service_entry == "装修家居"
+    target_audiences = await list_enabled_target_audience_names(db) if service_entry == "装修家居" else []
+    resident_populations = await list_enabled_resident_population_names(db) if service_entry == "装修家居" else []
+    process_types = await list_enabled_process_type_names(db) if service_entry == "装修家居" else []
+    process_names_by_type = await list_enabled_process_names_by_type(db) if service_entry == "装修家居" else {}
+    select_options = catalog_select_options(
+        target_audiences=target_audiences,
+        resident_populations=resident_populations,
+        process_types=process_types,
+        process_names_by_type=process_names_by_type,
+    )
     if requires_content_type:
         for content_type in types:
             fields = configured_business_variable_fields(
@@ -805,6 +856,7 @@ async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any
                 service_entry=service_entry,
                 content_type_id=content_type["id"],
                 port="app",
+                select_options=select_options,
             )
             for field in fields:
                 field["content_type_code"] = content_type["type_code"]
@@ -817,6 +869,7 @@ async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any
             service_entry=service_entry,
             content_type_id=None,
             port="app",
+            select_options=select_options,
         )
     covers = [_cover_template_item(item) for item in await CoverRepository(db).list_enabled()]
     hycanvas_templates = await _list_mp_hycanvas_templates() if service_entry == "装修家居" else []
@@ -832,14 +885,17 @@ async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any
         "business_variable_bindings": [
             item
             for item in bindings
-            if item.get("service_entry") == service_entry
-            and item.get("enabled")
-            and "app" in (item.get("ports") or [])
+            if item.get("service_entry") == service_entry and item.get("enabled") and "app" in (item.get("ports") or [])
         ],
         "frame_areas": [_frame_area_payload(item) for item in FRAME_AREA_PRICING]
         if service_entry == "装修家居"
         else [],
         "design_styles": list(DESIGN_STYLES) if service_entry == "装修家居" else [],
+        "project_stages": (list(FIELD_SELECT_OPTIONS["项目阶段"]) if service_entry == "装修家居" else []),
+        "target_audiences": target_audiences,
+        "resident_populations": resident_populations,
+        "process_types": process_types,
+        "process_names_by_type": process_names_by_type,
         "regions": list(REGIONS),
         "region_tree": [{"city": city, "districts": list(districts)} for city, districts in REGION_TREE],
         "cover_templates": covers,
@@ -900,15 +956,33 @@ async def read_mp_gallery_item_file(db: AsyncSession, ctx: MpContext, item_id: s
     return await get_material_file(db, ctx.user, item_id)
 
 
-async def upload_cover(db: AsyncSession, ctx: MpContext, file: UploadFile) -> dict[str, Any]:
-    result = await create_cover_asset(db, ctx.user, file, role="source", content_task_id=None)
-    asset = result["asset"]
-    asset["file_url"] = f"/api/mp/content/covers/{asset['id']}/file"
-    library_item = await MaterialLibraryRepository(db).get_item_by_asset(asset["id"])
-    payload = {"asset": asset}
-    if library_item is not None:
-        payload["library_item_id"] = library_item.id
-    return payload
+async def upload_cover(
+    db: AsyncSession,
+    ctx: MpContext,
+    file: UploadFile,
+    *,
+    category: str | None = None,
+) -> dict[str, Any]:
+    """Upload via the same material-library import path used by PC 素材库."""
+    resolved_category = (category or "uncategorized").strip() or "uncategorized"
+    try:
+        imported = await import_material_images(db, ctx.user, [file], category=resolved_category)
+    except HTTPException:
+        raise
+    item = (imported.get("items") or [None])[0]
+    if not item:
+        raise _mp_error(500, "MATERIAL_UPLOAD_EMPTY", "素材上传失败")
+    asset = await ContentCoverRepository(db).get_asset(str(item["asset_id"]))
+    if asset is None:
+        raise _mp_error(500, "MATERIAL_ASSET_MISSING", "素材上传后无法读取文件")
+    payload_asset = serialize_asset(asset)
+    payload_asset["file_url"] = f"/api/mp/content/covers/{asset.id}/file"
+    return {
+        "asset": payload_asset,
+        "library_item_id": item["id"],
+        "category": item.get("category") or resolved_category,
+        "category_name": item.get("category_name") or "",
+    }
 
 
 async def read_cover_file(db: AsyncSession, ctx: MpContext, asset_id: str) -> tuple[bytes, str, str]:
@@ -991,11 +1065,25 @@ async def compile_brief(db: AsyncSession, ctx: MpContext, payload: MpCompileBrie
     ct_code = map_nrlx_to_ct_code(selected_type["type_code"], selected_type["name"])
     goal = resolve_content_goal(payload.service_entry, ct_code)
     template = await _decoration_template(db)
+    target_audiences = await list_enabled_target_audience_names(db) if payload.service_entry == "装修家居" else []
+    resident_populations = (
+        await list_enabled_resident_population_names(db) if payload.service_entry == "装修家居" else []
+    )
+    process_types = await list_enabled_process_type_names(db) if payload.service_entry == "装修家居" else []
+    process_names_by_type = (
+        await list_enabled_process_names_by_type(db) if payload.service_entry == "装修家居" else {}
+    )
     form_fields = configured_business_variable_fields(
         (await list_business_variables(db))["business_variables"],
         service_entry=payload.service_entry,
         content_type_id=selected_type["id"] if payload.service_entry == "装修家居" else None,
         port="app",
+        select_options=catalog_select_options(
+            target_audiences=target_audiences,
+            resident_populations=resident_populations,
+            process_types=process_types,
+            process_names_by_type=process_names_by_type,
+        ),
     )
     for field in form_fields:
         if not field.get("required"):

@@ -465,6 +465,23 @@ const FIELD_SELECT_OPTIONS = {
   ],
   项目阶段: ['拆改阶段', '水电阶段', '泥木阶段', '油漆阶段', '竣工交付']
 }
+const PROCESS_NAME_GUARD_HINT = '请先选择工艺类型，若没有工艺类型变量，请联系管理员配置'
+const targetAudienceOptions = computed(() => store.bootstrap?.target_audiences || [])
+const residentPopulationOptions = computed(() => store.bootstrap?.resident_populations || [])
+const processTypeOptions = computed(() => store.bootstrap?.process_types || [])
+const processNamesByType = computed(() => store.bootstrap?.process_names_by_type || {})
+const fieldSelectOptions = computed(() => {
+  const selectedType = String(formValues['工艺类型'] || '').trim()
+  const processNames = selectedType ? processNamesByType.value[selectedType] || [] : []
+  const hasProcessCatalog = Object.keys(processNamesByType.value).length > 0
+  return {
+    ...FIELD_SELECT_OPTIONS,
+    ...(targetAudienceOptions.value.length ? { 目标人群: targetAudienceOptions.value } : {}),
+    ...(residentPopulationOptions.value.length ? { 居住人口: residentPopulationOptions.value } : {}),
+    ...(processTypeOptions.value.length ? { 工艺类型: processTypeOptions.value } : {}),
+    ...(hasProcessCatalog ? { 工艺名称: processNames } : {})
+  }
+})
 const DECORATION_QUOTE_KEYS = ['基础', '木制品', '主材']
 const FRAME_AREA_QUOTES = {
   '50-70㎡': { 基础: '4-5万', 木制品: '2-3万', 主材: '2-3万' },
@@ -476,7 +493,10 @@ const FRAME_AREA_QUOTES = {
   '300㎡以上': { 基础: '30万以上', 木制品: '11万以上', 主材: '16万以上' }
 }
 const FIELD_PLACEHOLDERS = {
-  目标人群: '示例：毛坯装修三口之家',
+  目标人群: '请选择目标人群',
+  居住人口: '请选择居住人口',
+  工艺类型: '请选择工艺类型',
+  工艺名称: '请选择工艺名称',
   楼盘信息: '示例：洋湖天序',
   项目阶段: '请选择项目阶段'
 }
@@ -544,15 +564,20 @@ const activeFields = computed(() => {
     })
     .map((item) => {
       const name = item.variable_name
-      const options = FIELD_SELECT_OPTIONS[name]
+      const hasProcessNameCatalog = Object.keys(processNamesByType.value).length > 0
+      const options =
+        name === '工艺名称' && hasProcessNameCatalog
+          ? fieldSelectOptions.value[name] || []
+          : fieldSelectOptions.value[name]
+      const isSelect = Boolean(options) || (name === '工艺名称' && hasProcessNameCatalog)
       return {
         key: name,
         label: name,
-        type: options ? 'select' : 'text',
+        type: isSelect ? 'select' : 'text',
         required: Boolean(item.required),
-        options: options || [],
-        placeholder: options
-          ? `请选择${name}`
+        options: isSelect ? options || [] : [],
+        placeholder: isSelect
+          ? FIELD_PLACEHOLDERS[name] || `请选择${name}`
           : DECORATION_QUOTE_KEYS.includes(name)
             ? '根据外框面积自动带出暂时金额'
             : FIELD_PLACEHOLDERS[name] || `请输入${name}`
@@ -831,6 +856,18 @@ const applyFrameAreaTemporaryQuotes = (frameArea) => {
 
 const onBusinessSelectChange = (key, value) => {
   if (key === '外框面积') applyFrameAreaTemporaryQuotes(value)
+  if (key === '工艺类型') {
+    const allowed = processNamesByType.value[value] || []
+    const currentName = String(formValues['工艺名称'] || '').trim()
+    if (currentName && !allowed.includes(currentName)) formValues['工艺名称'] = undefined
+  }
+}
+
+const guardProcessNameSelect = (fieldKey, open) => {
+  if (!open || fieldKey !== '工艺名称') return
+  const hasTypeField = activeFields.value.some((field) => field.key === '工艺类型')
+  const selectedType = String(formValues['工艺类型'] || '').trim()
+  if (!hasTypeField || !selectedType) message.warning(PROCESS_NAME_GUARD_HINT)
 }
 
 const initializeFormValues = () => {
@@ -2340,6 +2377,7 @@ const openVersions = async () => {
                         allow-clear
                         :placeholder="field.placeholder || `请选择${field.label}`"
                         :options="(field.options || []).map((item) => ({ label: item, value: item }))"
+                        @openChange="(open) => guardProcessNameSelect(field.key, open)"
                         @change="(value) => onBusinessSelectChange(field.key, value)"
                       />
                       <a-select
@@ -2389,34 +2427,6 @@ const openVersions = async () => {
                     @change="onReviewNotePhotos"
                   />
                 </div>
-                <label v-for="field in activeFields" :key="field.key" class="field-block">
-                  <span>{{ field.label }}<em v-if="field.required">*</em></span>
-                  <a-input
-                    v-if="field.type === 'text'"
-                    v-model:value="formValues[field.key]"
-                    :placeholder="field.placeholder || `请输入${field.label}`"
-                  />
-                  <a-textarea
-                    v-else-if="field.type === 'textarea'"
-                    v-model:value="formValues[field.key]"
-                    :rows="3"
-                    :placeholder="field.placeholder || `请输入${field.label}`"
-                  />
-                  <a-select
-                    v-else-if="field.type === 'channel'"
-                    :value="store.task.channel_profile_version_id"
-                    :options="(store.bootstrap?.channel_profiles || []).map(channel => ({ value: channel.id, label: channel.name }))"
-                    disabled
-                    placeholder="任务尚未绑定发布渠道"
-                  />
-                  <a-select
-                    v-else-if="field.type === 'tags'"
-                    v-model:value="formValues[field.key]"
-                    mode="tags"
-                    :token-separators="[',', '，']"
-                    :placeholder="`输入${field.label}后回车`"
-                  />
-                </label>
               </div>
             </div>
             <aside class="facts-preview">

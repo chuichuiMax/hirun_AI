@@ -26,10 +26,14 @@ DEFAULT_PORTS: list[str] = ["pc", "app"]
 # (service_entry, content_type_name|None, variable_name, required, enabled)
 DEFAULT_BUSINESS_VARIABLES: tuple[tuple[str, str | None, str, bool, bool], ...] = (
     ("装修家居", "工艺施工展示", "目标人群", True, True),
+    ("装修家居", "工艺施工展示", "居住人口", True, True),
+    ("装修家居", "工艺施工展示", "工艺类型", True, True),
+    ("装修家居", "工艺施工展示", "工艺名称", True, True),
     ("装修家居", "工艺施工展示", "楼盘信息", False, True),
     ("装修家居", "工艺施工展示", "外框面积", True, True),
     ("装修家居", "工艺施工展示", "项目阶段", True, True),
     ("装修家居", "装修报价清单", "目标人群", True, True),
+    ("装修家居", "装修报价清单", "居住人口", True, True),
     ("装修家居", "装修报价清单", "楼盘信息", True, True),
     ("装修家居", "装修报价清单", "外框面积", True, True),
     ("装修家居", "装修报价清单", "基础", False, True),
@@ -200,9 +204,7 @@ async def list_business_variables(
     return {"business_variables": rows, "total": len(rows)}
 
 
-async def create_business_variable(
-    db: AsyncSession, user: User, payload: BusinessVariableCreate
-) -> dict[str, Any]:
+async def create_business_variable(db: AsyncSession, user: User, payload: BusinessVariableCreate) -> dict[str, Any]:
     await ensure_default_business_variables(db)
     if payload.service_entry not in SERVICE_ENTRIES:
         raise _error(422, "BUSINESS_VARIABLE_SERVICE_ENTRY_INVALID", "服务类型不存在")
@@ -255,9 +257,7 @@ async def create_business_variable(
     }
 
 
-async def update_business_variable(
-    db: AsyncSession, item_id: str, payload: BusinessVariableUpdate
-) -> dict[str, Any]:
+async def update_business_variable(db: AsyncSession, item_id: str, payload: BusinessVariableUpdate) -> dict[str, Any]:
     repo = BusinessVariableRepository(db)
     item = await repo.get(item_id)
     if item is None:

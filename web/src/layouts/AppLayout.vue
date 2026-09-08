@@ -19,6 +19,8 @@ import {
   UserRoundPen,
   ShieldCheck,
   Layers,
+  UsersRound,
+  House,
   PanelsTopLeft,
   Braces,
   ListTree,
@@ -238,6 +240,18 @@ const mainList = computed(() => {
         activeIcon: Layers
       },
       {
+        name: '目标人群配置',
+        path: '/config-manage/target-audiences',
+        icon: UsersRound,
+        activeIcon: UsersRound
+      },
+      {
+        name: '居住人口配置',
+        path: '/config-manage/resident-populations',
+        icon: House,
+        activeIcon: House
+      },
+      {
         name: '业务参数配置',
         path: '/config-manage/variables',
         icon: Braces,
@@ -250,7 +264,7 @@ const mainList = computed(() => {
         activeIcon: ListTree
       },
       {
-        name: '工艺标准列表',
+        name: '工艺类型列表',
         path: '/config-manage/process-standards',
         icon: Hammer,
         activeIcon: Hammer
@@ -270,7 +284,7 @@ const mainList = computed(() => {
   return items
 })
 
-const expandedGroups = ref({ 配置管理: true })
+const expandedGroups = ref({ 配置管理: false })
 
 const isNavItemActive = (item) => {
   const activePaths = item.activePaths || (item.path ? [item.path] : [])
@@ -291,6 +305,16 @@ const toggleGroup = (item) => {
     [item.name]: !expandedGroups.value[item.name]
   }
 }
+
+watch(
+  () => route.path,
+  (path) => {
+    if (path.startsWith('/config-manage')) {
+      expandedGroups.value = { ...expandedGroups.value, 配置管理: true }
+    }
+  },
+  { immediate: true }
+)
 
 const setSidebarCollapsed = (collapsed) => {
   sidebarCollapsed.value = collapsed
@@ -653,12 +677,30 @@ div.header,
 
   .nav {
     display: flex;
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     flex-direction: column;
     justify-content: flex-start;
     align-items: stretch;
     position: relative;
     gap: 4px;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+
+    &::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--gray-400) 70%, transparent);
+    }
+
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
   }
 
   .nav-group {

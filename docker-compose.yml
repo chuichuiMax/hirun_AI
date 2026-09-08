@@ -437,9 +437,11 @@ services:
       APP_URL: ${HYCANVAS_PUBLIC_URL:-http://127.0.0.1:${HYCANVAS_PORT:-8005}}
       REDIS_URL: ""
       PUBLIC_DIR: ""
-      FRONTEND_URL: http://127.0.0.1:${HYCANVAS_DEV_FRONTEND_PORT:-3000}
-      NEXT_PUBLIC_BACKEND_URL: http://127.0.0.1:${HYCANVAS_PORT:-8005}/api
-      HYCANVAS_DEV_BACKEND_URL: http://127.0.0.1:8005
+      FRONTEND_URL: ${HYCANVAS_FRONTEND_URL:-http://127.0.0.1:${HYCANVAS_DEV_FRONTEND_PORT:-3000}}
+      # Browser API base. Behind ai.hi-run.net nginx set NEXT_PUBLIC_BACKEND_URL=/api
+      # so clients call same-origin /api/v1 (not 127.0.0.1:8005).
+      NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://127.0.0.1:${HYCANVAS_PORT:-8005}/api}
+      HYCANVAS_DEV_BACKEND_URL: ${HYCANVAS_DEV_BACKEND_URL:-http://127.0.0.1:8005}
       STORAGE_DRIVER: local
       LOCAL_STORAGE_PATH: /app/.data/storage
       FONTS_DIR: /usr/share/fonts/opentype/noto

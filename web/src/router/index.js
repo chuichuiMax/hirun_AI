@@ -221,6 +221,18 @@ const router = createRouter({
           meta: { keepAlive: false, requiresAuth: true }
         },
         {
+          path: 'target-audiences',
+          name: 'TargetAudienceConfigComp',
+          component: () => import('../views/TargetAudienceConfigView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'resident-populations',
+          name: 'ResidentPopulationConfigComp',
+          component: () => import('../views/ResidentPopulationConfigView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
           path: 'variables',
           name: 'VariableConfigComp',
           component: () => import('../views/VariableConfigView.vue'),

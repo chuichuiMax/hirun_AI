@@ -1808,6 +1808,54 @@ class ContentProcessStandard(Base):
         }
 
 
+class ContentTargetAudience(Base):
+    """目标人群配置。"""
+
+    __tablename__ = "content_target_audiences"
+    __table_args__ = (UniqueConstraint("name", name="uq_content_target_audiences_name"),)
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(64), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ContentResidentPopulation(Base):
+    """居住人口配置。"""
+
+    __tablename__ = "content_resident_populations"
+    __table_args__ = (UniqueConstraint("name", name="uq_content_resident_populations_name"),)
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(64), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_by = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "enabled": bool(self.enabled),
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
 class ContentCover(Base):
     """内容封面。"""
 

@@ -80,6 +80,21 @@ async def test_mp_sms_login_me_schema_and_pc_token_isolation(test_client, admin_
         assert {"目标人群", "楼盘信息", "外框面积", "项目阶段"} <= process_keys
         assert any(field["key"] == "楼盘信息" and field["required"] is False for field in process_type["variables"])
         assert any(field["key"] == "外框面积" and field["type"] == "select" for field in process_type["variables"])
+        assert "三口之家" in data["resident_populations"]
+        resident_field = next(
+            (field for field in process_type["variables"] if field["key"] == "居住人口"),
+            None,
+        )
+        if resident_field:
+            assert resident_field["type"] == "select"
+            assert resident_field["options"] == data["resident_populations"]
+        assert any(
+            field["key"] == "项目阶段"
+            and field["type"] == "select"
+            and field["options"] == ["拆改阶段", "水电阶段", "泥木阶段", "油漆阶段", "竣工交付"]
+            for field in process_type["variables"]
+        )
+        assert data["project_stages"] == ["拆改阶段", "水电阶段", "泥木阶段", "油漆阶段", "竣工交付"]
         assert all(item.get("content_type_id") for item in data["variables"])
         assert all("app" in item["ports"] for item in data["variables"])
         assert data["business_variable_bindings"]
@@ -182,6 +197,8 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
             field["key"]: (
                 "毛坯装修三口之家"
                 if field["key"] == "目标人群"
+                else "三口之家"
+                if field["key"] == "居住人口"
                 else "星河湾"
                 if field["key"] == "楼盘信息"
                 else "50-70㎡"

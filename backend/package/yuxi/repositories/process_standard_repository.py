@@ -40,6 +40,30 @@ class ProcessStandardRepository:
         )
         return [name for (name,) in result.all() if name]
 
+    async def list_enabled_names(self) -> list[str]:
+        result = await self.db.execute(
+            select(ContentProcessStandard.name)
+            .where(ContentProcessStandard.enabled.is_(True))
+            .distinct()
+            .order_by(ContentProcessStandard.name.asc())
+        )
+        return [name for (name,) in result.all() if name]
+
+    async def list_enabled_names_by_type(self) -> dict[str, list[str]]:
+        result = await self.db.execute(
+            select(ContentProcessStandard.name, ContentProcessStandard.detail)
+            .where(ContentProcessStandard.enabled.is_(True))
+            .order_by(ContentProcessStandard.name.asc(), ContentProcessStandard.detail.asc())
+        )
+        mapping: dict[str, list[str]] = {}
+        for type_name, detail in result.all():
+            if not type_name or not detail:
+                continue
+            bucket = mapping.setdefault(type_name, [])
+            if detail not in bucket:
+                bucket.append(detail)
+        return mapping
+
     async def list_items(
         self, *, keyword: str | None = None, name: str | None = None
     ) -> list[ContentProcessStandard]:

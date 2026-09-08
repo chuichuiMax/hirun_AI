@@ -142,6 +142,16 @@ async def list_process_standards(
     }
 
 
+async def list_enabled_process_type_names(db: AsyncSession) -> list[str]:
+    await ensure_default_process_standards(db)
+    return await ProcessStandardRepository(db).list_enabled_names()
+
+
+async def list_enabled_process_names_by_type(db: AsyncSession) -> dict[str, list[str]]:
+    await ensure_default_process_standards(db)
+    return await ProcessStandardRepository(db).list_enabled_names_by_type()
+
+
 async def create_process_standard(
     db: AsyncSession, user: User, payload: ProcessStandardCreate
 ) -> dict[str, Any]:
