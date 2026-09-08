@@ -18,6 +18,7 @@ import (
 // All JWT-guarded; visibility scope is enforced in the service. Static segments
 // (collections) are registered before the {id} param routes.
 func mountTemplates(api chi.Router, tm *templates.Service, acct *accounts.Service, up *uploads.Service) {
+	api.Get("/templates/catalog", templatesCatalogHandler(tm))
 	api.Group(func(r chi.Router) {
 		r.Use(requireAuth(acct))
 		r.Get("/templates", templatesListHandler(tm))
@@ -36,6 +37,17 @@ func mountTemplates(api chi.Router, tm *templates.Service, acct *accounts.Servic
 		r.Post("/templates/{id}/instantiate", templatesInstantiateHandler(tm))
 		r.Post("/templates/{id}/collection", templatesAssignCollectionHandler(tm))
 	})
+}
+
+func templatesCatalogHandler(tm *templates.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		categories, err := tm.PublicCategorizedCatalog(r.Context())
+		if err != nil {
+			templatesProblem(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"categories": categories})
+	}
 }
 
 func templatesBackgroundPreviewHandler(tm *templates.Service, up *uploads.Service) http.HandlerFunc {

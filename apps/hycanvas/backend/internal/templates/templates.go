@@ -605,6 +605,27 @@ type Collection struct {
 	Name        string `json:"name"`
 }
 
+// Category groups the templates assigned to one workspace collection for
+// consumers that need the complete categorized catalog in one request.
+type Category struct {
+	ID        string           `json:"id"`
+	Name      string           `json:"name"`
+	Templates []PublicTemplate `json:"templates"`
+}
+
+type PublicTemplate struct {
+	ID             string         `json:"id"`
+	Title          string         `json:"title"`
+	Categories     []string       `json:"categories"`
+	Tags           []string       `json:"tags"`
+	Format         map[string]any `json:"format"`
+	PageCount      int            `json:"pageCount"`
+	PreviewURLs    []string       `json:"previewUrls"`
+	FillableFields []any          `json:"fillableFields"`
+	CreatedAt      string         `json:"createdAt"`
+	UpdatedAt      string         `json:"updatedAt"`
+}
+
 func (s *Service) CreateCollection(ctx context.Context, userID, workspaceID, name string) (Collection, error) {
 	if err := s.access.AssertMember(ctx, userID, workspaceID, "member"); err != nil {
 		return Collection{}, ErrForbidden
@@ -629,6 +650,31 @@ func (s *Service) ListCollections(ctx context.Context, userID, workspaceID strin
 		out = append(out, Collection{ID: r.ID, WorkspaceID: r.WorkspaceID, Name: r.Name})
 	}
 	return out, nil
+}
+
+func (s *Service) PublicCategorizedCatalog(ctx context.Context) ([]Category, error) {
+	rows, err := s.listAllCollections(ctx)
+	if err != nil {
+		return nil, err
+	}
+	categories := make([]Category, 0, len(rows))
+	for _, collection := range rows {
+		templateRows, err := s.listCollectionRows(ctx, collection.ID)
+		if err != nil {
+			return nil, err
+		}
+		templates := make([]PublicTemplate, 0, len(templateRows))
+		for _, row := range templateRows {
+			template := rowToTemplate(row)
+			templates = append(templates, PublicTemplate{
+				ID: template.ID, Title: template.Title, Categories: template.Categories, Tags: template.Tags,
+				Format: template.Format, PageCount: template.PageCount, PreviewURLs: template.PreviewURLs,
+				FillableFields: template.FillableFields, CreatedAt: template.CreatedAt, UpdatedAt: template.UpdatedAt,
+			})
+		}
+		categories = append(categories, Category{ID: collection.ID, Name: collection.Name, Templates: templates})
+	}
+	return categories, nil
 }
 
 func (s *Service) DeleteCollection(ctx context.Context, userID, id string) error {
