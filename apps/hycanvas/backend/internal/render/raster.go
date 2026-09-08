@@ -40,6 +40,7 @@ import (
 	"image/png"
 	"math"
 	"strings"
+	"unicode"
 
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -687,6 +688,19 @@ func runText(ro, style map[string]any) string {
 		return strings.ToUpper(text)
 	case "lower":
 		return strings.ToLower(text)
+	case "title":
+		start := true
+		return strings.Map(func(r rune) rune {
+			if unicode.IsLetter(r) {
+				if start {
+					start = false
+					return unicode.ToUpper(r)
+				}
+				return r
+			}
+			start = true
+			return r
+		}, text)
 	}
 	return text
 }
@@ -759,7 +773,7 @@ func (rc *rctx) rasterText(m mat, node map[string]any) {
 			text = ShapeArabic(text, 0, 0)
 		}
 		fam := asStr(style["fontFamily"])
-		wght := int(asNum(asObj(style["axes"])["wght"]))
+		wght := effectiveFontWeight(style)
 		size := asNum(style["fontSize"])
 		if size == 0 {
 			size = 16
@@ -796,7 +810,7 @@ func (rc *rctx) rasterText(m mat, node map[string]any) {
 		}
 		// Registered real fonts win (glyph-true export); otherwise the embedded
 		// fallback keeps text legible and positioned.
-		fnt := lookupFont(asStr(style["fontFamily"]), int(asNum(asObj(style["axes"])["wght"])))
+		fnt := lookupFont(asStr(style["fontFamily"]), effectiveFontWeight(style))
 		if fnt == nil {
 			fnt = rc.font
 		}
@@ -952,7 +966,7 @@ func (rc *rctx) rasterText(m mat, node map[string]any) {
 			src := image.NewUniform(rasterColor(col, rc.alpha))
 			ls := asNum(sg.style["letterSpacing"])
 			fam := asStr(sg.style["fontFamily"])
-			wght := int(asNum(asObj(sg.style["axes"])["wght"]))
+			wght := effectiveFontWeight(sg.style)
 			size := asNum(sg.style["fontSize"])
 			if size == 0 {
 				size = 16
