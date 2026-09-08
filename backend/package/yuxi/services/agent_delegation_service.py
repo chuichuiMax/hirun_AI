@@ -115,6 +115,7 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
 
 class AgentDelegationService:
     KNOWLEDGE_NODE_IDS = {
+        "research_strategy_prices",
         "collect_missing_evidence",
         "collect_strategy_product_evidence",
         "collect_business_rule_evidence",
@@ -125,6 +126,7 @@ class AgentDelegationService:
     }
     KNOWLEDGE_TOOL_NAMES = {"list_kbs", "get_mindmap", "query_kb", "open_kb_document", "find_kb_document"}
     RESEARCH_KNOWLEDGE_NAMES = {
+        "research_strategy_prices": {"价格库"},
         "collect_business_rule_evidence": {"品牌知识库", "平台规则"},
         "collect_price_evidence": {"价格库"},
         "collect_compliance_evidence": {"封禁词库"},
@@ -384,6 +386,10 @@ class AgentDelegationService:
         ]
         context._visible_knowledge_bases = visible
         context.knowledges = [str(item["kb_id"]) for item in visible if item.get("kb_id")]
+        if node_id == "research_strategy_prices" and not context.knowledges:
+            raise ContentApplicationError(
+                "price_knowledge_not_authorized", "报价补证 Agent 未配置可访问的价格库", "invalid",
+            )
 
     @staticmethod
     async def _invoke_graph(

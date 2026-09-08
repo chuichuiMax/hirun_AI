@@ -46,7 +46,7 @@ class ContentNodeInputAssembler:
                 f"节点 {node['id']} 输入不符合 {contract_name}: {field_path} {message}".strip(),
                 "invalid",
             ) from exc
-        if contract_name == "JointStrategyInputV1":
+        if contract_name in {"JointStrategyInputV1", "ReevaluateJointStrategyInputV1"}:
             # 路径紧邻事实值，模型无需自行计数；只标注可见副本，不改冻结证据。
             for index, item in enumerate(payload["evidence_bundle"].get("items", [])):
                 if (

@@ -380,11 +380,11 @@ async def get_content_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
     rule_bundle = await repo.get_rule_bundle(version.id)
     policy = load_selection_policy()
     templates = await repo.list_templates()
-    from yuxi.content.v3.joint_workflow import PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID
+    from yuxi.content.v3.joint_workflow import BLUEPRINT_FIRST_WORKFLOW_IDS
 
     for template in templates:
         template["strategy_mode"] = policy["industry_modes"].get(template["slug"], policy["default_mode"])
-        template["blueprint_first"] = template["default_workflow_version_id"] == PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID
+        template["blueprint_first"] = template["default_workflow_version_id"] in BLUEPRINT_FIRST_WORKFLOW_IDS
     return {
         "industry_templates": templates,
         "content_goals": CONTENT_GOALS,

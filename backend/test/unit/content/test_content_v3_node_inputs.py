@@ -288,6 +288,8 @@ def test_input_contract_registry_contains_every_agent_payload_contract():
         "SelectCreationStrategyInputV1",
         "SelectStrategyInputV2",
         "JointStrategyInputV1",
+        "ReevaluateJointStrategyInputV1",
+        "ResearchStrategyPricesInputV1",
         "ViralAssetPreparationInputV1",
         "SelectContentDirectionInputV1",
         "ExplainStrategyInputV1",

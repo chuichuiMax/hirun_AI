@@ -288,7 +288,10 @@ class ContentWorkflowAgent(BaseAgent):
                 persisted = await db.get(type(node_run), node_run.id)
                 if persisted:
                     output_snapshot = {"updated_fields": sorted(result.keys())}
-                    if cache_key or node_id in {"select_creation_strategy", "lock_creation_strategy"}:
+                    if cache_key or node_id in {
+                        "select_creation_strategy", "lock_creation_strategy", "research_strategy_prices",
+                        "confirm_strategy_prices", "merge_strategy_prices", "reselect_creation_strategy",
+                    }:
                         output_snapshot["result"] = result
                     if node_id == "prepare_strategy_candidates":
                         output_snapshot["reference_search_queries"] = result.get("reference_search_queries", [])
@@ -448,6 +451,19 @@ class ContentWorkflowAgent(BaseAgent):
                 "state_version": state_version + 1,
                 "resume_parent_run_id": None,
             }
+
+        if node["id"] == "confirm_strategy_prices":
+            collection = dict(state["strategy_price_evidence_collection"])
+            items = collection.get("evidence_items") or []
+            if not items:
+                return {}
+            ids = {item["id"] for item in items}
+            answer = require_resume({"evidence_ids": sorted(ids), "evidence_items": items})
+            if set(answer.get("confirmed_evidence_ids") or []) != ids:
+                raise ValueError("检索报价必须逐项确认；标准单价的确认不代表本项目实际成交价")
+            collection["evidence_items"] = [{**item, "verified_status": "user_confirmed"} for item in items]
+            return {"strategy_price_evidence_collection": collection,
+                    "state_version": state_version + 1, "resume_parent_run_id": None}
 
         if interrupt_type == "high_risk_facts":
             collection = dict(state.get("evidence_collection") or {})

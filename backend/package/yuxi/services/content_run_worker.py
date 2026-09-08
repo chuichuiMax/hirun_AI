@@ -215,7 +215,16 @@ async def process_content_run(ctx, run_id: str):
                 "resume_parent_run_id": None,
             }
             retry_from_node = None
-            if requested_node == "submit_cover_job" and (
+            if (
+                pending_nodes == {"lock_creation_strategy"}
+                and (workflow.definition_json or {}).get("price_recovery")
+                and ((state_values.get("joint_strategy_decision") or {}).get("reference") or {}).get("status")
+                in {"needs_input", "no_candidate"}
+                and (state_values.get("strategy_price_evidence_collection") or {}).get("evidence_items")
+            ):
+                # 已补证的失败决策需按当前 Skill 复评；重复锁定同一拒绝结果无法恢复。
+                retry_from_node = "merge_strategy_prices"
+            elif requested_node == "submit_cover_job" and (
                 _visual_plan_exceeds_template_limits(state_values)
                 or _visual_plan_needs_template_field_repair(state_values)
             ):

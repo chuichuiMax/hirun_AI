@@ -1152,7 +1152,7 @@ watch(
     confirmedEvidenceIds.value = ['high_risk_facts', 'strategy_product_facts'].includes(
       interrupt?.interrupt_type
     )
-      ? [...(interrupt.evidence_ids || [])]
+      ? (interrupt.node_id === 'confirm_strategy_prices' ? [] : [...(interrupt.evidence_ids || [])])
       : []
     approvalNote.value = ''
   },
@@ -2352,10 +2352,15 @@ const openVersions = async () => {
             <div class="human-heading"><ShieldCheck :size="20" /><div><h3>确认关键事实</h3><p>价格、优惠、效果或高风险表达必须逐项确认后才能进入冻结证据并用于生成。</p></div></div>
             <a-checkbox-group v-model:value="confirmedEvidenceIds" class="fact-options">
               <a-checkbox v-for="item in store.interrupt.evidence_ids" :key="item" :value="item">
-                <strong>{{ evidenceReferenceText(item) }}</strong>
+                <strong>{{ store.interrupt.node_id === 'confirm_strategy_prices' ? evidenceItemsById.get(item)?.value : evidenceReferenceText(item) }}</strong>
+                <div v-if="store.interrupt.node_id === 'confirm_strategy_prices'">
+                  <p>{{ evidenceItemsById.get(item)?.metadata?.price_basis === 'standard_unit_price' ? '标准单价参考，不代表本项目实际成交费用' : '本项目报价资料' }}</p>
+                  <p>范围：{{ evidenceItemsById.get(item)?.metadata?.scope }} · 单位：{{ evidenceItemsById.get(item)?.metadata?.unit }}</p>
+                  <p>来源：{{ evidenceItemsById.get(item)?.metadata?.document_name || evidenceItemsById.get(item)?.metadata?.filename || evidenceItemsById.get(item)?.source_id }}</p>
+                </div>
               </a-checkbox>
             </a-checkbox-group>
-            <a-button type="primary" @click="submitHumanReview">确认选中事实并继续</a-button>
+            <a-button type="primary" :disabled="store.interrupt.node_id === 'confirm_strategy_prices' && confirmedEvidenceIds.length !== store.interrupt.evidence_ids.length" @click="submitHumanReview">确认选中事实并继续</a-button>
           </div>
 
           <div v-else-if="store.interrupt?.interrupt_type === 'formula_selection'" class="human-review-card">

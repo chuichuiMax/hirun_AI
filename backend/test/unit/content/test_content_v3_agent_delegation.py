@@ -1155,6 +1155,7 @@ async def test_delegation_agent_resolution_fails_closed(monkeypatch, agent, acce
     [
         ("collect_business_rule_evidence", {"品牌知识库", "平台规则"}),
         ("collect_price_evidence", {"价格库"}),
+        ("research_strategy_prices", {"价格库"}),
         ("collect_compliance_evidence", {"封禁词库"}),
         ("collect_viral_candidates", {"爆款库"}),
     ],

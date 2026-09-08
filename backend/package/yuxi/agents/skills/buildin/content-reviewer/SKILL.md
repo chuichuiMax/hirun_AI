@@ -8,6 +8,7 @@ description: 审核 Yuxi 生成内容的创作手法贯穿、公式执行、事�
 1. 当前节点 `payload` 必须包含 `content_draft`、`selected_title`、`content_outline`、`strategy_snapshot`、`validation_report` 和 `evidence_bundle`；缺少任一必需输入时直接报告契约错误，不得猜测补齐。
 2. 先确认 `validation_report.status` 为 `passed` 或 `warning`。若它为 `blocked`，返回 `REVIEW_CONTRACT_INVALID`，因为确定性阻断不应进入本节点。
 3. 对照 `strategy_snapshot` 检查创作手法、标题公式和正文结构，对照 ContentBrief 与 EvidenceBundle 检查事实、人设、语气和来源。
+   - 标注为“标准单价参考”的知识库价格可以独立展示，或与项目总预算并列；核对具体价格、单位、适用范围及来源即可。不得仅因没有工程量、分项小计、未覆盖全部类别或不与项目总预算加总一致而阻断、降级或要求补实际报价。若把标准价写成实际成交/结算费用，或虚构工程量、小计来凑总预算，才按事实不一致阻断并指出具体句子。
    - 公式只决定信息顺序，不允许把“旧况、关键数据、过程、结果”等公式步骤写成读者可见的报幕句。
    - 出现“旧况很典型”“关键数据先摊开”“先说背景”“再看过程”“最后看结果”“下面来说”“接下来看看”等元话术，或多个段落使用相同模板句式开场时，必须以 `PERSONA_STYLE_MISMATCH` 阻断并给出直接进入场景或事实的改写建议。
    - 不得因为结构、事实和证据正确，就把明显的提纲填充、审核报告腔或机械连接词判为语气通过。

@@ -13,7 +13,7 @@ from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from yuxi.content.model.contracts.joint_strategy import (
-    JointStrategyInputV1, JointStrategyDecisionV1,
+    JointStrategyInputV1, JointStrategyDecisionV1, JointStrategyDecisionV2, ReevaluateJointStrategyInputV1,
     StrategySnapshotV2, validate_joint_strategy,
 )
 from yuxi.content.model.contracts.strategy import SelectStrategyInputV2, StrategyDecisionV2, validate_strategy_decision
@@ -143,6 +143,13 @@ class CollectSelectedStrategyEvidenceInputV1(StrictContract):
 
 class CollectBusinessRuleEvidenceInputV1(CollectSelectedStrategyEvidenceInputV1):
     pass
+
+
+class ResearchStrategyPricesInputV1(StrictContract):
+    content_brief: dict[str, Any] = Field(min_length=1)
+    evidence_bundle: dict[str, Any] = Field(min_length=1)
+    joint_strategy_decision: JointStrategyDecisionV2
+    runtime_config_snapshot: dict[str, Any]
 
 
 class CollectPriceEvidenceInputV1(StrictContract):
@@ -426,6 +433,8 @@ INPUT_CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         SelectCreationStrategyInputV1,
         SelectStrategyInputV2,
         JointStrategyInputV1,
+        ReevaluateJointStrategyInputV1,
+        ResearchStrategyPricesInputV1,
         ViralAssetPreparationInputV1,
         SelectContentDirectionInputV1,
         ExplainStrategyInputV1,
@@ -522,6 +531,44 @@ class BusinessRuleEvidenceCollectionResultV1(EvidenceCollectionResultV1):
 
 class PriceEvidenceCollectionResultV1(EvidenceCollectionResultV1):
     pass
+
+
+class StrategyPriceEvidenceDraftV1(EvidenceDraftV1):
+    value: str = Field(
+        min_length=1, max_length=400,
+        description="一条报价的城市、项目、单价或金额、单位和来源注明的包含范围；不转抄整表",
+    )
+    # 来源版本由提交器按实际检索内容生成，Agent 不需要计算哈希。
+    source_hash: str = ""
+    source_version: str = ""
+    metadata: dict[str, Any] = Field(json_schema_extra={
+        "required": ["material_type", "price_basis", "scope", "unit", "integration_instruction"],
+        "properties": {
+            "material_type": {"const": "price"},
+            "price_basis": {"enum": ["standard_unit_price", "project_quote"]},
+            "scope": {"type": "string"},
+            "unit": {"type": "string"},
+            "integration_instruction": {"type": "string"},
+        },
+    })
+
+
+class StrategyPriceEvidenceResultV1(PriceEvidenceCollectionResultV1):
+    """锁定策略前的检索事实，不宣称已经匹配写作公式或得到用户授权。"""
+
+    evidence_items: list[StrategyPriceEvidenceDraftV1] = Field(max_length=8)
+
+    @model_validator(mode="after")
+    def validate_price_evidence(self):
+        for item in self.evidence_items:
+            if item.source_type != "knowledge_base" or item.verified_status != "retrieved":
+                raise ValueError("报价补证只能提交本次检索资料，不得代替人工确认")
+            if item.metadata.get("price_basis") not in {"standard_unit_price", "project_quote"}:
+                raise ValueError("报价必须区分标准单价与项目报价")
+            for key in ("scope", "unit", "integration_instruction"):
+                if not str(item.metadata.get(key) or "").strip():
+                    raise ValueError(f"报价缺少 {key}")
+        return self
 
 
 class ComplianceEvidenceCollectionResultV1(EvidenceCollectionResultV1):
@@ -723,6 +770,7 @@ CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         CreationStrategySelectionResultV1,
         StrategyDecisionV2,
         JointStrategyDecisionV1,
+        JointStrategyDecisionV2,
         ViralAssetPreparationResultV1,
         ViralDocumentResultV1,
         DirectionSelectionResultV1,
@@ -730,6 +778,7 @@ CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         EvidenceCollectionResultV1,
         BusinessRuleEvidenceCollectionResultV1,
         PriceEvidenceCollectionResultV1,
+        StrategyPriceEvidenceResultV1,
         ComplianceEvidenceCollectionResultV1,
         ViralCandidateCollectionResultV1,
         ViralReferenceSelectionResultV1,
@@ -1149,6 +1198,7 @@ def validate_content_node_result(
             article_usages = set(item.allowed_usage) & {"title", "body"}
             if (
                 item.source_type == "knowledge_base"
+                and not isinstance(result, StrategyPriceEvidenceResultV1)
                 and article_usages
                 and material_type not in {"viral_example", "platform_rule", "compliance_rule", "forbidden_term"}
             ):
@@ -1658,6 +1708,7 @@ class ContentNodeResultCollector:
             "ProductEvidenceCollectionResultV1",
             "BusinessRuleEvidenceCollectionResultV1",
             "PriceEvidenceCollectionResultV1",
+            "StrategyPriceEvidenceResultV1",
             "ComplianceEvidenceCollectionResultV1",
             "ViralCandidateCollectionResultV1",
         }
@@ -1682,6 +1733,14 @@ class ContentNodeResultCollector:
                     "知识库 Evidence 的 source_id 必须等于本节点唯一检索结果 ID",
                 )
             item["metadata"] = {**(item.get("metadata") or {}), **matches[0]["metadata"]}
+            if self.contract_name == "StrategyPriceEvidenceResultV1":
+                content = matches[0]["content"]
+                if not content.strip():
+                    raise ContractDomainValidationError(
+                        "knowledge_content_empty", f"evidence_items.{index}.source_id", "检索来源文本不能为空",
+                    )
+                item["source_hash"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                item["source_version"] = item["source_hash"]
         return normalized
 
     async def submit(self, **payload: Any) -> dict[str, Any]:
@@ -1725,6 +1784,7 @@ class ContentNodeResultCollector:
                 "EvidenceCollectionResultV1": {"价格库", "品牌知识库", "平台规则", "爆款库"},
                 "BusinessRuleEvidenceCollectionResultV1": {"品牌知识库", "平台规则"},
                 "PriceEvidenceCollectionResultV1": {"价格库"},
+                "StrategyPriceEvidenceResultV1": {"价格库"},
                 "ComplianceEvidenceCollectionResultV1": {"封禁词库"},
                 "ViralCandidateCollectionResultV1": {"爆款库"},
             }.get(self.contract_name)

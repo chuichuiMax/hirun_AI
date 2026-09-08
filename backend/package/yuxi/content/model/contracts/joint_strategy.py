@@ -23,6 +23,16 @@ class JointStrategyInputV1(SelectStrategyInputV2):
     reference_candidates: list[dict[str, Any]]
 
 
+class ReevaluateJointStrategyInputV1(JointStrategyInputV1):
+    strategy_price_evidence_collection: dict[str, Any]
+
+    @field_validator("strategy_price_evidence_collection")
+    @classmethod
+    def research_summary(cls, collection):
+        # 价格事实已在证据包中，不重复发送整份报价表。
+        return {key: collection[key] for key in ("citations", "unresolved_questions", "skipped") if key in collection}
+
+
 class PreparedReferenceDecisionV1(StrategyContract):
     status: Literal["selected", "not_requested", "no_candidate", "needs_input"]
     selected_asset_id: str | None = None
@@ -59,8 +69,24 @@ class JointStrategyDecisionV1(StrategyContract):
     )
 
 
+class JointStrategyDecisionV2(JointStrategyDecisionV1):
+    price_research_questions: list[str] = Field(
+        description=("报价缺口中可由价格库检索解决的问题；没有报价缺口时填 []。"
+                     "不要把工程量、实际成交价或公开授权伪装成标准单价问题。")
+    )
+
+    @model_validator(mode="after")
+    def validate_price_gap(self):
+        if self.price_research_questions and self.reference.status not in {"needs_input", "no_candidate"}:
+            raise ValueError("只有参考存在资料缺口时才能申请报价补证")
+        if any(not question.strip() for question in self.price_research_questions):
+            raise ValueError("报价检索问题不能为空")
+        return self
+
+
 def validate_joint_strategy(payload, inputs: dict[str, Any]) -> JointStrategyDecisionV1:
-    result = JointStrategyDecisionV1.model_validate(payload)
+    model = JointStrategyDecisionV2 if "price_research_questions" in payload else JointStrategyDecisionV1
+    result = model.model_validate(payload)
     candidates = inputs["strategy_candidates"]
     result.strategy = validate_strategy_decision(
         result.strategy.model_dump(),
