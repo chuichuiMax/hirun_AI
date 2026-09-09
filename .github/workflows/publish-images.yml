@@ -132,6 +132,7 @@ jobs:
         run: |
           uv run pytest \
             test/unit/content/test_xiaohongshu_distribution.py \
+            test/unit/content/test_xiaohongshu_cover_binding.py \
             test/unit/content/test_xiaohongshu_browser_session.py
 
       - name: Set up pnpm

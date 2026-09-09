@@ -1391,6 +1391,7 @@ async def test_xiaohongshu_distribution_snapshot_locks_selected_cover(monkeypatc
         topics=["内容创作"],
         current_version=2,
         cover_asset_id="cover-2",
+        hycanvas_design_snapshot=None,
     )
     account = SimpleNamespace(id="account-1", enabled=True, login_status="logged_in")
     cover = SimpleNamespace(
