@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -147,17 +149,22 @@ async def mp_hycanvas_template_preview(
 
 
 @mp.get("/content/galleries")
-async def mp_galleries(ctx: MpContext = Depends(get_mp_context), db: AsyncSession = Depends(get_db)):
-    return await list_mp_galleries(db, ctx)
+async def mp_galleries(
+    scope: Literal["private", "enterprise"] | None = Query(None),
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_mp_galleries(db, ctx, scope=scope)
 
 
 @mp.get("/content/gallery-items")
 async def mp_gallery_items(
     category: str = Query(...),
+    scope: Literal["private", "enterprise"] | None = Query(None),
     ctx: MpContext = Depends(get_mp_context),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_mp_gallery_items(db, ctx, category)
+    return await list_mp_gallery_items(db, ctx, category, scope=scope)
 
 
 @mp.get("/content/gallery-items/{item_id}/file")

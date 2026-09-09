@@ -1,7 +1,7 @@
-// Dashboard sections addressable by URL: /dashboard plus /dashboard/<view>.
-// pages/dashboard/[[...view]].tsx exports one static page per entry, so this
-// list is the single source of truth for both the left rail and the routes.
-// Kept free of the (client-only) DashboardApp so the page can import it for
+// Dashboard sections addressable by URL: /dashboard/ plus /dashboard/<view>/.
+// pages/dashboard/index.tsx covers home; pages/dashboard/[view].tsx covers the
+// rest. This list is the single source of truth for the left rail and routes.
+// Kept free of the (client-only) DashboardApp so pages can import it for
 // getStaticPaths without pulling the whole dashboard into the page bundle.
 
 export const dashboardViews = [
