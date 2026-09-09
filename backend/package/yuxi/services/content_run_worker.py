@@ -88,13 +88,15 @@ async def _retry_failed_cover_job(run, state: dict[str, Any]) -> dict[str, Any] 
 
 
 def _visual_plan_exceeds_template_limits(state: dict[str, Any]) -> bool:
+    from yuxi.content.control.visual_template_fields import apply_visual_text_max_char_floor
+
     visual_plan_text = (state.get("visual_plan") or {}).get("text") or []
     visual_material = (state.get("runtime_config_snapshot") or {}).get("visual_material") or {}
     role_indexes = {"title": 0, "subtitle": 1, "body_excerpt": 1}
     for field in visual_material.get("hycanvas_fillable_fields") or []:
         role = str(field.get("semanticRole") or "")
         text_index = role_indexes.get(role)
-        max_chars = (field.get("constraints") or {}).get("maxChars")
+        max_chars = apply_visual_text_max_char_floor(role, (field.get("constraints") or {}).get("maxChars"))
         if text_index is None or not isinstance(max_chars, int) or max_chars <= 0:
             continue
         if text_index < len(visual_plan_text) and len(str(visual_plan_text[text_index])) > max_chars:

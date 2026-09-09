@@ -400,7 +400,10 @@ class AgentNodeHandler:
         }
         assembly_state = state
         if node["id"] == "plan_visuals":
-            from yuxi.content.control.visual_template_fields import missing_required_template_fields
+            from yuxi.content.control.visual_template_fields import (
+                apply_visual_text_max_char_floor,
+                missing_required_template_fields,
+            )
 
             limits: dict[str, int] = {}
             allowed_template_fields: dict[str, dict[str, int]] = {}
@@ -411,12 +414,15 @@ class AgentNodeHandler:
                 constraints = field.get("constraints") or {}
                 field_key = str(field.get("key") or field.get("label") or "").strip()
                 if field_key:
-                    allowed_template_fields[field_key] = {
+                    field_limits = {
                         key: value
                         for key in ("maxChars", "maxCharsPerLine", "maxLines")
                         if isinstance((value := constraints.get(key)), int) and value > 0
                     }
-                max_chars = constraints.get("maxChars")
+                    if "maxChars" in field_limits:
+                        field_limits["maxChars"] = apply_visual_text_max_char_floor(role, field_limits["maxChars"])
+                    allowed_template_fields[field_key] = field_limits
+                max_chars = apply_visual_text_max_char_floor(role, constraints.get("maxChars"))
                 if isinstance(max_chars, int) and max_chars > 0:
                     limits[role] = min(limits.get(role, max_chars), max_chars)
             locked_values["visual_text_max_chars"] = limits

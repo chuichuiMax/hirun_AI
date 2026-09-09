@@ -1743,6 +1743,14 @@ def validate_content_node_result(
             _require_member(asset_id, context.allowed_asset_ids, f"source_asset_ids.{index}")
         _validate_evidence_ids(result.evidence_ids, "visual", context, "evidence_ids")
         _validate_numbers("\n".join([*result.text, *result.template_fields.values()]), context, "text", "visual")
+        if not any(str(item).strip() for item in result.text) and not any(
+            str(value).strip() for value in result.template_fields.values()
+        ):
+            raise ContractDomainValidationError(
+                "visual_text_missing",
+                "text",
+                "视觉方案必须提供 text 或 template_fields 封面文案",
+            )
         allowed_template_fields = {
             **context.allowed_visual_template_fields,
             **context.required_visual_template_fields,

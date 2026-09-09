@@ -249,7 +249,10 @@ def _hycanvas_template_fields(
     template_fields: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Resolve author-declared template semantics from locked content inputs."""
-    from yuxi.content.control.visual_template_fields import template_fact_sources
+    from yuxi.content.control.visual_template_fields import (
+        apply_visual_text_max_char_floor,
+        template_fact_sources,
+    )
 
     template_fields = template_fields or {}
     sources = {
@@ -286,7 +289,7 @@ def _hycanvas_template_fields(
         constraints = field.get("constraints") or {}
         if constraints.get("required") and not value:
             raise ValueError(f"封面模板必填字段“{label}”未完成自动适配")
-        max_chars = constraints.get("maxChars")
+        max_chars = apply_visual_text_max_char_floor(role, constraints.get("maxChars"))
         if isinstance(max_chars, int) and max_chars > 0 and len(value.replace("\n", "")) > max_chars:
             raise ValueError(f"封面字段“{label}”超过模板限制的 {max_chars} 个字符")
         max_chars_per_line = constraints.get("maxCharsPerLine")
@@ -567,6 +570,8 @@ async def create_content_cover_job(
     mode = visual_plan.mode
     size = f"{visual_plan.size.width}x{visual_plan.size.height}"
     text = list(visual_plan.text)
+    from yuxi.content.control.visual_template_fields import resolve_visual_cover_title
+
     workflow_resume = {
         "parent_run_id": node_input.parent_run_id,
         "node_id": "wait_cover_job",
@@ -592,13 +597,20 @@ async def create_content_cover_job(
             raise ValueError("视觉方案未使用任务锁定的唯一图库图片")
         hycanvas_template_id = visual_material.get("hycanvas_template_id")
         poster_template_id = visual_material.get("poster_template_id")
+        fillable_fields = visual_material.get("hycanvas_fillable_fields") or []
+        cover_title = resolve_visual_cover_title(
+            visual_text=text,
+            template_fields=visual_plan.template_fields,
+            declarations=fillable_fields,
+        )
+        if not cover_title:
+            raise ValueError("视觉方案缺少封面标题文案，请在 text 或 title 叙事字段中提交")
         if hycanvas_template_id:
             from yuxi.services.content_cover_service import create_hycanvas_cover_job
 
-            fillable_fields = visual_material.get("hycanvas_fillable_fields") or []
             fields = _hycanvas_template_fields(
                 fillable_fields,
-                visual_text=text,
+                visual_text=text or [cover_title],
                 template_fields=visual_plan.template_fields,
                 brief=task.brief_json or {},
             )
@@ -616,7 +628,7 @@ async def create_content_cover_job(
                 content_task_id=task_id,
                 source_asset_id=locked_image_asset_id,
                 template_id=hycanvas_template_id,
-                title=text[0],
+                title=cover_title,
                 fields=fields,
                 image_field_label=image_field_label,
                 idempotency_key=idempotency_key,
@@ -643,7 +655,7 @@ async def create_content_cover_job(
                     poster_template_id=poster_template_id,
                     product_asset_id=locked_image_asset_id,
                     content_task_id=task_id,
-                    title=text[0],
+                    title=cover_title,
                     enhance_with_image2=False,
                     n=1,
                     parameters={
@@ -663,7 +675,7 @@ async def create_content_cover_job(
                     theme_id="editorial_ink",
                     size=size,
                     layout={
-                        "title": text[0],
+                        "title": cover_title,
                         "subtitle": text[1] if len(text) > 1 else "",
                         "workflow_resume": workflow_resume,
                         "visual_plan_hash": plan_hash,
@@ -686,8 +698,8 @@ async def create_content_cover_job(
                     mode=resolved_provider_mode,
                     content_task_id=task_id,
                     source_asset_ids=source_asset_ids,
-                    title=text[0],
-                    prompt="；".join(text),
+                    title=cover_title,
+                    prompt="；".join(text) if text else cover_title,
                     size=size,
                     n=1,
                     parameters={

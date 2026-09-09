@@ -6,6 +6,10 @@
 
 ## v0.7.1 (current)
 
+- 修复封面提交节点在 `visual_plan.text` 为空时直接 `text[0]` 触发 `list index out of range`：改为从 text 或 HyCanvas `template_fields` 的 title 叙事字段解析封面标题，两者皆空时返回明确错误。
+
+- 放宽内容生产封面与正文两处卡点：HyCanvas 叙事字段（title/subtitle/body_excerpt）生产侧与存量模板将过短 `maxChars`（如 4/6）抬升到 12/16/24，保存模板对话框按语义角色给合理默认字数；正文生成节点模型调用从 2 次提到 3 次（节点看门狗 400 秒），模型视图进一步压缩词库片段与过长证据值，降低误报调用额度耗尽。
+
 - 修复小程序装修家居无法选用 HyCanvas 工作区封面模板：列表已能返回工作区 UUID 模板，但校验与预览仍只认内置 `xiaohongshu-*` ID，导致预览空白并误报「请选择小红书封面模板」。现与 PC 对齐，接受工作区 UUID，预览走 HyCanvas `render.png`。
 
 - 修复小程序好评笔记上传现场照片后生成结果页显示「暂无封面」：工作流跳过 HyCanvas 封面生成时，将简报中已上传的首张照片绑定为 Artifact `cover_asset_id`，结果页可正常预览。

@@ -81,6 +81,24 @@ export function SaveAsTemplateDialog({
     Boolean(field.label.trim() && field.key?.trim() && field.semanticRole && (field.constraints?.maxChars ?? 0) > 0),
   ) && new Set(selectedFields.map((field) => field.key)).size === selectedFields.length;
 
+  const ROLE_MAX_CHAR_DEFAULTS: Record<NonNullable<FillableFieldSummary["semanticRole"]>, number> = {
+    title: 16,
+    subtitle: 24,
+    body_excerpt: 36,
+    label: 8,
+    project_name: 20,
+    project_name_en: 28,
+    project_area: 8,
+    designer: 12,
+    completion_year: 4,
+    brand_name: 16,
+  };
+
+  function defaultMaxChars(role: FillableFieldSummary["semanticRole"] | undefined, text: string) {
+    const floor = ROLE_MAX_CHAR_DEFAULTS[role || "title"] ?? 16;
+    return Math.max(floor, Math.min(120, text.length || floor));
+  }
+
   function toggleField(nodeId: string, text: string) {
     setFillableFields((current) => current.some((field) => field.nodeId === nodeId)
       ? current.filter((field) => field.nodeId !== nodeId)
@@ -90,7 +108,7 @@ export function SaveAsTemplateDialog({
           key: `field_${current.length + 1}`,
           label: text.slice(0, 30),
           semanticRole: "title",
-          constraints: { required: true, maxChars: Math.max(4, Math.min(120, text.length || 20)) },
+          constraints: { required: true, maxChars: defaultMaxChars("title", text) },
         }]);
   }
 
@@ -99,13 +117,19 @@ export function SaveAsTemplateDialog({
   }
 
   function updateSemanticRole(nodeId: string, semanticRole: FillableFieldSummary["semanticRole"]) {
-    setFillableFields((current) => current.map((field) => field.nodeId === nodeId
-      ? {
-          ...field,
-          semanticRole,
-          constraints: { ...field.constraints, required: semanticRole === "label" ? false : field.constraints?.required },
-        }
-      : field));
+    setFillableFields((current) => current.map((field) => {
+      if (field.nodeId !== nodeId) return field;
+      const nextMax = Math.max(field.constraints?.maxChars ?? 0, defaultMaxChars(semanticRole, ""));
+      return {
+        ...field,
+        semanticRole,
+        constraints: {
+          ...field.constraints,
+          required: semanticRole === "label" ? false : field.constraints?.required,
+          maxChars: nextMax || defaultMaxChars(semanticRole, ""),
+        },
+      };
+    }));
   }
 
   async function save() {

@@ -4,6 +4,16 @@ from copy import deepcopy
 
 from yuxi.content.model.contracts.content_nodes import GenerateContentPromptV1
 
+_MAX_LEXICON_CHUNKS = 4
+_MAX_LEXICON_CHUNK_CHARS = 600
+_MAX_EVIDENCE_VALUE_CHARS = 400
+
+
+def _trim_text(value: object, limit: int) -> object:
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
 
 def project_generation_input(payload: dict) -> dict:
     # 调用方必须先完成 GenerateContentInputV1 校验（包括冻结策略 hash）。
@@ -26,4 +36,20 @@ def project_generation_input(payload: dict) -> dict:
     for item in projected["evidence_bundle"].get("items", []):
         for field in ("source_hash", "source_version", "created_at"):
             item.pop(field, None)
+        if "value" in item:
+            item["value"] = _trim_text(item["value"], _MAX_EVIDENCE_VALUE_CHARS)
+    lexicon = projected.get("formula_lexicon_bundle") or {}
+    for scope in ("title", "body"):
+        entries = lexicon.get(scope)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            chunks = entry.get("chunks")
+            if not isinstance(chunks, list):
+                continue
+            entry["chunks"] = [
+                _trim_text(chunk, _MAX_LEXICON_CHUNK_CHARS) for chunk in chunks[:_MAX_LEXICON_CHUNKS] if chunk
+            ]
     return GenerateContentPromptV1.model_validate(projected).model_dump(mode="json")

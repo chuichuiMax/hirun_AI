@@ -161,12 +161,12 @@ async def test_projected_strategy_and_original_generation(creation_mode):
                     assert size(projected) < size(original) * 0.85
                     runtime = snapshot["runtime_config_snapshot"]
                     assert runtime["reasoning_effort"] == "medium"
-                    assert runtime["limits"]["max_model_calls"] == 2
+                    assert runtime["limits"]["max_model_calls"] == 3
                     assert "viral-structure-rewriter" not in [s["slug"] for s in runtime["skills"]]
                     events = await list_run_stream_events(run_id, limit=500)
                     calls = [e["payload"]["payload"] for e in events if e["event_type"] == "content.model.started"]
                     generation_calls = [e for e in calls if e.get("node_id") == "generate_content"]
-                    assert generation_calls and all(e["call_number"] <= 2 for e in generation_calls)
+                    assert generation_calls and all(e["call_number"] <= 3 for e in generation_calls)
                     for call in generation_calls:
                         assert "viral-structure-rewriter" not in call["applied_skills"]
                         assert set(call["applied_skills"]) == {s["slug"] for s in runtime["skills"]}

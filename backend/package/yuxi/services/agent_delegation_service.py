@@ -39,11 +39,11 @@ from yuxi.storage.postgres.models_business import Agent, User
 from yuxi.storage.postgres.models_content import ContentNodeRun
 
 
-# 节点总时间、单调用时间、默认推理强度；每个受控节点的重试与纠错共用两次调用。
+# 节点总时间、单调用时间、默认推理强度、模型调用上限（连接重试与结果纠错共用）。
 CONTENT_NODE_EXECUTION_LIMITS = {
-    "generate_content": (300, 120, "medium"),
-    "select_creation_strategy": (150, 65, "low"),
-    "reselect_creation_strategy": (150, 65, "low"),
+    "generate_content": (400, 120, "medium", 3),
+    "select_creation_strategy": (150, 65, "low", 2),
+    "reselect_creation_strategy": (150, 65, "low", 2),
 }
 
 
@@ -127,14 +127,14 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
     }
     if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
         if request.node_run.node_id == "generate_content":
-            snapshot["generation_policy_version"] = 1
+            snapshot["generation_policy_version"] = 2
             snapshot["model_input_contract"] = "GenerateContentPromptV1"
         else:
             snapshot["strategy_execution_policy_version"] = 2
             snapshot["model_input_contract"] = "JointStrategyPromptV1"
         snapshot["streaming_timeout_policy_version"] = 1
         snapshot["limits"]["timeout_mode"] = "idle"
-        snapshot["limits"]["max_model_calls"] = 2
+        snapshot["limits"]["max_model_calls"] = CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id][3]
         snapshot["limits"]["sdk_max_retries"] = 0
     canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     snapshot["snapshot_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -430,11 +430,11 @@ class AgentDelegationService:
     @staticmethod
     def _apply_node_constraints(context, request: AgentDelegationRequest) -> None:
         if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
-            _, call_timeout, reasoning = CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id]
+            _, call_timeout, reasoning, max_model_calls = CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id]
             context.reasoning_effort = getattr(context, "reasoning_effort", None) or reasoning
             context.model_call_timeout_seconds = call_timeout
             context.model_retry_times = 1
-            context._content_max_model_calls = 2
+            context._content_max_model_calls = max_model_calls
         if request.knowledge_policy == "none" or request.knowledge_policy == "frozen_evidence_only":
             context.knowledges = []
         elif request.knowledge_policy == "agent_scope":

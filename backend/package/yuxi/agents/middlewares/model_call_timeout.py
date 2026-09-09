@@ -84,7 +84,7 @@ class ModelCallTimeoutMiddleware(AgentMiddleware):
         if controlled:
             if call_number > context._content_max_model_calls:
                 raise ModelExecutionBudgetExceeded(
-                    f"{node_label}已用完两次模型调用额度（连接重试与结果纠错共用），请检查失败明细"
+                    f"{node_label}已用完 {context._content_max_model_calls} 次模型调用额度（连接重试与结果纠错共用），请检查失败明细"
                 )
             output_limit = min(
                 context._content_node_token_budget // context._content_max_model_calls,
