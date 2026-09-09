@@ -7,7 +7,7 @@ def test_content_human_expression_skill_preserves_facts_and_persona_boundaries()
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "content-human-expression")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "2.0.0"
+    assert spec.version == "2.1.0"
     assert "自然语气" in skill_text
     assert "情绪推进" in skill_text
     assert "稳定人设" in skill_text
@@ -23,7 +23,9 @@ def test_content_human_expression_skill_preserves_facts_and_persona_boundaries()
     assert "读者视角改写" in skill_text
     assert "GeneratedContentResultV1" in skill_text
     assert "viral-layout-formatter" in skill_text
-    assert "至少保留四处" in skill_text
+    assert "不设置固定四处双换行" in skill_text
+    assert "至少保留四处" not in skill_text
+    assert "共用一次最终自检" in skill_text
     assert "叙事分散型、清单连续型和混合型" in skill_text
     assert "允许按参考连续多行使用 emoji 作为行首导航" in skill_text
     assert "每段最后一个" in skill_text
@@ -45,7 +47,7 @@ def test_body_generator_preserves_channel_expression_in_original_lists():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "content-body-generator")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "2.3.0"
+    assert spec.version == "2.5.0"
     assert "保持平台无关正文" not in skill_text
     assert "一组短行仍属于原结构段" in skill_text
     assert "content-human-expression" in skill_text

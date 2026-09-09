@@ -68,6 +68,9 @@ export const formatContentRevisionTarget = (nodeId) =>
   CONTENT_WORKFLOW_NODE_LABELS[nodeId] || '内容生成节点'
 
 const RUNTIME_EVENT_PRESENTATION = {
+  'content.model.started': { status: 'running', label: '模型调用' },
+  'content.model.progress': { status: 'running', label: '模型正在返回内容' },
+  'content.model.completed': { status: 'completed', label: '模型调用结束' },
   'content.agent.started': { status: 'running', label: 'Agent 开始执行' },
   'content.agent.completed': { status: 'completed', label: 'Agent 执行完成' },
   'content.agent.failed': { status: 'failed', label: 'Agent 执行失败' },
@@ -82,6 +85,10 @@ const RUNTIME_EVENT_PRESENTATION = {
 }
 
 const runtimeEventDetail = (eventType, payload) => {
+  if (eventType.startsWith('content.model.')) {
+    return [`第 ${payload.call_number || 1} 次调用`, payload.message || payload.status]
+      .filter(Boolean).join(' · ')
+  }
   if (eventType.startsWith('content.agent.')) return payload.agent_slug || '内容 Agent'
   if (eventType === 'content.skill.activated') {
     return [payload.skill_slug, payload.skill_version].filter(Boolean).join(' · ')
@@ -126,7 +133,9 @@ export const buildContentRuntimeTimeline = (runEvents = [], auditEvents = []) =>
         id: `runtime-${event.run_id || 'run'}-${event.seq || index}`,
         nodeId: event.payload?.node_id || '',
         eventType: event.event_type,
-        status: presentation.status,
+        status: event.event_type === 'content.model.completed' && event.payload?.status !== 'completed'
+          ? (event.payload?.status === 'cancelled' ? 'cancelled' : 'failed')
+          : presentation.status,
         label: presentation.label,
         detail: runtimeEventDetail(event.event_type, event.payload || {}),
         nodeLabel: CONTENT_WORKFLOW_NODE_LABELS[event.payload?.node_id] || event.payload?.node_id || '',
@@ -480,6 +489,10 @@ export const buildContentNarrativeStream = (activities = [], codeLabels = {}) =>
 
   for (const activity of activities) {
     if (activity.nodeId === 'visual_review') continue
+    if (activity.eventType === 'content.model.started' || activity.eventType === 'content.model.progress') {
+      add(activity.id, activity.detail, 'normal')
+      continue
+    }
     if (activity.status === 'failed') {
       add(activity.id, `执行遇到问题：${activity.detail || '当前内容未能继续生成。'}`, 'error')
       continue

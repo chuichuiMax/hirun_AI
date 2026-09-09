@@ -1211,8 +1211,11 @@ def test_formal_content_agent_catalog_and_conflict_policy():
     assert research_spec.model_retry_times == 1
     assert research_spec.config_version == 6
     new_agents = {"content-joint-strategy-agent", "content-viral-asset-agent"}
-    specialist_specs = [item for item in CONTENT_AGENT_SPECS
-                        if item.inherit_context_from == "content-research-agent" and item.slug not in new_agents]
+    specialist_specs = [
+        item
+        for item in CONTENT_AGENT_SPECS
+        if item.inherit_context_from == "content-research-agent" and item.slug not in new_agents
+    ]
     assert len(specialist_specs) == 5
     assert all(item.reasoning_effort == "low" for item in specialist_specs)
     assert all(item.model_call_timeout_seconds <= 65 for item in specialist_specs)
@@ -1242,7 +1245,8 @@ def test_formal_content_agent_catalog_and_conflict_policy():
         "humanizer-zh",
         "content-human-expression",
     )
-    assert generation_spec.config_version == 5
+    assert generation_spec.config_version == 6
+    assert generation_spec.reasoning_effort == "medium"
     spec = CONTENT_AGENT_SPECS[0]
     existing = Agent(
         slug=spec.slug,
@@ -1391,7 +1395,7 @@ def test_generation_agent_additive_migration_installs_viral_skills():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 5
+    assert existing.config_version == 6
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(existing.config_json["context"]["skills"]) == set(spec.skills)
@@ -1425,7 +1429,7 @@ def test_generation_agent_additive_migration_installs_viral_layout_formatter():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 5
+    assert existing.config_version == 6
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}
@@ -1460,7 +1464,7 @@ def test_generation_agent_additive_migration_installs_humanizer_for_original_con
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 5
+    assert existing.config_version == 6
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}

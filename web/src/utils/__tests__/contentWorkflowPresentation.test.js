@@ -19,6 +19,20 @@ import {
 
 assert.deepEqual(buildContentNarrativeCodeLabels(null), {})
 
+const modelTimeoutTimeline = buildContentRuntimeTimeline([], [{
+  event_type: 'content.model.completed',
+  payload: { node_id: 'generate_content', call_number: 1, status: 'timeout', duration_ms: 120000 }
+}, {
+  event_type: 'content.model.started',
+  payload: { node_id: 'generate_content', call_number: 2, message: '正在恢复或修正当前节点，已保留上游结果' }
+}])
+assert.equal(modelTimeoutTimeline[0].status, 'failed')
+assert.equal(modelTimeoutTimeline[1].status, 'running')
+assert.ok(modelTimeoutTimeline[1].detail.includes('第 2 次调用'))
+assert.ok(buildContentNarrativeStream(modelTimeoutTimeline).some(
+  (item) => item.text.includes('第 2 次调用') && item.text.includes('已保留上游结果')
+))
+
 const rejectedResultTimeline = buildContentRuntimeTimeline([], [{
   event_type: 'content.tool.failed',
   payload: {

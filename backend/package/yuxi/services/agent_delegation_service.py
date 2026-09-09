@@ -8,7 +8,7 @@ import json
 import os
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,10 @@ from pydantic import ValidationError
 from yuxi.agents.buildin import agent_manager
 from yuxi.agents.context import normalize_agent_context_config, prepare_agent_runtime_context
 from yuxi.agents.models import resolve_chat_model_spec
+from yuxi.agents.middlewares.model_call_timeout import ContentModelProgress
+from yuxi.models.providers.cache import model_cache
+from yuxi.content.control.workflow.generation_input import project_generation_input
+from yuxi.content.control.workflow.strategy_input import load_strategy_profiles, project_strategy_input
 from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.execution_trace import build_execution_preview
 from yuxi.content.model.contracts import (
@@ -33,6 +37,14 @@ from yuxi.repositories.content_repository import ContentRepository
 from yuxi.services.run_queue_service import append_run_stream_event
 from yuxi.storage.postgres.models_business import Agent, User
 from yuxi.storage.postgres.models_content import ContentNodeRun
+
+
+# 节点总时间、单调用时间、默认推理强度；每个受控节点的重试与纠错共用两次调用。
+CONTENT_NODE_EXECUTION_LIMITS = {
+    "generate_content": (300, 120, "medium"),
+    "select_creation_strategy": (150, 65, "low"),
+    "reselect_creation_strategy": (150, 65, "low"),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +95,11 @@ def _bounded_run_identifier(value: str) -> str:
 
 
 def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelegationRequest) -> dict[str, Any]:
+    model_spec = resolve_chat_model_spec(getattr(context, "model", None))
+    model_info = model_cache.get_model_info(model_spec)
+    effective_reasoning = getattr(context, "reasoning_effort", None) or (
+        model_info.extra.get("reasoning_effort") if model_info else None
+    )
     snapshot = {
         "schema_version": 2,
         "agent": {
@@ -91,7 +108,7 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
             "config_version": int(agent.config_version or 1),
         },
         "model": resolve_chat_model_spec(getattr(context, "model", None)),
-        "reasoning_effort": getattr(context, "reasoning_effort", None),
+        "reasoning_effort": effective_reasoning,
         "skills": list(getattr(context, "_runtime_skill_snapshots", []) or []),
         "tools": list(getattr(context, "_required_skill_tools", []) or []) + [request.result_tool_name],
         "mcps": list(getattr(context, "_required_skill_mcps", []) or []),
@@ -108,6 +125,17 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
         "output_contract": request.output_contract,
         "input_contract": request.input_contract,
     }
+    if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
+        if request.node_run.node_id == "generate_content":
+            snapshot["generation_policy_version"] = 1
+            snapshot["model_input_contract"] = "GenerateContentPromptV1"
+        else:
+            snapshot["strategy_execution_policy_version"] = 2
+            snapshot["model_input_contract"] = "JointStrategyPromptV1"
+        snapshot["streaming_timeout_policy_version"] = 1
+        snapshot["limits"]["timeout_mode"] = "idle"
+        snapshot["limits"]["max_model_calls"] = 2
+        snapshot["limits"]["sdk_max_retries"] = 0
     canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     snapshot["snapshot_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return snapshot
@@ -140,6 +168,9 @@ class AgentDelegationService:
         self.content_repo = ContentRepository(db)
 
     async def execute(self, request: AgentDelegationRequest) -> AgentDelegationResult:
+        if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
+            # 版本化运行策略不改写历史任务的已发布工作流定义。
+            request = replace(request, timeout_seconds=CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id][0])
         agent, backend = await self._resolve_agent(request)
         thread_id = _bounded_run_identifier(
             f"content:{request.task_id}:{request.node_run.node_id}:{request.node_run.attempt}"
@@ -179,6 +210,29 @@ class AgentDelegationService:
                 "invalid",
             )
 
+        if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
+            # 完整权限闭包校验后，才按本次模式收窄实际执行范围。
+            if (
+                request.node_run.node_id == "generate_content"
+                and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
+            ):
+                context._required_skill_closure = [
+                    slug for slug in context._required_skill_closure if slug != "viral-structure-rewriter"
+                ]
+            if (
+                request.node_run.node_id in {"select_creation_strategy", "reselect_creation_strategy"}
+                and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
+            ):
+                context._required_skill_closure = [
+                    slug for slug in context._required_skill_closure if slug != "prepared-viral-reference-selector"
+                ]
+            # 所需 Skill 已全文注入；不再发送面向动态探索/read_file 的通用目录说明。
+            context._prompt_skills = []
+            context._runtime_skill_snapshots = [
+                item for item in context._runtime_skill_snapshots if item["slug"] in context._required_skill_closure
+            ]
+            context._content_runtime_prepared = True
+            activated_scope = set(context._required_skill_closure)
         runtime_snapshot = build_runtime_config_snapshot(agent=agent, context=context, request=request)
         visible_payload = get_input_contract_model(request.input_contract).model_validate(request.input_payload)
         node_input_payload = {
@@ -195,6 +249,35 @@ class AgentDelegationService:
             "output_json_schema": get_contract_model(request.output_contract).model_json_schema(),
         }
         node_input = ContentAgentNodeInputV2.model_validate(node_input_payload)
+        model_view = None
+        if request.node_run.node_id == "generate_content":
+            model_view = project_generation_input(node_input.payload)
+        elif request.node_run.node_id in {"select_creation_strategy", "reselect_creation_strategy"}:
+            channel, persona = await load_strategy_profiles(
+                self.content_repo,
+                request.governance_values["locked_versions"],
+            )
+            model_view = project_strategy_input(node_input.payload, channel_profile=channel, persona_profile=persona)
+        if model_view is not None:
+            canonical_view = json.dumps(model_view, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            runtime_snapshot["model_input_hash"] = hashlib.sha256(canonical_view.encode()).hexdigest()
+            node_input = node_input.model_copy(
+                update={
+                    "input_contract": runtime_snapshot["model_input_contract"],
+                    "payload": model_view,
+                    "input_snapshot_hash": runtime_snapshot["model_input_hash"],
+                }
+            )
+            snapshot_content = {key: value for key, value in runtime_snapshot.items() if key != "snapshot_hash"}
+            runtime_snapshot["snapshot_hash"] = hashlib.sha256(
+                json.dumps(
+                    snapshot_content,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            node_input = node_input.model_copy(update={"runtime_config_snapshot": runtime_snapshot})
         collector = ContentNodeResultCollector(
             contract_name=request.output_contract,
             domain_context=request.domain_context,
@@ -236,10 +319,12 @@ class AgentDelegationService:
             "input_snapshot_hash": request.input_snapshot_hash,
             "visible_payload": visible_payload.model_dump(mode="json"),
             "runtime_config_snapshot": runtime_snapshot,
+            **({"model_visible_payload": model_view} if model_view is not None else {}),
         }
         await self.run_repo.mark_running(child_run.id)
         await self.db.commit()
         started_at = time.monotonic()
+        context._content_node_deadline = started_at + request.timeout_seconds
         await self._emit_agent_event(
             context,
             "content.agent.started",
@@ -344,6 +429,12 @@ class AgentDelegationService:
 
     @staticmethod
     def _apply_node_constraints(context, request: AgentDelegationRequest) -> None:
+        if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
+            _, call_timeout, reasoning = CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id]
+            context.reasoning_effort = getattr(context, "reasoning_effort", None) or reasoning
+            context.model_call_timeout_seconds = call_timeout
+            context.model_retry_times = 1
+            context._content_max_model_calls = 2
         if request.knowledge_policy == "none" or request.knowledge_policy == "frozen_evidence_only":
             context.knowledges = []
         elif request.knowledge_policy == "agent_scope":
@@ -388,7 +479,9 @@ class AgentDelegationService:
         context.knowledges = [str(item["kb_id"]) for item in visible if item.get("kb_id")]
         if node_id == "research_strategy_prices" and not context.knowledges:
             raise ContentApplicationError(
-                "price_knowledge_not_authorized", "报价补证 Agent 未配置可访问的价格库", "invalid",
+                "price_knowledge_not_authorized",
+                "报价补证 Agent 未配置可访问的价格库",
+                "invalid",
             )
 
     @staticmethod
@@ -408,6 +501,10 @@ class AgentDelegationService:
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
+        streaming = bool(getattr(context, "_content_max_model_calls", None))
+        if streaming:
+            context._content_node_idle_timeout = request.timeout_seconds
+            context._content_node_deadline = time.monotonic() + request.timeout_seconds
         invocation = asyncio.create_task(
             graph.ainvoke(
                 {"messages": [prompt]},
@@ -415,6 +512,9 @@ class AgentDelegationService:
                 config={
                     "configurable": {"thread_id": context.thread_id, "uid": context.uid},
                     "recursion_limit": request.max_execution_steps,
+                    "callbacks": (
+                        [ContentModelProgress(context)] if getattr(context, "_content_max_model_calls", None) else []
+                    ),
                 },
             )
         )
@@ -423,15 +523,24 @@ class AgentDelegationService:
             wait_set = {invocation}
             if cancel_waiter is not None:
                 wait_set.add(cancel_waiter)
-            done, _ = await asyncio.wait(wait_set, timeout=request.timeout_seconds, return_when=asyncio.FIRST_COMPLETED)
-            if invocation in done:
-                return invocation.result()
-            invocation.cancel()
-            await asyncio.gather(invocation, return_exceptions=True)
-            if cancel_waiter is not None and cancel_waiter in done:
-                raise asyncio.CancelledError
-            raise TimeoutError(f"Agent 节点执行超时（{request.timeout_seconds}s）")
+            while True:
+                remaining = (
+                    max(0, context._content_node_deadline - time.monotonic()) if streaming else request.timeout_seconds
+                )
+                done, _ = await asyncio.wait(wait_set, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
+                if cancel_waiter is not None and cancel_waiter in done:
+                    raise asyncio.CancelledError
+                if invocation in done:
+                    return invocation.result()
+                if streaming and time.monotonic() < context._content_node_deadline:
+                    continue
+                label = "无输出进展超时" if streaming else "执行超时"
+                raise TimeoutError(f"Agent 节点{label}（{request.timeout_seconds}s）")
         finally:
+            # Worker 重载或父协程取消时，同样结束模型子任务，避免后台继续提交旧结果。
+            if not invocation.done():
+                invocation.cancel()
+                await asyncio.gather(invocation, return_exceptions=True)
             if cancel_waiter is not None:
                 cancel_waiter.cancel()
                 await asyncio.gather(cancel_waiter, return_exceptions=True)

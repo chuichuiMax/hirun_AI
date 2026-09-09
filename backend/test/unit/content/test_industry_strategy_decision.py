@@ -172,6 +172,19 @@ def test_primary_method_must_use_score_not_configuration_position():
         validate(candidates, result)
 
 
+def test_tied_methods_report_exact_correction_without_changing_scores():
+    candidates, result = example()
+    for item in result["method_assessments"]:
+        item["dimensions"] = dict.fromkeys(item["dimensions"], 3)
+        item["total"] = 75
+    scores = deepcopy(result["method_assessments"])
+    with pytest.raises(ValueError, match=r"creation_method_codes\[0\] 应为 M1（75 分）"):
+        validate(candidates, result)
+    result["creation_method_codes"] = ["M1"]
+    assert validate(candidates, result).creation_method_codes == ["M1"]
+    assert result["method_assessments"] == scores
+
+
 def test_runtime_contract_registry_uses_the_same_scope_and_score_validation():
     from yuxi.content.model.contracts import (
         ContractDomainContext,
