@@ -13,13 +13,20 @@ from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from yuxi.content.model.contracts.joint_strategy import (
-    JointStrategyInputV1, JointStrategyDecisionV1, JointStrategyDecisionV2, ReevaluateJointStrategyInputV1,
-    StrategySnapshotV2, validate_joint_strategy,
+    JointStrategyInputV1,
+    JointStrategyDecisionV1,
+    JointStrategyDecisionV2,
+    ReevaluateJointStrategyInputV1,
+    StrategySnapshotV2,
+    validate_joint_strategy,
 )
 from yuxi.content.model.contracts.strategy import SelectStrategyInputV2, StrategyDecisionV2, validate_strategy_decision
 from yuxi.content.model.viral_document import ViralDocumentResultV1, validate_document_result
 from yuxi.content.model.viral_assets import (
-    ViralArticleSource, ViralAssetPreparationInputV1, ViralAssetPreparationResultV1, validate_prepared_asset,
+    ViralArticleSource,
+    ViralAssetPreparationInputV1,
+    ViralAssetPreparationResultV1,
+    validate_prepared_asset,
 )
 
 
@@ -69,6 +76,36 @@ class ContentAgentNodeInputV2(StrictContract):
     node_responsibility: str
     prohibited_actions: list[str]
     output_json_schema: dict[str, Any]
+
+
+class JointStrategyPromptV1(StrictContract):
+    """策略专用模型视图，输出继续对完整输入执行原有业务校验。"""
+
+    content_brief: dict[str, Any]
+    evidence_bundle: dict[str, Any]
+    strategy_candidates: dict[str, Any]
+    runtime_config_snapshot: dict[str, Any]
+    channel_profile: dict[str, Any]
+    persona_profile: dict[str, Any]
+    reference_candidates: list[dict[str, Any]] | None = None
+    strategy_price_evidence_collection: dict[str, Any] | None = None
+
+
+class GenerateContentPromptV1(StrictContract):
+    """从已校验完整输入投影的模型视图，不能替代服务端冻结快照校验。"""
+
+    content_brief: dict[str, Any]
+    strategy_snapshot: dict[str, Any]
+    formula_lexicon_bundle: dict[str, Any]
+    evidence_bundle: dict[str, Any]
+    channel_profile: dict[str, Any]
+    persona_profile: dict[str, Any]
+    runtime_config_snapshot: dict[str, Any]
+    validation_report: dict[str, Any] | None = None
+    review_report: dict[str, Any] | None = None
+    selected_title: dict[str, Any] | None = None
+    content_outline: dict[str, Any] | None = None
+    content_draft: dict[str, Any] | None = None
 
 
 class AnalyzeContentValueInputV1(StrictContract):
@@ -352,6 +389,11 @@ class GenerateContentInputV1(StrictContract):
             or self.strategy_snapshot.industry_slug == "decoration"
         )
         if (
+            decoration
+            and title_formula_code in {f"T{index:02d}" for index in range(1, 8)}
+            and body_formula_code in {f"C{index:02d}" for index in range(1, 5)}
+        ):
+        if (
             not review_notes
             and decoration
             and title_formula_code in {f"T{index:02d}" for index in range(1, 8)}
@@ -460,6 +502,8 @@ INPUT_CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         GenerateBodyInputV1,
         PersonaStylePolishInputV1,
         GenerateContentInputV1,
+        GenerateContentPromptV1,
+        JointStrategyPromptV1,
         SemanticReviewInputV1,
         PlanVisualsInputV1,
         SubmitCoverJobInputV1,
@@ -540,22 +584,25 @@ class PriceEvidenceCollectionResultV1(EvidenceCollectionResultV1):
 
 class StrategyPriceEvidenceDraftV1(EvidenceDraftV1):
     value: str = Field(
-        min_length=1, max_length=400,
+        min_length=1,
+        max_length=400,
         description="一条报价的城市、项目、单价或金额、单位和来源注明的包含范围；不转抄整表",
     )
     # 来源版本由提交器按实际检索内容生成，Agent 不需要计算哈希。
     source_hash: str = ""
     source_version: str = ""
-    metadata: dict[str, Any] = Field(json_schema_extra={
-        "required": ["material_type", "price_basis", "scope", "unit", "integration_instruction"],
-        "properties": {
-            "material_type": {"const": "price"},
-            "price_basis": {"enum": ["standard_unit_price", "project_quote"]},
-            "scope": {"type": "string"},
-            "unit": {"type": "string"},
-            "integration_instruction": {"type": "string"},
-        },
-    })
+    metadata: dict[str, Any] = Field(
+        json_schema_extra={
+            "required": ["material_type", "price_basis", "scope", "unit", "integration_instruction"],
+            "properties": {
+                "material_type": {"const": "price"},
+                "price_basis": {"enum": ["standard_unit_price", "project_quote"]},
+                "scope": {"type": "string"},
+                "unit": {"type": "string"},
+                "integration_instruction": {"type": "string"},
+            },
+        }
+    )
 
 
 class StrategyPriceEvidenceResultV1(PriceEvidenceCollectionResultV1):
@@ -1063,7 +1110,8 @@ def _require_member(value: str, allowed: frozenset[str], field_path: str) -> Non
     if value not in allowed:
         candidates = "、".join(sorted(allowed))
         raise ContractDomainValidationError(
-            "unknown_id", field_path,
+            "unknown_id",
+            field_path,
             f"{field_path} 不在锁定候选范围内: {value}；请逐字使用以下候选之一：{candidates}",
         )
 
@@ -1186,8 +1234,10 @@ def validate_content_node_result(
             raise ContractDomainValidationError("strategy_scope_missing", "strategy_candidates", "缺少锁定行业策略候选")
         try:
             result = validate_strategy_decision(
-                payload, context.strategy_candidates,
-                content_brief=context.strategy_brief, evidence_bundle=context.strategy_evidence,
+                payload,
+                context.strategy_candidates,
+                content_brief=context.strategy_brief,
+                evidence_bundle=context.strategy_evidence,
             )
         except ValueError as exc:
             raise ContractDomainValidationError("strategy_decision_invalid", "strategy_selection", str(exc)) from exc
@@ -1606,6 +1656,33 @@ def validate_content_node_result(
             _validate_evidence_ids(item.evidence_ids, "body", context, f"paragraph_evidence.{index}.evidence_ids")
         _validate_numbers("\n".join([result.body, *result.topics]), context, "body", "body")
     elif isinstance(result, GeneratedContentResultV1):
+        # 同一错误引用可能出现在多个段落；一次反馈全部位置，避免逐处消耗纠错额度。
+        evidence_fields = [("title.evidence_ids", "title", result.title.evidence_ids)]
+        evidence_fields.extend(
+            (f"outline.sections.{index}.evidence_ids", "body", item.evidence_ids)
+            for index, item in enumerate(result.outline.sections)
+        )
+        evidence_fields.extend(
+            (f"draft.paragraph_evidence.{index}.evidence_ids", "body", item.evidence_ids)
+            for index, item in enumerate(result.draft.paragraph_evidence)
+        )
+        errors = []
+        for path, usage, ids in evidence_fields:
+            unknown = sorted(set(ids) - context.allowed_evidence_by_usage.get(usage, frozenset()))
+            if unknown:
+                errors.append(f"{path}: {', '.join(unknown)}")
+        if errors:
+            allowed = {
+                usage: sorted(context.allowed_evidence_by_usage.get(usage, frozenset())) for usage in ("title", "body")
+            }
+            raise ContractDomainValidationError(
+                "evidence_forbidden",
+                "evidence_ids",
+                "以下位置引用了未授权 Evidence ID，请一次修正全部位置，逐字复制对应事实的 ID，不得猜测或缩写："
+                + "; ".join(errors)
+                + "；允许的 ID 按用途列出："
+                + json.dumps(allowed, ensure_ascii=False),
+            )
         if context.creation_mode == "viral_rewrite":
             if len(context.selected_viral_reference_ids) != 1:
                 raise ContractDomainValidationError(
@@ -1615,7 +1692,6 @@ def validate_content_node_result(
                 )
         _validate_formula_lexicon_usage(result, context)
         _require_equal(result.title.formula_code, context.locked_title_formula_code, "title.formula_code")
-        _validate_evidence_ids(result.title.evidence_ids, "title", context, "title.evidence_ids")
         _validate_numbers(result.title.text, context, "title.text", "title")
         title_length = len(result.title.text)
         if context.title_min_length is not None and title_length < context.title_min_length:
@@ -1632,8 +1708,6 @@ def validate_content_node_result(
             )
         _require_equal(result.outline.body_formula_code, context.locked_body_formula_code, "outline.body_formula_code")
         _validate_outline_calling_contract(result.outline, context)
-        for index, item in enumerate(result.outline.sections):
-            _validate_evidence_ids(item.evidence_ids, "body", context, f"outline.sections.{index}.evidence_ids")
         _require_equal(result.draft.body_formula_code, context.locked_body_formula_code, "draft.body_formula_code")
         for index, item in enumerate(result.draft.paragraph_evidence):
             _validate_evidence_ids(item.evidence_ids, "body", context, f"draft.paragraph_evidence.{index}.evidence_ids")
@@ -1802,7 +1876,9 @@ class ContentNodeResultCollector:
                 content = matches[0]["content"]
                 if not content.strip():
                     raise ContractDomainValidationError(
-                        "knowledge_content_empty", f"evidence_items.{index}.source_id", "检索来源文本不能为空",
+                        "knowledge_content_empty",
+                        f"evidence_items.{index}.source_id",
+                        "检索来源文本不能为空",
                     )
                 item["source_hash"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 item["source_version"] = item["source_hash"]

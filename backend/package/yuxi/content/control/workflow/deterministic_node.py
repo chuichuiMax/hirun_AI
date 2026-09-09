@@ -28,7 +28,7 @@ from yuxi.content.model.formulas.selector import (
     FormulaSelector,
 )
 from yuxi.content.model.rules.engine import CombinationMatcher, MatchRequest
-from yuxi.content.rules import brief_variable_map
+from yuxi.content.rules import brief_variable_map, canonical_brief_facts
 from yuxi.content.validation import ComplianceEngine, validate_numeric_evidence_coverage
 from yuxi.content.validators import validate_content
 from yuxi.content.control.workflow.external_wait import skip_formula_lexicon_pipeline
@@ -198,16 +198,24 @@ class V3DeterministicNodeHandler:
         if node["id"] == "merge_strategy_prices":
             collection = state["strategy_price_evidence_collection"]
             result = await self._freeze_evidence_bundle(
-                db=db, state={**state, "evidence_collection": collection}, node_run_id=node_run_id,
+                db=db,
+                state={**state, "evidence_collection": collection},
+                node_run_id=node_run_id,
             )
             candidates = dict(state["strategy_candidates"])
-            candidates["available_input_paths"] = list(dict.fromkeys([
-                *(candidates.get("available_input_paths") or []),
-                *(f"evidence_bundle.items.{index}.value"
-                  for index, item in enumerate(result["evidence_bundle"]["items"])
-                  if item.get("value") not in (None, "", [], {})
-                  and (item.get("metadata") or {}).get("material_type") != "viral_example"),
-            ]))
+            candidates["available_input_paths"] = list(
+                dict.fromkeys(
+                    [
+                        *(candidates.get("available_input_paths") or []),
+                        *(
+                            f"evidence_bundle.items.{index}.value"
+                            for index, item in enumerate(result["evidence_bundle"]["items"])
+                            if item.get("value") not in (None, "", [], {})
+                            and (item.get("metadata") or {}).get("material_type") != "viral_example"
+                        ),
+                    ]
+                )
+            )
             return {**result, "strategy_candidates": candidates}
         if node["id"] == "prepare_strategy_candidates":
             from yuxi.content.control.workflow.joint_strategy import prepare_strategy_candidates
@@ -710,7 +718,7 @@ class V3DeterministicNodeHandler:
         if existing.get("status") == "frozen" and existing.get("bundle_hash"):
             return {"evidence_bundle": existing}
         items: list[EvidenceItemV1] = []
-        for key, value in brief_variable_map(state["content_brief"]).items():
+        for key, value, variable_codes in canonical_brief_facts(state["content_brief"]):
             if value in (None, "", [], {}):
                 continue
             source_hash = hashlib.sha256(
@@ -719,7 +727,7 @@ class V3DeterministicNodeHandler:
             items.append(
                 EvidenceItemV1(
                     id=f"ev_{source_hash[:16]}",
-                    variable_codes=(key,),
+                    variable_codes=variable_codes,
                     value=value,
                     source_type="manual_input",
                     source_id=f"field_{key}",

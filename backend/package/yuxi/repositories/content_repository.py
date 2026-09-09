@@ -1272,6 +1272,34 @@ class ContentRepository:
         result = await self.db.execute(select(ChannelProfileVersion).where(ChannelProfileVersion.id == version_id))
         return result.scalar_one_or_none()
 
+    async def get_channel_strategy_profile(self, version_id: str) -> dict[str, Any] | None:
+        # 按任务锁定版本读取，包括已归档版本；不替换成最新发布配置。
+        row = (
+            await self.db.execute(
+                select(ChannelProfileVersion, ChannelProfile)
+                .join(ChannelProfile, ChannelProfile.id == ChannelProfileVersion.profile_id)
+                .where(ChannelProfileVersion.id == version_id)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        version, profile = row
+        return {
+            "version_id": version.id,
+            "code": profile.code,
+            "name": profile.name,
+            **{
+                key: getattr(version, key) or {}
+                for key in (
+                    "title_constraints",
+                    "body_constraints",
+                    "topic_constraints",
+                    "cta_policy",
+                    "link_policy",
+                )
+            },
+        }
+
     async def list_channel_profiles(self, *, published_only: bool = True) -> list[dict[str, Any]]:
         query = select(ChannelProfileVersion, ChannelProfile).join(
             ChannelProfile, ChannelProfile.id == ChannelProfileVersion.profile_id

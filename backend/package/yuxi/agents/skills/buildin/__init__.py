@@ -26,7 +26,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     ),
     BuiltinSkillSpec(
         slug="content-joint-strategy-selector",
-        version="1.4.0",
+        version="1.6.1",
         source_dir=_SKILLS_ROOT / "content-joint-strategy-selector",
         description="按行业规则一次选择公式、独立手法及已准备的文章级参考。",
     ),
@@ -38,7 +38,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     ),
     BuiltinSkillSpec(
         slug="decoration-direction-formula-selector",
-        version="1.2.0",
+        version="1.3.0",
         source_dir=_SKILLS_ROOT / "decoration-direction-formula-selector",
         description="仅在装修已选内容方向内匹配公式，独立评估手法，不生成公式分数。",
     ),
@@ -58,7 +58,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="humanizer-zh",
         source_dir=_SKILLS_ROOT / "humanizer-zh",
         description="降低中文内容的机械腔与模板化表达，同时保留原文事实、语气和格式。",
-        version="1.2.0",
+        version="1.3.0",
     ),
     BuiltinSkillSpec(
         slug="content-strategy-planner",
@@ -131,13 +131,13 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-body-generator",
         source_dir=_SKILLS_ROOT / "content-body-generator",
         description="使用人工锁定标题、正文公式和同源证据生成正文与话题。",
-        version="2.4.0",
+        version="2.5.0",
     ),
     BuiltinSkillSpec(
         slug="content-human-expression",
         source_dir=_SKILLS_ROOT / "content-human-expression",
         description="在不改变事实、公式和证据的前提下，落实人设语气、情绪与数据事项的 Emoji 功能覆盖和封禁词替换。",
-        version="2.0.0",
+        version="2.1.0",
     ),
     BuiltinSkillSpec(
         slug="viral-structure-rewriter",
@@ -146,13 +146,13 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
             "按已冻结的唯一爆款结构蓝图重构标题、大纲和正文，"
             "保留真实 Emoji 的位置和功能，并使用真实业务证据替换原文内容。"
         ),
-        version="1.7.0",
+        version="1.8.0",
     ),
     BuiltinSkillSpec(
         slug="viral-layout-formatter",
         source_dir=_SKILLS_ROOT / "viral-layout-formatter",
         description="按原创公式或已冻结爆款结构，把正文排成适合渠道扫读的信息块、短段与互动收尾。",
-        version="1.6.0",
+        version="1.7.0",
     ),
     BuiltinSkillSpec(
         slug="content-outline-builder",
