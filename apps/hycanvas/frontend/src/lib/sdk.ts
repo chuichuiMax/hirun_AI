@@ -4,7 +4,7 @@
 import { HyCanvasClient, type UploadedAsset } from "@hc/sdk";
 import { CodedError } from "./errors";
 
-const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8005/api";
+const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "/api";
 
 export const oc = new HyCanvasClient({ baseUrl, credentials: "include" });
 

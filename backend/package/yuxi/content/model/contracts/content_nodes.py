@@ -389,11 +389,6 @@ class GenerateContentInputV1(StrictContract):
             or self.strategy_snapshot.industry_slug == "decoration"
         )
         if (
-            decoration
-            and title_formula_code in {f"T{index:02d}" for index in range(1, 8)}
-            and body_formula_code in {f"C{index:02d}" for index in range(1, 5)}
-        ):
-        if (
             not review_notes
             and decoration
             and title_formula_code in {f"T{index:02d}" for index in range(1, 8)}

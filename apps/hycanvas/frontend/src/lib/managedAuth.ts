@@ -47,9 +47,21 @@ export function contentSwarmHyCanvasURL(): string | null {
   return isContentSwarmManaged && base ? `${base}/hycanvas` : null;
 }
 
+/** Ask the ContentSwarm parent to mint a fresh integration session, or hard-navigate home. */
 export function returnToContentSwarm(): boolean {
+  if (typeof window === "undefined") return false;
+  // Inside the embed, never replace the top window with /hycanvas again: that
+  // reloads the parent, mints another ticket, and loops the auth loader forever
+  // when cookies failed to stick. Tell the parent to recreate the iframe src.
+  if (window.parent !== window) {
+    const parentOrigin = contentSwarmOrigin();
+    if (parentOrigin) {
+      window.parent.postMessage({ type: "hycanvas:auth:required" }, parentOrigin);
+      return true;
+    }
+  }
   const target = contentSwarmHyCanvasURL();
-  if (!target || typeof window === "undefined") return false;
+  if (!target) return false;
   window.top?.location.replace(target);
   return true;
 }

@@ -2,16 +2,17 @@
 // redirects to /login when anonymous. Compatible with static export: all auth
 // resolution happens in the browser.
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useRouter } from "next/router";
 import { useAuth } from "@/store/auth";
 import { FullScreenLoader } from "@/components/ui/BrandLoader";
-import { returnToContentSwarm } from "@/lib/managedAuth";
+import { isContentSwarmManaged, returnToContentSwarm } from "@/lib/managedAuth";
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const router = useRouter();
   const status = useAuth((s) => s.status);
   const bootstrap = useAuth((s) => s.bootstrap);
+  const askedParent = useRef(false);
 
   useEffect(() => {
     if (status === "loading") void bootstrap();
@@ -19,7 +20,13 @@ export function RequireAuth({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (status !== "anon") return;
-    if (returnToContentSwarm()) return;
+    if (isContentSwarmManaged) {
+      if (!askedParent.current) {
+        askedParent.current = true;
+        if (returnToContentSwarm()) return;
+      }
+      return;
+    }
     // Carry the current location as a return path so a deep link (e.g.
     // /dashboard/templates) survives the login round-trip. AuthForm validates
     // `next` as a same-origin relative path before honoring it.
@@ -28,6 +35,12 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     void router.replace(`/login${next}`);
   }, [status, router]);
 
+  if (status === "loading") {
+    return <FullScreenLoader />;
+  }
+  if (status === "anon" && isContentSwarmManaged) {
+    return <FullScreenLoader label="正在重新连接 ContentSwarm…" />;
+  }
   if (status !== "authed") {
     return <FullScreenLoader />;
   }

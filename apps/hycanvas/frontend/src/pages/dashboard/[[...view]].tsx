@@ -24,12 +24,9 @@ interface DashboardPageProps {
 // render this same page component, so client-side navigation between sections
 // keeps the mounted DashboardApp (and its loaded data) alive.
 export const getStaticPaths: GetStaticPaths = async () => ({
-  // Prefer [] over false: with trailingSlash + Turbopack `next dev`, the bare
-  // /dashboard/ root is only reliably generated from an empty catch-all array.
   paths: dashboardViews.map((v) => ({ params: { view: v === "home" ? [] : [v] } })),
-  // Production static export still requires fallback:false. Turbopack's pages
-  // router often skips materializing these optional catch-all paths in `next
-  // dev`, which sent ContentFlow's post-login /dashboard/ embed to the 404 page.
+  // Production static export requires false. In next dev (no output:export),
+  // blocking keeps /dashboard/ materializing for ContentSwarm embeds.
   fallback: process.env.NODE_ENV === "development" ? "blocking" : false,
 });
 

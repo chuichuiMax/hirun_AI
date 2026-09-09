@@ -149,6 +149,13 @@ const handleHyCanvasMessage = (event) => {
     void handleMaterialRequest(event)
     return
   }
+  // Auth bootstrap failed inside the iframe (no session cookies). Mint a fresh
+  // integration ticket and reload the frame instead of top-navigating /hycanvas
+  // in a loop that leaves the workbench stuck on「加载中…」.
+  if (event.data?.type === 'hycanvas:auth:required') {
+    void loadHyCanvas()
+    return
+  }
   if (event.data?.type !== 'hycanvas:return') return
   const target = new URL(event.data.returnUrl)
   if (target.origin !== window.location.origin) return
