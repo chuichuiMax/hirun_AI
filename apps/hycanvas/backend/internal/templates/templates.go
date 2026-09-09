@@ -529,11 +529,11 @@ func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInpu
 			tags = []string{}
 		}
 	}
-	var wsPtr *string
-	if visibility != "public" {
-		ws := in.WorkspaceID
-		wsPtr = &ws
-	}
+	// Visibility controls who can use the template. WorkspaceID records which
+	// workspace owns its collection, including public templates, so selecting
+	// "everyone" does not make the template disappear from that category.
+	ws := in.WorkspaceID
+	wsPtr := &ws
 	row, err := s.createRow(ctx, createTemplateInput{
 		ownerID: userID, workspaceID: wsPtr, title: in.Title, category: nilIfEmpty(category),
 		tags: tags, file: fileRaw, thumbnail: nilIfEmpty(in.Thumbnail), visibility: visibility,

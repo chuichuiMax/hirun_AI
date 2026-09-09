@@ -75,7 +75,9 @@ func (s *Service) listRows(ctx context.Context, userID string, memberWS []string
 	args := []any{userID, memberWS}
 	if workspaceID != "" {
 		args = append(args, workspaceID)
-		q += ` AND "workspace_id" = $` + itoa(len(args))
+		q += ` AND ("workspace_id" = $` + itoa(len(args)) + `
+			OR (visibility = 'PUBLIC' AND "workspace_id" IS NULL AND "collection_id" IN (
+				SELECT id FROM "template_collections" WHERE "workspace_id" = $` + itoa(len(args)) + `)))`
 	}
 	if collectionID != "" {
 		args = append(args, collectionID)

@@ -732,6 +732,28 @@ func TestTemplates_DB(t *testing.T) {
 	if catalogCategory == nil || catalogCategory.Name != col.Name || len(catalogCategory.Templates) != 1 || catalogCategory.Templates[0].ID != wsTmpl.ID {
 		t.Fatalf("categorized catalog wrong: %+v", catalog)
 	}
+	publicTmpl, err := svc.SaveAsTemplate(ctx, owner.ID, SaveInput{
+		WorkspaceID: ws.ID, File: loaded.File, Title: "Public Tmpl", Visibility: "public", CollectionID: col.ID,
+	})
+	if err != nil {
+		t.Fatalf("save public template in collection: %v", err)
+	}
+	if publicTmpl.Visibility != "public" || publicTmpl.WorkspaceID == nil || *publicTmpl.WorkspaceID != ws.ID {
+		t.Fatalf("public template lost its collection workspace: %+v", publicTmpl)
+	}
+	inCol, err = svc.List(ctx, owner.ID, TemplateQuery{}, ws.ID, col.ID)
+	if err != nil || len(inCol) != 2 {
+		t.Fatalf("public template missing from workspace collection: %+v err=%v", inCol, err)
+	}
+	// Older public templates cleared workspace_id. Their collection still owns
+	// the workspace, so they must remain visible in the selected category.
+	if _, err := tx.Exec(ctx, `UPDATE "templates" SET "workspace_id" = NULL WHERE id = $1`, publicTmpl.ID); err != nil {
+		t.Fatalf("simulate historical public template: %v", err)
+	}
+	inCol, err = svc.List(ctx, owner.ID, TemplateQuery{}, ws.ID, col.ID)
+	if err != nil || len(inCol) != 2 {
+		t.Fatalf("historical public template missing from workspace collection: %+v err=%v", inCol, err)
+	}
 	if err := svc.DeleteCollection(ctx, owner.ID, col.ID); err != nil {
 		t.Fatalf("DeleteCollection: %v", err)
 	}
