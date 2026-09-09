@@ -135,6 +135,29 @@ async def test_fetches_xiaohongshu_template_preview_png():
 
 
 @pytest.mark.asyncio
+async def test_fetches_workspace_template_preview_via_render():
+    template_id = "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/api/v1/templates/{template_id}/render.png"
+        assert request.headers["Authorization"] == "Bearer hyk_test"
+        return httpx.Response(200, content=b"workspace-png", headers={"content-type": "image/png"})
+
+    client = HyCanvasClient(
+        base_url="http://hycanvas",
+        public_url="http://canvas.example",
+        api_key="hyk_test",
+        workspace_id="ws-1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    data, content_type = await client.fetch_template_preview(template_id)
+
+    assert data == b"workspace-png"
+    assert content_type == "image/png"
+
+
+@pytest.mark.asyncio
 async def test_renders_template_preview_with_selected_image_background():
     template_id = "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
 

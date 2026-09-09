@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any, NotRequired, TypedDict
@@ -16,6 +17,8 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import AIMessage, AnyMessage
 from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.types import Command
+
+logger = logging.getLogger(__name__)
 
 
 class TokenUsagePayload(TypedDict, total=False):
@@ -38,6 +41,7 @@ class TokenUsagePayload(TypedDict, total=False):
     summary_message_tokens: int
     summary_trigger_tokens: int | None
     model_usage: dict[str, Any]
+    visible_response_tokens: int
     counter: str
     estimate: bool
     measured_at: str
@@ -60,6 +64,10 @@ def _safe_int(value: Any) -> int | None:
         return value
     if isinstance(value, float) and value.is_integer():
         return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
+            return int(text)
     return None
 
 
@@ -82,27 +90,135 @@ def _is_summary_message(message: AnyMessage) -> bool:
     return getattr(message, "additional_kwargs", {}).get("lc_source") == "summarization"
 
 
+def _coerce_usage_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    usage: dict[str, Any] = {}
+    for key, item in value.items():
+        if isinstance(item, bool):
+            continue
+        as_int = _safe_int(item)
+        if as_int is not None:
+            usage[str(key)] = as_int
+            continue
+        if not isinstance(item, Mapping):
+            continue
+        nested: dict[str, int] = {}
+        for inner_key, inner_value in item.items():
+            parsed = _safe_int(inner_value)
+            if parsed is not None:
+                nested[str(inner_key)] = parsed
+        if nested:
+            usage[str(key)] = nested
+    return usage
+
+
 def _model_usage_from_response(response: ModelResponse) -> dict[str, Any]:
     for message in reversed(response.result):
         if not isinstance(message, AIMessage):
             continue
-        usage = getattr(message, "usage_metadata", None)
-        if not isinstance(usage, Mapping):
+        usage = _coerce_usage_mapping(getattr(message, "usage_metadata", None))
+        metadata = getattr(message, "response_metadata", None)
+        if isinstance(metadata, Mapping):
+            for key in ("token_usage", "usage", "tokenUsage"):
+                extra = _coerce_usage_mapping(metadata.get(key))
+                if extra:
+                    usage = {**extra, **usage}
+        if not usage:
+            # MiniMax / SiliconFlow may stash usage on the message dict itself.
+            extra = _coerce_usage_mapping(getattr(message, "usage", None))
+            if extra:
+                usage = extra
+        if not usage:
             continue
-        return {
-            str(key): (
-                {
-                    str(detail_key): detail_value
-                    for detail_key, detail_value in value.items()
-                    if isinstance(detail_value, int)
-                }
-                if isinstance(value, Mapping)
-                else value
-            )
-            for key, value in usage.items()
-            if isinstance(value, (int, Mapping))
-        }
+        if "output_tokens" not in usage and "completion_tokens" in usage:
+            usage["output_tokens"] = usage["completion_tokens"]
+        return usage
     return {}
+
+
+def _reasoning_tokens(usage: Mapping[str, Any]) -> int:
+    candidates: list[Any] = []
+    for details_key in ("output_token_details", "output_tokens_details", "completion_tokens_details"):
+        details = usage.get(details_key)
+        if isinstance(details, Mapping):
+            candidates.extend(details.get(item) for item in ("reasoning", "reasoning_tokens"))
+    candidates.extend((usage.get("reasoning_tokens"), usage.get("reasoning")))
+    for value in candidates:
+        parsed = _safe_int(value)
+        if parsed is not None and parsed > 0:
+            return parsed
+    return 0
+
+
+_REASONING_CONTENT_KEYS = frozenset({"reasoning_content", "additional_reasoning_content"})
+_REASONING_BLOCK_TYPES = frozenset({"reasoning", "thinking", "reasoning_content"})
+
+
+def _visible_content(content: Any) -> Any:
+    if not isinstance(content, list):
+        return content
+    visible: list[Any] = []
+    for block in content:
+        if isinstance(block, Mapping) and str(block.get("type") or "") in _REASONING_BLOCK_TYPES:
+            continue
+        visible.append(block)
+    return visible
+
+
+def _messages_without_hidden_reasoning(messages: Iterable[AnyMessage]) -> list[AnyMessage]:
+    """Drop hidden reasoning fields so budget metering only sees user-visible text/tools."""
+    cleaned: list[AnyMessage] = []
+    for message in messages:
+        if not isinstance(message, AIMessage):
+            cleaned.append(message)
+            continue
+        additional = {
+            key: value
+            for key, value in dict(getattr(message, "additional_kwargs", None) or {}).items()
+            if key not in _REASONING_CONTENT_KEYS
+        }
+        cleaned.append(
+            AIMessage(
+                content=_visible_content(message.content),
+                tool_calls=list(getattr(message, "tool_calls", None) or []),
+                invalid_tool_calls=list(getattr(message, "invalid_tool_calls", None) or []),
+                additional_kwargs=additional,
+                id=getattr(message, "id", None),
+                name=getattr(message, "name", None),
+            )
+        )
+    return cleaned
+
+
+def _visible_generated_tokens(snapshot: TokenUsagePayload) -> int:
+    # Prefer the response-only visible estimate: full state deltas can still pick up
+    # provider thinking text that landed in message content/additional_kwargs.
+    approx_visible = int(snapshot.get("visible_response_tokens") or 0)
+    if approx_visible <= 0:
+        approx_visible = max(
+            int(snapshot.get("state_messages_tokens", 0) or 0)
+            - int(snapshot.get("state_messages_tokens_before_call", 0) or 0),
+            0,
+        )
+    usage = snapshot.get("model_usage") or {}
+    output_tokens = _safe_int(usage.get("output_tokens"))
+    if output_tokens is None:
+        output_tokens = _safe_int(usage.get("completion_tokens"))
+    if output_tokens is None:
+        return approx_visible
+    reasoning_tokens = _reasoning_tokens(usage)
+    visible_from_usage = max(output_tokens - reasoning_tokens, 0)
+    if reasoning_tokens > 0:
+        # Provider split is authoritative for hidden reasoning, but never charge more
+        # than the visible reply/tool payload we actually appended to state.
+        return min(visible_from_usage, approx_visible) if approx_visible else visible_from_usage
+    # 提供商常把隐藏 reasoning 算进 output_tokens 且不给明细；取提供商计数与可见回复估算的较小值。
+    if approx_visible and visible_from_usage:
+        return min(approx_visible, visible_from_usage)
+    if approx_visible:
+        return approx_visible
+    return visible_from_usage
 
 
 class TokenUsageMiddleware(AgentMiddleware[TokenUsageState]):
@@ -130,6 +246,7 @@ class TokenUsageMiddleware(AgentMiddleware[TokenUsageState]):
         state_tokens_before_call = self._count_tokens(state_messages)
         next_state_messages = [*state_messages, *response_messages]
         state_messages_tokens = self._count_tokens(next_state_messages)
+        visible_response_tokens = self._count_tokens(_messages_without_hidden_reasoning(response_messages))
         llm_messages_tokens = self._count_tokens(llm_messages)
         system_tokens = self._count_tokens(system_messages)
         tools_tokens = self._count_tokens([], tools=tools) if tools else 0
@@ -163,6 +280,7 @@ class TokenUsageMiddleware(AgentMiddleware[TokenUsageState]):
             "summary_message_tokens": self._count_tokens([summary_message]) if summary_message else 0,
             "summary_trigger_tokens": summary_trigger_tokens,
             "model_usage": _model_usage_from_response(response),
+            "visible_response_tokens": visible_response_tokens,
             "counter": "langchain.count_tokens_approximately",
             "estimate": True,
             "measured_at": datetime.now(UTC).isoformat(),
@@ -200,20 +318,17 @@ class TokenUsageMiddleware(AgentMiddleware[TokenUsageState]):
         configured = getattr(runtime_context, "_content_node_token_budget", None)
         if configured is None:
             return
-        model_usage = snapshot.get("model_usage") or {}
-        output_tokens = model_usage.get("output_tokens")
-        if isinstance(output_tokens, int):
-            output_details = model_usage.get("output_token_details") or {}
-            reasoning_tokens = output_details.get("reasoning", 0) if isinstance(output_details, Mapping) else 0
-            current = max(output_tokens - reasoning_tokens, 0)
-        else:
-            current = max(
-                int(snapshot.get("state_messages_tokens", 0))
-                - int(snapshot.get("state_messages_tokens_before_call", 0)),
-                0,
-            )
+        current = _visible_generated_tokens(snapshot)
         used = int(getattr(runtime_context, "_content_node_tokens_used", 0) or 0) + current
         setattr(runtime_context, "_content_node_tokens_used", used)
         maximum = int(configured)
         if used > maximum:
+            logger.warning(
+                "content token budget exceeded: used=%s current=%s max=%s visible_response=%s model_usage=%s",
+                used,
+                current,
+                maximum,
+                snapshot.get("visible_response_tokens"),
+                snapshot.get("model_usage"),
+            )
             raise ContentTokenBudgetExceeded(f"内容 Agent Token 使用超过节点预算（{maximum}）")

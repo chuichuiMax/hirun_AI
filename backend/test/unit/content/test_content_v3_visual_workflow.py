@@ -17,6 +17,7 @@ from yuxi.content.control.workflow.external_wait import (
     MISSING_VISUAL_COVER_SKIP_REASON,
     RESEARCH_SKIP_REASON,
     ExternalWaitNodeHandler,
+    review_notes_uploaded_cover_asset_id,
     skip_content_correction_interrupt,
     skip_cover_pipeline,
     skip_formula_lexicon_pipeline,
@@ -822,12 +823,57 @@ async def test_cover_selection_does_not_interrupt_for_review_notes(monkeypatch):
 
     result = await ContentWorkflowAgent()._v3_human_review(
         {"id": "select_cover", "interrupt_type": "cover_selection"},
+        _review_notes_state(
+            content_brief={
+                "form_values": {
+                    "mp_service_entry": "好评笔记",
+                    "cover_asset_id": "cca_uploaded_1",
+                    "cover_asset_ids": ["cca_uploaded_1"],
+                },
+                "attachments": [{"asset_id": "cca_uploaded_1", "role": "cover"}],
+            }
+        ),
+    )
+
+    assert result["selected_cover"] == {"asset_id": "cca_uploaded_1", "source": "uploaded_photo"}
+    assert result["state_version"] == 3
+    assert result["resume_parent_run_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_cover_selection_review_notes_without_photo_keeps_empty_cover(monkeypatch):
+    monkeypatch.setattr(
+        content_workflow_graph_module,
+        "interrupt",
+        lambda _payload: pytest.fail("好评笔记不应触发人工选封面"),
+    )
+
+    result = await ContentWorkflowAgent()._v3_human_review(
+        {"id": "select_cover", "interrupt_type": "cover_selection"},
         _review_notes_state(),
     )
 
     assert result["selected_cover"] == {}
     assert result["state_version"] == 3
     assert result["resume_parent_run_id"] is None
+
+
+def test_review_notes_uploaded_cover_asset_id_prefers_cover_asset():
+    assert (
+        review_notes_uploaded_cover_asset_id(
+            {
+                "content_brief": {
+                    "form_values": {
+                        "mp_service_entry": "好评笔记",
+                        "cover_asset_ids": ["cca_2", "cca_3"],
+                        "cover_asset_id": "cca_1",
+                    }
+                }
+            }
+        )
+        == "cca_1"
+    )
+    assert review_notes_uploaded_cover_asset_id({"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}}) is None
 
 
 @pytest.mark.asyncio

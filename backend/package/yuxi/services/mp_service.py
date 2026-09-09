@@ -118,7 +118,10 @@ FRAME_AREA_PRICING: tuple[dict[str, Any], ...] = (
 )
 _QUOTE_RANGE = re.compile(r"^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)万$")
 _QUOTE_FLOOR = re.compile(r"^(\d+(?:\.\d+)?)万以上$")
-_HYCANVAS_TEMPLATE_ID = re.compile(r"^xiaohongshu-[a-z0-9-]+$")
+_HYCANVAS_TEMPLATE_ID = re.compile(
+    r"^(?:xiaohongshu-[a-z0-9-]+|"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+)
 _OPEN_QUOTE_SPAN = 10
 DESIGN_STYLES: tuple[str, ...] = (
     "复合写意",
@@ -811,15 +814,15 @@ async def _lock_decoration_visual_material(
     template_id = str(hycanvas_template_id or "").strip()
     if not _HYCANVAS_TEMPLATE_ID.fullmatch(template_id):
         raise _mp_error(422, "MP_HYCANVAS_TEMPLATE_REQUIRED", "请选择小红书封面模板")
-    repo = MaterialLibraryRepository(db)
+    repo = MaterialLibraryRepository(db, include_shared=True)
     owner_uid = str(user.uid)
     item = None
     if str(image_item_id or "").strip():
         item = await repo.get_item_for_user(str(image_item_id).strip(), owner_uid)
     elif str(cover_asset_id or "").strip():
-        item = await repo.get_item_by_asset(str(cover_asset_id).strip())
-        if item is not None and item.owner_uid != owner_uid:
-            item = None
+        candidate = await repo.get_item_by_asset(str(cover_asset_id).strip())
+        if candidate is not None:
+            item = await repo.get_item_for_user(candidate.id, owner_uid)
     else:
         raise _mp_error(422, "MP_COVER_REQUIRED", "请选择图库图片或上传封面图")
     if item is None or item.material_type != "image" or item.status != "enabled":
@@ -922,21 +925,34 @@ def _mp_gallery_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def list_mp_galleries(db: AsyncSession, ctx: MpContext) -> dict[str, Any]:
+async def list_mp_galleries(
+    db: AsyncSession,
+    ctx: MpContext,
+    scope: Literal["private", "enterprise"] | None = None,
+) -> dict[str, Any]:
     result = await list_image_galleries(db, ctx.user)
     galleries = []
     for item in result.get("galleries") or []:
+        visibility = item.get("visibility") or "private"
+        if scope and visibility != scope:
+            continue
         cover_item_id = item.get("cover_item_id")
         galleries.append(
             {
                 **item,
+                "visibility": visibility,
                 "cover_file_url": f"/api/mp/content/gallery-items/{cover_item_id}/file" if cover_item_id else None,
             }
         )
     return {"galleries": galleries}
 
 
-async def list_mp_gallery_items(db: AsyncSession, ctx: MpContext, category: str) -> dict[str, Any]:
+async def list_mp_gallery_items(
+    db: AsyncSession,
+    ctx: MpContext,
+    category: str,
+    scope: Literal["private", "enterprise"] | None = None,
+) -> dict[str, Any]:
     result = await list_material_items(
         db,
         ctx.user,
@@ -947,6 +963,7 @@ async def list_mp_gallery_items(db: AsyncSession, ctx: MpContext, category: str)
         page=1,
         page_size=100,
         sort="newest",
+        scope=scope,
     )
     items = [_mp_gallery_item(item) for item in result.get("items") or []]
     return {"items": items, "total": result.get("total") or 0}
@@ -1200,32 +1217,69 @@ async def get_artifact(db: AsyncSession, ctx: MpContext, task_id: str) -> dict[s
     return result
 
 
+def _publish_status_label(status: str | None) -> str:
+    if status in {"reviewed", "completed"}:
+        return "已发布"
+    return "未发布"
+
+
+def _format_mp_created_at(value) -> str:
+    if value is None:
+        return ""
+    from yuxi.utils.datetime_utils import SHANGHAI_TZ, ensure_utc
+
+    local = ensure_utc(value).astimezone(SHANGHAI_TZ)
+    return local.strftime("%Y%m%d %H:%M:%S")
+
+
+def _creation_methods_label(snapshot: dict[str, Any]) -> str:
+    methods = snapshot.get("creation_methods") or snapshot.get("methods") or snapshot.get("method_codes") or []
+    if not isinstance(methods, list):
+        return str(methods or "")
+    definitions = snapshot.get("creation_method_definitions") or []
+    name_by_code: dict[str, str] = {}
+    if isinstance(definitions, list):
+        for item in definitions:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "").strip()
+            name = str(item.get("name") or item.get("label") or "").strip()
+            if code and name:
+                name_by_code[code] = name
+    labels = [name_by_code.get(str(code), str(code)) for code in methods if str(code).strip()]
+    return "+".join(labels)
+
+
 def _list_item(
     task: ContentTask, artifact: ContentArtifact | None, favorited: bool, cover_asset_id: str | None
 ) -> dict[str, Any]:
     brief = task.brief_json or {}
     form_values = brief.get("form_values") or {}
     snapshot = (artifact.strategy_snapshot if artifact else None) or task.strategy_json or {}
-    formula = snapshot.get("selected_body_formula_code") or snapshot.get("body_formula_code")
-    methods = snapshot.get("methods") or snapshot.get("method_codes") or []
-    method_label = "、".join(str(item) for item in methods) if isinstance(methods, list) else (str(methods) or "")
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    title_formula = snapshot.get("title_formula") if isinstance(snapshot.get("title_formula"), dict) else {}
+    body_formula = snapshot.get("body_formula") if isinstance(snapshot.get("body_formula"), dict) else {}
+    cover_id = cover_asset_id or form_values.get("cover_asset_id")
+    service_entry = str(form_values.get("mp_service_entry") or "")
     return {
         "task_id": task.id,
         "content_code": form_values.get("mp_content_code") or "",
-        "service_entry": form_values.get("mp_service_entry") or "",
+        "service_entry": service_entry,
         "content_type_name": form_values.get("mp_content_type_name") or "",
-        "method": method_label,
+        "creation_methods": _creation_methods_label(snapshot),
+        "method": _creation_methods_label(snapshot),
+        "viral_title_formula": str(title_formula.get("name") or title_formula.get("code") or ""),
         "title": artifact.title if artifact else "",
-        "formula": formula or "",
+        "content_formula": str(body_formula.get("name") or body_formula.get("code") or ""),
+        "formula": str(body_formula.get("name") or body_formula.get("code") or ""),
         "status": task.status,
+        "status_label": _publish_status_label(task.status),
         "created_at": format_utc_datetime(task.created_at),
+        "created_at_display": _format_mp_created_at(task.created_at),
         "favorited": favorited,
-        "cover_asset_id": cover_asset_id or form_values.get("cover_asset_id"),
-        "cover_file_url": (
-            f"/api/mp/content/covers/{cover_asset_id or form_values.get('cover_asset_id')}/file"
-            if (cover_asset_id or form_values.get("cover_asset_id"))
-            else None
-        ),
+        "cover_asset_id": cover_id,
+        "cover_file_url": (f"/api/mp/content/covers/{cover_id}/file" if cover_id else None),
     }
 
 

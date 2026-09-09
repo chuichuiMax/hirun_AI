@@ -62,6 +62,92 @@ def test_content_token_budget_still_rejects_visible_output_over_limit() -> None:
     assert context._content_node_tokens_used == 6
 
 
+def test_content_token_budget_reads_string_reasoning_token_counts() -> None:
+    context = SimpleNamespace(_content_node_token_budget=5)
+    request = SimpleNamespace(runtime=SimpleNamespace(context=context))
+
+    TokenUsageMiddleware._enforce_content_token_budget(
+        request,
+        {
+            "model_usage": {
+                "completion_tokens": "12004",
+                "completion_tokens_details": {"reasoning_tokens": "12000"},
+            },
+            "visible_response_tokens": 4,
+        },
+    )
+
+    assert context._content_node_tokens_used == 4
+
+
+def test_content_token_budget_ignores_hidden_reasoning_in_visible_response_estimate() -> None:
+    context = SimpleNamespace(_content_node_token_budget=5)
+    request = SimpleNamespace(runtime=SimpleNamespace(context=context))
+
+    TokenUsageMiddleware._enforce_content_token_budget(
+        request,
+        {
+            "model_usage": {"output_tokens": 18000},
+            "visible_response_tokens": 4,
+            "state_messages_tokens": 20000,
+            "state_messages_tokens_before_call": 1000,
+        },
+    )
+
+    assert context._content_node_tokens_used == 4
+
+
+def test_content_token_budget_caps_provider_visible_by_response_estimate() -> None:
+    context = SimpleNamespace(_content_node_token_budget=5)
+    request = SimpleNamespace(runtime=SimpleNamespace(context=context))
+
+    TokenUsageMiddleware._enforce_content_token_budget(
+        request,
+        {
+            "model_usage": {
+                "output_tokens": 12004,
+                "output_token_details": {"reasoning": 12000},
+            },
+            "visible_response_tokens": 3,
+        },
+    )
+
+    assert context._content_node_tokens_used == 3
+
+
+def test_content_token_budget_uses_visible_reply_when_reasoning_is_not_split() -> None:
+    context = SimpleNamespace(_content_node_token_budget=5)
+    request = SimpleNamespace(runtime=SimpleNamespace(context=context))
+
+    TokenUsageMiddleware._enforce_content_token_budget(
+        request,
+        {
+            "model_usage": {"output_tokens": 18000},
+            "state_messages_tokens": 1204,
+            "state_messages_tokens_before_call": 1200,
+        },
+    )
+
+    assert context._content_node_tokens_used == 4
+
+
+def test_content_token_budget_still_rejects_long_visible_reply_without_reasoning_split() -> None:
+    context = SimpleNamespace(_content_node_token_budget=5)
+    request = SimpleNamespace(runtime=SimpleNamespace(context=context))
+
+    with pytest.raises(RuntimeError, match="Token 使用超过节点预算"):
+        TokenUsageMiddleware._enforce_content_token_budget(
+            request,
+            {
+                "model_usage": {"output_tokens": 18000},
+                "state_messages_tokens": 1210,
+                "state_messages_tokens_before_call": 1200,
+            },
+        )
+
+    assert context._content_node_tokens_used == 10
+
+
 @pytest.mark.asyncio
 async def test_token_usage_middleware_records_request_and_state_tokens() -> None:
     middleware = TokenUsageMiddleware()
@@ -152,3 +238,39 @@ async def test_token_usage_middleware_detects_effective_summary_message() -> Non
     assert token_usage["summary_message_tokens"] > 0
     assert token_usage["context_window"] is None
     assert token_usage["context_usage_ratio"] is None
+
+
+@pytest.mark.asyncio
+async def test_token_usage_reads_reasoning_from_response_metadata() -> None:
+    middleware = TokenUsageMiddleware(token_counter=lambda messages, tools=None: len(list(messages)) * 4)
+    context = SimpleNamespace(_content_node_token_budget=5, summary_threshold=None)
+    request = SimpleNamespace(
+        model=SimpleNamespace(profile={}),
+        state={"messages": []},
+        messages=[],
+        system_message=None,
+        tools=[],
+        runtime=SimpleNamespace(context=context),
+    )
+
+    async def handler(_request):
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="ok",
+                    response_metadata={
+                        "token_usage": {
+                            "completion_tokens": 18004,
+                            "completion_tokens_details": {"reasoning_tokens": 18000},
+                        }
+                    },
+                )
+            ]
+        )
+
+    result = await middleware.awrap_model_call(request, handler)
+    assert result.command.update["token_usage"]["model_usage"]["output_tokens"] == 18004
+    assert result.command.update["token_usage"]["model_usage"]["completion_tokens_details"] == {
+        "reasoning_tokens": 18000
+    }
+    assert context._content_node_tokens_used == 4

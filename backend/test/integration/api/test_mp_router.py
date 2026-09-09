@@ -108,7 +108,10 @@ async def test_mp_sms_login_me_schema_and_pc_token_isolation(test_client, admin_
         assert all(item["districts"] for item in data["region_tree"])
         assert isinstance(data["hycanvas_templates"], list)
         if data["hycanvas_templates"]:
-            assert data["hycanvas_templates"][0]["id"].startswith("xiaohongshu-")
+            template_id = data["hycanvas_templates"][0]["id"]
+            assert template_id.startswith("xiaohongshu-") or (
+                len(template_id) == 36 and template_id.count("-") == 4
+            )
             assert data["hycanvas_templates"][0]["preview_urls"][0].startswith(
                 "/api/mp/content/hycanvas-templates/"
             )

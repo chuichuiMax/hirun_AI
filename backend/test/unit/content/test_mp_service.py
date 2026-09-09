@@ -10,14 +10,17 @@ from yuxi.services.mp_service import (
     _cover_asset_ids,
     _lock_decoration_visual_material,
     _mp_gallery_item,
+    _mp_hycanvas_template_item,
     build_mp_brief_payload,
     expand_quote_range,
     has_mp_content_code,
+    list_mp_galleries,
     list_mp_gallery_items,
     lookup_frame_area_pricing,
     map_nrlx_to_ct_code,
     mask_phone,
     next_mp_content_code,
+    read_hycanvas_template_preview,
     resolve_content_goal,
 )
 
@@ -209,8 +212,8 @@ async def test_lock_decoration_visual_material_accepts_gallery_item(monkeypatch)
         status = "enabled"
 
     class Repo:
-        def __init__(self, db):
-            pass
+        def __init__(self, db, *, include_shared=False):
+            self.include_shared = include_shared
 
         async def get_item_for_user(self, item_id, owner_uid, for_update=False):
             assert item_id == "mli_1"
@@ -233,6 +236,137 @@ async def test_lock_decoration_visual_material_accepts_gallery_item(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_lock_decoration_visual_material_accepts_workspace_template_id(monkeypatch):
+    class Item:
+        id = "mli_1"
+        asset_id = "cca_1"
+        owner_uid = "u1"
+        material_type = "image"
+        status = "enabled"
+
+    class Repo:
+        def __init__(self, db, *, include_shared=False):
+            self.include_shared = include_shared
+
+        async def get_item_for_user(self, item_id, owner_uid, for_update=False):
+            return Item()
+
+        async def item_is_selected_by_task(self, item_id, owner_uid, exclude_task_id=None):
+            return False
+
+    monkeypatch.setattr("yuxi.services.mp_service.MaterialLibraryRepository", Repo)
+    selection, asset_id = await _lock_decoration_visual_material(
+        None,
+        type("User", (), {"uid": "u1"})(),
+        image_item_id="mli_1",
+        hycanvas_template_id="8bc32ed9-f80a-47e2-8e2b-913e35c125c8",
+    )
+    assert selection.hycanvas_template_id == "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
+    assert asset_id == "cca_1"
+
+
+@pytest.mark.asyncio
+async def test_lock_decoration_visual_material_accepts_enterprise_shared_image(monkeypatch):
+    class Item:
+        id = "mli_shared"
+        asset_id = "cca_shared"
+        owner_uid = "admin"
+        material_type = "image"
+        status = "enabled"
+
+    class Repo:
+        def __init__(self, db, *, include_shared=False):
+            assert include_shared is True
+
+        async def get_item_for_user(self, item_id, owner_uid, for_update=False):
+            assert item_id == "mli_shared"
+            assert owner_uid == "u1"
+            return Item()
+
+        async def item_is_selected_by_task(self, item_id, owner_uid, exclude_task_id=None):
+            return False
+
+    monkeypatch.setattr("yuxi.services.mp_service.MaterialLibraryRepository", Repo)
+    selection, asset_id = await _lock_decoration_visual_material(
+        None,
+        type("User", (), {"uid": "u1"})(),
+        image_item_id="mli_shared",
+        hycanvas_template_id="xiaohongshu-home-renovation",
+    )
+    assert selection.image_item_id == "mli_shared"
+    assert asset_id == "cca_shared"
+
+
+@pytest.mark.asyncio
+async def test_lock_decoration_visual_material_accepts_shared_cover_asset(monkeypatch):
+    class Item:
+        id = "mli_shared"
+        asset_id = "cca_shared"
+        owner_uid = "admin"
+        material_type = "image"
+        status = "enabled"
+
+    class Repo:
+        def __init__(self, db, *, include_shared=False):
+            assert include_shared is True
+
+        async def get_item_by_asset(self, asset_id):
+            assert asset_id == "cca_shared"
+            return Item()
+
+        async def get_item_for_user(self, item_id, owner_uid, for_update=False):
+            assert item_id == "mli_shared"
+            return Item()
+
+        async def item_is_selected_by_task(self, item_id, owner_uid, exclude_task_id=None):
+            return False
+
+    monkeypatch.setattr("yuxi.services.mp_service.MaterialLibraryRepository", Repo)
+    selection, asset_id = await _lock_decoration_visual_material(
+        None,
+        type("User", (), {"uid": "u1"})(),
+        cover_asset_id="cca_shared",
+        hycanvas_template_id="xiaohongshu-home-renovation",
+    )
+    assert selection.image_item_id == "mli_shared"
+    assert asset_id == "cca_shared"
+
+
+@pytest.mark.asyncio
+async def test_lock_decoration_visual_material_rejects_private_cover_of_others(monkeypatch):
+    class Item:
+        id = "mli_private"
+        asset_id = "cca_private"
+        owner_uid = "other"
+        material_type = "image"
+        status = "enabled"
+
+    class Repo:
+        def __init__(self, db, *, include_shared=False):
+            pass
+
+        async def get_item_by_asset(self, asset_id):
+            return Item()
+
+        async def get_item_for_user(self, item_id, owner_uid, for_update=False):
+            return None
+
+        async def item_is_selected_by_task(self, item_id, owner_uid, exclude_task_id=None):
+            return False
+
+    monkeypatch.setattr("yuxi.services.mp_service.MaterialLibraryRepository", Repo)
+    with pytest.raises(HTTPException) as exc:
+        await _lock_decoration_visual_material(
+            None,
+            type("User", (), {"uid": "u1"})(),
+            cover_asset_id="cca_private",
+            hycanvas_template_id="xiaohongshu-home-renovation",
+        )
+    assert exc.value.status_code == 422
+    assert exc.value.detail["error"]["code"] == "MP_COVER_LIBRARY_ITEM_MISSING"
+
+
+@pytest.mark.asyncio
 async def test_lock_decoration_visual_material_rejects_image_in_use(monkeypatch):
     class Item:
         id = "mli_1"
@@ -242,8 +376,8 @@ async def test_lock_decoration_visual_material_rejects_image_in_use(monkeypatch)
         status = "enabled"
 
     class Repo:
-        def __init__(self, db):
-            pass
+        def __init__(self, db, *, include_shared=False):
+            self.include_shared = include_shared
 
         async def get_item_for_user(self, item_id, owner_uid, for_update=False):
             return Item()
@@ -272,6 +406,46 @@ def test_mp_gallery_item_always_exposes_in_use():
     assert unused["file_url"] == "/api/mp/content/gallery-items/mli_2/file"
 
 
+def test_mp_hycanvas_template_item_rewrites_preview_to_mp_proxy():
+    template_id = "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
+    item = _mp_hycanvas_template_item(
+        {
+            "id": template_id,
+            "title": "小红书爆款封面",
+            "preview_urls": [f"/api/content/covers/hycanvas/templates/{template_id}/render.png"],
+        }
+    )
+    assert item["preview_urls"] == [f"/api/mp/content/hycanvas-templates/{template_id}/preview"]
+    assert item["title"] == "小红书爆款封面"
+
+
+@pytest.mark.asyncio
+async def test_read_hycanvas_template_preview_accepts_workspace_id(monkeypatch):
+    template_id = "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
+
+    class Client:
+        async def fetch_template_preview(self, requested_id):
+            assert requested_id == template_id
+            return b"png", "image/png"
+
+        @classmethod
+        def from_env(cls):
+            return Client()
+
+    monkeypatch.setattr("yuxi.services.hycanvas_service.HyCanvasClient", Client)
+    data, content_type = await read_hycanvas_template_preview(template_id)
+    assert data == b"png"
+    assert content_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_read_hycanvas_template_preview_rejects_invalid_id():
+    with pytest.raises(HTTPException) as exc:
+        await read_hycanvas_template_preview("not-a-template-id")
+    assert exc.value.status_code == 404
+    assert exc.value.detail["error"]["code"] == "HYCANVAS_TEMPLATE_NOT_FOUND"
+
+
 @pytest.mark.asyncio
 async def test_list_mp_gallery_items_forwards_in_use(monkeypatch):
     async def fake_list_material_items(*args, **kwargs):
@@ -289,6 +463,27 @@ async def test_list_mp_gallery_items_forwards_in_use(monkeypatch):
     assert result["items"][0]["in_use"] is True
     assert result["items"][1]["in_use"] is False
     assert result["items"][0]["file_url"].endswith("/mli_used/file")
+
+
+@pytest.mark.asyncio
+async def test_list_mp_galleries_includes_enterprise_scope(monkeypatch):
+    async def fake_list_image_galleries(db, user):
+        return {
+            "galleries": [
+                {"id": "mine", "name": "我的图库", "visibility": "private", "cover_item_id": "mli_1"},
+                {"id": "shared", "name": "公共图库", "visibility": "enterprise", "cover_item_id": "mli_2"},
+            ]
+        }
+
+    monkeypatch.setattr("yuxi.services.mp_service.list_image_galleries", fake_list_image_galleries)
+    ctx = type("Ctx", (), {"user": object()})()
+    all_galleries = await list_mp_galleries(None, ctx)
+    assert [item["id"] for item in all_galleries["galleries"]] == ["mine", "shared"]
+    assert all_galleries["galleries"][1]["cover_file_url"].endswith("/mli_2/file")
+    shared = await list_mp_galleries(None, ctx, scope="enterprise")
+    assert [item["id"] for item in shared["galleries"]] == ["shared"]
+    private = await list_mp_galleries(None, ctx, scope="private")
+    assert [item["id"] for item in private["galleries"]] == ["mine"]
 
 
 def test_cover_asset_ids_keep_order_and_reject_more_than_three():

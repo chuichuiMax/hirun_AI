@@ -48,6 +48,33 @@ def cover_skip_reason(state: dict[str, Any]) -> str:
     return MISSING_VISUAL_COVER_SKIP_REASON
 
 
+def review_notes_uploaded_cover_asset_id(state: dict[str, Any]) -> str | None:
+    """好评笔记跳过 HyCanvas 封面生成时，使用用户上传的现场照片作为展示封面。"""
+    if not skip_formula_lexicon_pipeline(state):
+        return None
+    brief = state.get("content_brief") or {}
+    if not isinstance(brief, dict):
+        return None
+    values = brief.get("form_values") if isinstance(brief.get("form_values"), dict) else {}
+    ids: list[str] = []
+    extra = values.get("cover_asset_ids")
+    if isinstance(extra, list):
+        ids.extend(str(item).strip() for item in extra)
+    cover_id = str(values.get("cover_asset_id") or "").strip()
+    if cover_id:
+        ids.insert(0, cover_id)
+    for item in brief.get("attachments") or []:
+        if not isinstance(item, dict):
+            continue
+        asset_id = str(item.get("asset_id") or "").strip()
+        if asset_id and str(item.get("role") or "") in {"cover", "photo", ""}:
+            ids.append(asset_id)
+    for asset_id in ids:
+        if asset_id:
+            return asset_id
+    return None
+
+
 def skip_content_correction_interrupt(state: dict[str, Any]) -> bool:
     return skip_formula_lexicon_pipeline(state)
 
@@ -170,8 +197,9 @@ __all__ = [
     "RESEARCH_SKIP_REASON",
     "ExternalWaitNodeHandler",
     "cover_skip_reason",
+    "review_notes_uploaded_cover_asset_id",
+    "skip_content_correction_interrupt",
     "skip_cover_pipeline",
     "skip_formula_lexicon_pipeline",
     "skip_research_pipeline",
-    "skip_content_correction_interrupt",
 ]

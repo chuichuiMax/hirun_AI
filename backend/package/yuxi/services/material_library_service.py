@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import uuid
 from pathlib import Path
 from typing import Any, Literal
@@ -31,6 +32,8 @@ from yuxi.storage.postgres.models_content import (
 )
 from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.upload_utils import read_upload_with_limit
+
+logger = logging.getLogger(__name__)
 
 MATERIAL_LIBRARY_BUCKET = "image"
 MAX_MATERIAL_BYTES = 20 * 1024 * 1024
@@ -126,9 +129,16 @@ def _audit(db: AsyncSession, user: User, operation: str, **details):
 
 def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
     try:
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
         with Image.open(io.BytesIO(data)) as source:
-            if source.format not in {"JPEG", "PNG", "WEBP"}:
-                raise _error(400, "MATERIAL_FORMAT_UNSUPPORTED", "仅支持 JPG、PNG 或 WebP 图片")
+            # 不按扩展名/声明格式拦截：微信相册常把 HEIC/MPO/实况图标成 .jpg。
+            # 只要 Pillow（含 HEIF 插件）能解码，就统一转成 PNG 入库。
+            detected = (source.format or "").upper()
             image = ImageOps.exif_transpose(source)
             image.load()
             width, height = image.size
@@ -141,11 +151,23 @@ def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
                 raise _error(400, "MATERIAL_DIMENSION_INVALID", "图片尺寸必须在 2–8192 像素且不超过 4000 万像素")
             output = io.BytesIO()
             image.convert("RGBA").save(output, format="PNG", optimize=True)
+            logger.info(
+                "material image normalized format=%s size=%sx%s bytes_in=%s bytes_out=%s",
+                detected or "unknown",
+                width,
+                height,
+                len(data),
+                output.tell(),
+            )
             return output.getvalue(), width, height, "image/png"
     except HTTPException:
         raise
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
-        raise _error(400, "MATERIAL_IMAGE_INVALID", "上传文件不是有效图片") from exc
+        raise _error(
+            400,
+            "MATERIAL_IMAGE_INVALID",
+            "无法识别该图片（请用系统相册导出为 JPG/PNG 后再传，勿直接传实况图/未解码原片）",
+        ) from exc
 
 
 def _make_image_thumbnail(data: bytes) -> bytes:
@@ -438,7 +460,7 @@ async def list_material_items(
         if category
         else None
     )
-    repo = MaterialLibraryRepository(db)
+    repo = MaterialLibraryRepository(db, include_shared=True)
     rows, total = await repo.list_items(
         _owner_uid(user),
         material_type=material_type,
@@ -467,6 +489,8 @@ async def list_material_items(
     items = []
     for item, asset, item_category in rows:
         payload = serialize_item(item, asset, item_category, posters_by_asset.get(asset.id))
+        payload["can_manage"] = _can_manage_item(user, item, item_category)
+        payload["uploaded_by_name"] = uploader_names.get(item.owner_uid) or item.owner_uid
         if material_type == "image":
             payload["in_use"] = item.id in used_image_ids
         items.append(payload)
