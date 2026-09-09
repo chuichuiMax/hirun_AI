@@ -50,14 +50,14 @@ async def material_users(test_client):
                 username=f"pytest_material_owner_{suffix}",
                 uid=f"pytest_material_owner_{suffix}",
                 password_hash=AuthUtils.hash_password(password),
-                role="user",
+                role="superadmin",
                 department_id=department.id,
             ),
             User(
                 username=f"pytest_material_other_{suffix}",
                 uid=f"pytest_material_other_{suffix}",
                 password_hash=AuthUtils.hash_password(password),
-                role="user",
+                role="superadmin",
                 department_id=department.id,
             ),
         ]
@@ -77,8 +77,9 @@ async def material_users(test_client):
         yield {"owner": headers[0], "other": headers[1]}
     finally:
         async with session_factory() as db:
-            from yuxi.storage.postgres.models_content import ContentMaterialCategory
+            from yuxi.storage.postgres.models_content import ContentMaterialCategory, ContentMaterialShare
 
+            await db.execute(delete(ContentMaterialShare).where(ContentMaterialShare.owner_uid.in_(credentials)))
             await db.execute(delete(ContentMaterialCategory).where(ContentMaterialCategory.owner_uid.in_(credentials)))
             await db.execute(delete(OperationLog).where(OperationLog.user_id.in_(user_ids)))
             await db.execute(delete(User).where(User.id.in_(user_ids)))
@@ -277,6 +278,9 @@ async def test_image_gallery_supports_exactly_one_nested_level(test_client, mate
             "name": "客厅案例",
             "description": "项目案例中的客厅图片",
             "parent_id": parent["id"],
+            "design_style": "江南印象",
+            "building_name": "测试楼盘",
+            "area": "120",
         },
     )
     assert child_response.status_code == 201, child_response.text
@@ -393,6 +397,147 @@ async def test_image_gallery_supports_exactly_one_nested_level(test_client, mate
         await test_client.delete(f"/api/material-library/items/{item['id']}", headers=headers)
 
 
+async def test_decoration_gallery_child_requires_an_allowed_design_style(test_client, material_users):
+    headers = material_users["owner"]
+    parent_response = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "222", "industry_slug": "decoration"},
+    )
+    assert parent_response.status_code == 201, parent_response.text
+    parent = parent_response.json()["category"]
+
+    missing_style = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "客厅案例", "parent_id": parent["id"]},
+    )
+    assert missing_style.status_code == 422, missing_style.text
+    assert missing_style.json()["detail"]["error"]["code"] == "MATERIAL_DESIGN_STYLE_REQUIRED"
+
+    invalid_style = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={
+            "material_type": "image",
+            "name": "卧室案例",
+            "parent_id": parent["id"],
+            "design_style": "不在列表中",
+        },
+    )
+    assert invalid_style.status_code == 422, invalid_style.text
+    assert invalid_style.json()["detail"]["error"]["code"] == "MATERIAL_DESIGN_STYLE_INVALID"
+
+    created = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={
+            "material_type": "image",
+            "name": "书房案例",
+            "parent_id": parent["id"],
+            "design_style": "江南印象",
+            "building_name": "测试楼盘",
+            "area": "120",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["category"]["design_style"] == "江南印象"
+
+
+async def test_decoration_gallery_child_requires_and_persists_building_name_and_area(test_client, material_users):
+    headers = material_users["owner"]
+    parent_response = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "装修与家居", "industry_slug": "decoration"},
+    )
+    assert parent_response.status_code == 201, parent_response.text
+    parent = parent_response.json()["category"]
+
+    missing_building_name = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={
+            "material_type": "image",
+            "name": "客厅案例",
+            "parent_id": parent["id"],
+            "design_style": "江南印象",
+        },
+    )
+    assert missing_building_name.status_code == 422, missing_building_name.text
+    assert missing_building_name.json()["detail"]["error"]["code"] == "MATERIAL_BUILDING_NAME_REQUIRED"
+
+    missing_area = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={
+            "material_type": "image",
+            "name": "卧室案例",
+            "parent_id": parent["id"],
+            "design_style": "江南印象",
+            "building_name": "洋湖天序",
+        },
+    )
+    assert missing_area.status_code == 422, missing_area.text
+    assert missing_area.json()["detail"]["error"]["code"] == "MATERIAL_AREA_REQUIRED"
+
+    created = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={
+            "material_type": "image",
+            "name": "书房案例",
+            "parent_id": parent["id"],
+            "design_style": "江南印象",
+            "building_name": "洋湖天序",
+            "area": "120",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["category"]["building_name"] == "洋湖天序"
+    assert created.json()["category"]["area"] == "120"
+
+
+async def test_decoration_gallery_child_update_preserves_share_details(test_client, material_users):
+    headers = material_users["owner"]
+    parent_response = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "装修与家居编辑", "industry_slug": "decoration"},
+    )
+    assert parent_response.status_code == 201, parent_response.text
+    parent = parent_response.json()["category"]
+    child_response = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={
+            "material_type": "image",
+            "name": "客厅实景",
+            "parent_id": parent["id"],
+            "design_style": "江南印象",
+            "building_name": "洋湖天序",
+            "area": "120",
+        },
+    )
+    assert child_response.status_code == 201, child_response.text
+    child = child_response.json()["category"]
+
+    updated = await test_client.patch(
+        f"/api/material-library/categories/{child['id']}?material_type=image",
+        headers=headers,
+        json={
+            "name": "客厅实景",
+            "design_style": "雅致现代",
+            "building_name": "万科金域华府",
+            "area": "120",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["category"]["design_style"] == "雅致现代"
+    assert updated.json()["category"]["building_name"] == "万科金域华府"
+    assert updated.json()["category"]["area"] == "120"
+
+
 async def test_cover_mask_is_stored_but_not_listed_as_library_template(test_client, material_users):
     headers = material_users["owner"]
     uploaded = await test_client.post(
@@ -465,3 +610,89 @@ async def test_poster_template_uses_controlled_category_without_tags(test_client
             f"/api/content/covers/poster-templates/{template['id']}", headers=headers
         )
         assert deleted.status_code == 200, deleted.text
+
+
+async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and_renders_project_details(
+    test_client, material_users
+):
+    headers = material_users["owner"]
+    parent_response = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={"material_type": "image", "name": "装修与家居", "industry_slug": "decoration"},
+    )
+    assert parent_response.status_code == 201, parent_response.text
+    parent = parent_response.json()["category"]
+    child_response = await test_client.post(
+        "/api/material-library/categories",
+        headers=headers,
+        json={
+            "material_type": "image",
+            "name": "洋湖天序·三居式·复古写意",
+            "parent_id": parent["id"],
+            "building_name": "洋湖天序",
+            "area": "120",
+            "design_style": "复古风潮",
+        },
+    )
+    assert child_response.status_code == 201, child_response.text
+    child = child_response.json()["category"]
+
+    first_upload, second_upload = await asyncio.gather(
+        test_client.post(
+            "/api/material-library/images/import",
+            headers=headers,
+            data={"category": child["id"]},
+            files=[("files", ("first.png", _png(), "image/png"))],
+        ),
+        test_client.post(
+            "/api/material-library/images/import",
+            headers=headers,
+            data={"category": child["id"]},
+            files=[("files", ("second.png", _poster_png(), "image/png"))],
+        ),
+    )
+    assert first_upload.status_code == 201, first_upload.text
+    assert second_upload.status_code == 201, second_upload.text
+    first_item = first_upload.json()["items"][0]
+    second_item = second_upload.json()["items"][0]
+
+    missing = await test_client.post("/api/material-library/shares", headers=headers, json={"item_ids": []})
+    assert missing.status_code == 422, missing.text
+
+    created = await test_client.post(
+        "/api/material-library/shares",
+        headers=headers,
+        json={"item_ids": [second_item["id"], first_item["id"]]},
+    )
+    assert created.status_code == 201, created.text
+    share = created.json()["share"]
+    assert share["title"] == "洋湖天序·三居式·复古写意"
+    assert share["description"] == "洋湖天序｜120㎡｜复古风潮"
+    assert share["image_count"] == 2
+    assert share["page_path"].endswith(f"/shares/{share['token']}/page")
+    assert share["page_url"].endswith(share["page_path"])
+    assert share["image_url"].endswith(share["image_path"])
+
+    deleted = await test_client.delete(f"/api/material-library/items/{first_item['id']}", headers=headers)
+    assert deleted.status_code == 200, deleted.text
+
+    public_page = await test_client.get(share["page_path"])
+    assert public_page.status_code == 200, public_page.text
+    assert "洋湖天序·三居式·复古写意" in public_page.text
+    assert 'class="project-info-card"' in public_page.text
+    assert "楼盘：洋湖天序" in public_page.text
+    assert "面积：120㎡" in public_page.text
+    assert "风格：复古风潮" in public_page.text
+    assert 'property="og:description" content="洋湖天序｜120㎡｜复古风潮"' in public_page.text
+    assert f"/api/material-library/shares/{share['token']}/images/1" in public_page.text
+    assert public_page.text.index("/images/1") < public_page.text.index("/images/2")
+
+    second_snapshot = await test_client.get(f"/api/material-library/shares/{share['token']}/images/1")
+    first_snapshot = await test_client.get(f"/api/material-library/shares/{share['token']}/images/2")
+    assert second_snapshot.status_code == 200, second_snapshot.text
+    assert first_snapshot.status_code == 200, first_snapshot.text
+    with Image.open(io.BytesIO(second_snapshot.content)) as image:
+        assert image.size == (1080, 1440)
+    with Image.open(io.BytesIO(first_snapshot.content)) as image:
+        assert image.size == (48, 36)

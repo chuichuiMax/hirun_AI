@@ -389,7 +389,36 @@ class PostgresManager(metaclass=SingletonMeta):
         """确保业务 schema 包含后续新增字段（运行时 schema 演进）。"""
         self._check_initialized()
         stmts = [
+            (
+                "CREATE TABLE IF NOT EXISTS content_material_shares ("
+                "id VARCHAR(64) PRIMARY KEY, token VARCHAR(64) NOT NULL UNIQUE, "
+                "owner_uid VARCHAR(255) NOT NULL, category_id VARCHAR(64) NOT NULL, "
+                "title VARCHAR(80) NOT NULL, building_name VARCHAR(80), area VARCHAR(32), "
+                "design_style VARCHAR(32), created_at TIMESTAMP)"
+            ),
+            (
+                "CREATE TABLE IF NOT EXISTS content_material_share_items ("
+                "share_id VARCHAR(64) NOT NULL REFERENCES content_material_shares(id) ON DELETE CASCADE, "
+                "display_order INTEGER NOT NULL, original_file_name VARCHAR(255) NOT NULL, "
+                "content_type VARCHAR(128) NOT NULL, file_size INTEGER NOT NULL, "
+                "image_width INTEGER NOT NULL, image_height INTEGER NOT NULL, bucket_name VARCHAR(128) NOT NULL, "
+                "object_name TEXT NOT NULL, PRIMARY KEY (share_id, display_order))"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_content_material_shares_owner_created "
+                "ON content_material_shares(owner_uid, created_at)"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS idx_content_material_share_items_share_order "
+                "ON content_material_share_items(share_id, display_order)"
+            ),
+            "ALTER TABLE IF EXISTS content_material_shares ADD COLUMN IF NOT EXISTS building_name VARCHAR(80)",
+            "ALTER TABLE IF EXISTS content_material_shares ADD COLUMN IF NOT EXISTS area VARCHAR(32)",
+            "ALTER TABLE IF EXISTS content_material_shares ADD COLUMN IF NOT EXISTS design_style VARCHAR(32)",
             "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS parent_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS design_style VARCHAR(32)",
+            "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS building_name VARCHAR(80)",
+            "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS area VARCHAR(32)",
             (
                 "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS "
                 "industry_slug VARCHAR(80) NOT NULL DEFAULT 'uncategorized'"

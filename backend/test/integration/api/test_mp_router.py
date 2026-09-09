@@ -378,3 +378,39 @@ async def test_mp_sms_send_validates_employee_before_sending(test_client, admin_
     finally:
         await test_client.delete(f"/api/employees/{disabled_id}", headers=admin_headers)
         await test_client.delete(f"/api/employees/{pc_id}", headers=admin_headers)
+
+
+async def test_mp_material_share_requires_mp_token_and_valid_selection(test_client, admin_headers):
+    phone = _phone()
+    created = await test_client.post("/api/employees", headers=admin_headers, json=_employee_payload(phone))
+    assert created.status_code == 200, created.text
+    employee_pk = created.json()["employee"]["id"]
+    try:
+        sent = await test_client.post("/api/mp/auth/sms/send", json={"phone": phone})
+        assert sent.status_code == 200, sent.text
+        logged = await test_client.post(
+            "/api/mp/auth/sms/login",
+            json={"phone": phone, "code": sent.json()["debug_code"]},
+        )
+        assert logged.status_code == 200, logged.text
+        mp_headers = {"Authorization": f"Bearer {logged.json()['access_token']}"}
+
+        anonymous = await test_client.post("/api/mp/share/cases", json={"item_ids": ["mli_missing"]})
+        assert anonymous.status_code == 401, anonymous.text
+
+        pc_blocked = await test_client.post(
+            "/api/mp/share/cases", headers=admin_headers, json={"item_ids": ["mli_missing"]}
+        )
+        assert pc_blocked.status_code == 401, pc_blocked.text
+
+        empty = await test_client.post("/api/mp/share/cases", headers=mp_headers, json={"item_ids": []})
+        assert empty.status_code == 422, empty.text
+
+        missing = await test_client.post(
+            "/api/mp/share/cases", headers=mp_headers, json={"item_ids": ["mli_missing"]}
+        )
+        assert missing.status_code == 404, missing.text
+        assert missing.json()["detail"]["error"]["code"] == "MATERIAL_NOT_FOUND"
+    finally:
+        deleted = await test_client.delete(f"/api/employees/{employee_pk}", headers=admin_headers)
+        assert deleted.status_code == 200, deleted.text

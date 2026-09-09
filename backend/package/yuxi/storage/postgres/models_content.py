@@ -1073,6 +1073,40 @@ class ContentMaterialLibraryItem(Base):
         }
 
 
+class ContentMaterialShare(Base):
+    """可公开访问的素材图库图片分享快照。"""
+
+    __tablename__ = "content_material_shares"
+
+    id = Column(String(64), primary_key=True)
+    token = Column(String(64), nullable=False, unique=True, index=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    category_id = Column(String(64), nullable=False, index=True)
+    title = Column(String(80), nullable=False)
+    building_name = Column(String(80), nullable=True)
+    area = Column(String(32), nullable=True)
+    design_style = Column(String(32), nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+
+
+class ContentMaterialShareItem(Base):
+    """分享中的单张图片快照，按创建时的选择顺序排列。"""
+
+    __tablename__ = "content_material_share_items"
+
+    share_id = Column(String(64), ForeignKey("content_material_shares.id", ondelete="CASCADE"), primary_key=True)
+    display_order = Column(Integer, primary_key=True)
+    original_file_name = Column(String(255), nullable=False)
+    content_type = Column(String(128), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    image_width = Column(Integer, nullable=False)
+    image_height = Column(Integer, nullable=False)
+    bucket_name = Column(String(128), nullable=False)
+    object_name = Column(Text, nullable=False)
+
+    __table_args__ = (Index("idx_content_material_share_items_share_order", "share_id", "display_order"),)
+
+
 class ContentMaterialCategory(Base):
     """用户维护的素材图片图库或封面模板分类。"""
 
@@ -1084,6 +1118,9 @@ class ContentMaterialCategory(Base):
     tenant_id = Column(String(64), nullable=True, index=True)
     parent_id = Column(String(64), nullable=True, index=True)
     industry_slug = Column(String(80), nullable=False, default="uncategorized", index=True)
+    design_style = Column(String(32), nullable=True)
+    building_name = Column(String(80), nullable=True)
+    area = Column(String(32), nullable=True)
     name = Column(String(80), nullable=False)
     description = Column(String(255), nullable=False, default="")
     sort_order = Column(Integer, nullable=False, default=0)
@@ -1122,6 +1159,9 @@ class ContentMaterialCategory(Base):
             "parent_id": self.parent_id,
             "level": 2 if self.parent_id else 1,
             "industry_slug": self.industry_slug,
+            "design_style": self.design_style,
+            "building_name": self.building_name,
+            "area": self.area,
             "name": self.name,
             "description": self.description or "",
             "sort_order": self.sort_order,

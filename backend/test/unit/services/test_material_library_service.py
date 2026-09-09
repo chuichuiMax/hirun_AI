@@ -5,11 +5,18 @@ import io
 import pytest
 from fastapi import HTTPException
 from PIL import Image
+from pydantic import ValidationError
 
+import yuxi.services.material_library_service as material_library_service
 from yuxi.services.material_library_service import (
     MATERIAL_LIBRARY_BUCKET,
+    MaterialCategoryCreate,
+    MaterialShareCreate,
     _make_image_thumbnail,
     _normalize_image,
+    create_material_category,
+    render_public_material_share_page,
+    serialize_public_material_share,
     serialize_item,
 )
 from yuxi.services.material_library_categories import (
@@ -24,6 +31,8 @@ from yuxi.storage.postgres.models_content import (
     ContentCoverPosterTemplate,
     ContentMaterialCategory,
     ContentMaterialLibraryItem,
+    ContentMaterialShare,
+    ContentMaterialShareItem,
 )
 
 
@@ -114,6 +123,289 @@ def test_material_category_exposes_gallery_level():
     assert parent.to_dict()["industry_slug"] == "decoration"
     assert child.to_dict()["level"] == 2
     assert child.to_dict()["parent_id"] == parent.id
+
+
+def test_material_share_selection_requires_distinct_nonempty_image_ids():
+    with pytest.raises(ValidationError):
+        MaterialShareCreate(item_ids=[])
+    with pytest.raises(ValidationError):
+        MaterialShareCreate(item_ids=["mli_1", "mli_1"])
+    with pytest.raises(ValidationError):
+        MaterialShareCreate(item_ids=[" "])
+    assert len(MaterialShareCreate(item_ids=[f"mli_{index}" for index in range(1000)]).item_ids) == 1000
+    with pytest.raises(ValidationError):
+        MaterialShareCreate(item_ids=[f"mli_{index}" for index in range(1001)])
+
+
+def test_public_material_share_serializer_exposes_only_snapshot_data_in_display_order():
+    share = ContentMaterialShare(
+        id="mls_internal",
+        token="not-enumerable-share-id",
+        owner_uid="private-owner",
+        category_id="private-category",
+        title="客厅实景",
+        building_name="万科金域华府",
+        area="120",
+        design_style="现代简约",
+    )
+    items = [
+        ContentMaterialShareItem(
+            share_id=share.id,
+            display_order=1,
+            original_file_name="first.png",
+            content_type="image/png",
+            file_size=128,
+            image_width=48,
+            image_height=36,
+            bucket_name="image",
+            object_name="immutable/1.png",
+        ),
+        ContentMaterialShareItem(
+            share_id=share.id,
+            display_order=2,
+            original_file_name="second.png",
+            content_type="image/png",
+            file_size=128,
+            image_width=48,
+            image_height=36,
+            bucket_name="image",
+            object_name="immutable/2.png",
+        ),
+    ]
+
+    payload = serialize_public_material_share(share, items)
+
+    assert payload == {
+        "share": {
+            "id": "not-enumerable-share-id",
+            "gallery_name": "客厅实景",
+            "building_name": "万科金域华府",
+            "area": "120",
+            "design_style": "现代简约",
+            "cover_url": "/api/material-library/shares/not-enumerable-share-id/images/1",
+            "images": [
+                {
+                    "order": 1,
+                    "file_name": "first.png",
+                    "url": "/api/material-library/shares/not-enumerable-share-id/images/1",
+                },
+                {
+                    "order": 2,
+                    "file_name": "second.png",
+                    "url": "/api/material-library/shares/not-enumerable-share-id/images/2",
+                },
+            ],
+        }
+    }
+
+
+def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_metadata(monkeypatch):
+    monkeypatch.delenv("MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL", raising=False)
+    share = ContentMaterialShare(
+        id="mls_1",
+        token="share-token",
+        owner_uid="owner-1",
+        category_id="gallery-2",
+        title="洋湖天序·三居式·复古写意",
+        building_name="万科金域华府",
+        area="120",
+        design_style="现代简约",
+    )
+    items = [
+        ContentMaterialShareItem(
+            share_id=share.id,
+            display_order=1,
+            original_file_name="first.png",
+            content_type="image/png",
+            file_size=128,
+            image_width=48,
+            image_height=36,
+            bucket_name="image",
+            object_name="material-library-shares/owner-1/mls_1/1.png",
+        ),
+        ContentMaterialShareItem(
+            share_id=share.id,
+            display_order=2,
+            original_file_name="second.png",
+            content_type="image/png",
+            file_size=256,
+            image_width=64,
+            image_height=48,
+            bucket_name="image",
+            object_name="material-library-shares/owner-1/mls_1/2.png",
+        ),
+    ]
+
+    page = render_public_material_share_page(share, items, "https://share.example.test/")
+
+    assert "<title>洋湖天序·三居式·复古写意</title>" in page
+    assert 'property="og:description" content="万科金域华府｜120㎡｜现代简约"' in page
+    assert '楼盘：万科金域华府' in page
+    assert '面积：120㎡' in page
+    assert '风格：现代简约' in page
+    assert (
+        'property="og:image" '
+        'content="https://share.example.test/api/material-library/shares/share-token/images/1"' in page
+    )
+    assert page.index("/images/1") < page.index("/images/2")
+
+
+@pytest.mark.asyncio
+async def test_decoration_gallery_child_requires_and_persists_an_allowed_design_style(monkeypatch):
+    parent = ContentMaterialCategory(
+        owner_uid="owner-1",
+        material_type="image",
+        id="gallery-decoration",
+        industry_slug="decoration",
+        name="222",
+        sort_order=0,
+    )
+
+    class FakeDB:
+        async def commit(self):
+            pass
+
+        async def rollback(self):
+            pass
+
+    class FakeRepo:
+        def __init__(self, _db):
+            pass
+
+        async def get_category(self, *_args):
+            return parent
+
+        async def create_category(self, **values):
+            return ContentMaterialCategory(**values)
+
+    async def ensure_categories(*_args, **_kwargs):
+        return [parent]
+
+    monkeypatch.setattr(material_library_service, "MaterialLibraryRepository", FakeRepo)
+    monkeypatch.setattr(material_library_service, "ensure_material_categories", ensure_categories)
+
+    with pytest.raises(HTTPException) as missing_style:
+        await create_material_category(
+            FakeDB(),
+            type("User", (), {"uid": "owner-1", "department_id": None})(),
+            MaterialCategoryCreate(material_type="image", name="客厅案例", parent_id=parent.id),
+        )
+
+    assert missing_style.value.status_code == 422
+    assert missing_style.value.detail["error"]["code"] == "MATERIAL_DESIGN_STYLE_REQUIRED"
+
+    with pytest.raises(HTTPException) as invalid_style:
+        await create_material_category(
+            FakeDB(),
+            type("User", (), {"uid": "owner-1", "department_id": None})(),
+            MaterialCategoryCreate(
+                material_type="image",
+                name="卧室案例",
+                parent_id=parent.id,
+                design_style="不在列表中",
+            ),
+        )
+
+    assert invalid_style.value.status_code == 422
+    assert invalid_style.value.detail["error"]["code"] == "MATERIAL_DESIGN_STYLE_INVALID"
+
+    created = await create_material_category(
+        FakeDB(),
+        type("User", (), {"uid": "owner-1", "department_id": None})(),
+        MaterialCategoryCreate(
+            material_type="image",
+            name="书房案例",
+            parent_id=parent.id,
+            design_style="江南印象",
+            building_name="洋湖天序",
+            area="120",
+        ),
+    )
+
+    assert created["category"]["design_style"] == "江南印象"
+
+
+@pytest.mark.asyncio
+async def test_decoration_gallery_child_requires_and_persists_building_name_and_area(monkeypatch):
+    parent = ContentMaterialCategory(
+        owner_uid="owner-1",
+        material_type="image",
+        id="gallery-decoration",
+        industry_slug="decoration",
+        name="装修与家居",
+        sort_order=0,
+    )
+
+    class FakeDB:
+        async def commit(self):
+            pass
+
+        async def rollback(self):
+            pass
+
+    class FakeRepo:
+        def __init__(self, _db):
+            pass
+
+        async def get_category(self, *_args):
+            return parent
+
+        async def create_category(self, **values):
+            return ContentMaterialCategory(**values)
+
+    async def ensure_categories(*_args, **_kwargs):
+        return [parent]
+
+    monkeypatch.setattr(material_library_service, "MaterialLibraryRepository", FakeRepo)
+    monkeypatch.setattr(material_library_service, "ensure_material_categories", ensure_categories)
+    user = type("User", (), {"uid": "owner-1", "department_id": None})()
+
+    with pytest.raises(HTTPException) as missing_building_name:
+        await create_material_category(
+            FakeDB(),
+            user,
+            MaterialCategoryCreate(
+                material_type="image",
+                name="客厅案例",
+                parent_id=parent.id,
+                design_style="江南印象",
+            ),
+        )
+
+    assert missing_building_name.value.status_code == 422
+    assert missing_building_name.value.detail["error"]["code"] == "MATERIAL_BUILDING_NAME_REQUIRED"
+
+    with pytest.raises(HTTPException) as missing_area:
+        await create_material_category(
+            FakeDB(),
+            user,
+            MaterialCategoryCreate(
+                material_type="image",
+                name="卧室案例",
+                parent_id=parent.id,
+                design_style="江南印象",
+                building_name="洋湖天序",
+            ),
+        )
+
+    assert missing_area.value.status_code == 422
+    assert missing_area.value.detail["error"]["code"] == "MATERIAL_AREA_REQUIRED"
+
+    created = await create_material_category(
+        FakeDB(),
+        user,
+        MaterialCategoryCreate(
+            material_type="image",
+            name="书房案例",
+            parent_id=parent.id,
+            design_style="江南印象",
+            building_name="洋湖天序",
+            area="120",
+        ),
+    )
+
+    assert created["category"]["building_name"] == "洋湖天序"
+    assert created["category"]["area"] == "120"
 
 
 def test_cover_template_item_exposes_linked_generation_status():

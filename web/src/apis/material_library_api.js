@@ -21,6 +21,7 @@ export const materialLibraryApi = {
     }),
   listGalleries: (industrySlug = '') =>
     apiGet(`/api/material-library/galleries${encodeQuery({ industry_slug: industrySlug })}`),
+  createShare: (itemIds) => apiPost('/api/material-library/shares', { item_ids: itemIds }),
   importImages: (files, category) => {
     const form = new FormData()
     Array.from(files).forEach((file) => form.append('files', file))

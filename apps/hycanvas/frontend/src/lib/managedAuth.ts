@@ -40,9 +40,6 @@ function contentSwarmOrigin(): string | null {
   }
   if (typeof document === "undefined" || !document.referrer) return null;
   return new URL(document.referrer).origin;
-  const configured = process.env.NEXT_PUBLIC_CONTENTSWARM_URL ?? "";
-  if (typeof window === "undefined") return configured.trim().replace(/\/$/, "") || null;
-  return resolveContentSwarmOrigin(configured, document.referrer, window.location.hostname);
 }
 
 export function contentSwarmHyCanvasURL(): string | null {

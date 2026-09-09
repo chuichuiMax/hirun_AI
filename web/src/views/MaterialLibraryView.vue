@@ -14,6 +14,7 @@ import {
   ScanText,
   Search,
   Settings2,
+  Share2,
   Trash2,
   Upload
 } from 'lucide-vue-next'
@@ -41,6 +42,7 @@ const total = ref(0)
 const page = ref(1)
 const queryInput = ref('')
 const query = ref('')
+const designStyleFilter = ref('')
 const categoryFilter = ref('')
 const sort = ref('newest')
 const uploadOpen = ref(false)
@@ -60,12 +62,23 @@ const categorySaving = ref(false)
 const categoryEditorMode = ref('create')
 const editingCategory = ref(null)
 const categoryParentId = ref('')
-const categoryForm = reactive({ name: '', description: '', industry_slug: '' })
+const categoryForm = reactive({
+  name: '',
+  description: '',
+  industry_slug: '',
+  design_style: '',
+  building_name: '',
+  area: ''
+})
 const categoryManagerOpen = ref(false)
 const deleteCategoryOpen = ref(false)
 const categoryDeleting = ref(false)
 const deletingCategory = ref(null)
 const deleteTargetCategory = ref('')
+const selectedShareItemIds = ref([])
+const shareOpen = ref(false)
+const shareChannel = ref('wechat')
+const shareCreating = ref(false)
 const previewUrls = new Map()
 const maxUploadBytes = 20 * 1024 * 1024
 const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp'])
@@ -74,6 +87,7 @@ const categoryMap = computed(() => Object.fromEntries(categories.value.map((item
 const currentGallery = computed(() => categoryMap.value[activeGallery.value])
 const parentGallery = computed(() => categoryMap.value[currentGallery.value?.parent_id] || null)
 const isTopLevelGallery = computed(() => Boolean(currentGallery.value && !currentGallery.value.parent_id))
+const isChildGallery = computed(() => Boolean(currentGallery.value?.parent_id))
 const orderedCategories = computed(() => {
   const roots = categories.value.filter((item) => !item.parent_id)
   return roots.flatMap((root) => [root, ...categories.value.filter((item) => item.parent_id === root.id)])
@@ -81,14 +95,32 @@ const orderedCategories = computed(() => {
 const uploadCategories = computed(() => orderedCategories.value)
 const uploadFileLimit = computed(() => materialType.value === 'image' ? 50 : 100)
 const deleteTargetOptions = computed(() => categories.value.filter((item) => item.id !== deletingCategory.value?.id))
+const decorationGalleryStyles = [
+  '复合写意', '写意木构', '江南印象', '东方古雅', '轻欧简美', '欧美香颂', '欧式田园',
+  '异域风情', '新装饰主义', '北欧之光', '意境东方', '雅致现代', '复古风潮', '艺术室界'
+]
+const isDecorationGalleryChild = computed(() =>
+  ['create', 'edit'].includes(categoryEditorMode.value) &&
+  materialType.value === 'image' &&
+  categoryParentId.value &&
+  categoryMap.value[categoryParentId.value]?.industry_slug === 'decoration'
+)
+const isDecorationGalleryPage = computed(() =>
+  materialType.value === 'image' &&
+  isTopLevelGallery.value &&
+  currentGallery.value?.industry_slug === 'decoration'
+)
 const filteredGalleries = computed(() => {
   const term = queryInput.value.trim().toLowerCase()
   const scoped = isGalleryRoot.value
     ? galleries.value.filter((item) => !item.parent_id)
     : (isTopLevelGallery.value ? galleries.value.filter((item) => item.parent_id === activeGallery.value) : [])
-  const industryScoped = isGalleryRoot.value && industryFilter.value
-    ? scoped.filter((item) => (item.industry_slug || 'uncategorized') === industryFilter.value)
+  const styleScoped = isDecorationGalleryPage.value && designStyleFilter.value
+    ? scoped.filter((item) => item.design_style === designStyleFilter.value)
     : scoped
+  const industryScoped = isGalleryRoot.value && industryFilter.value
+    ? styleScoped.filter((item) => (item.industry_slug || 'uncategorized') === industryFilter.value)
+    : styleScoped
   if (!term) return industryScoped
   return industryScoped.filter((item) => `${item.name}${item.description}`.toLowerCase().includes(term))
 })
@@ -138,7 +170,10 @@ function openCreateCategory(parentId = '') {
   Object.assign(categoryForm, {
     name: '',
     description: '',
-    industry_slug: categoryParentId.value ? (categoryMap.value[categoryParentId.value]?.industry_slug || '') : ''
+    industry_slug: categoryParentId.value ? (categoryMap.value[categoryParentId.value]?.industry_slug || '') : '',
+    design_style: '',
+    building_name: '',
+    area: ''
   })
   categoryEditorOpen.value = true
 }
@@ -150,7 +185,10 @@ function openEditCategory(category) {
   Object.assign(categoryForm, {
     name: category.name,
     description: category.description || '',
-    industry_slug: category.industry_slug || ''
+    industry_slug: category.industry_slug || '',
+    design_style: category.design_style || '',
+    building_name: category.building_name || '',
+    area: category.area || ''
   })
   categoryEditorOpen.value = true
 }
@@ -160,11 +198,27 @@ async function saveCategory() {
   if (materialType.value === 'image' && !categoryParentId.value && !categoryForm.industry_slug) {
     return message.warning('请选择图库所属行业')
   }
+  if (isDecorationGalleryChild.value && !categoryForm.design_style) {
+    return message.warning('请选择设计风格')
+  }
+  if (isDecorationGalleryChild.value && !categoryForm.building_name.trim()) {
+    return message.warning('请输入楼盘名称')
+  }
+  if (isDecorationGalleryChild.value && !categoryForm.area.trim()) {
+    return message.warning('请输入面积')
+  }
   const payload = {
     name: categoryForm.name.trim(),
     description: categoryForm.description.trim(),
     ...(materialType.value === 'image' && !categoryParentId.value
       ? { industry_slug: categoryForm.industry_slug }
+      : {}),
+    ...(isDecorationGalleryChild.value
+      ? {
+          design_style: categoryForm.design_style,
+          building_name: categoryForm.building_name.trim(),
+          area: categoryForm.area.trim()
+        }
       : {})
   }
   categorySaving.value = true
@@ -275,6 +329,8 @@ function search() {
 
 function enterGallery(gallery) {
   activeGallery.value = gallery.code
+  designStyleFilter.value = ''
+  selectedShareItemIds.value = []
   query.value = ''
   queryInput.value = ''
   page.value = 1
@@ -284,6 +340,8 @@ function enterGallery(gallery) {
 function leaveGallery() {
   const targetGallery = currentGallery.value?.parent_id || ''
   activeGallery.value = targetGallery
+  designStyleFilter.value = ''
+  selectedShareItemIds.value = []
   items.value = []
   query.value = ''
   queryInput.value = ''
@@ -499,10 +557,65 @@ function removeItem(item) {
     cancelText: '取消',
     async onOk() {
       await materialLibraryApi.deleteItem(item.id)
+      selectedShareItemIds.value = selectedShareItemIds.value.filter((itemId) => itemId !== item.id)
       message.success('素材已删除')
       await loadItems()
     }
   })
+}
+
+function selectedShareOrder(itemId) {
+  const index = selectedShareItemIds.value.indexOf(itemId)
+  return index === -1 ? null : index + 1
+}
+
+function toggleShareItem(itemId) {
+  const index = selectedShareItemIds.value.indexOf(itemId)
+  if (index === -1) selectedShareItemIds.value.push(itemId)
+  else selectedShareItemIds.value.splice(index, 1)
+}
+
+async function copyShareUrl(url) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(url)
+    return
+  }
+  const input = document.createElement('textarea')
+  input.value = url
+  input.setAttribute('readonly', '')
+  input.style.position = 'fixed'
+  input.style.opacity = '0'
+  document.body.append(input)
+  input.select()
+  const copied = document.execCommand('copy')
+  input.remove()
+  if (!copied) throw new Error('浏览器未授予复制权限')
+}
+
+async function createShare() {
+  if (!selectedShareItemIds.value.length) return message.warning('请先选择要分享的图片')
+  shareCreating.value = true
+  try {
+    const response = await materialLibraryApi.createShare(selectedShareItemIds.value)
+    const shareUrl = response.share.page_url || new URL(response.share.page_path, window.location.origin).href
+    const shareTitle = response.share.title || '素材图库分享'
+    const shareDescription = response.share.description || '打开查看素材图库实景案例'
+    if (navigator.share) {
+      await navigator.share({ title: shareTitle, text: shareDescription, url: shareUrl })
+      shareOpen.value = false
+      message.success('已打开系统分享面板，请选择微信或企业微信联系人')
+      return
+    }
+    await copyShareUrl(shareUrl)
+    shareOpen.value = false
+    const appUrl = shareChannel.value === 'wechat' ? 'weixin://' : 'wxwork://'
+    window.location.href = appUrl
+    message.success('分享卡片链接已复制，请在打开的应用中粘贴发送')
+  } catch (error) {
+    message.error(error.message || '创建分享失败，请稍后重试')
+  } finally {
+    shareCreating.value = false
+  }
 }
 
 function formatSize(bytes) {
@@ -512,6 +625,7 @@ function formatSize(bytes) {
 
 watch(materialType, async () => {
   activeGallery.value = ''
+  designStyleFilter.value = ''
   categoryFilter.value = ''
   query.value = ''
   queryInput.value = ''
@@ -535,6 +649,9 @@ onBeforeUnmount(releasePreviews)
         <template v-if="materialType === 'image'">
           <a-button v-if="isGalleryRoot || (isTopLevelGallery && !currentGallery?.is_system)" class="lucide-icon-btn" @click="openCreateCategory(isTopLevelGallery ? activeGallery : '')">
             <FolderPlus :size="15" />{{ isTopLevelGallery ? '新建二级图库' : '新建图库' }}
+          </a-button>
+          <a-button v-if="isChildGallery" class="lucide-icon-btn" :disabled="!selectedShareItemIds.length" @click="shareOpen = true">
+            <Share2 :size="15" />分享{{ selectedShareItemIds.length ? ` (${selectedShareItemIds.length})` : '' }}
           </a-button>
         </template>
         <a-button v-else class="lucide-icon-btn" @click="categoryManagerOpen = true">
@@ -582,6 +699,24 @@ onBeforeUnmount(releasePreviews)
       <a-spin :spinning="loading">
         <div v-for="group in galleryGroups" :key="group.slug" class="gallery-section">
           <h3>{{ group.name }}</h3>
+          <div v-if="isDecorationGalleryPage" class="design-style-filter" role="tablist" aria-label="设计风格筛选">
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="!designStyleFilter"
+              :class="{ active: !designStyleFilter }"
+              @click="designStyleFilter = ''"
+            >全部</button>
+            <button
+              v-for="style in decorationGalleryStyles"
+              :key="style"
+              type="button"
+              role="tab"
+              :aria-selected="designStyleFilter === style"
+              :class="{ active: designStyleFilter === style }"
+              @click="designStyleFilter = style"
+            >{{ style }}</button>
+          </div>
           <div class="gallery-grid">
           <article v-for="gallery in group.galleries" :key="gallery.id" class="gallery-card">
             <button type="button" class="gallery-open" @click="enterGallery(gallery)">
@@ -600,10 +735,19 @@ onBeforeUnmount(releasePreviews)
           </div>
         </div>
 
-        <div v-if="!isGalleryRoot && items.length" class="material-section">
-          <h3 v-if="isTopLevelGallery && filteredGalleries.length">当前图库图片</h3>
+        <div v-if="!isGalleryRoot && (items.length || isTopLevelGallery)" class="material-section current-gallery-section">
+          <h3 v-if="isTopLevelGallery">当前图库图片</h3>
           <div :class="materialType === 'image' ? 'image-grid' : 'poster-wall'">
-          <article v-for="item in items" :key="item.id" class="material-card" :class="{ poster: materialType === 'cover_template' }">
+          <article v-for="item in items" :key="item.id" class="material-card" :class="{ poster: materialType === 'cover_template', 'is-share-selected': selectedShareOrder(item.id) }">
+            <button
+              v-if="materialType === 'image' && isChildGallery"
+              type="button"
+              class="share-select"
+              :class="{ selected: selectedShareOrder(item.id) }"
+              :aria-label="selectedShareOrder(item.id) ? `取消选择第 ${selectedShareOrder(item.id)} 张图片` : `选择图片 ${item.name}`"
+              :title="selectedShareOrder(item.id) ? `已选第 ${selectedShareOrder(item.id)} 张，点击取消` : '选择图片'"
+              @click="toggleShareItem(item.id)"
+            >{{ selectedShareOrder(item.id) || '' }}</button>
             <button type="button" class="preview-button" @click="previewItem = item">
               <img :src="item.previewUrl" :alt="item.name" />
               <span v-if="materialType === 'cover_template'" class="poster-overlay"><b>{{ item.name }}</b><small>{{ item.category_name }}</small></span>
@@ -659,6 +803,17 @@ onBeforeUnmount(releasePreviews)
       <img v-if="previewItem" class="large-preview" :src="previewItem.previewUrl" :alt="previewItem.name" />
     </a-modal>
 
+    <a-modal v-model:open="shareOpen" title="分享图库图片" :confirm-loading="shareCreating" ok-text="复制链接并打开应用" @ok="createShare">
+      <div class="share-form">
+        <p>将分享 {{ selectedShareItemIds.length }} 张图片。链接长期有效，原图库图片删除后仍可查看本次分享的快照。</p>
+        <a-radio-group v-model:value="shareChannel">
+          <a-radio value="wechat">微信</a-radio>
+          <a-radio value="wecom">企业微信</a-radio>
+        </a-radio-group>
+        <small>系统自动生成卡片所需的封面、标题和楼盘信息；在公网 HTTPS 地址下，微信粘贴链接后会显示链接卡片。支持系统分享的设备会直接打开分享面板，否则会复制链接并尝试打开所选应用。</small>
+      </div>
+    </a-modal>
+
     <a-modal v-model:open="editOpen" title="编辑素材信息" ok-text="保存" @ok="saveEdit">
       <div class="upload-form">
         <label><span>名称</span><a-input v-model:value="editForm.name" maxlength="255" /></label>
@@ -675,6 +830,11 @@ onBeforeUnmount(releasePreviews)
           <a-select-option v-for="item in industries" :key="item.slug" :value="item.slug">{{ item.name }}</a-select-option>
         </a-select></label>
         <label><span>{{ categoryParentId ? '二级图库名称' : (materialType === 'image' ? '图库名称' : '分类名称') }} <b>*</b></span><a-input v-model:value="categoryForm.name" maxlength="80" :placeholder="categoryParentId ? '例如：客厅案例' : (materialType === 'image' ? '例如：春季新品素材' : '例如：客户案例')" /></label>
+        <label v-if="isDecorationGalleryChild"><span>楼盘名称 <b>*</b></span><a-input v-model:value="categoryForm.building_name" maxlength="80" placeholder="请输入楼盘名称" /></label>
+        <label v-if="isDecorationGalleryChild"><span>面积㎡ <b>*</b></span><a-input v-model:value="categoryForm.area" maxlength="32" placeholder="请输入面积" /></label>
+        <label v-if="isDecorationGalleryChild"><span>设计风格 <b>*</b></span><a-select v-model:value="categoryForm.design_style" placeholder="请选择设计风格">
+          <a-select-option v-for="style in decorationGalleryStyles" :key="style" :value="style">{{ style }}</a-select-option>
+        </a-select></label>
         <label><span>说明</span><a-textarea v-model:value="categoryForm.description" :rows="3" maxlength="255" show-count :placeholder="materialType === 'image' ? '说明图库收纳的图片范围，方便团队快速判断' : '说明这个分类适用的封面场景'" /></label>
       </div>
     </a-modal>
@@ -726,6 +886,11 @@ onBeforeUnmount(releasePreviews)
 .category-filter { width: 170px; }.sort-filter { width: 130px; }
 .gallery-section, .material-section { margin-bottom: 22px; }
 .gallery-section h3, .material-section h3 { margin: 0 0 12px; color: var(--color-text); font-size: 15px; }
+.design-style-filter { display: flex; gap: 24px; margin: -2px 0 16px; overflow-x: auto; border-bottom: 1px solid var(--gray-100); white-space: nowrap; }
+.design-style-filter button { position: relative; padding: 0 0 10px; border: 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; font-size: 14px; }
+.design-style-filter button::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: transparent; content: ''; }
+.design-style-filter button:hover, .design-style-filter button.active { color: var(--color-primary); }
+.design-style-filter button.active { font-weight: 600; }.design-style-filter button.active::after { background: var(--color-primary); }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
 .gallery-card { position: relative; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 14px; background: var(--gray-0); transition: transform .18s, box-shadow .18s, border-color .18s; }
 .gallery-card:hover { transform: translateY(-2px); border-color: var(--color-primary); box-shadow: 0 8px 24px rgb(20 35 70 / 10%); }
@@ -742,11 +907,14 @@ onBeforeUnmount(releasePreviews)
 .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
 .poster-wall { columns: 260px; column-gap: 18px; }
 .material-card { position: relative; overflow: hidden; border: 1px solid var(--gray-150); border-radius: 9px; background: var(--gray-0); }
+.material-card.is-share-selected { border-color: var(--main-color); }
 .material-card.poster { break-inside: avoid; margin: 0 0 18px; }
 .material-card:hover { border-color: var(--gray-300); box-shadow: 0 6px 20px rgb(20 35 70 / 9%); }
 .preview-button { position: relative; display: block; width: 100%; height: 190px; overflow: hidden; padding: 0; border: 0; background: var(--gray-25); cursor: zoom-in; }
 .preview-button img { width: 100%; height: 100%; object-fit: cover; transition: transform .2s; }
 .material-card:hover .preview-button img { transform: scale(1.025); }
+.share-select { position: absolute; z-index: 3; top: 10px; right: 10px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--gray-300); border-radius: 999px; background: rgb(255 255 255 / 92%); color: var(--color-text-secondary); cursor: pointer; }
+.share-select:hover { border-color: var(--main-color); color: var(--main-color); }.share-select.selected { border-color: var(--main-color); background: var(--main-color); color: var(--gray-0); font-weight: 600; }
 .poster .preview-button { height: auto; min-height: 320px; aspect-ratio: 3 / 4; }
 .poster .preview-button img { object-fit: cover; }
 .poster-overlay { position: absolute; inset: auto 0 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 54px 16px 16px; text-align: left; background: linear-gradient(transparent, rgb(0 0 0 / 82%)); color: white; }
@@ -765,6 +933,7 @@ onBeforeUnmount(releasePreviews)
 .upload-drop:hover, .upload-drop.dragging { border-color: var(--main-500); background: var(--main-20); color: var(--main-700); }
 .upload-drop.dragging { box-shadow: 0 0 0 3px var(--main-100); }
 .upload-drop small { color: var(--color-text-tertiary); }
+.share-form { display: flex; flex-direction: column; gap: 14px; }.share-form p, .share-form small { margin: 0; color: var(--color-text-secondary); }.share-form small { font-size: 12px; }
 .large-preview { display: block; max-width: 100%; max-height: 72vh; margin: 0 auto; object-fit: contain; }
 .category-manager-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }.category-manager-head p { margin: 0; color: var(--color-text-secondary); }
 .category-list { display: flex; flex-direction: column; max-height: 520px; overflow: auto; border: 1px solid var(--gray-150); border-radius: 10px; }
