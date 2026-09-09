@@ -742,7 +742,15 @@ async def create_distribution(
     cover_snapshot = {"type": "generated", "template": "title-card-v1"}
     if artifact.cover_asset_id:
         cover_asset = await ContentCoverRepository(db).get_asset_for_user(artifact.cover_asset_id, owner_uid)
-        if cover_asset is None or cover_asset.role != "output":
+        # HyCanvas 创建/同步设计稿会将导出的封面保存为 source，并在内容快照中绑定。
+        design_snapshot = artifact.hycanvas_design_snapshot or {}
+        is_bound_hycanvas_cover = (
+            cover_asset is not None
+            and cover_asset.role == "source"
+            and bool(design_snapshot.get("design_id"))
+            and design_snapshot.get("cover_asset_id") == cover_asset.id
+        )
+        if cover_asset is None or (cover_asset.role != "output" and not is_bound_hycanvas_cover):
             raise _error(409, "CONTENT_COVER_MISSING", "当前封面不存在，请重新选择封面")
         cover_snapshot = {
             "type": "asset",
