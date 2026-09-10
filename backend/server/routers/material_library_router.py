@@ -3,8 +3,8 @@ from __future__ import annotations
 from urllib.parse import quote
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.utils.auth_middleware import get_db, get_required_user
@@ -13,17 +13,23 @@ from yuxi.services.material_library_service import (
     MaterialCategoryDelete,
     MaterialCategoryUpdate,
     MaterialItemUpdate,
+    MaterialShareCreate,
+    create_material_share,
     create_material_category,
     delete_material_item,
     delete_material_category,
     get_material_file,
     get_material_thumbnail,
+    get_public_material_share,
+    get_public_material_share_image,
     get_material_categories,
     import_material_images,
     list_image_galleries,
     list_material_items,
     update_material_item,
     update_material_category,
+    render_public_material_share_page,
+    serialize_public_material_share,
 )
 from yuxi.storage.postgres.models_business import User
 
@@ -92,6 +98,52 @@ async def image_galleries(
     db: AsyncSession = Depends(get_db),
 ):
     return await list_image_galleries(db, current_user, industry_slug=industry_slug)
+
+
+@material_library.post("/shares", status_code=status.HTTP_201_CREATED)
+async def create_share(
+    payload: MaterialShareCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_material_share(db, current_user, payload)
+
+
+@material_library.get("/shares/{token}/page", response_class=HTMLResponse)
+async def public_share_page(
+    token: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    share, items = await get_public_material_share(db, token)
+    return HTMLResponse(render_public_material_share_page(share, items, str(request.base_url)))
+
+
+@material_library.get("/shares/{token}")
+async def public_share_data(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    share, items = await get_public_material_share(db, token)
+    return serialize_public_material_share(share, items)
+
+
+@material_library.get("/shares/{token}/images/{display_order}")
+async def public_share_image(
+    token: str,
+    display_order: int,
+    db: AsyncSession = Depends(get_db),
+):
+    data, content_type, file_name = await get_public_material_share_image(db, token, display_order)
+    encoded_name = quote(file_name, safe="")
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}",
+        },
+    )
 
 
 @material_library.get("/items")

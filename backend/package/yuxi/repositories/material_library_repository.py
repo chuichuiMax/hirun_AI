@@ -12,6 +12,8 @@ from yuxi.storage.postgres.models_content import (
     ContentCoverPosterTemplate,
     ContentMaterialCategory,
     ContentMaterialLibraryItem,
+    ContentMaterialShare,
+    ContentMaterialShareItem,
     ContentTask,
 )
 
@@ -164,6 +166,63 @@ class MaterialLibraryRepository:
                 )
             ).scalars()
         )
+
+    async def list_image_items_with_assets_and_categories(
+        self, owner_uid: str, item_ids: list[str]
+    ) -> list[tuple[ContentMaterialLibraryItem, ContentCoverAsset, ContentMaterialCategory]]:
+        if not item_ids:
+            return []
+        join = ContentMaterialLibraryItem.__table__.join(
+            ContentCoverAsset, ContentCoverAsset.id == ContentMaterialLibraryItem.asset_id
+        ).join(
+            ContentMaterialCategory,
+            (ContentMaterialCategory.owner_uid == ContentMaterialLibraryItem.owner_uid)
+            & (ContentMaterialCategory.material_type == ContentMaterialLibraryItem.material_type)
+            & (ContentMaterialCategory.id == ContentMaterialLibraryItem.category),
+        )
+        return list(
+            (
+                await self.db.execute(
+                    select(ContentMaterialLibraryItem, ContentCoverAsset, ContentMaterialCategory)
+                    .select_from(join)
+                    .where(
+                        ContentMaterialLibraryItem.owner_uid == owner_uid,
+                        ContentMaterialLibraryItem.id.in_(item_ids),
+                        ContentMaterialLibraryItem.material_type == "image",
+                        ContentMaterialLibraryItem.status == "enabled",
+                        ContentMaterialLibraryItem.deleted_at.is_(None),
+                        ContentCoverAsset.deleted_at.is_(None),
+                        ContentMaterialCategory.deleted_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+
+    async def create_share(
+        self, share: ContentMaterialShare, items: list[ContentMaterialShareItem]
+    ) -> None:
+        self.db.add(share)
+        self.db.add_all(items)
+        await self.db.flush()
+
+    async def get_share_with_items(
+        self, token: str
+    ) -> tuple[ContentMaterialShare | None, list[ContentMaterialShareItem]]:
+        share = (
+            await self.db.execute(select(ContentMaterialShare).where(ContentMaterialShare.token == token))
+        ).scalar_one_or_none()
+        if share is None:
+            return None, []
+        items = list(
+            (
+                await self.db.execute(
+                    select(ContentMaterialShareItem)
+                    .where(ContentMaterialShareItem.share_id == share.id)
+                    .order_by(ContentMaterialShareItem.display_order)
+                )
+            ).scalars()
+        )
+        return share, items
 
     async def item_is_selected_by_task(
         self, item_id: str, owner_uid: str, *, exclude_task_id: str | None = None

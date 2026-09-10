@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +53,7 @@ from yuxi.services.mp_service import (
     update_me,
     upload_cover,
 )
+from yuxi.services.material_library_service import MaterialShareCreate, create_material_share
 
 mp = APIRouter(prefix="/mp", tags=["mp"])
 
@@ -179,6 +180,15 @@ async def mp_gallery_item_file(
         media_type=content_type,
         headers={"Content-Disposition": f'inline; filename="{file_name}"'},
     )
+
+
+@mp.post("/share/cases", status_code=status.HTTP_201_CREATED)
+async def mp_create_material_share(
+    payload: MaterialShareCreate,
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_material_share(db, ctx.user, payload)
 
 
 @mp.post("/content/uploads/cover")
