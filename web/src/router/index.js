@@ -28,6 +28,12 @@ const router = createRouter({
       meta: { requiresAuth: false }
     },
     {
+      path: '/share/case/:shareId',
+      name: 'CaseShare',
+      component: () => import('../views/CaseShareView.vue'),
+      meta: { requiresAuth: false }
+    },
+    {
       path: '/auth/oidc/callback', // oidc登录回调页面
       name: 'OIDCCallback',
       component: () => import('@/views/OIDCCallbackView.vue'),

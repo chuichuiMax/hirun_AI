@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import hashlib
 import io
 import json
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Any, Literal
@@ -29,6 +31,8 @@ from yuxi.storage.postgres.models_content import (
     ContentCoverPosterTemplate,
     ContentMaterialCategory,
     ContentMaterialLibraryItem,
+    ContentMaterialShare,
+    ContentMaterialShareItem,
 )
 from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.upload_utils import read_upload_with_limit
@@ -40,6 +44,25 @@ MAX_MATERIAL_BYTES = 20 * 1024 * 1024
 MAX_MATERIAL_DIMENSION = 8192
 MAX_MATERIAL_PIXELS = 40_000_000
 MATERIAL_THUMBNAIL_SIZE = (480, 480)
+DECORATION_GALLERY_INDUSTRY_SLUG = "decoration"
+DECORATION_GALLERY_DESIGN_STYLES = frozenset(
+    {
+        "复合写意",
+        "写意木构",
+        "江南印象",
+        "东方古雅",
+        "轻欧简美",
+        "欧美香颂",
+        "欧式田园",
+        "异域风情",
+        "新装饰主义",
+        "北欧之光",
+        "意境东方",
+        "雅致现代",
+        "复古风潮",
+        "艺术室界",
+    }
+)
 
 
 class MaterialItemUpdate(BaseModel):
@@ -55,6 +78,20 @@ class MaterialItemUpdate(BaseModel):
         return value
 
 
+class MaterialShareCreate(BaseModel):
+    item_ids: list[str] = Field(min_length=1, max_length=1000)
+
+    @field_validator("item_ids")
+    @classmethod
+    def validate_item_ids(cls, value: list[str]) -> list[str]:
+        normalized = [item_id.strip() for item_id in value]
+        if any(not item_id for item_id in normalized):
+            raise ValueError("图片标识不能为空")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("同一张图片只能选择一次")
+        return normalized
+
+
 class MaterialCategoryCreate(BaseModel):
     visibility: Literal["private", "enterprise"] = "private"
     material_type: Literal["image", "cover_template"]
@@ -62,6 +99,9 @@ class MaterialCategoryCreate(BaseModel):
     description: str = Field(default="", max_length=255)
     parent_id: str | None = Field(default=None, max_length=64)
     industry_slug: str | None = Field(default=None, max_length=80)
+    design_style: str | None = Field(default=None, max_length=32)
+    building_name: str | None = Field(default=None, max_length=80)
+    area: str | None = Field(default=None, max_length=32)
 
     @field_validator("name")
     @classmethod
@@ -84,6 +124,9 @@ class MaterialCategoryUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     sort_order: int | None = Field(default=None, ge=0, le=100000)
     industry_slug: str | None = Field(default=None, max_length=80)
+    design_style: str | None = Field(default=None, max_length=32)
+    building_name: str | None = Field(default=None, max_length=80)
+    area: str | None = Field(default=None, max_length=32)
 
     @field_validator("name")
     @classmethod
@@ -125,6 +168,30 @@ def _can_manage_item(user: User, item: ContentMaterialLibraryItem, category: Con
 
 def _audit(db: AsyncSession, user: User, operation: str, **details):
     db.add(OperationLog(user_id=user.id, operation=operation, details=json.dumps(details, ensure_ascii=False)))
+
+
+def _share_page_path(token: str) -> str:
+    return f"/api/material-library/shares/{token}/page"
+
+
+def _share_image_path(token: str, display_order: int) -> str:
+    return f"/api/material-library/shares/{token}/images/{display_order}"
+
+
+def _share_case_path(token: str) -> str:
+    return f"/share/case/{token}"
+
+
+def _share_public_url(path: str) -> str:
+    base_url = os.getenv("MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    return f"{base_url}{path}" if base_url else path
+
+
+def _share_description(building_name: str | None, area: str | None, design_style: str | None) -> str:
+    if not building_name or not area or not design_style:
+        return ""
+    area_text = area if area.endswith("㎡") else f"{area}㎡"
+    return f"{building_name}｜{area_text}｜{design_style}"
 
 
 def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
@@ -425,6 +492,225 @@ async def import_material_images(
     return {"items": results, "summary": {"total": len(results), "created": len(results)}}
 
 
+async def create_material_share(
+    db: AsyncSession, user: User, payload: MaterialShareCreate
+) -> dict[str, Any]:
+    owner_uid = _owner_uid(user)
+    repo = MaterialLibraryRepository(db)
+    rows = await repo.list_image_items_with_assets_and_categories(owner_uid, payload.item_ids)
+    if len(rows) != len(payload.item_ids):
+        raise _error(404, "MATERIAL_NOT_FOUND", "所选图片不存在或无权访问")
+
+    selected = {item.id: (item, asset, category) for item, asset, category in rows}
+    ordered_rows = [selected[item_id] for item_id in payload.item_ids]
+    category = ordered_rows[0][2]
+    if category.parent_id is None:
+        raise _error(422, "MATERIAL_SHARE_CHILD_GALLERY_REQUIRED", "只能分享二级图库中的图片")
+    if any(item_category.id != category.id for _, _, item_category in ordered_rows):
+        raise _error(422, "MATERIAL_SHARE_GALLERY_MISMATCH", "请选择同一个二级图库中的图片")
+
+    share = ContentMaterialShare(
+        id=f"mls_{uuid.uuid4().hex}",
+        token=uuid.uuid4().hex,
+        owner_uid=owner_uid,
+        category_id=category.id,
+        title=category.name,
+        building_name=category.building_name,
+        area=category.area,
+        design_style=category.design_style,
+    )
+    snapshots: list[ContentMaterialShareItem] = []
+    uploaded_objects: list[tuple[str, str]] = []
+    storage = get_minio_client()
+    try:
+        for display_order, (_, asset, _) in enumerate(ordered_rows, start=1):
+            data = await storage.adownload_file(asset.bucket_name, asset.object_name)
+            object_name = f"material-library-shares/{owner_uid}/{share.id}/{display_order}.png"
+            uploaded = await storage.aupload_file(
+                bucket_name=MATERIAL_LIBRARY_BUCKET,
+                object_name=object_name,
+                data=data,
+                content_type=asset.content_type,
+            )
+            uploaded_objects.append((uploaded.bucket_name, uploaded.object_name))
+            snapshots.append(
+                ContentMaterialShareItem(
+                    share_id=share.id,
+                    display_order=display_order,
+                    original_file_name=asset.original_file_name,
+                    content_type=asset.content_type,
+                    file_size=asset.file_size,
+                    image_width=asset.image_width,
+                    image_height=asset.image_height,
+                    bucket_name=uploaded.bucket_name,
+                    object_name=uploaded.object_name,
+                )
+            )
+        await repo.create_share(share, snapshots)
+        await db.commit()
+    except StorageError as exc:
+        await db.rollback()
+        for bucket_name, object_name in uploaded_objects:
+            await storage.adelete_file(bucket_name, object_name)
+        raise _error(500, "MATERIAL_SHARE_STORAGE_FAILED", "分享图片快照保存失败") from exc
+    except Exception:
+        await db.rollback()
+        for bucket_name, object_name in uploaded_objects:
+            await storage.adelete_file(bucket_name, object_name)
+        raise
+
+    return {
+        "share": {
+            "id": share.token,
+            "url": _share_public_url(_share_case_path(share.token)),
+            "cover_url": _share_image_path(share.token, 1) if snapshots else None,
+            "token": share.token,
+            "title": share.title,
+            "description": _share_description(share.building_name, share.area, share.design_style),
+            "image_count": len(snapshots),
+            "page_path": _share_page_path(share.token),
+            "image_path": _share_image_path(share.token, 1) if snapshots else None,
+            "page_url": _share_public_url(_share_page_path(share.token)),
+            "image_url": _share_public_url(_share_image_path(share.token, 1)) if snapshots else None,
+        }
+    }
+
+
+async def get_public_material_share(
+    db: AsyncSession, token: str
+) -> tuple[ContentMaterialShare, list[ContentMaterialShareItem]]:
+    share, items = await MaterialLibraryRepository(db).get_share_with_items(token)
+    if share is None:
+        raise _error(404, "MATERIAL_SHARE_NOT_FOUND", "分享不存在")
+    return share, items
+
+
+def serialize_public_material_share(
+    share: ContentMaterialShare, items: list[ContentMaterialShareItem]
+) -> dict[str, Any]:
+    ordered_items = sorted(items, key=lambda item: item.display_order)
+    return {
+        "share": {
+            "id": share.token,
+            "gallery_name": share.title,
+            "building_name": share.building_name,
+            "area": share.area,
+            "design_style": share.design_style,
+            "cover_url": _share_image_path(share.token, 1) if ordered_items else None,
+            "images": [
+                {
+                    "order": item.display_order,
+                    "file_name": item.original_file_name,
+                    "url": _share_image_path(share.token, item.display_order),
+                }
+                for item in ordered_items
+            ],
+        }
+    }
+
+
+def render_public_material_share_page(
+    share: ContentMaterialShare,
+    items: list[ContentMaterialShareItem],
+    request_base_url: str,
+) -> str:
+    base_url = (
+        os.getenv("MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL", "").strip().rstrip("/")
+        or request_base_url.rstrip("/")
+    )
+    title = html.escape(share.title)
+    first_image = f"{base_url}{_share_image_path(share.token, 1)}" if items else ""
+    building_name = html.escape(share.building_name or "")
+    area = html.escape(share.area or "")
+    design_style = html.escape(share.design_style or "")
+    description = html.escape(_share_description(share.building_name, share.area, share.design_style))
+    details = ""
+    if building_name and area and design_style:
+        details = (
+            '<section class="project-info-card">'
+            f'<span>楼盘：{building_name}</span>'
+            f'<span>面积：{area}㎡</span>'
+            f'<span>风格：{design_style}</span>'
+            "</section>"
+        )
+    hero = (
+        f'<section class="share-hero"><img src="{html.escape(_share_image_path(share.token, 1), quote=True)}" '
+        f'alt="{title} 首图"></section>'
+        if items
+        else ""
+    )
+    images = "".join(
+        (
+            f'<img src="{html.escape(_share_image_path(share.token, item.display_order), quote=True)}" '
+            f'alt="{title} 第 {item.display_order} 张" loading="lazy">'
+        )
+        for item in items
+    )
+    return "\n".join(
+        [
+            "<!doctype html>",
+            '<html lang="zh-CN"><head><meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            f"<title>{title}</title>",
+            f'<meta property="og:title" content="{title}">',
+            f'<meta property="og:description" content="{description}">',
+            f'<meta property="og:image" content="{html.escape(first_image, quote=True)}">',
+            f'<meta name="twitter:title" content="{title}">',
+            f'<meta name="twitter:description" content="{description}">',
+            f'<meta name="twitter:image" content="{html.escape(first_image, quote=True)}">',
+            '<meta name="twitter:card" content="summary_large_image">',
+            "<style>",
+            'body{margin:0;background:#fff;color:#151616;font:16px/1.6 '
+            '-apple-system,BlinkMacSystemFont,"Noto Sans SC","Segoe UI",sans-serif}',
+            (
+                "header{display:flex;align-items:center;justify-content:center;"
+                "min-height:74px;padding:0 24px;background:#fff}"
+            ),
+            "h1{margin:0;font-size:21px;line-height:1.4;text-align:center}",
+            "main{max-width:720px;margin:auto;padding:0 0 36px}",
+            ".share-hero{height:min(53vw,382px);overflow:hidden;background:#eef0f0}",
+            ".share-hero img{display:block;width:100%;height:100%;margin:0;object-fit:cover}",
+            (
+                ".project-info-card{position:relative;z-index:1;display:grid;"
+                "grid-template-columns:1fr 1fr;gap:16px 24px;margin:-76px 28px 34px;"
+                "padding:38px 30px 28px;border-radius:16px;background:#fff;"
+                "box-shadow:0 5px 12px rgb(0 0 0 / 22%);font-size:18px;line-height:1.55}"
+            ),
+            ".project-info-card span:last-child{grid-column:1 / -1}",
+            ".case-section{padding:0 10px}",
+            "h2{display:flex;align-items:center;gap:16px;margin:0 18px 20px;font-size:22px;line-height:1.4}",
+            "h2::before{width:16px;height:35px;background:#ff1717;content:''}",
+            ".case-images img{display:block;width:100%;margin:0 0 24px;background:#fff}",
+            (
+                "@media (max-width:480px){header{min-height:62px;padding:0 16px}"
+                "h1{font-size:18px}.project-info-card{margin:-54px 18px 28px;"
+                "padding:28px 24px 22px;font-size:17px}.case-section{padding:0 10px}"
+                "h2{margin:0 18px 18px;font-size:20px}}"
+            ),
+            "</style></head><body>",
+            (
+                f"<header><h1>{title}</h1></header><main>{hero}{details}"
+                f'<section class="case-section"><h2>实景案例</h2>'
+                f'<div class="case-images">{images}</div></section></main></body></html>'
+            ),
+        ]
+    )
+
+
+async def get_public_material_share_image(
+    db: AsyncSession, token: str, display_order: int
+) -> tuple[bytes, str, str]:
+    _, items = await get_public_material_share(db, token)
+    snapshot = next((item for item in items if item.display_order == display_order), None)
+    if snapshot is None:
+        raise _error(404, "MATERIAL_SHARE_IMAGE_NOT_FOUND", "分享图片不存在")
+    try:
+        data = await get_minio_client().adownload_file(snapshot.bucket_name, snapshot.object_name)
+    except StorageError as exc:
+        raise _error(500, "MATERIAL_SHARE_STORAGE_FAILED", "分享图片读取失败") from exc
+    return data, snapshot.content_type, snapshot.original_file_name
+
+
 async def list_material_items(
     db: AsyncSession,
     user: User,
@@ -611,6 +897,9 @@ async def create_material_category(
     visibility = payload.visibility
     parent = None
     industry_slug = None
+    design_style = None
+    building_name = None
+    area = None
     if payload.parent_id:
         if payload.material_type != "image":
             raise _error(422, "MATERIAL_CATEGORY_DEPTH_INVALID", "只有素材图片图库支持二级图库")
@@ -625,7 +914,31 @@ async def create_material_category(
             raise _error(403, "MATERIAL_CATEGORY_FORBIDDEN", "只有管理员可管理企业共享图库")
         visibility = parent.visibility
         industry_slug = parent.industry_slug
+        design_style = (payload.design_style or "").strip()
+        building_name = (payload.building_name or "").strip()
+        area = (payload.area or "").strip()
+        if parent.industry_slug == DECORATION_GALLERY_INDUSTRY_SLUG:
+            if not design_style:
+                raise _error(422, "MATERIAL_DESIGN_STYLE_REQUIRED", "请选择设计风格")
+            if design_style not in DECORATION_GALLERY_DESIGN_STYLES:
+                raise _error(422, "MATERIAL_DESIGN_STYLE_INVALID", "设计风格不在可选范围内")
+            if not building_name:
+                raise _error(422, "MATERIAL_BUILDING_NAME_REQUIRED", "请输入楼盘名称")
+            if not area:
+                raise _error(422, "MATERIAL_AREA_REQUIRED", "请输入面积")
+        elif design_style or building_name or area:
+            raise _error(
+                422,
+                "MATERIAL_GALLERY_DETAILS_PARENT_INVALID",
+                "设计风格、楼盘名称和面积仅适用于装修与家居二级图库",
+            )
     elif payload.material_type == "image":
+        if payload.design_style or payload.building_name or payload.area:
+            raise _error(
+                422,
+                "MATERIAL_GALLERY_DETAILS_PARENT_INVALID",
+                "设计风格、楼盘名称和面积仅适用于装修与家居二级图库",
+            )
         industry_slug = await _validate_industry_slug(db, payload.industry_slug) or "uncategorized"
     if visibility == "enterprise" and (payload.material_type != "image" or not _is_admin(user)):
         raise _error(403, "MATERIAL_CATEGORY_FORBIDDEN", "只有管理员可创建企业共享图片图库")
@@ -638,6 +951,9 @@ async def create_material_category(
             material_type=payload.material_type,
             parent_id=parent.id if parent else None,
             industry_slug=industry_slug,
+            design_style=design_style or None,
+            building_name=building_name or None,
+            area=area or None,
             name=payload.name.strip(),
             description=payload.description.strip(),
             sort_order=(max(item.sort_order for item in categories) + 10),
@@ -710,7 +1026,42 @@ async def update_material_category(
         if material_type != "image" or category.parent_id:
             raise _error(422, "MATERIAL_INDUSTRY_INHERITED", "只有一级图片图库可以设置行业")
         category.industry_slug = await _validate_industry_slug(db, changes["industry_slug"]) or "uncategorized"
-        await repo.update_child_category_industry(_owner_uid(user), material_type, category.id, category.industry_slug)
+        await repo.update_child_category_industry(
+            _owner_uid(user), material_type, category.id, category.industry_slug
+        )
+    detail_fields = ("design_style", "building_name", "area")
+    if any(field in changes for field in detail_fields):
+        if material_type != "image" or not category.parent_id:
+            if any(changes.get(field) for field in detail_fields):
+                raise _error(
+                    422,
+                    "MATERIAL_GALLERY_DETAILS_PARENT_INVALID",
+                    "设计风格、楼盘名称和面积仅适用于装修与家居二级图库",
+                )
+        else:
+            parent = await repo.get_category(_owner_uid(user), material_type, category.parent_id)
+            if parent is None or parent.industry_slug != DECORATION_GALLERY_INDUSTRY_SLUG:
+                if any(changes.get(field) for field in detail_fields):
+                    raise _error(
+                        422,
+                        "MATERIAL_GALLERY_DETAILS_PARENT_INVALID",
+                        "设计风格、楼盘名称和面积仅适用于装修与家居二级图库",
+                    )
+            else:
+                design_style = str(changes.get("design_style", category.design_style or "") or "").strip()
+                building_name = str(changes.get("building_name", category.building_name or "") or "").strip()
+                area = str(changes.get("area", category.area or "") or "").strip()
+                if not design_style:
+                    raise _error(422, "MATERIAL_DESIGN_STYLE_REQUIRED", "请选择设计风格")
+                if design_style not in DECORATION_GALLERY_DESIGN_STYLES:
+                    raise _error(422, "MATERIAL_DESIGN_STYLE_INVALID", "设计风格不在可选范围内")
+                if not building_name:
+                    raise _error(422, "MATERIAL_BUILDING_NAME_REQUIRED", "请输入楼盘名称")
+                if not area:
+                    raise _error(422, "MATERIAL_AREA_REQUIRED", "请输入面积")
+                category.design_style = design_style
+                category.building_name = building_name
+                category.area = area
     category.updated_at = utc_now_naive()
     _audit(db, user, "material.gallery.update", category_id=category.id, changes=changes)
     try:
