@@ -493,6 +493,39 @@ def _extract_interrupt(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+async def _backfill_cover_selection_assets(
+    db: AsyncSession,
+    *,
+    task_id: str,
+    owner_uid: str,
+    interrupt: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not interrupt or interrupt.get("interrupt_type") != "cover_selection":
+        return interrupt
+    existing = [str(item) for item in (interrupt.get("asset_ids") or []) if item]
+    if existing:
+        return interrupt
+    from yuxi.repositories.content_cover_repository import ContentCoverRepository
+
+    jobs, _ = await ContentCoverRepository(db).list_jobs(
+        owner_uid,
+        content_task_id=task_id,
+        page=1,
+        page_size=10,
+    )
+    for job in jobs:
+        if job.status != "succeeded":
+            continue
+        asset_ids = [str(item) for item in ((job.result_json or {}).get("asset_ids") or []) if item]
+        if asset_ids:
+            return {
+                **interrupt,
+                "asset_ids": asset_ids,
+                "cover_job_id": interrupt.get("cover_job_id") or job.id,
+            }
+    return interrupt
+
+
 def _compact_run(run_result: dict[str, Any], interrupt: dict[str, Any] | None) -> dict[str, Any]:
     run = run_result["run"]
     return {
@@ -1182,7 +1215,13 @@ async def start_run(db: AsyncSession, ctx: MpContext, task_id: str, payload: MpR
 async def get_run(db: AsyncSession, ctx: MpContext, run_id: str) -> dict[str, Any]:
     result = await get_content_run(db, ctx.user, run_id)
     events = await list_run_stream_events(run_id, limit=500)
-    return _compact_run(result, _extract_interrupt(events))
+    interrupt = await _backfill_cover_selection_assets(
+        db,
+        task_id=str(result["run"]["thread_id"]),
+        owner_uid=str(ctx.user.uid),
+        interrupt=_extract_interrupt(events),
+    )
+    return _compact_run(result, interrupt)
 
 
 async def stream_run_events(run_id: str, after_seq: str, ctx: MpContext):

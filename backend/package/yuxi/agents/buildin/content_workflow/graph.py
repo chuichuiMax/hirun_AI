@@ -771,23 +771,46 @@ class ContentWorkflowAgent(BaseAgent):
                     "state_version": state_version + 1,
                     "resume_parent_run_id": None,
                 }
-            review = state.get("visual_review") or {}
-            passed_ids = {
-                item["asset_id"] for item in review.get("assets") or [] if item.get("status") in {"passed", "warning"}
-            }
-            answer = require_resume({"asset_ids": sorted(passed_ids)})
             cover_job = state.get("cover_job") or {}
-            asset_ids = list(cover_job.get("asset_ids") or [])
-            if cover_job.get("status") != "succeeded" or not asset_ids:
+            cover_asset_ids = [str(item) for item in (cover_job.get("asset_ids") or []) if item]
+            if not cover_asset_ids:
+                cover_asset_ids = [
+                    str(item.get("id") or item.get("asset_id"))
+                    for item in (state.get("cover_assets") or [])
+                    if isinstance(item, dict) and (item.get("id") or item.get("asset_id"))
+                ]
+            if cover_job.get("status") != "succeeded" or not cover_asset_ids:
                 raise ValueError("封面生成成功后才能选择保存")
-            answer = require_resume({"asset_ids": asset_ids, "cover_job_id": cover_job["cover_job_id"]})
+            review = state.get("visual_review") or {}
+            reviewed = [
+                item
+                for item in (review.get("assets") or [])
+                if isinstance(item, dict) and item.get("asset_id") in cover_asset_ids
+            ]
+            if reviewed:
+                selectable = [
+                    str(item["asset_id"])
+                    for item in reviewed
+                    if item.get("status") in {"passed", "warning"}
+                ]
+                if not selectable:
+                    raise ValueError("视觉审核未通过任何封面，请重试封面生成")
+            else:
+                # 审核结果未逐条回填资产时，允许选择本次 CoverJob 产出，避免空候选卡死。
+                selectable = cover_asset_ids
+            answer = require_resume(
+                {
+                    "asset_ids": selectable,
+                    "cover_job_id": cover_job.get("cover_job_id"),
+                }
+            )
             asset_id = answer.get("asset_id")
-            if asset_id not in asset_ids:
+            if asset_id not in selectable:
                 raise ValueError("只能选择本次生成的封面资产")
             return {
                 "selected_cover": {
                     "asset_id": asset_id,
-                    "cover_job_id": cover_job["cover_job_id"],
+                    "cover_job_id": cover_job.get("cover_job_id"),
                 },
                 "state_version": state_version + 1,
                 "resume_parent_run_id": None,

@@ -110,9 +110,9 @@ const coverCandidates = computed(() => {
   if (interrupt?.interrupt_type !== 'cover_selection') return []
   // 历史中断的可选 ID 受旧审核过滤，使用当前任务实际生成成功的资产恢复选择。
   const job = store.runAudit?.external_wait
-  const assetIds = job?.status === 'succeeded'
-    ? job.result?.asset_ids || []
-    : interrupt.asset_ids || []
+  const fromJob = job?.status === 'succeeded' ? job.result?.asset_ids || [] : []
+  const fromInterrupt = interrupt.asset_ids || []
+  const assetIds = [...new Set([...fromJob, ...fromInterrupt].filter(Boolean))]
   return assetIds.map(assetId => ({ assetId }))
 })
 const coverSelectionAllowed = computed(() =>

@@ -658,6 +658,40 @@ async def test_review_notes_skip_research_agent_without_delegation():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("node_id", "state_key"),
+    [
+        ("collect_business_rule_evidence", "business_rule_evidence_collection"),
+        ("collect_price_evidence", "price_evidence_collection"),
+        ("collect_compliance_evidence", "compliance_evidence_collection"),
+        ("collect_viral_candidates", "viral_candidate_collection"),
+        ("research_strategy_prices", "strategy_price_evidence_collection"),
+    ],
+)
+async def test_review_notes_skip_parallel_research_agents(node_id: str, state_key: str):
+    class ForbiddenDB:
+        async def get(self, *args, **kwargs):
+            raise AssertionError("好评笔记不应调用获客调研 Agent")
+
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("好评笔记不应调用获客调研 Agent")
+
+    result = await AgentNodeHandler().execute(
+        db=ForbiddenDB(),
+        node={"id": node_id},
+        state=_review_notes_state(
+            evidence_gap_analysis={"has_missing": True},
+            runtime_config_snapshot={"force_evidence_research": True, "creation_mode": "viral_rewrite"},
+        ),
+        node_run_id="node-run-1",
+    )
+
+    assert result[state_key]["skipped"] is True
+    assert result[state_key]["skip_reason"] == RESEARCH_SKIP_REASON
+    assert result[state_key]["evidence_items"] == []
+
+
+@pytest.mark.asyncio
 async def test_home_furnishing_skips_research_when_no_evidence_gap():
     class ForbiddenDB:
         async def get(self, *args, **kwargs):
@@ -811,6 +845,42 @@ async def test_external_wait_still_requires_cover_job_id_for_home_furnishing():
                 "cover_job": {},
             },
         )
+
+
+@pytest.mark.asyncio
+async def test_cover_selection_uses_cover_job_assets_when_review_omits_them(monkeypatch):
+    payloads = []
+
+    def fake_interrupt(payload):
+        payloads.append(payload)
+        return {
+            "run_id": "run-1",
+            "node_id": "select_cover",
+            "expected_state_version": 2,
+            "asset_id": "cca_cover_1",
+        }
+
+    monkeypatch.setattr(content_workflow_graph_module, "interrupt", fake_interrupt)
+
+    result = await ContentWorkflowAgent()._v3_human_review(
+        {"id": "select_cover", "interrupt_type": "cover_selection"},
+        {
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "state_version": 2,
+            "content_brief": {"form_values": {"mp_service_entry": "装修家居"}},
+            "visual_review": {"assets": [], "status": "passed"},
+            "cover_job": {
+                "cover_job_id": "ccj_1",
+                "status": "succeeded",
+                "asset_ids": ["cca_cover_1"],
+            },
+        },
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["asset_ids"] == ["cca_cover_1"]
+    assert result["selected_cover"] == {"asset_id": "cca_cover_1", "cover_job_id": "ccj_1"}
 
 
 @pytest.mark.asyncio

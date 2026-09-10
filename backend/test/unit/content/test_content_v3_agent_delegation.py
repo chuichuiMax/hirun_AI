@@ -1178,6 +1178,63 @@ def test_parallel_research_agents_receive_only_their_knowledge_scope(node_id, ex
     assert set(context.knowledges) == {item["kb_id"] for item in context._visible_knowledge_bases}
 
 
+def test_review_notes_generate_content_scopes_to_review_notes_knowledge_base():
+    context = SimpleNamespace(
+        knowledges=["kb-brand", "kb-review", "kb-price"],
+        _visible_knowledge_bases=[
+            {"kb_id": "kb-brand", "name": "品牌知识库"},
+            {"kb_id": "kb-review", "name": "好评知识库"},
+            {"kb_id": "kb-price", "name": "价格库"},
+        ],
+        _required_skill_tools=["submit_content_node_result"],
+        skill_tool_allowlist=[],
+    )
+
+    AgentDelegationService._restrict_research_knowledge_scope(
+        context,
+        "generate_content",
+        knowledge_policy="agent_scope",
+    )
+    AgentDelegationService._ensure_knowledge_tools_available(context)
+
+    assert context._visible_knowledge_bases == [{"kb_id": "kb-review", "name": "好评知识库"}]
+    assert context.knowledges == ["kb-review"]
+    assert "query_kb" in context._required_skill_tools
+    assert "query_kb" in context.skill_tool_allowlist
+
+
+def test_decoration_generate_content_does_not_force_review_notes_knowledge_scope():
+    context = SimpleNamespace(
+        knowledges=[],
+        _visible_knowledge_bases=[],
+    )
+
+    AgentDelegationService._restrict_research_knowledge_scope(
+        context,
+        "generate_content",
+        knowledge_policy="frozen_evidence_only",
+    )
+
+    assert context.knowledges == []
+    assert context._visible_knowledge_bases == []
+
+
+def test_review_notes_generate_content_requires_review_notes_knowledge_base():
+    context = SimpleNamespace(
+        knowledges=["kb-brand"],
+        _visible_knowledge_bases=[{"kb_id": "kb-brand", "name": "品牌知识库"}],
+    )
+
+    with pytest.raises(ContentApplicationError) as exc_info:
+        AgentDelegationService._restrict_research_knowledge_scope(
+            context,
+            "generate_content",
+            knowledge_policy="agent_scope",
+        )
+
+    assert exc_info.value.code == "review_notes_knowledge_not_authorized"
+
+
 def test_formal_content_agent_catalog_and_conflict_policy():
     assert len(CONTENT_AGENT_SPECS) == 14
     assert {item.slug for item in CONTENT_AGENT_SPECS} == {
@@ -1245,7 +1302,8 @@ def test_formal_content_agent_catalog_and_conflict_policy():
         "humanizer-zh",
         "content-human-expression",
     )
-    assert generation_spec.config_version == 6
+    assert generation_spec.config_version == 7
+    assert generation_spec.skill_tools == ("query_kb", "open_kb_document", "find_kb_document", "list_kbs")
     assert generation_spec.reasoning_effort == "medium"
     spec = CONTENT_AGENT_SPECS[0]
     existing = Agent(
@@ -1423,7 +1481,7 @@ def test_generation_agent_additive_migration_installs_viral_skills():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 6
+    assert existing.config_version == 7
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(existing.config_json["context"]["skills"]) == set(spec.skills)
@@ -1457,7 +1515,7 @@ def test_generation_agent_additive_migration_installs_viral_layout_formatter():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 6
+    assert existing.config_version == 7
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}
@@ -1492,10 +1550,42 @@ def test_generation_agent_additive_migration_installs_humanizer_for_original_con
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 6
+    assert existing.config_version == 7
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}
+
+
+def test_generation_agent_additive_migration_enables_review_notes_knowledge_tools():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-generation-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={
+            "context": {
+                "skills": list(spec.skills),
+                "skill_tool_allowlist": [],
+                "model": "provider:user-model",
+            }
+        },
+        enabled=True,
+        config_version=6,
+        is_subagent=False,
+        created_by="system",
+        updated_by="user-1",
+    )
+
+    assert migrate_system_content_agent(existing, spec) is True
+    assert existing.config_version == 7
+    assert existing.config_json["context"]["skill_tool_allowlist"] == [
+        "query_kb",
+        "open_kb_document",
+        "find_kb_document",
+        "list_kbs",
+    ]
+    assert existing.config_json["context"]["model"] == "provider:user-model"
+    validate_existing_content_agent(existing, spec)
 
 
 def test_delegation_schema_has_unique_child_run_and_parent_node_index():

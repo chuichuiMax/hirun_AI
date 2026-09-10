@@ -1,13 +1,19 @@
 ---
 name: content-title-generator
 description: 按锁定策略生成可追溯标题候选，或从已通过确定性校验的候选中选择最终标题。
-version: 2.2.0,
+version: 2.3.0
 ---
 
 # 标题候选生成
 
 根据当前节点输出契约执行标题候选生成或标题选择，不生成正文、不决定流程跳转。
 
+0. 若 `payload.content_brief.form_values.mp_service_entry` 为「好评笔记」：
+   - 先用授权清单中的 `kb_id` 调用 `query_kb` 检索「好评知识库」，模仿已有好评的标题语气、长度与结构；
+   - 事实只来自 `content_brief` / `evidence_bundle`（项目成员、区域、现场信息等），禁止编造；
+   - 忽略 `strategy_snapshot.title_formula`、`formula_lexicon_bundle` 与装修获客标题公式；
+   - 业主第一人称评价，不要写成获客种草或员工自荐；
+   - 然后跳到本 Skill 第 8 条及之后与渠道长度、提交相关的要求。
 1. 当前 Skill 全文已经注入，不调用 `read_file`。
 2. 只读取当前节点 `payload`；锁定标题公式的完整原版定义位于 `payload.strategy_snapshot.title_formula`，不得再次读取可变规则库，也不得凭记忆补公式。
 3. 业务事实已经完整提供在 `payload.content_brief` 和 `payload.evidence_bundle` 中，不调用业务事实或知识库工具。

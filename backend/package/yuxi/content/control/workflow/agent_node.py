@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.content.control.workflow.content_node_input import ContentNodeInputAssembler
 from yuxi.content.control.workflow.external_wait import (
     RESEARCH_SKIP_REASON,
+    REVIEW_NOTES_KNOWLEDGE_BASE_NAME,
     cover_skip_reason,
     skip_cover_pipeline,
     skip_formula_lexicon_pipeline,
@@ -60,6 +61,22 @@ DECORATION_FORMULA_REVIEW_CODES = frozenset(
         "BODY_FORMULA_MISMATCH",
         "CONTENT_STRUCTURE_MISMATCH",
     }
+)
+
+REVIEW_NOTES_RESEARCH_RESULT_FIELDS = {
+    "collect_missing_evidence": "evidence_collection",
+    "collect_business_rule_evidence": "business_rule_evidence_collection",
+    "collect_price_evidence": "price_evidence_collection",
+    "collect_compliance_evidence": "compliance_evidence_collection",
+    "collect_viral_candidates": "viral_candidate_collection",
+    "research_strategy_prices": "strategy_price_evidence_collection",
+}
+
+REVIEW_NOTES_GENERATE_PROHIBITED_ACTIONS = (
+    "不按装修获客标题公式或正文调用规则写作",
+    "不检索「好评知识库」以外的知识库或网页",
+    "不以获客种草、员工自荐或销售转化口吻写作",
+    "不编造简报与证据以外的项目事实",
 )
 
 
@@ -250,16 +267,18 @@ class AgentNodeHandler:
                         "assets": [],
                     }
                 }
-        if skip_research_pipeline(state) and node["id"] == "collect_missing_evidence":
-            return {
-                "evidence_collection": {
-                    "skipped": True,
-                    "skip_reason": RESEARCH_SKIP_REASON,
-                    "evidence_items": [],
-                    "citations": [],
-                    "unresolved_questions": [],
+        if skip_research_pipeline(state):
+            research_field = REVIEW_NOTES_RESEARCH_RESULT_FIELDS.get(node["id"])
+            if research_field is not None:
+                return {
+                    research_field: {
+                        "skipped": True,
+                        "skip_reason": RESEARCH_SKIP_REASON,
+                        "evidence_items": [],
+                        "citations": [],
+                        "unresolved_questions": [],
+                    }
                 }
-            }
         if node["id"] == "collect_missing_evidence" and not (state.get("evidence_gap_analysis") or {}).get(
             "has_missing"
         ):
@@ -464,8 +483,20 @@ class AgentNodeHandler:
                     "不得要求细分人群+数字+结果或人设沉淀分段结构",
                 )
             )
+        knowledge_policy = node["knowledge_policy"]
+        max_tool_calls = int(node["max_tool_calls"])
+        max_retrieval_rounds = int(node.get("max_retrieval_rounds") or 0)
+        max_knowledge_bases = int(node.get("max_knowledge_bases") or 0)
+        max_chunks_per_knowledge_base = int(node.get("max_chunks_per_knowledge_base") or 0)
+        max_chars_per_knowledge_chunk = int(node.get("max_chars_per_knowledge_chunk") or 0)
         if skip_formula_lexicon_pipeline(state) and node["id"] == "generate_content":
-            prohibited_actions.append("不按装修获客标题公式或正文调用规则写作")
+            prohibited_actions = list(REVIEW_NOTES_GENERATE_PROHIBITED_ACTIONS)
+            knowledge_policy = "agent_scope"
+            max_tool_calls = max(max_tool_calls, 6)
+            max_retrieval_rounds = max(max_retrieval_rounds, 2)
+            max_knowledge_bases = max(max_knowledge_bases, 1)
+            max_chunks_per_knowledge_base = max(max_chunks_per_knowledge_base, 4)
+            max_chars_per_knowledge_chunk = max(max_chars_per_knowledge_chunk, 2400)
         delegation = AgentDelegationService(db)
         delegated = await delegation.execute(
             AgentDelegationRequest(
@@ -487,19 +518,23 @@ class AgentNodeHandler:
                     "locked_values": locked_values,
                     "product_material_requirements": state.get("product_material_requirements") or {},
                 },
-                prompt=f"执行内容工作流节点 {node['id']} 的唯一职责",
+                prompt=(
+                    f"执行内容工作流节点 {node['id']}：检索「{REVIEW_NOTES_KNOWLEDGE_BASE_NAME}」并模仿写作"
+                    if skip_formula_lexicon_pipeline(state) and node["id"] == "generate_content"
+                    else f"执行内容工作流节点 {node['id']} 的唯一职责"
+                ),
                 output_contract=node["output_contract"],
                 result_tool_name=node["result_tool_name"],
-                knowledge_policy=node["knowledge_policy"],
+                knowledge_policy=knowledge_policy,
                 timeout_seconds=node["timeout_seconds"],
                 max_execution_steps=node["max_execution_steps"],
-                max_tool_calls=node["max_tool_calls"],
+                max_tool_calls=max_tool_calls,
                 token_budget=node["token_budget"],
-                max_retrieval_rounds=int(node.get("max_retrieval_rounds") or 0),
-                max_knowledge_bases=int(node.get("max_knowledge_bases") or 0),
-                max_chunks_per_knowledge_base=int(node.get("max_chunks_per_knowledge_base") or 0),
+                max_retrieval_rounds=max_retrieval_rounds,
+                max_knowledge_bases=max_knowledge_bases,
+                max_chunks_per_knowledge_base=max_chunks_per_knowledge_base,
                 prohibited_actions=tuple(prohibited_actions),
-                max_chars_per_knowledge_chunk=int(node.get("max_chars_per_knowledge_chunk") or 0),
+                max_chars_per_knowledge_chunk=max_chars_per_knowledge_chunk,
             )
         )
         mapped = AgentNodeResultMapper.to_state(node["id"], delegated.output, state)

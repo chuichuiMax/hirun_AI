@@ -14,6 +14,7 @@ COVER_SKIP_REASON = "好评笔记跳过封面生成"
 MISSING_VISUAL_COVER_SKIP_REASON = "未锁定图库图片，跳过封面生成"
 RESEARCH_SKIP_REASON = "好评笔记沿用简报已锁定事实，跳过获客调研"
 REVIEW_NOTES_SERVICE_ENTRY = "好评笔记"
+REVIEW_NOTES_KNOWLEDGE_BASE_NAME = "好评知识库"
 
 
 def _brief_service_entry(state: dict[str, Any]) -> str:
@@ -195,6 +196,8 @@ __all__ = [
     "COVER_SKIP_REASON",
     "MISSING_VISUAL_COVER_SKIP_REASON",
     "RESEARCH_SKIP_REASON",
+    "REVIEW_NOTES_KNOWLEDGE_BASE_NAME",
+    "REVIEW_NOTES_SERVICE_ENTRY",
     "ExternalWaitNodeHandler",
     "cover_skip_reason",
     "review_notes_uploaded_cover_asset_id",

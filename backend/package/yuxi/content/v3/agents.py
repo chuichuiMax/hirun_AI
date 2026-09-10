@@ -169,8 +169,8 @@ CONTENT_AGENT_SPECS = (
             "humanizer-zh",
             "content-human-expression",
         ),
-        skill_tools=(),
-        config_version=6,
+        skill_tools=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
+        config_version=7,
     ),
     ContentAgentSpec(
         slug="content-review-agent",
@@ -311,6 +311,26 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
                         "content-human-expression",
                     },
                     {},
+                ),
+                6: (
+                    (),
+                    {
+                        "content-title-generator",
+                        "content-outline-builder",
+                        "content-body-generator",
+                        "viral-structure-rewriter",
+                        "viral-layout-formatter",
+                        "humanizer-zh",
+                        "content-human-expression",
+                    },
+                    {
+                        "skill_tool_allowlist": [
+                            "query_kb",
+                            "open_kb_document",
+                            "find_kb_document",
+                            "list_kbs",
+                        ],
+                    },
                 ),
             },
         }

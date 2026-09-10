@@ -125,13 +125,15 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-title-generator",
         source_dir=_SKILLS_ROOT / "content-title-generator",
         description="按锁定标题公式生成候选，并从确定性校验通过的候选中选择最终标题。",
-        version="2.2.0",
+        version="2.3.0",
+        tool_dependencies=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
     ),
     BuiltinSkillSpec(
         slug="content-body-generator",
         source_dir=_SKILLS_ROOT / "content-body-generator",
         description="使用人工锁定标题、正文公式和同源证据生成正文与话题。",
-        version="2.5.0",
+        version="2.6.0",
+        tool_dependencies=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
     ),
     BuiltinSkillSpec(
         slug="content-human-expression",

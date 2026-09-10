@@ -19,9 +19,10 @@ from yuxi.agents.context import normalize_agent_context_config, prepare_agent_ru
 from yuxi.agents.models import resolve_chat_model_spec
 from yuxi.agents.middlewares.model_call_timeout import ContentModelProgress
 from yuxi.models.providers.cache import model_cache
+from yuxi.content.control.errors import ContentApplicationError
+from yuxi.content.control.workflow.external_wait import REVIEW_NOTES_KNOWLEDGE_BASE_NAME
 from yuxi.content.control.workflow.generation_input import project_generation_input
 from yuxi.content.control.workflow.strategy_input import load_strategy_profiles, project_strategy_input
-from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.execution_trace import build_execution_preview
 from yuxi.content.model.contracts import (
     ContentAgentNodeInputV2,
@@ -151,6 +152,7 @@ class AgentDelegationService:
         "collect_compliance_evidence",
         "collect_viral_candidates",
         "semantic_review",
+        "generate_content",
     }
     KNOWLEDGE_TOOL_NAMES = {"list_kbs", "get_mindmap", "query_kb", "open_kb_document", "find_kb_document"}
     RESEARCH_KNOWLEDGE_NAMES = {
@@ -159,6 +161,7 @@ class AgentDelegationService:
         "collect_price_evidence": {"价格库"},
         "collect_compliance_evidence": {"封禁词库"},
         "collect_viral_candidates": {"爆款库"},
+        "generate_content": {REVIEW_NOTES_KNOWLEDGE_BASE_NAME},
     }
 
     def __init__(self, db: AsyncSession):
@@ -200,8 +203,24 @@ class AgentDelegationService:
         context.required_skills = list(request.required_skills)
         self._apply_node_constraints(context, request)
         await prepare_agent_runtime_context(context, context_schema=backend.context_schema)
-        self._restrict_research_knowledge_scope(context, request.node_run.node_id)
+        self._restrict_research_knowledge_scope(
+            context,
+            request.node_run.node_id,
+            knowledge_policy=request.knowledge_policy,
+        )
+        if (
+            request.knowledge_policy == "agent_scope"
+            and getattr(context, "knowledges", None)
+            and os.environ.get("LITE_MODE", "").lower() in {"true", "1"}
+        ):
+            raise ContentApplicationError(
+                "knowledge_capability_unavailable",
+                "LITE_MODE 不支持 Agent 已配置的知识库检索",
+                "conflict",
+            )
         self._apply_knowledge_tool_scope(context)
+        if request.node_run.node_id == "generate_content" and request.knowledge_policy == "agent_scope":
+            self._ensure_knowledge_tools_available(context)
         activated_scope = set(getattr(context, "_required_skill_closure", []) or [])
         if not set(request.required_skills).issubset(activated_scope):
             raise ContentApplicationError(
@@ -444,6 +463,9 @@ class AgentDelegationService:
                     f"节点 {request.node_run.node_id} 不允许检索知识库",
                     "invalid",
                 )
+            if request.node_run.node_id == "generate_content":
+                # 先放开用户可见知识库，再按「好评知识库」名称收窄。
+                context.knowledges = None
             if context.knowledges and os.environ.get("LITE_MODE", "").lower() in {"true", "1"}:
                 raise ContentApplicationError(
                     "knowledge_capability_unavailable",
@@ -466,7 +488,15 @@ class AgentDelegationService:
         ]
 
     @classmethod
-    def _restrict_research_knowledge_scope(cls, context, node_id: str) -> None:
+    def _restrict_research_knowledge_scope(
+        cls,
+        context,
+        node_id: str,
+        *,
+        knowledge_policy: str = "frozen_evidence_only",
+    ) -> None:
+        if node_id == "generate_content" and knowledge_policy != "agent_scope":
+            return
         allowed_names = cls.RESEARCH_KNOWLEDGE_NAMES.get(node_id)
         if allowed_names is None:
             return
@@ -483,6 +513,27 @@ class AgentDelegationService:
                 "报价补证 Agent 未配置可访问的价格库",
                 "invalid",
             )
+        if node_id == "generate_content" and not context.knowledges:
+            raise ContentApplicationError(
+                "review_notes_knowledge_not_authorized",
+                f"好评笔记生成未配置可访问的「{REVIEW_NOTES_KNOWLEDGE_BASE_NAME}」",
+                "invalid",
+            )
+
+    @classmethod
+    def _ensure_knowledge_tools_available(cls, context) -> None:
+        if not getattr(context, "knowledges", None):
+            return
+        tools = list(getattr(context, "_required_skill_tools", []) or [])
+        for name in sorted(cls.KNOWLEDGE_TOOL_NAMES):
+            if name not in tools:
+                tools.append(name)
+        context._required_skill_tools = tools
+        allowlist = list(getattr(context, "skill_tool_allowlist", None) or [])
+        for name in sorted(cls.KNOWLEDGE_TOOL_NAMES):
+            if name not in allowlist:
+                allowlist.append(name)
+        context.skill_tool_allowlist = allowlist
 
     @staticmethod
     async def _invoke_graph(

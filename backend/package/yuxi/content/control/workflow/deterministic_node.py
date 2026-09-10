@@ -577,7 +577,7 @@ class V3DeterministicNodeHandler:
             or (state.get("industry_pack") or {}).get("id")
             or ""
         )
-        if not industry_pack_id.startswith("industry-pack-decoration-v"):
+        if skip_formula_lexicon_pipeline(state) or not industry_pack_id.startswith("industry-pack-decoration-v"):
             return {
                 "formula_lexicon_bundle": {
                     "required": False,
