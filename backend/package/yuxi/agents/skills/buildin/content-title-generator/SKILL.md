@@ -9,7 +9,7 @@ version: 2.3.0
 根据当前节点输出契约执行标题候选生成或标题选择，不生成正文、不决定流程跳转。
 
 0. 若 `payload.content_brief.form_values.mp_service_entry` 为「好评笔记」：
-   - 先用授权清单中的 `kb_id` 调用 `query_kb` 检索「好评知识库」，模仿已有好评的标题语气、长度与结构；
+   - 先用授权清单中的 `kb_id` 调用 `query_kb` 检索「好评知识库」或「好评笔记知识库」，模仿已有好评的标题语气、长度与结构；
    - 事实只来自 `content_brief` / `evidence_bundle`（项目成员、区域、现场信息等），禁止编造；
    - 忽略 `strategy_snapshot.title_formula`、`formula_lexicon_bundle` 与装修获客标题公式；
    - 业主第一人称评价，不要写成获客种草或员工自荐；

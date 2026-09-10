@@ -1203,6 +1203,29 @@ def test_review_notes_generate_content_scopes_to_review_notes_knowledge_base():
     assert "query_kb" in context.skill_tool_allowlist
 
 
+def test_review_notes_generate_content_accepts_review_notes_knowledge_base_alias():
+    context = SimpleNamespace(
+        knowledges=["kb-brand", "kb-review-notes"],
+        _visible_knowledge_bases=[
+            {"kb_id": "kb-brand", "name": "品牌知识库"},
+            {"kb_id": "kb-review-notes", "name": "好评笔记知识库"},
+        ],
+        _required_skill_tools=["submit_content_node_result"],
+        skill_tool_allowlist=[],
+    )
+
+    AgentDelegationService._restrict_research_knowledge_scope(
+        context,
+        "generate_content",
+        knowledge_policy="agent_scope",
+    )
+    AgentDelegationService._ensure_knowledge_tools_available(context)
+
+    assert context._visible_knowledge_bases == [{"kb_id": "kb-review-notes", "name": "好评笔记知识库"}]
+    assert context.knowledges == ["kb-review-notes"]
+    assert "query_kb" in context._required_skill_tools
+
+
 def test_decoration_generate_content_does_not_force_review_notes_knowledge_scope():
     context = SimpleNamespace(
         knowledges=[],

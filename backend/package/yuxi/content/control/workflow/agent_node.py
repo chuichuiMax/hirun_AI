@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.content.control.workflow.content_node_input import ContentNodeInputAssembler
 from yuxi.content.control.workflow.external_wait import (
     RESEARCH_SKIP_REASON,
-    REVIEW_NOTES_KNOWLEDGE_BASE_NAME,
     cover_skip_reason,
     skip_cover_pipeline,
     skip_formula_lexicon_pipeline,
@@ -74,7 +73,7 @@ REVIEW_NOTES_RESEARCH_RESULT_FIELDS = {
 
 REVIEW_NOTES_GENERATE_PROHIBITED_ACTIONS = (
     "不按装修获客标题公式或正文调用规则写作",
-    "不检索「好评知识库」以外的知识库或网页",
+    "不检索「好评知识库」或「好评笔记知识库」以外的知识库或网页",
     "不以获客种草、员工自荐或销售转化口吻写作",
     "不编造简报与证据以外的项目事实",
 )
@@ -519,7 +518,7 @@ class AgentNodeHandler:
                     "product_material_requirements": state.get("product_material_requirements") or {},
                 },
                 prompt=(
-                    f"执行内容工作流节点 {node['id']}：检索「{REVIEW_NOTES_KNOWLEDGE_BASE_NAME}」并模仿写作"
+                    f"执行内容工作流节点 {node['id']}：检索「好评知识库」或「好评笔记知识库」并模仿写作"
                     if skip_formula_lexicon_pipeline(state) and node["id"] == "generate_content"
                     else f"执行内容工作流节点 {node['id']} 的唯一职责"
                 ),

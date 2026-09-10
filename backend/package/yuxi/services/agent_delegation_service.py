@@ -20,7 +20,10 @@ from yuxi.agents.models import resolve_chat_model_spec
 from yuxi.agents.middlewares.model_call_timeout import ContentModelProgress
 from yuxi.models.providers.cache import model_cache
 from yuxi.content.control.errors import ContentApplicationError
-from yuxi.content.control.workflow.external_wait import REVIEW_NOTES_KNOWLEDGE_BASE_NAME
+from yuxi.content.control.workflow.external_wait import (
+    REVIEW_NOTES_KNOWLEDGE_BASE_ALIASES,
+    REVIEW_NOTES_KNOWLEDGE_BASE_NAME,
+)
 from yuxi.content.control.workflow.generation_input import project_generation_input
 from yuxi.content.control.workflow.strategy_input import load_strategy_profiles, project_strategy_input
 from yuxi.content.execution_trace import build_execution_preview
@@ -161,7 +164,7 @@ class AgentDelegationService:
         "collect_price_evidence": {"价格库"},
         "collect_compliance_evidence": {"封禁词库"},
         "collect_viral_candidates": {"爆款库"},
-        "generate_content": {REVIEW_NOTES_KNOWLEDGE_BASE_NAME},
+        "generate_content": set(REVIEW_NOTES_KNOWLEDGE_BASE_ALIASES),
     }
 
     def __init__(self, db: AsyncSession):
@@ -464,7 +467,7 @@ class AgentDelegationService:
                     "invalid",
                 )
             if request.node_run.node_id == "generate_content":
-                # 先放开用户可见知识库，再按「好评知识库」名称收窄。
+                # 先放开用户可见知识库，再按好评知识库名称（含别名）收窄。
                 context.knowledges = None
             if context.knowledges and os.environ.get("LITE_MODE", "").lower() in {"true", "1"}:
                 raise ContentApplicationError(
@@ -516,7 +519,8 @@ class AgentDelegationService:
         if node_id == "generate_content" and not context.knowledges:
             raise ContentApplicationError(
                 "review_notes_knowledge_not_authorized",
-                f"好评笔记生成未配置可访问的「{REVIEW_NOTES_KNOWLEDGE_BASE_NAME}」",
+                f"好评笔记生成未配置可访问的「{REVIEW_NOTES_KNOWLEDGE_BASE_NAME}」"
+                f"或「好评笔记知识库」",
                 "invalid",
             )
 
