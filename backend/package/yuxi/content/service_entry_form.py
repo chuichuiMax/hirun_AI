@@ -3,14 +3,24 @@ from __future__ import annotations
 from typing import Any
 
 BRAND_NAME = "鸿扬家居"
+CONSTRUCTION_BRAND = "鸿扬家装"
 DECORATION_QUOTE_KEYS = ("基础", "木制品", "主材")
+LAYOUT_FIELD_KEYS = ("房屋布局", "户型布局", "户型")
 # PC / 小程序业务变量表单：存在则固定排在最前（其余保持原相对顺序）
 FORM_FIELD_PRIORITY_KEYS = ("外框面积", "基础", "木制品", "主材")
 REVIEW_NOTE_ROLE_KEYS = ("设计师", "预算师", "项目经理", "客户经理", "工匠")
 REVIEW_NOTES_WRITING_INSTRUCTION = (
     "以业主第一人称评价设计师、预算师、项目经理、客户经理等项目成员；"
     "检索并模仿「好评知识库」或「好评笔记知识库」中已有文章的语气、结构和用词；"
+    "标题不要出现楼盘、小区或项目案名，可以赞美表扬所属店面或门店；"
     "写内部可归档的真实好评，不要写成获客种草、员工自荐或销售转化文案。"
+)
+DECORATION_WRITING_INSTRUCTION = (
+    "标题要有吸引点：情绪、悬念、反差或利益点至少占一项，禁止楼盘+面积+风格的说明书式平铺；"
+    "正文不要展开某套房的案例故事（旧况、改造过程、完工效果叙事），每套房子不同，细节写错容易失真；"
+    "正文优先用信息卡点写清：小区名称、房屋面积、房屋布局（仅简报有填时）、风格、项目施工鸿扬家装；"
+    "必须写出鸿扬家居/鸿扬家装品牌优势，并带明确引流点（同城咨询、报价参考、留言私信等）；"
+    "事实只来自简报与冻结证据，不得编造户型缺陷、改造前后效果或他人案例细节。"
 )
 
 
@@ -194,6 +204,10 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
     frame_area = str(values.get("外框面积") or "").strip()
     style = str(values.get("设计风格") or "").strip()
     region = str(values.get("所在区域") or "").strip()
+    layout = next(
+        (str(values.get(key) or "").strip() for key in LAYOUT_FIELD_KEYS if str(values.get(key) or "").strip()),
+        "",
+    )
     budget_text = "；".join(
         f"{label} {values[label]}".strip() for label in DECORATION_QUOTE_KEYS if str(values.get(label) or "").strip()
     )
@@ -205,9 +219,23 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
         product = community or "整装项目"
         process = budget_text or f"{style} {frame_area}".strip() or "整装交付"
         pain = f"{community or '业主'}关注{frame_area or '户型'}装修落地"
-        advantage = style or "鸿扬整装标准化交付"
+        advantage = "；".join(
+            part
+            for part in (
+                style,
+                f"项目施工{CONSTRUCTION_BRAND}",
+                f"{BRAND_NAME}整装标准化交付与透明服务",
+            )
+            if part
+        )
         audience = [region] if region else ["装修业主"]
-        result = " ".join(part for part in (community, frame_area, style) if part)
+        result = " ".join(part for part in (community, frame_area, layout, style, f"施工{CONSTRUCTION_BRAND}") if part)
+        values["community_name"] = community
+        values["house_area"] = frame_area
+        values["house_layout"] = layout
+        values["design_style"] = style
+        values["construction_brand"] = CONSTRUCTION_BRAND
+        values["writing_instruction"] = DECORATION_WRITING_INSTRUCTION
     else:
         product = "业主好评笔记"
         process = persona_text or "项目成员服务"

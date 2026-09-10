@@ -1894,21 +1894,10 @@ const buildBrief = () => ({
   persona: formValues.persona ? { description: formValues.persona } : {},
   required_terms: formValues.required_terms || [],
   forbidden_terms: formValues.forbidden_terms || [],
-  attachments: isReviewNotes.value
-    ? reviewNotePhotoIds.value.map((assetId, index) => ({
-        asset_id: assetId,
-        role: index === 0 ? 'cover' : 'photo'
-      }))
-    : [],
+  attachments: [],
   locked_fields: [],
   form_values: {
-    ...formValues,
-    ...(isReviewNotes.value && reviewNotePhotoIds.value.length
-      ? {
-          cover_asset_id: reviewNotePhotoIds.value[0],
-          cover_asset_ids: reviewNotePhotoIds.value
-        }
-      : {})
+    ...formValues
   },
   visual_material: !isReviewNotes.value && selectedImageItemId.value
     ? {
@@ -1930,7 +1919,6 @@ const scheduleBriefSave = () => {
 
 watch(formValues, scheduleBriefSave, { deep: true })
 watch([selectedImageItemId, selectedHyCanvasTemplateId], scheduleBriefSave)
-watch(reviewNotePhotos, scheduleBriefSave, { deep: true })
 watch([selectedImageItemId, selectedHyCanvasTemplateId, photoComposition], scheduleBriefSave, { deep: true })
 onBeforeUnmount(() => {
   window.clearTimeout(draftSaveTimer)
@@ -1976,12 +1964,7 @@ const compileBrief = async () => {
     message.warning(`请填写${missing.label}`)
     return
   }
-  if (isReviewNotes.value) {
-    if (!reviewNotePhotoIds.value.length) {
-      message.warning('请上传照片')
-      return
-    }
-  } else {
+  if (!isReviewNotes.value) {
     if (!selectedImageItemId.value) {
       message.warning('请选择一张图库原图')
       return
@@ -2452,43 +2435,6 @@ const openVersions = async () => {
                     </label>
                   </div>
                 </section>
-
-                <div v-if="isReviewNotes" class="review-photo-block">
-                  <div class="review-photo-grid">
-                    <div
-                      v-for="(photo, index) in reviewNotePhotos"
-                      :key="photo.assetId"
-                      class="review-photo-item"
-                    >
-                      <img v-if="photo.previewUrl" :src="photo.previewUrl" :alt="photo.name" />
-                      <button
-                        type="button"
-                        class="review-photo-remove"
-                        aria-label="移除照片"
-                        @click="removeReviewNotePhoto(index)"
-                      >
-                        <X :size="14" />
-                      </button>
-                    </div>
-                    <button
-                      v-if="reviewNotePhotos.length < REVIEW_NOTE_PHOTO_LIMIT"
-                      type="button"
-                      class="review-photo-add"
-                      :disabled="reviewNotePhotoUploading"
-                      @click="openReviewNotePhotoPicker"
-                    >
-                      <span>+<em>*</em>上传照片(最多3张)</span>
-                    </button>
-                  </div>
-                  <input
-                    ref="reviewNotePhotoInput"
-                    type="file"
-                    accept=".png,.jpg,.jpeg,.webp"
-                    multiple
-                    hidden
-                    @change="onReviewNotePhotos"
-                  />
-                </div>
               </div>
             </div>
             <aside class="facts-preview">

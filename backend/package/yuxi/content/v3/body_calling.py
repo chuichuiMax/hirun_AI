@@ -39,15 +39,15 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "verified_data",
                 "name": "数据落地铺垫",
-                "instruction": "使用人工录入的户型面积、整体预算、施工项目等真实数字强化真实性",
-                "fill_rule": "只使用 ContentBrief 或 EvidenceBundle 中的真实数据，不调用词库补造数字",
+                "instruction": "用简报信息卡点写出小区名称、房屋面积、房屋布局（有填才写）、风格、项目施工鸿扬家装；可并列整体预算，不展开某套房案例故事",
+                "fill_rule": "只使用 ContentBrief 或 EvidenceBundle 中的真实数据，不调用词库补造数字，不编造布局与改造细节",
                 "lexicon_calls": [],
                 "fact_source": "evidence",
             },
             {
                 "id": "single_contrast",
                 "name": "多维度前后反差展示",
-                "instruction": "四选一且单篇只使用一种反差逻辑，禁止混用",
+                "instruction": "四选一且单篇只使用一种反差逻辑，禁止混用；反差讲服务/预算/认知/代价，不讲虚构户型改造前后故事",
                 "fill_rule": "按所选反差维度使用对应词库，保持统一正反对比逻辑",
                 "lexicon_calls": [],
                 "fact_source": "lexicon_and_evidence",
@@ -55,7 +55,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "persona_cta",
                 "name": "细节+人设收尾引导",
-                "instruction": "结合透明施工细节、靠谱工长人设和轻咨询转化引导",
+                "instruction": "点明鸿扬家居/鸿扬家装品牌优势，结合透明施工细节与明确引流点（同城咨询、报价参考、留言私信）",
                 "fill_rule": "使用服务反差词库输出优势，并用报价引导词库完成转化",
                 "lexicon_calls": ["persona.service_contrast", "ending.quotation_cta"],
                 "fact_source": "lexicon_and_evidence",
@@ -89,11 +89,11 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
         ],
         "variation_rule": "不同正文轮换反差维度和表达，单篇不得混用多个反差维度",
         "reference_examples": [
-            "很多业主装修都会遇到预算问题；用真实报价信息说明反差，再以透明施工细节和同城报价咨询收尾。"
+            "很多业主装修都会遇到预算问题；用小区、面积、风格与施工方信息卡点说明，再以品牌优势和同城报价咨询收尾。"
         ],
     },
     "C02": {
-        "formula_name": "实景流量类：旧况+数据+反差+落地",
+        "formula_name": "实景流量类：痛点+数据+优势+引流",
         "lexicon_calls": [
             "body.old_house_pain",
             "body.renovation_advantage",
@@ -104,40 +104,40 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "old_house_pain",
                 "name": "人群痛点开篇",
-                "instruction": "锁定本地老房、二手房业主，呈现房屋老旧、户型缺陷和居住痛点",
-                "fill_rule": "使用旧房痛点词库真实还原旧况",
+                "instruction": "锁定本地装修业主的普遍痛点（预算、增项、交付担心），用词库表达共鸣；不要写成某一套房的旧况故事",
+                "fill_rule": "使用旧房痛点词库描述共性困扰，不编造具体户型缺陷与改造情节",
                 "lexicon_calls": ["body.old_house_pain"],
                 "fact_source": "lexicon_and_evidence",
             },
             {
                 "id": "verified_renovation_data",
                 "name": "数据落地铺垫",
-                "instruction": "使用房屋面积、改造工期、整体预算和核心施工项目等真实数据",
-                "fill_rule": "只使用 ContentBrief 或 EvidenceBundle 中的真实改造数据",
+                "instruction": "信息卡点写出小区名称、房屋面积、房屋布局（有填才写）、风格、项目施工鸿扬家装；可并列预算与施工项目，禁止展开案例描述",
+                "fill_rule": "只使用 ContentBrief 或 EvidenceBundle 中的真实字段，缺失布局则跳过该卡点",
                 "lexicon_calls": [],
                 "fact_source": "evidence",
             },
             {
                 "id": "before_after",
-                "name": "前后反差展示",
-                "instruction": "改造前问题 VS 改造后居住效果，形成一一对应的前后反差",
-                "fill_rule": "使用改造优势词库对应解决开篇痛点，不得虚构效果",
+                "name": "优势反差展示",
+                "instruction": "用服务/交付/工艺优势词库形成反差，不写改造前问题 VS 改造后效果的虚构案例对比",
+                "fill_rule": "使用改造优势词库对应开篇痛点，不得虚构效果与户型故事",
                 "lexicon_calls": ["body.renovation_advantage"],
                 "fact_source": "lexicon_and_evidence",
             },
             {
                 "id": "delivery_cta",
                 "name": "细节+人设收尾",
-                "instruction": "结合本地实景工地、一户一方案人设背书和案例引流",
-                "fill_rule": "使用落地背书词库佐证案例真实性，并用案例引导词库收尾",
+                "instruction": "写明鸿扬家居/鸿扬家装品牌优势与落地背书，并用明确引流点收尾（同城看工艺、咨询、留言）",
+                "fill_rule": "使用落地背书词库作短背书，并用案例引导词库收尾；禁止长篇案例叙事",
                 "lexicon_calls": ["persona.delivery_endorsement", "ending.case_cta"],
                 "fact_source": "lexicon_and_evidence",
             },
         ],
         "variants": [],
-        "variation_rule": "旧况、改造优势和落地表达应随真实案例变化，不复制参考案例原句",
+        "variation_rule": "痛点、优势与引流表达应轮换，不复制参考案例原句，不编造单套房改造故事",
         "reference_examples": [
-            "从老房采光、收纳和动线问题切入，补充真实面积、工期与预算，展示改造反差并以本地实景案例引导收尾。"
+            "从本地业主共性痛点切入，用小区、面积、风格与鸿扬家装施工信息卡点增强可信，再写品牌优势并以同城咨询引流收尾。"
         ],
     },
     "C03": {

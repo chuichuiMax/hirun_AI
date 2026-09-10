@@ -493,19 +493,20 @@ def test_cover_asset_ids_keep_order_and_reject_more_than_three():
     assert exc.value.detail["error"]["code"] == "MP_COVER_LIMIT"
 
 
-def test_build_mp_brief_payload_attaches_up_to_three_photos():
+def test_build_mp_brief_payload_review_notes_has_no_photos():
     brief = build_mp_brief_payload(
         service_entry="好评笔记",
         form_values={"设计师": "林工"},
         content_type_name="人设自荐",
         content_type_id=None,
-        cover_asset_id="cover-1",
+        cover_asset_id=None,
         cover_asset_ids=["cover-2", "cover-3"],
         cover_template_id=None,
         content_code="NR20260828001",
     )
-    assert [item["asset_id"] for item in brief.attachments] == ["cover-1", "cover-2", "cover-3"]
-    assert brief.form_values["cover_asset_ids"] == ["cover-1", "cover-2", "cover-3"]
+    assert brief.attachments == []
+    assert not brief.form_values.get("cover_asset_id")
+    assert not brief.form_values.get("cover_asset_ids")
     assert brief.audience == ["业主"]
     assert brief.form_values["project_type"] == "业主好评笔记"
     assert "好评知识库" in brief.form_values["writing_instruction"]
@@ -519,7 +520,7 @@ def test_build_mp_brief_payload_review_notes_region_is_optional():
         form_values={"设计师": "林工", "所在区域": "株洲市 荷塘区"},
         content_type_name="人设自荐",
         content_type_id=None,
-        cover_asset_id="cover-1",
+        cover_asset_id=None,
         cover_template_id=None,
         content_code="NR20260828002",
     )
@@ -528,7 +529,7 @@ def test_build_mp_brief_payload_review_notes_region_is_optional():
         form_values={"设计师": "林工"},
         content_type_name="人设自荐",
         content_type_id=None,
-        cover_asset_id="cover-1",
+        cover_asset_id=None,
         cover_template_id=None,
         content_code="NR20260828003",
     )

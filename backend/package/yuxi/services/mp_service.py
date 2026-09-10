@@ -448,20 +448,25 @@ def build_mp_brief_payload(
     form_values: dict[str, Any],
     content_type_name: str,
     content_type_id: str | None,
-    cover_asset_id: str,
+    cover_asset_id: str | None,
     cover_template_id: str | None,
     content_code: str,
     cover_asset_ids: list[str] | None = None,
     visual_material: ContentVisualMaterialSelection | None = None,
 ) -> ContentBriefPayload:
-    photo_ids = _cover_asset_ids(cover_asset_id, cover_asset_ids)
     values = {str(key): value for key, value in form_values.items()}
     values["mp_service_entry"] = service_entry
     values["mp_content_code"] = content_code
     values["mp_content_type_id"] = content_type_id or ""
     values["mp_content_type_name"] = content_type_name
-    values["cover_asset_id"] = photo_ids[0]
-    values["cover_asset_ids"] = photo_ids
+    photo_ids: list[str] = []
+    if service_entry != "好评笔记" and str(cover_asset_id or "").strip():
+        photo_ids = _cover_asset_ids(str(cover_asset_id).strip(), cover_asset_ids)
+        values["cover_asset_id"] = photo_ids[0]
+        values["cover_asset_ids"] = photo_ids
+    else:
+        values.pop("cover_asset_id", None)
+        values.pop("cover_asset_ids", None)
     if cover_template_id:
         values["cover_template_id"] = cover_template_id
     if visual_material is not None:
@@ -1151,8 +1156,9 @@ async def compile_brief(db: AsyncSession, ctx: MpContext, payload: MpCompileBrie
             cover_asset_id=payload.cover_asset_id,
             hycanvas_template_id=payload.hycanvas_template_id,
         )
-    elif not str(payload.cover_asset_id or "").strip():
-        raise _mp_error(422, "MP_COVER_REQUIRED", "请上传照片")
+    else:
+        # 好评笔记不上传、不绑定现场照片/封面。
+        cover_asset_id = None
     content_code = await _next_code_for_user(db, ctx.user)
     created = await create_content_task(
         db,

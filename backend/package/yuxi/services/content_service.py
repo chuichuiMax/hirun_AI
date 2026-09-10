@@ -944,19 +944,13 @@ async def save_content_brief(
         )
     compiled, missing = compile_content_brief(task=task, template=template, brief=brief, form_fields=form_fields)
     if compile_now and service_entry == "好评笔记":
-        photo_ids = review_note_photo_ids(brief)
-        if not photo_ids:
-            raise _content_error(422, "CONTENT_REVIEW_NOTE_PHOTO_REQUIRED", "请上传照片")
-        if len(photo_ids) > 3:
-            raise _content_error(422, "CONTENT_REVIEW_NOTE_PHOTO_LIMIT", "最多上传3张图片")
+        # 好评笔记不要求现场照片，也不写入封面附件。
         compiled["form_values"] = {
             **(compiled.get("form_values") or {}),
-            "cover_asset_id": photo_ids[0],
-            "cover_asset_ids": photo_ids,
+            "cover_asset_id": None,
+            "cover_asset_ids": [],
         }
-        compiled["attachments"] = [
-            {"asset_id": item, "role": "cover" if index == 0 else "photo"} for index, item in enumerate(photo_ids)
-        ]
+        compiled["attachments"] = []
     selection = brief.visual_material
     requested_image_item_id = selection.image_item_id if selection else None
     requested_poster_template_id = selection.poster_template_id if selection else None

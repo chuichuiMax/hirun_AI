@@ -76,6 +76,16 @@ REVIEW_NOTES_GENERATE_PROHIBITED_ACTIONS = (
     "不检索「好评知识库」或「好评笔记知识库」以外的知识库或网页",
     "不以获客种草、员工自荐或销售转化口吻写作",
     "不编造简报与证据以外的项目事实",
+    "标题不出现楼盘、小区或项目案名；可赞美表扬所属店面或门店",
+)
+
+DECORATION_GENERATE_PROHIBITED_ACTIONS = (
+    "不修改锁定策略与公式",
+    "不检索网页或知识库",
+    "不引入冻结证据外的事实",
+    "标题不做楼盘+面积+风格的说明书式平铺，须有吸引点",
+    "正文不展开某套房案例故事，不编造户型改造前后细节",
+    "正文须含简报已有小区/面积/风格与项目施工鸿扬家装，并写品牌优势与引流点",
 )
 
 
@@ -496,6 +506,8 @@ class AgentNodeHandler:
             max_knowledge_bases = max(max_knowledge_bases, 1)
             max_chunks_per_knowledge_base = max(max_chunks_per_knowledge_base, 4)
             max_chars_per_knowledge_chunk = max(max_chars_per_knowledge_chunk, 2400)
+        elif node["id"] == "generate_content":
+            prohibited_actions = list(DECORATION_GENERATE_PROHIBITED_ACTIONS)
         delegation = AgentDelegationService(db)
         delegated = await delegation.execute(
             AgentDelegationRequest(

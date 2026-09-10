@@ -229,6 +229,11 @@ def test_map_service_entry_form_values_keeps_configured_names():
     assert mapped["楼盘信息"] == "星河湾"
     assert mapped["project_type"] == "星河湾"
     assert mapped["brand_name"] == "鸿扬家居"
+    assert mapped["construction_brand"] == "鸿扬家装"
+    assert "项目施工鸿扬家装" in mapped["advantage"]
+    assert "标题要有吸引点" in mapped["writing_instruction"]
+    assert "不要展开某套房的案例故事" in mapped["writing_instruction"]
+    assert "引流点" in mapped["writing_instruction"]
     assert mapped.get("voice") != "业主第一人称"
     assert "好评知识库" not in str(mapped.get("writing_instruction") or "")
     assert "基础 4万" in mapped["craft_and_materials"]
@@ -242,5 +247,7 @@ def test_map_service_entry_form_values_review_notes_uses_owner_voice():
     assert mapped["project_type"] == "业主好评笔记"
     assert mapped["voice"] == "业主第一人称"
     assert "好评知识库" in mapped["writing_instruction"]
+    assert "标题不要出现楼盘" in mapped["writing_instruction"]
+    assert "所属店面" in mapped["writing_instruction"]
     assert mapped["audience"] == ["业主"]
     assert mapped["location"] == "长沙市"

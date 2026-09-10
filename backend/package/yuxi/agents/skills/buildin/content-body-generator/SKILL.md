@@ -1,13 +1,14 @@
 ---
 name: content-body-generator
 description: 使用人工锁定标题和同一份 ContentBrief、StrategyPlan、EvidenceBundle 生成正文与话题。仅在 Yuxi 内容工作流的正文生成或定向重写节点使用。
-version: 2.6.0
+version: 2.7.0
 ---
 
 # 正文与话题生成
 
 1. 只读取当前节点 `payload`；在简化工作流中与标题、大纲一次生成并保持一致。
    - 若 `payload.content_brief.form_values.mp_service_entry` 为「好评笔记」：必须先用授权清单中的 `kb_id` 调用 `query_kb` 检索「好评知识库」或「好评笔记知识库」，模仿已有好评的语气、段落节奏与用词；事实只来自简报与证据中的项目成员、地点与现场信息；忽略 `body_formula` / `body_calling` / `formula_lexicon_bundle`；业主第一人称评价，不要获客种草。然后按第 8 条及之后控制篇幅并提交。
+   - 若 `payload.content_brief.form_values.mp_service_entry` 为「装修家居」：遵守 `writing_instruction`；**不要**展开某套房的案例故事（旧况→改造过程→完工效果）；信息卡点优先写出小区名称、房屋面积、房屋布局（仅简报有填时）、风格、项目施工鸿扬家装；必须写鸿扬家居/鸿扬家装品牌优势，并带明确引流点；品牌或案例证明只作一句背书，不得编造户型缺陷与改造前后细节。
    - `payload.runtime_config_snapshot.creation_mode=original` 时，按锁定公式原创，不使用爆款结构参考。
    - `payload.runtime_config_snapshot.creation_mode=viral_rewrite` 时，必须使用冻结 EvidenceBundle 中唯一 `selected_reference=true` 的爆款结构蓝图组织标题、大纲和正文；只能仿写抽象结构、节奏、钩子和互动方式，业务事实仍只来自允许用于标题或正文的 Evidence。
 2. 首次 `generate_content` 在同一次输出中生成大纲，并严格沿用该大纲；已有 `payload.content_outline` 且审核未要求调整结构时沿用已有大纲。按 `payload.strategy_snapshot.body_formula` 逐段兑现结构，并让 `creation_methods` 贯穿全文。
@@ -15,7 +16,7 @@ version: 2.6.0
    - 当正文公式包含 `body_calling` 时，逐段执行其 `instruction` 和 `fill_rule`，只使用该段声明的 `lexicon_calls`；词库只决定表达，不得提供事实。
    - 若大纲选择了 `variant_key`，正文的反差段只能使用该维度，禁止混入其他反差逻辑。
    - 把正文实际采用的词库编码和原样词条写入 `draft.lexicon_usage`；必须覆盖各固定段落词库和所选 `variant_key` 对应词库，未实际使用的词条不得虚报。
-3. 按锁定公式需要，从 `payload.evidence_bundle` 植入产品卖点、适用人群、价格、品牌或案例证明，只使用允许用于正文的证据。引用知识库价格证据时，必须选择与当前内容相关的具体 SKU，并写出该 SKU 的明确价格和单位；不得只写“按元/平方米、元/项或元/间计价”“可参考价格表”“以实际为准”等空泛口径。若证据说明该价格不等同于本案总预算，应同时保留适用范围说明。
+3. 按锁定公式需要，从 `payload.evidence_bundle` 植入产品卖点、适用人群、价格、品牌或短背书，只使用允许用于正文的证据。装修家居优先写简报已有字段与品牌优势、引流点，不以长篇案例证明替代信息卡点。引用知识库价格证据时，必须选择与当前内容相关的具体 SKU，并写出该 SKU 的明确价格和单位；不得只写“按元/平方米、元/项或元/间计价”“可参考价格表”“以实际为准”等空泛口径。若证据说明该价格不等同于本案总预算，应同时保留适用范围说明。
    - 标准单价可独立组成报价明细或工价清单，明确标注“标准单价参考”并保留项目、单位、范围。项目总预算可以另行展示，两者无需对应或加总一致；没有工程量、小计或某些类别的报价不影响展示已有单价。不得为了凑总预算倒推单价、工程量或小计，也不得称为本案实际成交/结算明细。适用范围说明写在价格清单附近，不要用索要实际报价的提示替代正文中的具体单价。
 4. `style_reference` 仅用于开头钩子、结构、节奏、互动方式和 emoji/表情符号位置模式参考；可沿用抽象模式，禁止复制原句、事实或数字，禁止写入 `paragraph_evidence`。
 5. 只使用 `payload.evidence_bundle` 中允许用于正文的事实；不得调用业务事实或知识库工具，不得补造客户、价格、参数、统计或效果。好评笔记除外：允许检索「好评知识库」或「好评笔记知识库」作语气结构参考，但仍不得把知识库样例中的他人事实写成当前项目事实。

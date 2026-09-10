@@ -1,7 +1,7 @@
 ---
 name: content-title-generator
 description: 按锁定策略生成可追溯标题候选，或从已通过确定性校验的候选中选择最终标题。
-version: 2.3.0
+version: 2.4.0
 ---
 
 # 标题候选生成
@@ -13,7 +13,13 @@ version: 2.3.0
    - 事实只来自 `content_brief` / `evidence_bundle`（项目成员、区域、现场信息等），禁止编造；
    - 忽略 `strategy_snapshot.title_formula`、`formula_lexicon_bundle` 与装修获客标题公式；
    - 业主第一人称评价，不要写成获客种草或员工自荐；
+   - 标题禁止出现楼盘/小区/项目案名（含简报「楼盘信息」及同类地名案名）；可赞美、表扬所属店面/门店/服务门店，不要把店面写成楼盘；
    - 然后跳到本 Skill 第 8 条及之后与渠道长度、提交相关的要求。
+0b. 若 `payload.content_brief.form_values.mp_service_entry` 为「装修家居」（或未标注好评笔记的装修获客任务）：
+   - 仍严格遵守锁定标题公式与词库；
+   - 标题必须有吸引点：情绪共鸣、悬念、反差、利益点或痛点戳中，至少落地一项；禁止「小区/楼盘＋面积＋风格」说明书式平铺；
+   - 可点出区域、面积、风格中的高信息槽，但要用钩子句式组合，不要写成资料卡标题；
+   - 遵守 `content_brief.form_values.writing_instruction`（若有）。
 1. 当前 Skill 全文已经注入，不调用 `read_file`。
 2. 只读取当前节点 `payload`；锁定标题公式的完整原版定义位于 `payload.strategy_snapshot.title_formula`，不得再次读取可变规则库，也不得凭记忆补公式。
 3. 业务事实已经完整提供在 `payload.content_brief` 和 `payload.evidence_bundle` 中，不调用业务事实或知识库工具。

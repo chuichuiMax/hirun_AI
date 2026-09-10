@@ -113,7 +113,7 @@ async def test_v34_brief_compiles_without_visual_material(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pc_review_notes_compile_requires_photos(monkeypatch):
+async def test_pc_review_notes_compile_ignores_photos(monkeypatch):
     task = SimpleNamespace(
         id="task-review-notes",
         workflow_version_id=PLATFORM_WORKFLOW_V3_ID,
@@ -145,12 +145,12 @@ async def test_pc_review_notes_compile_requires_photos(monkeypatch):
         async def commit(self):
             return None
 
-    async def fake_list_variables(db):
+    async def fake_list_business_variables(db):
         del db
-        return {"variables": []}
+        return {"business_variables": []}
 
     monkeypatch.setattr(content_service, "ContentRepository", FakeRepo)
-    monkeypatch.setattr(content_service, "list_variables", fake_list_variables)
+    monkeypatch.setattr(content_service, "list_business_variables", fake_list_business_variables)
     monkeypatch.setattr(
         content_service,
         "compile_content_brief",
@@ -158,34 +158,20 @@ async def test_pc_review_notes_compile_requires_photos(monkeypatch):
     )
     monkeypatch.setattr(content_service, "normalize_manual_evidence", lambda task_id, compiled: {"items": []})
 
-    with pytest.raises(HTTPException) as missing:
-        await content_service.save_content_brief(
-            FakeDB(),
-            SimpleNamespace(uid="user-1"),
-            task.id,
-            ContentBriefPayload(form_values={"mp_service_entry": "好评笔记", "设计师": "林工"}),
-            compile_now=True,
-        )
-    assert missing.value.status_code == 422
-    assert missing.value.detail["error"]["code"] == "CONTENT_REVIEW_NOTE_PHOTO_REQUIRED"
-
-    with pytest.raises(HTTPException) as too_many:
-        await content_service.save_content_brief(
-            FakeDB(),
-            SimpleNamespace(uid="user-1"),
-            task.id,
-            ContentBriefPayload(
-                form_values={
-                    "mp_service_entry": "好评笔记",
-                    "cover_asset_ids": ["p1", "p2", "p3", "p4"],
-                }
-            ),
-            compile_now=True,
-        )
-    assert too_many.value.status_code == 422
-    assert too_many.value.detail["error"]["code"] == "CONTENT_REVIEW_NOTE_PHOTO_LIMIT"
-
     result = await content_service.save_content_brief(
+        FakeDB(),
+        SimpleNamespace(uid="user-1"),
+        task.id,
+        ContentBriefPayload(form_values={"mp_service_entry": "好评笔记", "设计师": "林工"}),
+        compile_now=True,
+    )
+    assert result["compiled"] is True
+    assert task.brief_json["form_values"].get("cover_asset_id") is None
+    assert task.brief_json["form_values"].get("cover_asset_ids") == []
+    assert task.brief_json["attachments"] == []
+    assert task.runtime_config_snapshot_json["visual_material"] is None
+
+    with_photos = await content_service.save_content_brief(
         FakeDB(),
         SimpleNamespace(uid="user-1"),
         task.id,
@@ -198,10 +184,10 @@ async def test_pc_review_notes_compile_requires_photos(monkeypatch):
         ),
         compile_now=True,
     )
-    assert result["compiled"] is True
-    assert task.brief_json["form_values"]["cover_asset_ids"] == ["photo-1", "photo-2"]
-    assert [item["asset_id"] for item in task.brief_json["attachments"]] == ["photo-1", "photo-2"]
-    assert task.runtime_config_snapshot_json["visual_material"] is None
+    assert with_photos["compiled"] is True
+    assert task.brief_json["form_values"].get("cover_asset_id") is None
+    assert task.brief_json["form_values"].get("cover_asset_ids") == []
+    assert task.brief_json["attachments"] == []
 
 
 @pytest.mark.asyncio

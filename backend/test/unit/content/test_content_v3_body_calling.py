@@ -40,6 +40,10 @@ def test_body_calling_catalog_covers_all_formulas_and_five_source_columns() -> N
         assert calling["sections"]
         assert all(section["fill_rule"] for section in calling["sections"])
         assert calling["reference_examples"]
+    c02 = DECORATION_BODY_CALLING["C02"]
+    assert "案例故事" in c02["sections"][1]["instruction"] or "禁止展开案例" in c02["sections"][1]["instruction"]
+    assert "鸿扬家装" in c02["sections"][1]["instruction"]
+    assert "引流" in c02["sections"][3]["instruction"]
 
 
 def test_outline_must_follow_body_calling_section_order_and_choose_one_variant() -> None:

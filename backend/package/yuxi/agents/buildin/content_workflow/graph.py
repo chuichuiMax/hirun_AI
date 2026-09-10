@@ -17,13 +17,10 @@ from yuxi.content.control.workflow.agent_node import AgentNodeHandler
 from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
 from yuxi.content.control.workflow.external_wait import (
     ExternalWaitNodeHandler,
-    review_notes_uploaded_cover_asset_id,
     skip_content_correction_interrupt,
     skip_cover_pipeline,
     skip_formula_lexicon_pipeline,
 )
-from yuxi.content.control.workflow.revision import RevisionRouteController, resolve_revision_reason
-from yuxi.content.control.workflow.external_wait import ExternalWaitNodeHandler
 from yuxi.content.control.workflow.revision import (
     RevisionRouteController,
     resolve_revision_reason,
@@ -761,13 +758,8 @@ class ContentWorkflowAgent(BaseAgent):
 
         if interrupt_type == "cover_selection":
             if skip_cover_pipeline(state):
-                uploaded_cover_id = review_notes_uploaded_cover_asset_id(state)
                 return {
-                    "selected_cover": (
-                        {"asset_id": uploaded_cover_id, "source": "uploaded_photo"}
-                        if uploaded_cover_id
-                        else {}
-                    ),
+                    "selected_cover": {},
                     "state_version": state_version + 1,
                     "resume_parent_run_id": None,
                 }
@@ -940,30 +932,18 @@ class ContentWorkflowAgent(BaseAgent):
             if selected_cover:
                 cover_repo = ContentCoverRepository(db)
                 cover_asset = await cover_repo.get_asset(str(cover_asset_id or ""))
-                if selected_cover.get("source") == "uploaded_photo" or (
-                    cover_asset_id and not cover_job_id and skip_formula_lexicon_pipeline(state)
+                cover_job = await cover_repo.get_job(str(cover_job_id or ""))
+                if (
+                    cover_job is None
+                    or cover_job.status != "succeeded"
+                    or cover_job.content_task_id != task.id
+                    or cover_asset is None
+                    or cover_asset.owner_uid != state["uid"]
+                    or cover_asset.role != "output"
+                    or cover_asset.id not in ((cover_job.result_json or {}).get("asset_ids") or [])
                 ):
-                    if (
-                        cover_asset is None
-                        or cover_asset.deleted_at is not None
-                        or cover_asset.owner_uid != state["uid"]
-                        or cover_asset.role not in {"source", "library_image"}
-                    ):
-                        raise ValueError("好评笔记只能绑定当前用户上传的现场照片作为封面")
-                    cover_job_id = None
-                else:
-                    cover_job = await cover_repo.get_job(str(cover_job_id or ""))
-                    if (
-                        cover_job is None
-                        or cover_job.status != "succeeded"
-                        or cover_job.content_task_id != task.id
-                        or cover_asset is None
-                        or cover_asset.owner_uid != state["uid"]
-                        or cover_asset.role != "output"
-                        or cover_asset.id not in ((cover_job.result_json or {}).get("asset_ids") or [])
-                    ):
-                        raise ValueError("ArtifactVersion 只能绑定本任务生成成功的 CoverJob 输出资产")
-                    hycanvas_design_snapshot = (cover_job.result_json or {}).get("hycanvas_design_snapshot") or {}
+                    raise ValueError("ArtifactVersion 只能绑定本任务生成成功的 CoverJob 输出资产")
+                hycanvas_design_snapshot = (cover_job.result_json or {}).get("hycanvas_design_snapshot") or {}
             artifact = await repo.get_artifact_for_task(task.id)
             if artifact is None:
                 artifact = ContentArtifact(
