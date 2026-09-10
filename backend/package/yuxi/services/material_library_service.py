@@ -570,7 +570,7 @@ async def create_material_share(
             "image_count": len(snapshots),
             "page_path": _share_page_path(share.token),
             "image_path": _share_image_path(share.token, 1) if snapshots else None,
-            "page_url": _share_public_url(_share_page_path(share.token)),
+            "page_url": _share_public_url(_share_case_path(share.token)),
             "image_url": _share_public_url(_share_image_path(share.token, 1)) if snapshots else None,
         }
     }
@@ -618,12 +618,18 @@ def render_public_material_share_page(
         os.getenv("MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL", "").strip().rstrip("/")
         or request_base_url.rstrip("/")
     )
+    ordered_items = sorted(items, key=lambda item: item.display_order)
     title = html.escape(share.title)
-    first_image = f"{base_url}{_share_image_path(share.token, 1)}" if items else ""
+    first_item = ordered_items[0] if ordered_items else None
+    first_image = f"{base_url}{_share_image_path(share.token, first_item.display_order)}" if first_item else ""
+    share_url = f"{base_url}{_share_case_path(share.token)}"
+    first_image_type = html.escape(first_item.content_type, quote=True) if first_item else ""
+    first_image_width = first_item.image_width if first_item else ""
+    first_image_height = first_item.image_height if first_item else ""
     building_name = html.escape(share.building_name or "")
     area = html.escape(share.area or "")
     design_style = html.escape(share.design_style or "")
-    description = html.escape(_share_description(share.building_name, share.area, share.design_style))
+    description = html.escape(_share_description(share.building_name, share.area, share.design_style), quote=True)
     details = ""
     if building_name and area and design_style:
         details = (
@@ -644,7 +650,7 @@ def render_public_material_share_page(
             f'<img src="{html.escape(_share_image_path(share.token, item.display_order), quote=True)}" '
             f'alt="{title} 第 {item.display_order} 张" loading="lazy">'
         )
-        for item in items
+        for item in ordered_items
     )
     return "\n".join(
         [
@@ -652,9 +658,17 @@ def render_public_material_share_page(
             '<html lang="zh-CN"><head><meta charset="utf-8">',
             '<meta name="viewport" content="width=device-width, initial-scale=1">',
             f"<title>{title}</title>",
+            f'<meta name="description" content="{description}">',
+            '<meta property="og:type" content="website">',
+            f'<meta property="og:url" content="{html.escape(share_url, quote=True)}">',
+            '<meta property="og:site_name" content="Yuxi">',
             f'<meta property="og:title" content="{title}">',
             f'<meta property="og:description" content="{description}">',
             f'<meta property="og:image" content="{html.escape(first_image, quote=True)}">',
+            f'<meta property="og:image:secure_url" content="{html.escape(first_image, quote=True)}">',
+            f'<meta property="og:image:type" content="{first_image_type}">',
+            f'<meta property="og:image:width" content="{first_image_width}">',
+            f'<meta property="og:image:height" content="{first_image_height}">',
             f'<meta name="twitter:title" content="{title}">',
             f'<meta name="twitter:description" content="{description}">',
             f'<meta name="twitter:image" content="{html.escape(first_image, quote=True)}">',

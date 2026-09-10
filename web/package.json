@@ -8,6 +8,7 @@
     "server": "vite serve --host",
     "server:prod": "vite serve --host --port 8080",
     "build": "vite build",
+    "test:share-flow": "node scripts/verify-share-flow.mjs",
     "preview": "vite preview",
     "lint": "eslint . --fix --cache",
     "format": "prettier --write --experimental-cli src/"

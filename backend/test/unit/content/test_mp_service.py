@@ -402,8 +402,10 @@ def test_mp_gallery_item_always_exposes_in_use():
     unused = _mp_gallery_item({"id": "mli_2", "name": "上传图片"})
     assert used["in_use"] is True
     assert used["file_url"] == "/api/mp/content/gallery-items/mli_1/file"
+    assert used["thumbnail_file_url"] == "/api/mp/content/gallery-items/mli_1/thumbnail"
     assert unused["in_use"] is False
     assert unused["file_url"] == "/api/mp/content/gallery-items/mli_2/file"
+    assert unused["thumbnail_file_url"] == "/api/mp/content/gallery-items/mli_2/thumbnail"
 
 
 def test_mp_hycanvas_template_item_rewrites_preview_to_mp_proxy():
@@ -463,6 +465,7 @@ async def test_list_mp_gallery_items_forwards_in_use(monkeypatch):
     assert result["items"][0]["in_use"] is True
     assert result["items"][1]["in_use"] is False
     assert result["items"][0]["file_url"].endswith("/mli_used/file")
+    assert result["items"][0]["thumbnail_file_url"].endswith("/mli_used/thumbnail")
 
 
 @pytest.mark.asyncio
