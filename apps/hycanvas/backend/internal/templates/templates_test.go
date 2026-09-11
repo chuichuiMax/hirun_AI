@@ -315,6 +315,32 @@ func TestNormalizeTemplateTypographyRejectsMissingTextNode(t *testing.T) {
 	}
 }
 
+func TestEnrichTextFieldLayoutConstraintsCapsCopyToFixedTextBox(t *testing.T) {
+	file := map[string]any{
+		"pages": []any{map[string]any{"children": []any{map[string]any{
+			"id": "title-node", "type": "text",
+			"box": map[string]any{"mode": "fixed", "width": 240.0, "height": 120.0},
+			"content": []any{map[string]any{"runs": []any{map[string]any{
+				"text": "原标题", "style": map[string]any{"fontSize": 60.0, "lineHeight": map[string]any{"mode": "multiple", "value": 1.0}},
+			}}}},
+		}}}},
+	}
+	field := map[string]any{
+		"nodeId": "title-node", "kind": "text", "label": "主标题",
+		"constraints": map[string]any{"maxChars": 20.0, "required": true},
+	}
+
+	enrichTextFieldLayoutConstraints(file, []any{field})
+
+	constraints := asObj(field["constraints"])
+	if asNum(constraints["maxChars"]) != 8 || asNum(constraints["maxCharsPerLine"]) != 4 || asNum(constraints["maxLines"]) != 2 {
+		t.Fatalf("layout constraints = %#v", constraints)
+	}
+	if measured, _ := constraints["layoutMeasured"].(bool); !measured {
+		t.Fatalf("layout constraint should be marked measured: %#v", constraints)
+	}
+}
+
 func TestFillTextFieldsDoesNotChangeTemplateStyleOrStructure(t *testing.T) {
 	file := map[string]any{
 		"pages": []any{map[string]any{"children": []any{map[string]any{

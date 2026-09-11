@@ -21,6 +21,13 @@ def apply_visual_text_max_char_floor(role: str, max_chars: int | None) -> int | 
     return max(max_chars, floor)
 
 
+def resolved_visual_text_max_chars(role: str, constraints: dict[str, Any]) -> int | None:
+    """Keep every template's declared physical capacity authoritative."""
+    del role
+    max_chars = constraints.get("maxChars")
+    return max_chars if isinstance(max_chars, int) and max_chars > 0 else None
+
+
 def resolve_visual_cover_title(
     *,
     visual_text: list[str] | None,
@@ -94,6 +101,7 @@ def missing_required_template_fields(
 __all__ = [
     "VISUAL_TEXT_MAX_CHAR_FLOORS",
     "apply_visual_text_max_char_floor",
+    "resolved_visual_text_max_chars",
     "missing_required_template_fields",
     "resolve_visual_cover_title",
     "template_fact_sources",

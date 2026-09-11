@@ -86,6 +86,9 @@ var seedEntries = func() []seedEntry {
 func (e seedEntry) toTemplate() Template {
 	var t Template
 	_ = json.Unmarshal(e.Template, &t)
+	var file map[string]any
+	_ = json.Unmarshal(e.File, &file)
+	enrichTextFieldLayoutConstraints(file, t.FillableFields)
 	return t
 }
 
@@ -178,6 +181,7 @@ func rowToTemplate(r TemplateRow) Template {
 			fillable = declared
 		}
 	}
+	enrichTextFieldLayoutConstraints(file, fillable)
 	attrs := []any{}
 	if len(r.Attributions) > 0 {
 		_ = json.Unmarshal(r.Attributions, &attrs)
@@ -457,7 +461,99 @@ func normalizeTemplateTypography(file map[string]any, fields []any) error {
 		}
 		field["typography"] = typography
 	}
+	enrichTextFieldLayoutConstraints(file, fields)
 	return nil
+}
+
+// enrichTextFieldLayoutConstraints derives conservative copy limits from the
+// template's fixed text box. These values are generation constraints, not a
+// request to resize type: the instantiated node keeps every saved style value.
+func enrichTextFieldLayoutConstraints(file map[string]any, fields []any) {
+	textNodes := map[string]map[string]any{}
+	for _, pageRaw := range asArr(file["pages"]) {
+		for _, root := range asArr(asObj(pageRaw)["children"]) {
+			visitTree(asObj(root), func(node map[string]any) {
+				if asStr(node["type"]) == "text" {
+					textNodes[asStr(node["id"])] = node
+				}
+			})
+		}
+	}
+	for _, raw := range fields {
+		field := asObj(raw)
+		if asStr(field["kind"]) != "text" || asStr(field["semanticRole"]) == "label" {
+			continue
+		}
+		node := textNodes[asStr(field["nodeId"])]
+		box := asObj(node["box"])
+		if node == nil || box == nil || asStr(box["mode"]) != "fixed" {
+			continue
+		}
+		paragraphs := asArr(node["content"])
+		if len(paragraphs) == 0 {
+			continue
+		}
+		runs := asArr(asObj(paragraphs[0])["runs"])
+		if len(runs) == 0 {
+			continue
+		}
+		style := asObj(asObj(runs[0])["style"])
+		fontSize := asNum(style["fontSize"])
+		if fontSize <= 0 {
+			continue
+		}
+		padding := asObj(box["padding"])
+		width := asNum(box["width"]) - asNum(padding["l"]) - asNum(padding["r"])
+		height := asNum(box["height"]) - asNum(padding["t"]) - asNum(padding["b"])
+		if width <= 0 || height <= 0 {
+			continue
+		}
+		advance := fontSize + max(0, asNum(style["letterSpacing"]))
+		lineHeight := resolvedLineHeight(style, fontSize)
+		if advance <= 0 || lineHeight <= 0 {
+			continue
+		}
+		maxPerLine := int(math.Floor(width / advance))
+		maxLines := int(math.Floor(height / lineHeight))
+		if maxPerLine < 1 || maxLines < 1 {
+			continue
+		}
+		constraints := asObj(field["constraints"])
+		if constraints == nil {
+			constraints = map[string]any{}
+			field["constraints"] = constraints
+		}
+		if declared := int(asNum(constraints["maxChars"])); declared > 0 && declared < maxPerLine*maxLines {
+			maxPerLine = min(maxPerLine, declared)
+			maxLines = min(maxLines, max(1, declared/maxPerLine))
+		}
+		if declared := int(asNum(constraints["maxCharsPerLine"])); declared > 0 {
+			maxPerLine = min(maxPerLine, declared)
+		}
+		if declared := int(asNum(constraints["maxLines"])); declared > 0 {
+			maxLines = min(maxLines, declared)
+		}
+		constraints["maxChars"] = float64(maxPerLine * maxLines)
+		constraints["maxCharsPerLine"] = float64(maxPerLine)
+		constraints["maxLines"] = float64(maxLines)
+		constraints["layoutMeasured"] = true
+	}
+}
+
+func resolvedLineHeight(style map[string]any, fontSize float64) float64 {
+	lineHeight := style["lineHeight"]
+	if value := asNum(lineHeight); value > 0 {
+		return fontSize * value
+	}
+	if spec := asObj(lineHeight); spec != nil {
+		if asStr(spec["mode"]) == "absolute" && asNum(spec["value"]) > 0 {
+			return asNum(spec["value"])
+		}
+		if asStr(spec["mode"]) == "multiple" && asNum(spec["value"]) > 0 {
+			return fontSize * asNum(spec["value"])
+		}
+	}
+	return fontSize * 1.2
 }
 
 func (s *Service) SaveAsTemplate(ctx context.Context, userID string, in SaveInput) (Template, error) {

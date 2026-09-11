@@ -350,7 +350,15 @@ export interface FillableFieldSummary {
   key?: string;
   semanticRole?: "title" | "subtitle" | "project_name" | "project_name_en" | "project_area" | "designer" | "completion_year" | "brand_name" | "label" | "body_excerpt";
   hint?: string;
-  constraints?: { maxChars?: number; aspect?: number; required?: boolean };
+  constraints?: {
+    maxChars?: number;
+    maxCharsPerLine?: number;
+    maxLines?: number;
+    /** True when the limits were derived from this template's fixed text box. */
+    layoutMeasured?: boolean;
+    aspect?: number;
+    required?: boolean;
+  };
   /** Snapshot extracted from the template node when it is saved. The design
    * file remains the rendering source of truth. */
   typography?: {

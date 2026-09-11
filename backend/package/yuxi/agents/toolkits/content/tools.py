@@ -250,7 +250,7 @@ def _hycanvas_template_fields(
 ) -> dict[str, str]:
     """Resolve author-declared template semantics from locked content inputs."""
     from yuxi.content.control.visual_template_fields import (
-        apply_visual_text_max_char_floor,
+        resolved_visual_text_max_chars,
         template_fact_sources,
     )
 
@@ -289,7 +289,7 @@ def _hycanvas_template_fields(
         constraints = field.get("constraints") or {}
         if constraints.get("required") and not value:
             raise ValueError(f"封面模板必填字段“{label}”未完成自动适配")
-        max_chars = apply_visual_text_max_char_floor(role, constraints.get("maxChars"))
+        max_chars = resolved_visual_text_max_chars(role, constraints)
         if isinstance(max_chars, int) and max_chars > 0 and len(value.replace("\n", "")) > max_chars:
             raise ValueError(f"封面字段“{label}”超过模板限制的 {max_chars} 个字符")
         max_chars_per_line = constraints.get("maxCharsPerLine")

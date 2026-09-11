@@ -280,6 +280,7 @@ def test_generation_projection_keeps_price_sources_rules_and_revision_without_mu
 def test_visual_text_max_char_floor_raises_cover_copy_limits():
     from yuxi.content.control.visual_template_fields import (
         apply_visual_text_max_char_floor,
+        resolved_visual_text_max_chars,
         resolve_visual_cover_title,
     )
 
@@ -287,6 +288,8 @@ def test_visual_text_max_char_floor_raises_cover_copy_limits():
     assert apply_visual_text_max_char_floor("body_excerpt", 6) == 24
     assert apply_visual_text_max_char_floor("title", 20) == 20
     assert apply_visual_text_max_char_floor("label", 4) == 4
+    assert resolved_visual_text_max_chars("title", {"maxChars": 8, "layoutMeasured": True}) == 8
+    assert resolved_visual_text_max_chars("title", {"maxChars": 8}) == 8
     assert (
         resolve_visual_cover_title(
             visual_text=[],
