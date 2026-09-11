@@ -100,7 +100,8 @@ const uploadFileLimit = computed(() => materialType.value === 'image' ? 50 : 100
 const deleteTargetOptions = computed(() => categories.value.filter((item) => item.id !== deletingCategory.value?.id && (deletingCategory.value?.visibility !== 'enterprise' || item.visibility === 'enterprise')))
 const decorationGalleryStyles = [
   '复合写意', '写意木构', '江南印象', '东方古雅', '轻欧简美', '欧美香颂', '欧式田园',
-  '异域风情', '新装饰主义', '北欧之光', '意境东方', '雅致现代', '复古风潮', '艺术室界'
+  '异域风情', '新装饰主义', '北欧之光', '意境东方', '雅致现代', '工业再造', '优雅缤纷',
+  '极简侘寂', '仿生未来', '复古风潮', '艺术室界'
 ]
 const isDecorationGalleryChild = computed(() =>
   ['create', 'edit'].includes(categoryEditorMode.value) &&
@@ -605,13 +606,20 @@ async function copyShareUrl(url) {
   if (!copied) throw new Error('浏览器未授予复制权限')
 }
 
+function currentPublicShareUrl(path) {
+  if (/^https?:\/\//i.test(path)) return path
+  const basePath = import.meta.env.BASE_URL.replace(/\/$/, '')
+  const routePath = path.startsWith('/') ? path : `/${path}`
+  return new URL(`${basePath}${routePath}`, window.location.origin).href
+}
+
 async function createShare() {
   if (!selectedShareItemIds.value.length) return message.warning('请先选择要分享的图片')
   shareCreating.value = true
   shareUrlForManualCopy.value = ''
   try {
     const response = await materialLibraryApi.createShare(selectedShareItemIds.value)
-    const shareUrl = response.share.url || response.share.page_url || new URL(response.share.page_path, window.location.origin).href
+    const shareUrl = currentPublicShareUrl(response.share.url || response.share.page_url || response.share.page_path)
     shareUrlForManualCopy.value = shareUrl
     await copyShareUrl(shareUrl)
     shareOpen.value = false

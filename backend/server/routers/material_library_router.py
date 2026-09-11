@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.utils.auth_middleware import get_db, get_required_user
+from server.utils.public_url import request_public_base_url
 from yuxi.services.material_library_service import (
     MaterialCategoryCreate,
     MaterialCategoryDelete,
@@ -104,10 +105,16 @@ async def image_galleries(
 @material_library.post("/shares", status_code=status.HTTP_201_CREATED)
 async def create_share(
     payload: MaterialShareCreate,
+    request: Request,
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await create_material_share(db, current_user, payload)
+    return await create_material_share(
+        db,
+        current_user,
+        payload,
+        public_base_url=request_public_base_url(request),
+    )
 
 
 @material_library.get("/shares/{token}/page", response_class=HTMLResponse)
@@ -117,7 +124,7 @@ async def public_share_page(
     db: AsyncSession = Depends(get_db),
 ):
     share, items = await get_public_material_share(db, token)
-    return HTMLResponse(render_public_material_share_page(share, items, str(request.base_url)))
+    return HTMLResponse(render_public_material_share_page(share, items, request_public_base_url(request)))
 
 
 @public_share_router.get("/share/case/{token}", response_class=HTMLResponse)
@@ -127,7 +134,7 @@ async def canonical_public_share_page(
     db: AsyncSession = Depends(get_db),
 ):
     share, items = await get_public_material_share(db, token)
-    return HTMLResponse(render_public_material_share_page(share, items, str(request.base_url)))
+    return HTMLResponse(render_public_material_share_page(share, items, request_public_base_url(request)))
 
 
 @material_library.get("/shares/{token}")

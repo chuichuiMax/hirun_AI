@@ -200,7 +200,7 @@ def test_public_material_share_serializer_exposes_only_snapshot_data_in_display_
 
 
 def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_metadata(monkeypatch):
-    monkeypatch.delenv("MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setenv("MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL", "https://old-share.example.test")
     share = ContentMaterialShare(
         id="mls_1",
         token="share-token",
@@ -236,12 +236,12 @@ def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_m
         ),
     ]
 
-    page = render_public_material_share_page(share, items, "https://share.example.test/")
+    page = render_public_material_share_page(share, items, "https://share.example.test/boyun/")
 
     assert "<title>洋湖天序·三居式·复古写意</title>" in page
     assert '<meta name="description" content="万科金域华府｜120㎡｜现代简约">' in page
     assert '<meta property="og:type" content="website">' in page
-    assert '<meta property="og:url" content="https://share.example.test/share/case/share-token">' in page
+    assert '<meta property="og:url" content="https://share.example.test/boyun/share/case/share-token">' in page
     assert '<meta property="og:site_name" content="Yuxi">' in page
     assert 'property="og:description" content="万科金域华府｜120㎡｜现代简约"' in page
     assert '楼盘：万科金域华府' in page
@@ -249,11 +249,11 @@ def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_m
     assert '风格：现代简约' in page
     assert (
         'property="og:image" '
-        'content="https://share.example.test/api/material-library/shares/share-token/images/1"' in page
+        'content="https://share.example.test/boyun/api/material-library/shares/share-token/images/1"' in page
     )
     assert (
         'property="og:image:secure_url" '
-        'content="https://share.example.test/api/material-library/shares/share-token/images/1"' in page
+        'content="https://share.example.test/boyun/api/material-library/shares/share-token/images/1"' in page
     )
     assert '<meta property="og:image:type" content="image/png">' in page
     assert '<meta property="og:image:width" content="48">' in page
@@ -261,8 +261,9 @@ def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_m
     assert page.index("/images/1") < page.index("/images/2")
 
 
+@pytest.mark.parametrize("design_style", ["工业再造", "优雅缤纷", "极简侘寂", "仿生未来"])
 @pytest.mark.asyncio
-async def test_decoration_gallery_child_requires_and_persists_an_allowed_design_style(monkeypatch):
+async def test_decoration_gallery_child_requires_and_persists_an_allowed_design_style(monkeypatch, design_style):
     parent = ContentMaterialCategory(
         owner_uid="owner-1",
         material_type="image",
@@ -330,13 +331,13 @@ async def test_decoration_gallery_child_requires_and_persists_an_allowed_design_
             material_type="image",
             name="书房案例",
             parent_id=parent.id,
-            design_style="江南印象",
+            design_style=design_style,
             building_name="洋湖天序",
             area="120",
         ),
     )
 
-    assert created["category"]["design_style"] == "江南印象"
+    assert created["category"]["design_style"] == design_style
 
 
 @pytest.mark.asyncio
