@@ -221,6 +221,25 @@ def test_catalog_select_options_merges_audience_and_resident_population():
     }
 
 
+def test_map_service_entry_form_values_quotation_list_brand_over_price():
+    mapped = map_service_entry_form_values(
+        "装修家居",
+        {
+            "mp_content_type_name": "装修报价清单",
+            "楼盘信息": "星河湾",
+            "基础": "4万",
+            "木制品": "2万",
+            "主材": "2万",
+            "设计风格": "北欧之光",
+        },
+    )
+    assert "一眼看懂" in mapped["writing_instruction"]
+    assert "报价不是鸿扬核心卖点" in mapped["writing_instruction"]
+    assert "品牌优势" in mapped["writing_instruction"]
+    assert "不以低价作为卖点" in mapped["advantage"]
+    assert "鸿扬家居品牌" in mapped["advantage"]
+
+
 def test_map_service_entry_form_values_keeps_configured_names():
     mapped = map_service_entry_form_values(
         "装修家居",
@@ -234,6 +253,8 @@ def test_map_service_entry_form_values_keeps_configured_names():
     assert "标题要有吸引点" in mapped["writing_instruction"]
     assert "不要展开某套房的案例故事" in mapped["writing_instruction"]
     assert "引流点" in mapped["writing_instruction"]
+    assert "evidence_cite_index" in mapped["writing_instruction"] or "Evidence ID" in mapped["writing_instruction"] or "paragraph_evidence" in mapped["writing_instruction"]
+    assert "中间值" in mapped["writing_instruction"]
     assert mapped.get("voice") != "业主第一人称"
     assert "好评知识库" not in str(mapped.get("writing_instruction") or "")
     assert "基础 4万" in mapped["craft_and_materials"]

@@ -106,6 +106,7 @@ class GenerateContentPromptV1(StrictContract):
     selected_title: dict[str, Any] | None = None
     content_outline: dict[str, Any] | None = None
     content_draft: dict[str, Any] | None = None
+    evidence_cite_index: list[dict[str, Any]] | None = None
 
 
 class AnalyzeContentValueInputV1(StrictContract):

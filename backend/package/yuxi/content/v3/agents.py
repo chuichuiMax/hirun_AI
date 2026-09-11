@@ -157,7 +157,7 @@ CONTENT_AGENT_SPECS = (
         slug="content-generation-agent",
         name="内容创作 Agent",
         description="按已锁定的创作手法与公式，一次生成标题、大纲和具备自然语气、情绪与人设表达的正文。",
-        reasoning_effort="medium",
+        reasoning_effort="low",
         model_call_timeout_seconds=120,
         model_retry_times=1,
         skills=(
@@ -170,7 +170,7 @@ CONTENT_AGENT_SPECS = (
             "content-human-expression",
         ),
         skill_tools=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
-        config_version=7,
+        config_version=8,
     ),
     ContentAgentSpec(
         slug="content-review-agent",
@@ -330,6 +330,23 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
                             "find_kb_document",
                             "list_kbs",
                         ],
+                    },
+                ),
+                7: (
+                    (),
+                    {
+                        "content-title-generator",
+                        "content-outline-builder",
+                        "content-body-generator",
+                        "viral-structure-rewriter",
+                        "viral-layout-formatter",
+                        "humanizer-zh",
+                        "content-human-expression",
+                    },
+                    {
+                        "reasoning_effort": spec.reasoning_effort,
+                        "model_call_timeout_seconds": spec.model_call_timeout_seconds,
+                        "model_retry_times": spec.model_retry_times,
                     },
                 ),
             },

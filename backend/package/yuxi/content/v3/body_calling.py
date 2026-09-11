@@ -16,7 +16,7 @@ SOURCE_METADATA = {
 
 DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
     "C01": {
-        "formula_name": "报价转化类：痛点+数据+反差+背书",
+        "formula_name": "报价转化类：痛点+数据+品牌背书+引流",
         "lexicon_calls": [
             "body.budget_pain",
             "body.budget_contrast",
@@ -31,7 +31,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "audience_pain",
                 "name": "人群痛点开篇",
-                "instruction": "锁定本地装修业主，聚焦装修预算、报价核心困扰，直击业主刚需痛点",
+                "instruction": "锁定本地装修业主，聚焦看不懂报价、怕隐形增项、怕低价陷阱等困扰；痛点可谈预算，但不要把「低价」塑造成解决方案",
                 "fill_rule": "仅使用预算痛点词库描述业主普遍报价、预算困扰",
                 "lexicon_calls": ["body.budget_pain"],
                 "fact_source": "lexicon",
@@ -39,24 +39,24 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "verified_data",
                 "name": "数据落地铺垫",
-                "instruction": "用简报信息卡点写出小区名称、房屋面积、房屋布局（有填才写）、风格、项目施工鸿扬家装；可并列整体预算，不展开某套房案例故事",
-                "fill_rule": "只使用 ContentBrief 或 EvidenceBundle 中的真实数据，不调用词库补造数字，不编造布局与改造细节",
+                "instruction": "用简报信息卡点写出小区名称、房屋面积、房屋布局（有填才写）、风格、项目施工鸿扬家装；可并列基础/木制品/主材等报价作参考口径，并点明报价仅供参考、不是核心卖点；面积等字段原样抄写证据文本；对应事实写入本段 evidence_ids",
+                "fill_rule": "只使用 ContentBrief 或 EvidenceBundle 中的真实数据，逐字复制匹配条目的 id，不调用词库补造数字，不编造布局与改造细节，不把面积区间改成中间值",
                 "lexicon_calls": [],
                 "fact_source": "evidence",
             },
             {
                 "id": "single_contrast",
                 "name": "多维度前后反差展示",
-                "instruction": "四选一且单篇只使用一种反差逻辑，禁止混用；反差讲服务/预算/认知/代价，不讲虚构户型改造前后故事",
-                "fill_rule": "按所选反差维度使用对应词库，保持统一正反对比逻辑",
+                "instruction": "四选一且单篇只使用一种反差逻辑，禁止混用；优先服务/认知反差；反差结论导向透明交付与品牌靠谱，禁止主推「我们更便宜/低价碾压」",
+                "fill_rule": "按所选反差维度使用对应词库，保持统一正反对比逻辑；涉及预算时强调口径清晰与少踩坑，不强调低价优势",
                 "lexicon_calls": [],
                 "fact_source": "lexicon_and_evidence",
             },
             {
                 "id": "persona_cta",
-                "name": "细节+人设收尾引导",
-                "instruction": "点明鸿扬家居/鸿扬家装品牌优势，结合透明施工细节与明确引流点（同城咨询、报价参考、留言私信）",
-                "fill_rule": "使用服务反差词库输出优势，并用报价引导词库完成转化",
+                "name": "品牌优势+引流收尾",
+                "instruction": "用充足篇幅写鸿扬家居/鸿扬家装品牌优势（标准化整装、透明施工、规范工艺、售后与靠谱交付），再给明确引流点（同城咨询、看工艺、留言要参考清单）；报价不是收尾卖点",
+                "fill_rule": "使用服务反差/人设词库输出品牌与交付优势，并用报价引导词库做轻咨询转化，禁止把低价写成转化理由",
                 "lexicon_calls": ["persona.service_contrast", "ending.quotation_cta"],
                 "fact_source": "lexicon_and_evidence",
             },
@@ -65,31 +65,31 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "service_contrast",
                 "name": "服务反差",
-                "instruction": "行业乱象套路 VS 我方透明施工服务",
+                "instruction": "行业乱象套路 VS 鸿扬透明施工与品牌交付",
                 "lexicon_calls": ["body.quotation_chaos", "persona.service_contrast"],
             },
             {
                 "id": "budget_contrast",
                 "name": "预算反差",
-                "instruction": "业主理想化预算预期 VS 实际装修超支现状",
+                "instruction": "业主理想化预算预期 VS 实际装修超支现状；解决方向是口径透明与品牌交付，不是拼最低价",
                 "lexicon_calls": ["body.owner_expectation_gap", "body.budget_contrast"],
             },
             {
                 "id": "cognitive_contrast",
                 "name": "认知反差",
-                "instruction": "业主错误报价认知 VS 专业正规报价逻辑",
+                "instruction": "业主错误报价认知 VS 专业正规报价逻辑与品牌标准",
                 "lexicon_calls": ["body.quotation_cognitive_contrast"],
             },
             {
                 "id": "cost_contrast",
                 "name": "代价反差",
-                "instruction": "盲目低价签约的踩坑代价 VS 规范报价的省钱优势",
+                "instruction": "盲目低价签约的踩坑代价 VS 选择规范品牌与透明交付的长期省心（不要写成「我们更便宜」）",
                 "lexicon_calls": ["body.cost_result"],
             },
         ],
-        "variation_rule": "不同正文轮换反差维度和表达，单篇不得混用多个反差维度",
+        "variation_rule": "不同正文轮换反差维度和表达，单篇不得混用多个反差维度；报价清单类始终以品牌优势收束",
         "reference_examples": [
-            "很多业主装修都会遇到预算问题；用小区、面积、风格与施工方信息卡点说明，再以品牌优势和同城报价咨询收尾。"
+            "从看不懂报价、怕增项切入；用小区、面积、风格与参考报价卡点说明；重点讲鸿扬品牌与透明交付，最后邀请同城咨询。"
         ],
     },
     "C02": {
@@ -112,8 +112,8 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "verified_renovation_data",
                 "name": "数据落地铺垫",
-                "instruction": "信息卡点写出小区名称、房屋面积、房屋布局（有填才写）、风格、项目施工鸿扬家装；可并列预算与施工项目，禁止展开案例描述",
-                "fill_rule": "只使用 ContentBrief 或 EvidenceBundle 中的真实字段，缺失布局则跳过该卡点",
+                "instruction": "信息卡点写出小区名称、房屋面积、房屋布局（有填才写）、风格、项目施工鸿扬家装；面积等字段原样抄写证据文本；可并列预算与施工项目，禁止展开案例描述；对应事实写入本段 evidence_ids",
+                "fill_rule": "只使用 ContentBrief 或 EvidenceBundle 中的真实字段，逐字复制匹配条目的 id；缺失布局则跳过该卡点；禁止把面积区间改成中间值",
                 "lexicon_calls": [],
                 "fact_source": "evidence",
             },

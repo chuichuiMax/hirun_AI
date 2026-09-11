@@ -19,8 +19,21 @@ DECORATION_WRITING_INSTRUCTION = (
     "标题要有吸引点：情绪、悬念、反差或利益点至少占一项，禁止楼盘+面积+风格的说明书式平铺；"
     "正文不要展开某套房的案例故事（旧况、改造过程、完工效果叙事），每套房子不同，细节写错容易失真；"
     "正文优先用信息卡点写清：小区名称、房屋面积、房屋布局（仅简报有填时）、风格、项目施工鸿扬家装；"
+    "卡点文字必须与简报/证据原文一致（面积保留区间原文，禁止改成130m²等中间值）；"
+    "写出的每个卡点与数字都要在 paragraph_evidence 挂载对应 evidence_bundle.items[].id（或 evidence_cite_index.id），逐字复制，禁止编造 ID；"
+    "若有可用于正文的业务知识证据，至少再挂一条；"
     "必须写出鸿扬家居/鸿扬家装品牌优势，并带明确引流点（同城咨询、报价参考、留言私信等）；"
     "事实只来自简报与冻结证据，不得编造户型缺陷、改造前后效果或他人案例细节。"
+)
+QUOTATION_LIST_TYPE_NAMES = frozenset({"装修报价清单", "报价清单"})
+QUOTATION_LIST_WRITING_INSTRUCTION = (
+    "内容类型为装修报价清单：标题必须让人一眼看懂在说什么（预算参考/报价透明/避坑清单等），"
+    "句子通顺、语义完整，禁止词库堆砌、暗号式缩写或看不懂的标题；"
+    "标题可用痛点或悬念，但主题要落在「看清单/看预算口径/避隐形增项」，不要吹嘘最低价；"
+    "正文把基础/木制品/主材等报价仅作参考信息卡点展示，明确报价不是鸿扬核心卖点，禁止主推「更便宜、低价、性价比碾压」；"
+    "正文重点写鸿扬家居/鸿扬家装品牌优势：标准化交付、透明施工、自有/规范工艺、售后与靠谱服务，用品牌与交付能力收尾引流；"
+    "仍须写清小区、面积（原文）、风格、项目施工鸿扬家装等信息卡点，并正确挂载 Evidence ID；"
+    "不展开某套房案例故事，不编造数字与改造情节。"
 )
 
 
@@ -218,16 +231,32 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
     if service_entry == "装修家居":
         product = community or "整装项目"
         process = budget_text or f"{style} {frame_area}".strip() or "整装交付"
-        pain = f"{community or '业主'}关注{frame_area or '户型'}装修落地"
-        advantage = "；".join(
-            part
-            for part in (
-                style,
-                f"项目施工{CONSTRUCTION_BRAND}",
-                f"{BRAND_NAME}整装标准化交付与透明服务",
+        content_type_name = str(values.get("mp_content_type_name") or "").strip()
+        is_quotation_list = content_type_name in QUOTATION_LIST_TYPE_NAMES
+        if is_quotation_list:
+            pain = f"{community or '业主'}关心装修预算口径与隐形增项，更需要看清品牌与交付是否靠谱"
+            advantage = "；".join(
+                part
+                for part in (
+                    f"{BRAND_NAME}品牌与标准化整装交付",
+                    f"项目施工{CONSTRUCTION_BRAND}",
+                    "透明工艺与售后服务（报价仅作参考，不以低价作为卖点）",
+                )
+                if part
             )
-            if part
-        )
+            values["writing_instruction"] = QUOTATION_LIST_WRITING_INSTRUCTION
+        else:
+            pain = f"{community or '业主'}关注{frame_area or '户型'}装修落地"
+            advantage = "；".join(
+                part
+                for part in (
+                    style,
+                    f"项目施工{CONSTRUCTION_BRAND}",
+                    f"{BRAND_NAME}整装标准化交付与透明服务",
+                )
+                if part
+            )
+            values["writing_instruction"] = DECORATION_WRITING_INSTRUCTION
         audience = [region] if region else ["装修业主"]
         result = " ".join(part for part in (community, frame_area, layout, style, f"施工{CONSTRUCTION_BRAND}") if part)
         values["community_name"] = community
@@ -235,7 +264,6 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
         values["house_layout"] = layout
         values["design_style"] = style
         values["construction_brand"] = CONSTRUCTION_BRAND
-        values["writing_instruction"] = DECORATION_WRITING_INSTRUCTION
     else:
         product = "业主好评笔记"
         process = persona_text or "项目成员服务"

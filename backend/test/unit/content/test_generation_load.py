@@ -25,7 +25,7 @@ def test_strategy_has_time_for_two_calls_and_preserves_explicit_reasoning(node_i
     assert CONTENT_NODE_EXECUTION_LIMITS[node_id][0] >= context._content_max_model_calls * context.model_call_timeout_seconds + 3 + 15
     context.reasoning_effort = "medium"
     AgentDelegationService._apply_node_constraints(context, request)
-    assert context.reasoning_effort == "medium"
+    assert context.reasoning_effort == "low"
 
 
 def test_generate_content_allows_three_model_calls_with_matching_watchdog():
@@ -37,7 +37,7 @@ def test_generate_content_allows_three_model_calls_with_matching_watchdog():
     )
     context = SimpleNamespace(reasoning_effort=None)
     AgentDelegationService._apply_node_constraints(context, request)
-    assert context.reasoning_effort == "medium"
+    assert context.reasoning_effort == "low"
     assert context.model_call_timeout_seconds == 120
     assert context._content_max_model_calls == 3
     assert CONTENT_NODE_EXECUTION_LIMITS["generate_content"][0] >= (
@@ -267,10 +267,14 @@ def test_generation_projection_keeps_price_sources_rules_and_revision_without_mu
     for key in ("id", "value", "source_id", "allowed_usage", "verified_status", "risk_level", "metadata"):
         assert evidence[key] == payload["evidence_bundle"]["items"][0][key]
     assert "source_hash" not in evidence
+    cite = result["evidence_cite_index"]
+    assert cite[0]["id"] == payload["evidence_bundle"]["items"][0]["id"]
+    assert "title" in cite[0]["allowed_usage"] or "body" in cite[0]["allowed_usage"]
+    assert cite[0]["value_preview"] == payload["evidence_bundle"]["items"][0]["value"]
     chunks = result["formula_lexicon_bundle"]["body"][0]["chunks"]
     assert chunks[0] == "短词条"
-    assert chunks[1].endswith("…") and len(chunks[1]) == 600
-    assert len(chunks) == 4
+    assert chunks[1].endswith("…") and len(chunks[1]) == 400
+    assert len(chunks) == 3
 
 
 def test_visual_text_max_char_floor_raises_cover_copy_limits():

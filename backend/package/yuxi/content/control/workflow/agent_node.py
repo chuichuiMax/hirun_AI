@@ -83,9 +83,13 @@ DECORATION_GENERATE_PROHIBITED_ACTIONS = (
     "不修改锁定策略与公式",
     "不检索网页或知识库",
     "不引入冻结证据外的事实",
+    "首轮不得 read_file 或探索工具，须直接 submit_content_node_result",
     "标题不做楼盘+面积+风格的说明书式平铺，须有吸引点",
     "正文不展开某套房案例故事，不编造户型改造前后细节",
     "正文须含简报已有小区/面积/风格与项目施工鸿扬家装，并写品牌优势与引流点",
+    "不编造 Evidence ID；卡点与数字须原样引用并挂载对应 id；面积禁止改写成中间值",
+    "有业务知识证据时 paragraph_evidence 至少挂一条知识库 id",
+    "报价清单类：标题须语义清晰可读；不以低价为主卖点，正文突出鸿扬品牌优势",
 )
 
 
@@ -532,7 +536,12 @@ class AgentNodeHandler:
                 prompt=(
                     f"执行内容工作流节点 {node['id']}：检索「好评知识库」或「好评笔记知识库」并模仿写作"
                     if skip_formula_lexicon_pipeline(state) and node["id"] == "generate_content"
-                    else f"执行内容工作流节点 {node['id']} 的唯一职责"
+                    else (
+                        f"执行内容工作流节点 {node['id']} 的唯一职责；"
+                        "首轮直接调用 submit_content_node_result，不要 read_file 或空转工具"
+                        if node["id"] == "generate_content"
+                        else f"执行内容工作流节点 {node['id']} 的唯一职责"
+                    )
                 ),
                 output_contract=node["output_contract"],
                 result_tool_name=node["result_tool_name"],

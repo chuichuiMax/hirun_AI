@@ -45,7 +45,8 @@ from yuxi.storage.postgres.models_content import ContentNodeRun
 
 # 节点总时间、单调用时间、默认推理强度、模型调用上限（连接重试与结果纠错共用）。
 CONTENT_NODE_EXECUTION_LIMITS = {
-    "generate_content": (400, 120, "medium", 3),
+    # 正文生成以首轮直出为主；low 显著缩短单次推理，校验失败仍可用满 3 次额度纠错。
+    "generate_content": (400, 120, "low", 3),
     "select_creation_strategy": (150, 65, "low", 2),
     "reselect_creation_strategy": (150, 65, "low", 2),
 }
@@ -238,8 +239,10 @@ class AgentDelegationService:
                 request.node_run.node_id == "generate_content"
                 and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
             ):
+                # 原创不需仿写结构 Skill；有人味由 content-human-expression 覆盖，省去 humanizer 注入体积。
+                drop = {"viral-structure-rewriter", "humanizer-zh"}
                 context._required_skill_closure = [
-                    slug for slug in context._required_skill_closure if slug != "viral-structure-rewriter"
+                    slug for slug in context._required_skill_closure if slug not in drop
                 ]
             if (
                 request.node_run.node_id in {"select_creation_strategy", "reselect_creation_strategy"}
@@ -453,7 +456,8 @@ class AgentDelegationService:
     def _apply_node_constraints(context, request: AgentDelegationRequest) -> None:
         if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
             _, call_timeout, reasoning, max_model_calls = CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id]
-            context.reasoning_effort = getattr(context, "reasoning_effort", None) or reasoning
+            # 节点时限表覆盖 Agent 种子配置，保证正文生成走低推理延迟。
+            context.reasoning_effort = reasoning
             context.model_call_timeout_seconds = call_timeout
             context.model_retry_times = 1
             context._content_max_model_calls = max_model_calls

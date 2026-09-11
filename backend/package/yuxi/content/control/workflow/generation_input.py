@@ -4,15 +4,38 @@ from copy import deepcopy
 
 from yuxi.content.model.contracts.content_nodes import GenerateContentPromptV1
 
-_MAX_LEXICON_CHUNKS = 4
-_MAX_LEXICON_CHUNK_CHARS = 600
-_MAX_EVIDENCE_VALUE_CHARS = 400
+_MAX_LEXICON_CHUNKS = 3
+_MAX_LEXICON_CHUNK_CHARS = 400
+_MAX_EVIDENCE_VALUE_CHARS = 320
+_MAX_CITE_VALUE_CHARS = 80
 
 
 def _trim_text(value: object, limit: int) -> object:
     if not isinstance(value, str) or len(value) <= limit:
         return value
     return value[: limit - 1].rstrip() + "…"
+
+
+def _build_evidence_cite_index(items: list) -> list[dict]:
+    index: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        if item.get("verified_status") == "rejected":
+            continue
+        index.append(
+            {
+                "id": item["id"],
+                "allowed_usage": list(item.get("allowed_usage") or []),
+                "source_id": item.get("source_id"),
+                "source_type": item.get("source_type"),
+                "material_type": (item.get("metadata") or {}).get("material_type")
+                if isinstance(item.get("metadata"), dict)
+                else None,
+                "value_preview": _trim_text(item.get("value"), _MAX_CITE_VALUE_CHARS),
+            }
+        )
+    return index
 
 
 def project_generation_input(payload: dict) -> dict:
@@ -33,7 +56,9 @@ def project_generation_input(payload: dict) -> dict:
         for key in list(brief.get(section) or {}):
             if key.endswith("_version_id") or key in {"attachments", "visual_material"}:
                 del brief[section][key]
-    for item in projected["evidence_bundle"].get("items", []):
+    evidence_items = projected["evidence_bundle"].get("items", [])
+    projected["evidence_cite_index"] = _build_evidence_cite_index(evidence_items)
+    for item in evidence_items:
         for field in ("source_hash", "source_version", "created_at"):
             item.pop(field, None)
         if "value" in item:
