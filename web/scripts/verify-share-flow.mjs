@@ -8,7 +8,7 @@ for (const forbidden of ['navigator.share', 'weixin://', 'wxwork://']) {
   }
 }
 
-for (const required of ['response.share.url', '链接已复制，请粘贴到微信或企业微信']) {
+for (const required of ['currentPublicShareUrl', 'import.meta.env.BASE_URL', 'response.share.url', '链接已复制，请粘贴到微信或企业微信']) {
   if (!source.includes(required)) {
     throw new Error(`share flow is missing required behavior: ${required}`)
   }

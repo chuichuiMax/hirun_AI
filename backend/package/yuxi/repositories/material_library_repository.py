@@ -176,9 +176,7 @@ class MaterialLibraryRepository:
             ContentCoverAsset, ContentCoverAsset.id == ContentMaterialLibraryItem.asset_id
         ).join(
             ContentMaterialCategory,
-            (ContentMaterialCategory.owner_uid == ContentMaterialLibraryItem.owner_uid)
-            & (ContentMaterialCategory.material_type == ContentMaterialLibraryItem.material_type)
-            & (ContentMaterialCategory.id == ContentMaterialLibraryItem.category),
+            self.category_join(),
         )
         return list(
             (
@@ -186,7 +184,7 @@ class MaterialLibraryRepository:
                     select(ContentMaterialLibraryItem, ContentCoverAsset, ContentMaterialCategory)
                     .select_from(join)
                     .where(
-                        ContentMaterialLibraryItem.owner_uid == owner_uid,
+                        self.item_access(owner_uid),
                         ContentMaterialLibraryItem.id.in_(item_ids),
                         ContentMaterialLibraryItem.material_type == "image",
                         ContentMaterialLibraryItem.status == "enabled",

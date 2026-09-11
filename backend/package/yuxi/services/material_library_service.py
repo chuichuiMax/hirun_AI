@@ -59,6 +59,10 @@ DECORATION_GALLERY_DESIGN_STYLES = frozenset(
         "北欧之光",
         "意境东方",
         "雅致现代",
+        "工业再造",
+        "优雅缤纷",
+        "极简侘寂",
+        "仿生未来",
         "复古风潮",
         "艺术室界",
     }
@@ -182,8 +186,8 @@ def _share_case_path(token: str) -> str:
     return f"/share/case/{token}"
 
 
-def _share_public_url(path: str) -> str:
-    base_url = os.getenv("MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL", "").strip().rstrip("/")
+def _share_public_url(path: str, public_base_url: str | None = None) -> str:
+    base_url = (public_base_url or os.getenv("MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL", "")).strip().rstrip("/")
     return f"{base_url}{path}" if base_url else path
 
 
@@ -493,10 +497,13 @@ async def import_material_images(
 
 
 async def create_material_share(
-    db: AsyncSession, user: User, payload: MaterialShareCreate
+    db: AsyncSession,
+    user: User,
+    payload: MaterialShareCreate,
+    public_base_url: str | None = None,
 ) -> dict[str, Any]:
     owner_uid = _owner_uid(user)
-    repo = MaterialLibraryRepository(db)
+    repo = MaterialLibraryRepository(db, include_shared=True)
     rows = await repo.list_image_items_with_assets_and_categories(owner_uid, payload.item_ids)
     if len(rows) != len(payload.item_ids):
         raise _error(404, "MATERIAL_NOT_FOUND", "所选图片不存在或无权访问")
@@ -562,7 +569,7 @@ async def create_material_share(
     return {
         "share": {
             "id": share.token,
-            "url": _share_public_url(_share_case_path(share.token)),
+            "url": _share_public_url(_share_case_path(share.token), public_base_url),
             "cover_url": _share_image_path(share.token, 1) if snapshots else None,
             "token": share.token,
             "title": share.title,
@@ -570,8 +577,8 @@ async def create_material_share(
             "image_count": len(snapshots),
             "page_path": _share_page_path(share.token),
             "image_path": _share_image_path(share.token, 1) if snapshots else None,
-            "page_url": _share_public_url(_share_case_path(share.token)),
-            "image_url": _share_public_url(_share_image_path(share.token, 1)) if snapshots else None,
+            "page_url": _share_public_url(_share_case_path(share.token), public_base_url),
+            "image_url": _share_public_url(_share_image_path(share.token, 1), public_base_url) if snapshots else None,
         }
     }
 
@@ -614,9 +621,8 @@ def render_public_material_share_page(
     items: list[ContentMaterialShareItem],
     request_base_url: str,
 ) -> str:
-    base_url = (
+    base_url = request_base_url.rstrip("/") or (
         os.getenv("MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL", "").strip().rstrip("/")
-        or request_base_url.rstrip("/")
     )
     ordered_items = sorted(items, key=lambda item: item.display_order)
     title = html.escape(share.title)
@@ -640,14 +646,14 @@ def render_public_material_share_page(
             "</section>"
         )
     hero = (
-        f'<section class="share-hero"><img src="{html.escape(_share_image_path(share.token, 1), quote=True)}" '
+        f'<section class="share-hero"><img src="{html.escape(first_image, quote=True)}" '
         f'alt="{title} 首图"></section>'
         if items
         else ""
     )
     images = "".join(
         (
-            f'<img src="{html.escape(_share_image_path(share.token, item.display_order), quote=True)}" '
+            f'<img src="{html.escape(f"{base_url}{_share_image_path(share.token, item.display_order)}", quote=True)}" '
             f'alt="{title} 第 {item.display_order} 张" loading="lazy">'
         )
         for item in ordered_items

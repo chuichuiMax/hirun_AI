@@ -435,13 +435,13 @@ async def test_decoration_gallery_child_requires_an_allowed_design_style(test_cl
             "material_type": "image",
             "name": "书房案例",
             "parent_id": parent["id"],
-            "design_style": "江南印象",
+            "design_style": "工业再造",
             "building_name": "测试楼盘",
             "area": "120",
         },
     )
     assert created.status_code == 201, created.text
-    assert created.json()["category"]["design_style"] == "江南印象"
+    assert created.json()["category"]["design_style"] == "工业再造"
 
 
 async def test_decoration_gallery_child_requires_and_persists_building_name_and_area(test_client, material_users):
@@ -662,7 +662,12 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
 
     created = await test_client.post(
         "/api/material-library/shares",
-        headers=headers,
+        headers={
+            **headers,
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "share.example.test",
+            "X-Forwarded-Prefix": "/boyun",
+        },
         json={"item_ids": [second_item["id"], first_item["id"]]},
     )
     assert created.status_code == 201, created.text
@@ -671,14 +676,19 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
     assert share["description"] == "洋湖天序｜120㎡｜复古风潮"
     assert share["image_count"] == 2
     assert share["page_path"].endswith(f"/shares/{share['token']}/page")
-    assert share["url"].endswith(f"/share/case/{share['token']}")
-    assert share["page_url"].endswith(f"/share/case/{share['token']}")
-    assert share["image_url"].endswith(share["image_path"])
+    assert share["url"] == f"https://share.example.test/boyun/share/case/{share['token']}"
+    assert share["page_url"] == share["url"]
+    assert share["image_url"] == f"https://share.example.test/boyun{share['image_path']}"
 
     deleted = await test_client.delete(f"/api/material-library/items/{first_item['id']}", headers=headers)
     assert deleted.status_code == 200, deleted.text
 
-    public_page = await test_client.get(share["page_path"])
+    public_headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "share.example.test",
+        "X-Forwarded-Prefix": "/boyun",
+    }
+    public_page = await test_client.get(share["page_path"], headers=public_headers)
     assert public_page.status_code == 200, public_page.text
     assert "洋湖天序·三居式·复古写意" in public_page.text
     assert 'class="project-info-card"' in public_page.text
@@ -686,10 +696,12 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
     assert "面积：120㎡" in public_page.text
     assert "风格：复古风潮" in public_page.text
     assert 'property="og:description" content="洋湖天序｜120㎡｜复古风潮"' in public_page.text
+    assert f'property="og:url" content="{share["url"]}"' in public_page.text
+    assert f'https://share.example.test/boyun/api/material-library/shares/{share["token"]}/images/1' in public_page.text
     assert f"/api/material-library/shares/{share['token']}/images/1" in public_page.text
     assert public_page.text.index("/images/1") < public_page.text.index("/images/2")
 
-    canonical_page = await test_client.get(share["url"])
+    canonical_page = await test_client.get(f"/share/case/{share['token']}", headers=public_headers)
     assert canonical_page.status_code == 200, canonical_page.text
     assert canonical_page.headers["content-type"].startswith("text/html")
     assert '<meta property="og:url"' in canonical_page.text
