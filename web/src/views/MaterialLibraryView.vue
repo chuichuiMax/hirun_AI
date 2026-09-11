@@ -80,8 +80,8 @@ const deletingCategory = ref(null)
 const deleteTargetCategory = ref('')
 const selectedShareItemIds = ref([])
 const shareOpen = ref(false)
-const shareChannel = ref('wechat')
 const shareCreating = ref(false)
+const shareUrlForManualCopy = ref('')
 const previewUrls = new Map()
 const maxUploadBytes = 20 * 1024 * 1024
 const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp'])
@@ -608,24 +608,16 @@ async function copyShareUrl(url) {
 async function createShare() {
   if (!selectedShareItemIds.value.length) return message.warning('请先选择要分享的图片')
   shareCreating.value = true
+  shareUrlForManualCopy.value = ''
   try {
     const response = await materialLibraryApi.createShare(selectedShareItemIds.value)
-    const shareUrl = response.share.page_url || new URL(response.share.page_path, window.location.origin).href
-    const shareTitle = response.share.title || '素材图库分享'
-    const shareDescription = response.share.description || '打开查看素材图库实景案例'
-    if (navigator.share) {
-      await navigator.share({ title: shareTitle, text: shareDescription, url: shareUrl })
-      shareOpen.value = false
-      message.success('已打开系统分享面板，请选择微信或企业微信联系人')
-      return
-    }
+    const shareUrl = response.share.url || response.share.page_url || new URL(response.share.page_path, window.location.origin).href
+    shareUrlForManualCopy.value = shareUrl
     await copyShareUrl(shareUrl)
     shareOpen.value = false
-    const appUrl = shareChannel.value === 'wechat' ? 'weixin://' : 'wxwork://'
-    window.location.href = appUrl
-    message.success('分享卡片链接已复制，请在打开的应用中粘贴发送')
+    message.success('链接已复制，请粘贴到微信或企业微信')
   } catch (error) {
-    message.error(error.message || '创建分享失败，请稍后重试')
+    message.error(error.message || '链接复制失败，请手动复制下方链接')
   } finally {
     shareCreating.value = false
   }
@@ -821,14 +813,11 @@ onBeforeUnmount(releasePreviews)
       <img v-if="previewItem" class="large-preview" :src="previewItem.previewUrl" :alt="previewItem.name" />
     </a-modal>
 
-    <a-modal v-model:open="shareOpen" title="分享图库图片" :confirm-loading="shareCreating" ok-text="复制链接并打开应用" @ok="createShare">
+    <a-modal v-model:open="shareOpen" title="分享图库图片" :confirm-loading="shareCreating" ok-text="复制链接" @ok="createShare">
       <div class="share-form">
         <p>将分享 {{ selectedShareItemIds.length }} 张图片。链接长期有效，原图库图片删除后仍可查看本次分享的快照。</p>
-        <a-radio-group v-model:value="shareChannel">
-          <a-radio value="wechat">微信</a-radio>
-          <a-radio value="wecom">企业微信</a-radio>
-        </a-radio-group>
-        <small>系统自动生成卡片所需的封面、标题和楼盘信息；在公网 HTTPS 地址下，微信粘贴链接后会显示链接卡片。支持系统分享的设备会直接打开分享面板，否则会复制链接并尝试打开所选应用。</small>
+        <small>点击“复制链接”后，请打开普通微信或企业微信，粘贴到个人会话或群聊。平台会自行抓取 H5 页面生成预览卡片。</small>
+        <a-input v-if="shareUrlForManualCopy" :value="shareUrlForManualCopy" readonly aria-label="分享链接" />
       </div>
     </a-modal>
 

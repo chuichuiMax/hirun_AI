@@ -44,6 +44,7 @@ from yuxi.services.mp_service import (
     read_cover_template_file,
     read_hycanvas_template_preview,
     read_mp_gallery_item_file,
+    read_mp_gallery_item_thumbnail,
     remove_favorite,
     resume_run,
     retry_run,
@@ -180,6 +181,16 @@ async def mp_gallery_item_file(
         media_type=content_type,
         headers={"Content-Disposition": f'inline; filename="{file_name}"'},
     )
+
+
+@mp.get("/content/gallery-items/{item_id}/thumbnail")
+async def mp_gallery_item_thumbnail(
+    item_id: str,
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    data = await read_mp_gallery_item_thumbnail(db, ctx, item_id)
+    return Response(content=data, media_type="image/jpeg")
 
 
 @mp.post("/share/cases", status_code=status.HTTP_201_CREATED)

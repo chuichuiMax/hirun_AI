@@ -239,6 +239,10 @@ def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_m
     page = render_public_material_share_page(share, items, "https://share.example.test/")
 
     assert "<title>洋湖天序·三居式·复古写意</title>" in page
+    assert '<meta name="description" content="万科金域华府｜120㎡｜现代简约">' in page
+    assert '<meta property="og:type" content="website">' in page
+    assert '<meta property="og:url" content="https://share.example.test/share/case/share-token">' in page
+    assert '<meta property="og:site_name" content="Yuxi">' in page
     assert 'property="og:description" content="万科金域华府｜120㎡｜现代简约"' in page
     assert '楼盘：万科金域华府' in page
     assert '面积：120㎡' in page
@@ -247,6 +251,13 @@ def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_m
         'property="og:image" '
         'content="https://share.example.test/api/material-library/shares/share-token/images/1"' in page
     )
+    assert (
+        'property="og:image:secure_url" '
+        'content="https://share.example.test/api/material-library/shares/share-token/images/1"' in page
+    )
+    assert '<meta property="og:image:type" content="image/png">' in page
+    assert '<meta property="og:image:width" content="48">' in page
+    assert '<meta property="og:image:height" content="36">' in page
     assert page.index("/images/1") < page.index("/images/2")
 
 

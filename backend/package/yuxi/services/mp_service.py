@@ -42,6 +42,7 @@ from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.services.content_cover_service import get_cover_asset_file, serialize_asset
 from yuxi.services.material_library_service import (
     get_material_file,
+    get_material_thumbnail,
     import_material_images,
     list_image_galleries,
     list_material_items,
@@ -960,6 +961,7 @@ def _mp_gallery_item(item: dict[str, Any]) -> dict[str, Any]:
         **item,
         "in_use": bool(item.get("in_use")),
         "file_url": f"/api/mp/content/gallery-items/{item_id}/file",
+        "thumbnail_file_url": f"/api/mp/content/gallery-items/{item_id}/thumbnail",
     }
 
 
@@ -1009,6 +1011,11 @@ async def list_mp_gallery_items(
 
 async def read_mp_gallery_item_file(db: AsyncSession, ctx: MpContext, item_id: str) -> tuple[bytes, str, str]:
     return await get_material_file(db, ctx.user, item_id)
+
+
+async def read_mp_gallery_item_thumbnail(db: AsyncSession, ctx: MpContext, item_id: str) -> bytes:
+    data, _ = await get_material_thumbnail(db, ctx.user, item_id)
+    return data
 
 
 async def upload_cover(

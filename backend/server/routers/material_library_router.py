@@ -34,6 +34,7 @@ from yuxi.services.material_library_service import (
 from yuxi.storage.postgres.models_business import User
 
 material_library = APIRouter(prefix="/material-library", tags=["material-library"])
+public_share_router = APIRouter(tags=["public-share"])
 
 
 @material_library.post("/images/import", status_code=status.HTTP_201_CREATED)
@@ -111,6 +112,16 @@ async def create_share(
 
 @material_library.get("/shares/{token}/page", response_class=HTMLResponse)
 async def public_share_page(
+    token: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    share, items = await get_public_material_share(db, token)
+    return HTMLResponse(render_public_material_share_page(share, items, str(request.base_url)))
+
+
+@public_share_router.get("/share/case/{token}", response_class=HTMLResponse)
+async def canonical_public_share_page(
     token: str,
     request: Request,
     db: AsyncSession = Depends(get_db),

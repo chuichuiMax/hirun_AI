@@ -671,7 +671,8 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
     assert share["description"] == "洋湖天序｜120㎡｜复古风潮"
     assert share["image_count"] == 2
     assert share["page_path"].endswith(f"/shares/{share['token']}/page")
-    assert share["page_url"].endswith(share["page_path"])
+    assert share["url"].endswith(f"/share/case/{share['token']}")
+    assert share["page_url"].endswith(f"/share/case/{share['token']}")
     assert share["image_url"].endswith(share["image_path"])
 
     deleted = await test_client.delete(f"/api/material-library/items/{first_item['id']}", headers=headers)
@@ -688,10 +689,19 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
     assert f"/api/material-library/shares/{share['token']}/images/1" in public_page.text
     assert public_page.text.index("/images/1") < public_page.text.index("/images/2")
 
+    canonical_page = await test_client.get(share["url"])
+    assert canonical_page.status_code == 200, canonical_page.text
+    assert canonical_page.headers["content-type"].startswith("text/html")
+    assert '<meta property="og:url"' in canonical_page.text
+
     second_snapshot = await test_client.get(f"/api/material-library/shares/{share['token']}/images/1")
     first_snapshot = await test_client.get(f"/api/material-library/shares/{share['token']}/images/2")
     assert second_snapshot.status_code == 200, second_snapshot.text
     assert first_snapshot.status_code == 200, first_snapshot.text
+    assert second_snapshot.headers["content-type"] == "image/png"
+    assert "inline" in second_snapshot.headers["content-disposition"]
+    assert "public" in second_snapshot.headers["cache-control"]
+    assert "immutable" in second_snapshot.headers["cache-control"]
     with Image.open(io.BytesIO(second_snapshot.content)) as image:
         assert image.size == (1080, 1440)
     with Image.open(io.BytesIO(first_snapshot.content)) as image:

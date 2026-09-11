@@ -29,7 +29,7 @@ from server.routers.process_standard_router import content_process_standards
 from server.routers.target_audience_router import content_target_audiences
 from server.routers.resident_population_router import content_resident_populations
 from server.routers.mp_router import mp
-from server.routers.material_library_router import material_library
+from server.routers.material_library_router import material_library, public_share_router as public_share_router
 
 _LITE_MODE = os.environ.get("LITE_MODE", "").lower() in ("true", "1")
 

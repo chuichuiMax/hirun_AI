@@ -37,6 +37,7 @@ cp .env.template .env.prod
 - `SANDBOX_IMAGE`：使用固定版本或 digest，禁止使用 `latest`
 - `YUXI_API_IMAGE`、`YUXI_WEB_IMAGE`、`YUXI_SANDBOX_PROVISIONER_IMAGE`、`HYCANVAS_IMAGE`：镜像仓库地址
 - `PUBLIC_BASE_URL`：运营人员实际访问的 HTTPS 地址，例如 `https://content.example.com/boyun`；生产部署拒绝纯 HTTP，证书必须可被标准客户端验证
+- `MATERIAL_LIBRARY_SHARE_PUBLIC_BASE_URL`：素材图库分享卡片使用的稳定公网 HTTPS 根地址。反向代理必须把 `/share/case/*`、`/api/material-library/shares/*` 转发到 API，并确保分享页与首图无需登录即可访问；不要填写 `localhost`、内网地址或临时隧道。
 
 部署脚本会在拉取镜像之前校验上述生产凭据和 HTTPS 地址，缺失、仍为公开默认值或长度不足时立即终止，且不会把密钥内容输出到日志。部署完成后除本机 API 与内部浏览器网关外，还会通过 `PUBLIC_BASE_URL` 验证公网 TLS 入口；三者任一失败都会触发既定回滚流程。
 
