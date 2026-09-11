@@ -1964,16 +1964,19 @@ async def ai_edit_content_artifact(
         "body_formula_code": (strategy_snapshot.get("body_formula") or {}).get("code"),
     }
     latest_run_id = task.latest_run_id
-    refined = await refine_generated_content(
-        model_spec=model_spec,
-        instruction=payload.instruction,
-        title=source_title,
-        body=source_body,
-        topics=source_topics,
-        brief=deepcopy(task.brief_json or {}),
-        strategy=strategy_snapshot,
-        evidence_bundle=evidence_snapshot,
-    )
+    try:
+        refined = await refine_generated_content(
+            model_spec=model_spec,
+            instruction=payload.instruction,
+            title=source_title,
+            body=source_body,
+            topics=source_topics,
+            brief=deepcopy(task.brief_json or {}),
+            strategy=strategy_snapshot,
+            evidence_bundle=evidence_snapshot,
+        )
+    except ValueError as exc:
+        raise _content_error(422, "CONTENT_AI_EDIT_MODEL_OUTPUT_INVALID", str(exc)) from exc
     refined["topics"] = _clean_list(refined["topics"])
     validation = validate_content(
         title=refined["title"],

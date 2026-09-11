@@ -90,7 +90,60 @@ async def test_refine_generated_content_only_accepts_artifact_fields(monkeypatch
     )
 
     assert result == {"title": "新标题", "body": "新正文", "topics": ["话题一"]}
-    assert "工作流、节点、规则、策略、证据和封面都是只读上下文" in captured["messages"][0].content
+    assert "必须同时包含 title、body、topics" in captured["messages"][0].content
+
+
+@pytest.mark.asyncio
+async def test_refine_generated_content_backfills_omitted_body_and_topics(monkeypatch):
+    class FakeModel:
+        async def ainvoke(self, _messages):
+            return AIMessage(content=json.dumps({"title": "只改了标题"}, ensure_ascii=False))
+
+    monkeypatch.setattr(generation, "resolve_chat_model_spec", lambda _spec: "provider:model")
+    monkeypatch.setattr(generation, "load_chat_model", lambda **_kwargs: FakeModel())
+
+    result = await generation.refine_generated_content(
+        model_spec=None,
+        instruction="请修改一下标题",
+        title="原始标题",
+        body="原始正文",
+        topics=["原话题"],
+        brief={},
+        strategy={},
+        evidence_bundle={},
+    )
+
+    assert result == {"title": "只改了标题", "body": "原始正文", "topics": ["原话题"]}
+
+
+@pytest.mark.asyncio
+async def test_ai_edit_maps_model_output_errors_to_422(monkeypatch):
+    artifact = _artifact()
+    task = _task()
+    repo = SimpleNamespace(
+        get_artifact_for_user=AsyncMock(return_value=artifact),
+        get_task_for_user=AsyncMock(return_value=task),
+    )
+    run_repo = SimpleNamespace(get_run=AsyncMock(return_value=SimpleNamespace(status="completed")))
+    monkeypatch.setattr(content_service, "ContentRepository", lambda _db: repo)
+    monkeypatch.setattr(content_service, "AgentRunRepository", lambda _db: run_repo)
+    monkeypatch.setattr(
+        content_service,
+        "refine_generated_content",
+        AsyncMock(side_effect=ValueError("AI 修改结果格式无效，请重试或写清要改的标题、正文")),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await content_service.ai_edit_content_artifact(
+            SimpleNamespace(),
+            SimpleNamespace(uid="user-1"),
+            artifact.id,
+            ContentArtifactAIEdit(instruction="请修改一下标题", expected_version=2),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["error"]["code"] == "CONTENT_AI_EDIT_MODEL_OUTPUT_INVALID"
+    assert artifact.current_version == 2
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,8 @@ from typing import Any
 
 BRAND_NAME = "鸿扬家居"
 CONSTRUCTION_BRAND = "鸿扬家装"
+# 获客文案口径：鸿扬是定制化家装，禁止写成整装/标准化整装。
+BRAND_POSITIONING = "定制化家装"
 DECORATION_QUOTE_KEYS = ("基础", "木制品", "主材")
 LAYOUT_FIELD_KEYS = ("房屋布局", "户型布局", "户型")
 # PC / 小程序业务变量表单：存在则固定排在最前（其余保持原相对顺序）
@@ -22,8 +24,8 @@ DECORATION_WRITING_INSTRUCTION = (
     "卡点文字必须与简报/证据原文一致（面积保留区间原文，禁止改成130m²等中间值）；"
     "写出的每个卡点与数字都要在 paragraph_evidence 挂载对应 evidence_bundle.items[].id（或 evidence_cite_index.id），逐字复制，禁止编造 ID；"
     "若有可用于正文的业务知识证据，至少再挂一条；"
-    "必须写出鸿扬家居/鸿扬家装品牌优势，并带明确引流点（同城咨询、报价参考、留言私信等）；"
-    "事实只来自简报与冻结证据，不得编造户型缺陷、改造前后效果或他人案例细节。"
+    "必须写出鸿扬家居/鸿扬家装品牌优势（定位为定制化家装，禁止写整装或标准化整装），并带明确引流点（同城咨询、报价参考、留言私信等）；"
+    "封面/副标/话题也不得出现整装、标准化整装；事实只来自简报与冻结证据，不得编造户型缺陷、改造前后效果或他人案例细节。"
 )
 QUOTATION_LIST_TYPE_NAMES = frozenset({"装修报价清单", "报价清单"})
 QUOTATION_LIST_WRITING_INSTRUCTION = (
@@ -31,8 +33,8 @@ QUOTATION_LIST_WRITING_INSTRUCTION = (
     "句子通顺、语义完整，禁止词库堆砌、暗号式缩写或看不懂的标题；"
     "标题可用痛点或悬念，但主题要落在「看清单/看预算口径/避隐形增项」，不要吹嘘最低价；"
     "正文把基础/木制品/主材等报价仅作参考信息卡点展示，明确报价不是鸿扬核心卖点，禁止主推「更便宜、低价、性价比碾压」；"
-    "正文重点写鸿扬家居/鸿扬家装品牌优势：标准化交付、透明施工、自有/规范工艺、售后与靠谱服务，用品牌与交付能力收尾引流；"
-    "仍须写清小区、面积（原文）、风格、项目施工鸿扬家装等信息卡点，并正确挂载 Evidence ID；"
+    "正文重点写鸿扬家居/鸿扬家装品牌优势：定制化家装、透明施工、自有/规范工艺、售后与靠谱服务，用品牌与交付能力收尾引流；"
+    "禁止把鸿扬写成整装或标准化整装；仍须写清小区、面积（原文）、风格、项目施工鸿扬家装等信息卡点，并正确挂载 Evidence ID；"
     "不展开某套房案例故事，不编造数字与改造情节。"
 )
 
@@ -229,8 +231,8 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
     )
 
     if service_entry == "装修家居":
-        product = community or "整装项目"
-        process = budget_text or f"{style} {frame_area}".strip() or "整装交付"
+        product = community or f"{BRAND_POSITIONING}项目"
+        process = budget_text or f"{style} {frame_area}".strip() or f"{BRAND_POSITIONING}交付"
         content_type_name = str(values.get("mp_content_type_name") or "").strip()
         is_quotation_list = content_type_name in QUOTATION_LIST_TYPE_NAMES
         if is_quotation_list:
@@ -238,7 +240,7 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
             advantage = "；".join(
                 part
                 for part in (
-                    f"{BRAND_NAME}品牌与标准化整装交付",
+                    f"{BRAND_NAME}品牌与{BRAND_POSITIONING}交付",
                     f"项目施工{CONSTRUCTION_BRAND}",
                     "透明工艺与售后服务（报价仅作参考，不以低价作为卖点）",
                 )
@@ -252,7 +254,7 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
                 for part in (
                     style,
                     f"项目施工{CONSTRUCTION_BRAND}",
-                    f"{BRAND_NAME}整装标准化交付与透明服务",
+                    f"{BRAND_NAME}{BRAND_POSITIONING}与透明服务",
                 )
                 if part
             )
@@ -264,6 +266,7 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
         values["house_layout"] = layout
         values["design_style"] = style
         values["construction_brand"] = CONSTRUCTION_BRAND
+        values["brand_positioning"] = BRAND_POSITIONING
     else:
         product = "业主好评笔记"
         process = persona_text or "项目成员服务"

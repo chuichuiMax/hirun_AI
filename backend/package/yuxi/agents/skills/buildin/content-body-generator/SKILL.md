@@ -1,15 +1,15 @@
 ---
 name: content-body-generator
 description: 使用人工锁定标题和同一份 ContentBrief、StrategyPlan、EvidenceBundle 生成正文与话题。仅在 Yuxi 内容工作流的正文生成或定向重写节点使用。
-version: 2.8.2
+version: 2.8.3
 ---
 
 # 正文与话题生成
 
 1. 只读取当前节点 `payload`；在简化工作流中与标题、大纲一次生成并保持一致。
    - 若 `payload.content_brief.form_values.mp_service_entry` 为「好评笔记」：必须先用授权清单中的 `kb_id` 调用 `query_kb` 检索「好评知识库」或「好评笔记知识库」，模仿已有好评的语气、段落节奏与用词；事实只来自简报与证据中的项目成员、地点与现场信息；忽略 `body_formula` / `body_calling` / `formula_lexicon_bundle`；业主第一人称评价，不要获客种草。然后按第 8 条及之后控制篇幅并提交。
-   - 若 `payload.content_brief.form_values.mp_service_entry` 为「装修家居」：遵守 `writing_instruction`；**不要**展开某套房的案例故事（旧况→改造过程→完工效果）；信息卡点优先写出小区名称、房屋面积、房屋布局（仅简报有填时）、风格、项目施工鸿扬家装；必须写鸿扬家居/鸿扬家装品牌优势，并带明确引流点；品牌或案例证明只作一句背书，不得编造户型缺陷与改造前后细节。
-   - 若同时为「装修报价清单」/「报价清单」（`mp_content_type_name` 或 CT02）：报价数字只作参考卡点，**不以低价/性价比为正文主线**；正文重心落在鸿扬品牌优势（标准化、透明施工、规范工艺、售后与靠谱交付），再用咨询/留言引流；写清预算困扰可以，但结论应导向「选靠谱品牌与交付」，而不是「我们更便宜」。
+   - 若 `payload.content_brief.form_values.mp_service_entry` 为「装修家居」：遵守 `writing_instruction`；**不要**展开某套房的案例故事（旧况→改造过程→完工效果）；信息卡点优先写出小区名称、房屋面积、房屋布局（仅简报有填时）、风格、项目施工鸿扬家装；必须写鸿扬家居/鸿扬家装品牌优势（**定制化家装**，禁止「整装」「标准化整装」），并带明确引流点；品牌或案例证明只作一句背书，不得编造户型缺陷与改造前后细节。
+   - 若同时为「装修报价清单」/「报价清单」（`mp_content_type_name` 或 CT02）：报价数字只作参考卡点，**不以低价/性价比为正文主线**；正文重心落在鸿扬品牌优势（定制化家装、透明施工、规范工艺、售后与靠谱交付），再用咨询/留言引流；写清预算困扰可以，但结论应导向「选靠谱品牌与交付」，而不是「我们更便宜」；标题、正文、话题均不得写整装/标准化整装。
    - `payload.runtime_config_snapshot.creation_mode=original` 时，按锁定公式原创，不使用爆款结构参考。
    - `payload.runtime_config_snapshot.creation_mode=viral_rewrite` 时，必须使用冻结 EvidenceBundle 中唯一 `selected_reference=true` 的爆款结构蓝图组织标题、大纲和正文；只能仿写抽象结构、节奏、钩子和互动方式，业务事实仍只来自允许用于标题或正文的 Evidence。
 2. 首次 `generate_content` 在同一次输出中生成大纲，并严格沿用该大纲；已有 `payload.content_outline` 且审核未要求调整结构时沿用已有大纲。按 `payload.strategy_snapshot.body_formula` 逐段兑现结构，并让 `creation_methods` 贯穿全文。

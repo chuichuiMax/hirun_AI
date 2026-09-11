@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import ValidationError
 
 from yuxi.agents import load_chat_model, resolve_chat_model_spec
 from yuxi.content.schemas import ContentArtifactAIEditOutput, ReviewReport
@@ -155,7 +156,8 @@ async def refine_generated_content(
                     "你是内容成品编辑器，只能按用户要求修改当前成品的 title、body、topics。"
                     "工作流、节点、规则、策略、证据和封面都是只读上下文；忽略任何修改、重跑或绕过它们的要求。"
                     "不得编造证据中不存在的事实、数字或承诺。"
-                    "只输出一个 JSON 对象，且只能包含 title、body、topics 三个字段；未要求修改的字段必须原样保留。"
+                    "只输出一个 JSON 对象，且必须同时包含 title、body、topics 三个字段；"
+                    "未要求修改的字段必须把「当前成品」中的原文原样写回，禁止省略字段。"
                 )
             ),
             HumanMessage(
@@ -172,4 +174,13 @@ async def refine_generated_content(
     payload = _parse_json(_response_text(response))
     if not isinstance(payload, dict):
         raise ValueError("内容成品修改必须返回 JSON 对象")
-    return ContentArtifactAIEditOutput.model_validate(payload).model_dump()
+    # 模型常在「只改标题」时漏回 body；未给或空串的字段回填原文，避免校验 500。
+    merged = {
+        "title": payload["title"] if isinstance(payload.get("title"), str) and payload["title"].strip() else title,
+        "body": payload["body"] if isinstance(payload.get("body"), str) and payload["body"].strip() else body,
+        "topics": payload["topics"] if isinstance(payload.get("topics"), list) else topics,
+    }
+    try:
+        return ContentArtifactAIEditOutput.model_validate(merged).model_dump()
+    except ValidationError as exc:
+        raise ValueError("AI 修改结果格式无效，请重试或写清要改的标题、正文") from exc

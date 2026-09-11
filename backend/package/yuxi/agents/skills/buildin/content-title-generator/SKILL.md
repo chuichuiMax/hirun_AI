@@ -1,7 +1,7 @@
 ---
 name: content-title-generator
 description: 按锁定策略生成可追溯标题候选，或从已通过确定性校验的候选中选择最终标题。
-version: 2.5.2
+version: 2.5.3
 ---
 
 # 标题候选生成
@@ -20,6 +20,7 @@ version: 2.5.2
    - 标题必须有吸引点：情绪共鸣、悬念、反差、利益点或痛点戳中，至少落地一项；禁止「小区/楼盘＋面积＋风格」说明书式平铺；
    - 可点出区域、面积、风格中的高信息槽，但要用钩子句式组合，不要写成资料卡标题；面积等数字必须与证据原文一致，不得改写成中间值；
    - 若 `mp_content_type_name` 为「装修报价清单」或「报价清单」（或内容方向 CT02）：标题必须语义完整、普通人一眼看懂（如预算参考/透明清单/避隐形增项），禁止词库硬拼、暗号缩写、不知所云；不要把「最低价/更便宜」当标题卖点；
+   - 鸿扬品牌定位为**定制化家装**，标题与话题禁止写「整装」「标准化整装」「全屋整装」；
    - 遵守 `content_brief.form_values.writing_instruction`（若有）。
 0c. Evidence ID：标题 `evidence_ids` 只能逐字复制 `payload.evidence_cite_index` / `evidence_bundle.items` 中 `allowed_usage` 含 `title` 的 `id`；禁止编造或用 `source_id` 代替。标题写到的面积/风格/区域事实必须挂上对应条目 ID。
 1. 当前 Skill 全文已经注入，不调用 `read_file`。装修家居（非好评笔记）在 `generate_content` 首轮须直接 `submit_content_node_result`，禁止探索工具。

@@ -44,6 +44,12 @@ def test_body_calling_catalog_covers_all_formulas_and_five_source_columns() -> N
     assert "案例故事" in c02["sections"][1]["instruction"] or "禁止展开案例" in c02["sections"][1]["instruction"]
     assert "鸿扬家装" in c02["sections"][1]["instruction"]
     assert "引流" in c02["sections"][3]["instruction"]
+    c01 = DECORATION_BODY_CALLING["C01"]
+    brand_section = c01["sections"][3]["instruction"]
+    assert "定制化家装" in brand_section
+    assert "标准化整装" not in brand_section
+    assert "定制化家装" in c02["sections"][3]["instruction"]
+    assert "标准化整装" not in c02["sections"][3]["instruction"]
 
 
 def test_outline_must_follow_body_calling_section_order_and_choose_one_variant() -> None:

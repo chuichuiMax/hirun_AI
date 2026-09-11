@@ -55,7 +55,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "persona_cta",
                 "name": "品牌优势+引流收尾",
-                "instruction": "用充足篇幅写鸿扬家居/鸿扬家装品牌优势（标准化整装、透明施工、规范工艺、售后与靠谱交付），再给明确引流点（同城咨询、看工艺、留言要参考清单）；报价不是收尾卖点",
+                "instruction": "用充足篇幅写鸿扬家居/鸿扬家装品牌优势（定制化家装、透明施工、规范工艺、售后与靠谱交付；禁止写成整装或标准化整装），再给明确引流点（同城咨询、看工艺、留言要参考清单）；报价不是收尾卖点",
                 "fill_rule": "使用服务反差/人设词库输出品牌与交付优势，并用报价引导词库做轻咨询转化，禁止把低价写成转化理由",
                 "lexicon_calls": ["persona.service_contrast", "ending.quotation_cta"],
                 "fact_source": "lexicon_and_evidence",
@@ -128,7 +128,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "delivery_cta",
                 "name": "细节+人设收尾",
-                "instruction": "写明鸿扬家居/鸿扬家装品牌优势与落地背书，并用明确引流点收尾（同城看工艺、咨询、留言）",
+                "instruction": "写明鸿扬家居/鸿扬家装品牌优势（定制化家装，禁止整装/标准化整装）与落地背书，并用明确引流点收尾（同城看工艺、咨询、留言）",
                 "fill_rule": "使用落地背书词库作短背书，并用案例引导词库收尾；禁止长篇案例叙事",
                 "lexicon_calls": ["persona.delivery_endorsement", "ending.case_cta"],
                 "fact_source": "lexicon_and_evidence",
