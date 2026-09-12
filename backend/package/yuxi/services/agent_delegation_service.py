@@ -46,7 +46,8 @@ from yuxi.storage.postgres.models_content import ContentNodeRun
 # 节点总时间、单调用时间、默认推理强度、模型调用上限（连接重试与结果纠错共用）。
 CONTENT_NODE_EXECUTION_LIMITS = {
     # 正文生成以首轮直出为主；low 显著缩短单次推理，校验失败仍可用满 3 次额度纠错。
-    "generate_content": (400, 120, "low", 3),
+    # SiliconFlow 大输入首包偶发 >120s，单调用空闲超时放宽到 180s，节点总时限同步抬高。
+    "generate_content": (560, 180, "low", 3),
     "select_creation_strategy": (150, 65, "low", 2),
     "reselect_creation_strategy": (150, 65, "low", 2),
 }

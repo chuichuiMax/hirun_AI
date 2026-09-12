@@ -132,14 +132,14 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-body-generator",
         source_dir=_SKILLS_ROOT / "content-body-generator",
         description="使用人工锁定标题、正文公式和同源证据生成正文与话题。",
-        version="2.6.0",
+        version="2.6.2",
         tool_dependencies=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
     ),
     BuiltinSkillSpec(
         slug="content-human-expression",
         source_dir=_SKILLS_ROOT / "content-human-expression",
         description="在不改变事实、公式和证据的前提下，落实人设语气、情绪与数据事项的 Emoji 功能覆盖和封禁词替换。",
-        version="2.1.0",
+        version="2.1.1",
     ),
     BuiltinSkillSpec(
         slug="viral-structure-rewriter",
@@ -172,7 +172,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-reviewer",
         source_dir=_SKILLS_ROOT / "content-reviewer",
         description="审核公式执行、事实一致性、人设语气和内容风险。",
-        version="1.10.0",
+        version="1.10.2",
         tool_dependencies=(
             "query_kb",
             "open_kb_document",

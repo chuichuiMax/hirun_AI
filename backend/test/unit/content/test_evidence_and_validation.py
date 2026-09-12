@@ -61,6 +61,48 @@ def test_deterministic_review_accepts_numbers_in_shared_evidence_bundle():
     assert report == {"status": "passed", "checks": []}
 
 
+def test_deterministic_review_blocks_platform_forbidden_replacement_terms():
+    evidence_bundle = {
+        "items": [
+            {
+                "id": "ev_forbidden",
+                "metadata": {
+                    "material_type": "platform_rule",
+                    "rule_kind": "forbidden_replacement_map",
+                },
+                "value": [
+                    {"problem_term": "报价", "alternatives": ["预算参考", "费用明细"]},
+                    {"problem_term": "私信", "alternatives": ["留言", "评论区聊聊"]},
+                ],
+            }
+        ]
+    }
+    blocked = validate_content(
+        title="同城装修报价参考",
+        body="想了解细节可以私信我，费用透明靠谱。",
+        topics=["装修"],
+        brief={"required_terms": [], "forbidden_terms": []},
+        evidence_bundle=evidence_bundle,
+        strategy={"methods": ["M01"], "title_formula_code": "T01", "content_formula_code": "C01"},
+    )
+    codes = {item["code"] for item in blocked["checks"]}
+    matched = {term for item in blocked["checks"] for term in item.get("matched_terms") or []}
+    assert blocked["status"] == "blocked"
+    assert "CONTENT_FORBIDDEN_TERM" in codes
+    assert matched == {"报价", "私信"}
+
+    passed = validate_content(
+        title="同城装修预算参考",
+        body="想了解细节可以留言，费用透明靠谱。",
+        topics=["装修"],
+        brief={"required_terms": [], "forbidden_terms": []},
+        evidence_bundle=evidence_bundle,
+        strategy={"methods": ["M01"], "title_formula_code": "T01", "content_formula_code": "C01"},
+    )
+    assert passed["status"] == "passed"
+    assert passed["checks"] == []
+
+
 def test_compliance_engine_uses_shared_code_for_named_block_rules():
     from yuxi.content.validation import ComplianceEngine
 

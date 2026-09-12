@@ -29,6 +29,7 @@ from yuxi.content.model.formulas.selector import (
 )
 from yuxi.content.model.rules.engine import CombinationMatcher, MatchRequest
 from yuxi.content.rules import brief_variable_map, canonical_brief_facts
+from yuxi.content.service_entry_form import filter_body_formulas_for_content_direction
 from yuxi.content.validation import ComplianceEngine, validate_numeric_evidence_coverage
 from yuxi.content.validators import validate_content
 from yuxi.content.control.workflow.external_wait import skip_formula_lexicon_pipeline
@@ -46,6 +47,10 @@ _SLOT_REQUIRED_VARIABLES = {
     "case_proof": {"number", "result", "scene", "location"},
     "brand": {"brand_name"},
 }
+
+
+def _body_formula_codes_for_direction(direction_code: str, codes: list[str] | tuple[str, ...]) -> list[str]:
+    return filter_body_formulas_for_content_direction(direction_code, codes)
 
 
 def _display_business_value(value: Any) -> str:
@@ -285,7 +290,10 @@ class V3DeterministicNodeHandler:
         selected = decision.eligible_groups[0]
         group = next(item for item in context.groups if item.code == selected.group_code)
         title_code = selected.title_formula_candidate_codes[0]
-        body_code = selected.body_formula_candidate_codes[0]
+        body_codes = _body_formula_codes_for_direction(
+            context.content_direction_code, selected.body_formula_candidate_codes
+        )
+        body_code = body_codes[0]
         method_codes = [item.method_code for item in group.method_members]
         evidence_ids = [
             str(item.get("id")) for item in (state.get("evidence_bundle") or {}).get("items") or [] if item.get("id")
@@ -348,7 +356,11 @@ class V3DeterministicNodeHandler:
             raise ValueError("固定规则选择的创作手法与组合组不一致")
         title_code = str(selection.get("title_formula_code") or "")
         body_code = str(selection.get("body_formula_code") or "")
-        if title_code not in group.title_formula_candidate_codes or body_code not in group.body_formula_candidate_codes:
+        body_codes = _body_formula_codes_for_direction(direction, group.body_formula_candidate_codes)
+        if body_code not in body_codes:
+            body_code = body_codes[0]
+            selection = {**selection, "body_formula_code": body_code}
+        if title_code not in group.title_formula_candidate_codes or body_code not in body_codes:
             raise ValueError("固定规则选择了组合组外的标题或正文公式")
 
         title_formula = (
@@ -401,7 +413,7 @@ class V3DeterministicNodeHandler:
                 combination_group_id=group.code,
                 rule_version_id=context.rule_version_id,
                 title_formula_codes=tuple(group.title_formula_candidate_codes),
-                body_formula_codes=tuple(group.body_formula_candidate_codes),
+                body_formula_codes=tuple(body_codes),
             ),
             [
                 FormulaCandidateDefinition(
@@ -411,7 +423,7 @@ class V3DeterministicNodeHandler:
                 )
                 for kind, codes in (
                     ("title", group.title_formula_candidate_codes),
-                    ("body", group.body_formula_candidate_codes),
+                    ("body", body_codes),
                 )
                 for code in codes
             ],
@@ -543,7 +555,7 @@ class V3DeterministicNodeHandler:
                 "id": match_snapshot.id,
                 "selected_group_id": group.code,
                 "eligible_title_formula_codes": list(group.title_formula_candidate_codes),
-                "eligible_body_formula_codes": list(group.body_formula_candidate_codes),
+                "eligible_body_formula_codes": list(body_codes),
             }
         )
         formula_payload = formula_decision.to_dict()
@@ -555,7 +567,7 @@ class V3DeterministicNodeHandler:
             "formula_candidate_pool": {
                 "combination_group_id": group.code,
                 "title_formula_codes": list(group.title_formula_candidate_codes),
-                "body_formula_codes": list(group.body_formula_candidate_codes),
+                "body_formula_codes": list(body_codes),
             },
             "evidence_gap_analysis": {
                 "has_missing": bool(missing),
@@ -820,7 +832,10 @@ class V3DeterministicNodeHandler:
             item for item in decision.eligible_groups if item.group_code == decision.selected_group_code
         )
         payload["eligible_title_formula_codes"] = list(selected_group.title_formula_candidate_codes)
-        payload["eligible_body_formula_codes"] = list(selected_group.body_formula_candidate_codes)
+        body_codes = _body_formula_codes_for_direction(
+            context.content_direction_code, selected_group.body_formula_candidate_codes
+        )
+        payload["eligible_body_formula_codes"] = list(body_codes)
         title_formulas = list(
             (
                 await db.execute(
@@ -837,14 +852,14 @@ class V3DeterministicNodeHandler:
                 await db.execute(
                     select(ContentFormula).where(
                         ContentFormula.version_id == context.rule_version_id,
-                        ContentFormula.code.in_(selected_group.body_formula_candidate_codes),
+                        ContentFormula.code.in_(body_codes),
                         ContentFormula.enabled.is_(True),
                     )
                 )
             ).scalars()
         )
         if len(title_formulas) != len(selected_group.title_formula_candidate_codes) or len(body_formulas) != len(
-            selected_group.body_formula_candidate_codes
+            body_codes
         ):
             raise ValueError("组合组引用了不存在或已停用的公式")
         available_variables = _available_variable_codes(state)
@@ -860,7 +875,7 @@ class V3DeterministicNodeHandler:
             (
                 (title_code, body_code, title_missing[title_code] | body_missing[body_code])
                 for title_code in selected_group.title_formula_candidate_codes
-                for body_code in selected_group.body_formula_candidate_codes
+                for body_code in body_codes
             ),
             key=lambda item: (len(item[2]), item[0], item[1]),
         )
@@ -868,7 +883,7 @@ class V3DeterministicNodeHandler:
         formula_candidate_pool = {
             "combination_group_id": decision.selected_group_code,
             "title_formula_codes": list(selected_group.title_formula_candidate_codes),
-            "body_formula_codes": list(selected_group.body_formula_candidate_codes),
+            "body_formula_codes": list(body_codes),
         }
         evidence_gap_analysis = {
             "has_missing": bool(missing_variables),

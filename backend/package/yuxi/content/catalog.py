@@ -57,7 +57,7 @@ CONTENT_TYPES = [
         "required_variable_codes": ["process", "advantage", "result"],
         "evidence_policy": {"process": "required", "result": "required_if_used"},
         "default_narrative_axes": ["detail_proves_capability", "process_reduces_risk"],
-        "default_body_formula_codes": ["C02"],
+        "default_body_formula_codes": ["C03"],
     },
     {
         "code": "CT06",

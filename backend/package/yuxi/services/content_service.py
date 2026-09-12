@@ -114,6 +114,18 @@ def _validate_model_spec(model_spec: str | None) -> str | None:
     return normalized
 
 
+def _resolve_run_model_spec(*candidates: str | None) -> str | None:
+    """按优先级选用可用聊天模型；跳过已从缓存移除的停用模型。"""
+    for candidate in candidates:
+        normalized = candidate.strip() if isinstance(candidate, str) else None
+        if not normalized:
+            continue
+        info = model_cache.get_model_info(normalized)
+        if info and info.model_type == "chat":
+            return normalized
+    return None
+
+
 def _clean_list(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in values if value and value.strip()))
 
@@ -1235,7 +1247,7 @@ async def resume_content_run(db: AsyncSession, user: User, run_id: str, payload:
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
     _require_runnable_v3_task(task)
-    model_spec = (parent.input_payload or {}).get("model_spec")
+    model_spec = _resolve_run_model_spec((parent.input_payload or {}).get("model_spec"))
     return await _enqueue_content_run(
         db,
         user=user,
@@ -1267,13 +1279,14 @@ async def retry_content_node(
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
     _require_runnable_v3_task(task)
+    model_spec = _resolve_run_model_spec(model_spec, (parent.input_payload or {}).get("model_spec"))
     return await _enqueue_content_run(
         db,
         user=user,
         task=task,
         request_id=request_id,
         action="retry",
-        model_spec=_validate_model_spec(model_spec) or (parent.input_payload or {}).get("model_spec"),
+        model_spec=model_spec,
         parent_run_id=parent.id,
         node_id=node_id,
     )

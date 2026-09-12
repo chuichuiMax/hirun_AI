@@ -3,7 +3,7 @@ export const CONTENT_WORKFLOW_NODE_LABELS = {
   ingest_real_materials: '导入真实素材',
   normalize_evidence: '规范化证据',
   prepare_strategy_candidates: '准备行业公式与文章参考卡',
-  select_creation_strategy: 'Agent 匹配创作手法与公式',
+  select_creation_strategy: '固定规则锁定创作手法与公式',
   lock_creation_strategy: '固定规则校验并锁定策略',
   load_formula_lexicons: '加载公式必选词库',
   analyze_and_select_direction: 'Agent 分析价值并选择内容方向',
@@ -81,7 +81,8 @@ const RUNTIME_EVENT_PRESENTATION = {
   'content.tool.rejected': { status: 'failed', label: '工具调用被拒绝' },
   'content.knowledge.retrieved': { status: 'completed', label: '知识库检索完成' },
   'content.validation.completed': { status: 'completed', label: '规则校验完成' },
-  'content.strategy.locked': { status: 'completed', label: '创作策略与公式已锁定' }
+  'content.strategy.locked': { status: 'completed', label: '创作策略与公式已锁定' },
+  'content.formula_lexicons.loaded': { status: 'completed', label: '公式必选词库已加载' }
 }
 
 const runtimeEventDetail = (eventType, payload) => {
@@ -105,6 +106,16 @@ const runtimeEventDetail = (eventType, payload) => {
     return `${payload.status || '已完成'} · ${payload.check_count || 0} 项检查`
   }
   if (eventType === 'content.strategy.locked') return '已确定创作手法、爆款标题公式和爆款正文公式'
+  if (eventType === 'content.formula_lexicons.loaded') {
+    const titleCode = payload.title_formula_code || '标题公式'
+    const bodyCode = payload.body_formula_code || '正文公式'
+    const titleCount = Array.isArray(payload.title_lexicons) ? payload.title_lexicons.length : 0
+    const bodyCount = Array.isArray(payload.body_lexicons) ? payload.body_lexicons.length : 0
+    const hash = payload.bundle_hash ? String(payload.bundle_hash).slice(0, 8) : ''
+    return [`${titleCode}/${bodyCode}`, `标题词库 ${titleCount}`, `正文词库 ${bodyCount}`, hash && `hash ${hash}`]
+      .filter(Boolean)
+      .join(' · ')
+  }
   return ''
 }
 
@@ -162,7 +173,7 @@ const NODE_PROGRESS_NARRATIVES = {
   compile_runtime_snapshot: '正在整理本次任务的渠道要求、内容目标和可用资源。',
   ingest_real_materials: '正在读取品牌资料、业务事实和用户提供的素材。',
   normalize_evidence: '正在核对事实来源，筛除重复或不能直接用于创作的信息。',
-  select_creation_strategy: '正在结合目标受众、业务优势和现有证据，判断最值得表达的内容方向。',
+  select_creation_strategy: '正在按内容方向、变量与证据覆盖度，用固定规则锁定创作手法和公式。',
   lock_creation_strategy: '正在核对所选方向与创作公式是否满足渠道和证据约束。',
   load_formula_lexicons: '正在按锁定的标题和正文公式，从对应知识库加载全部必选词库。',
   collect_missing_evidence: '正在检查创作所需事实，并补充影响内容可信度的资料。',
@@ -763,7 +774,7 @@ export const CONTENT_WORKFLOW_GROUPS = [
     steps: [
       {
         id: 'select_creation_strategy',
-        label: 'Agent 匹配创作手法、标题公式和正文公式',
+        label: '固定规则锁定创作手法、标题公式和正文公式',
         nodes: ['select_creation_strategy']
       },
       {

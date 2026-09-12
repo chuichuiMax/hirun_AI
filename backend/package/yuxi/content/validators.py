@@ -72,6 +72,67 @@ def unsupported_number_tokens(content: str, evidence_bundle: dict[str, Any]) -> 
     return sorted({number for number in NUMBER_PATTERN.findall(content) if number not in evidence_text})
 
 
+def _problem_term_from_row(row: Any) -> str:
+    if isinstance(row, str):
+        return row.strip()
+    if not isinstance(row, dict):
+        return ""
+    for key in ("problem_term", "problem", "term", "问题词"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _alternatives_from_row(row: Any) -> list[str]:
+    if not isinstance(row, dict):
+        return []
+    raw = row.get("alternatives")
+    if raw is None:
+        raw = row.get("常用表达方式")
+    if isinstance(raw, str):
+        return [part.strip() for part in re.split(r"[,/，、|;；]", raw) if part.strip()]
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return []
+
+
+def forbidden_replacement_entries(evidence_bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    """从平台封禁词替换表 Evidence 提取问题词与候选表达，不固化具体词表。"""
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in evidence_bundle.get("items") or []:
+        metadata = item.get("metadata") or {}
+        if metadata.get("rule_kind") != "forbidden_replacement_map":
+            continue
+        value = item.get("value")
+        rows: list[Any]
+        if isinstance(value, list):
+            rows = value
+        elif isinstance(value, dict):
+            nested = value.get("rows") or value.get("items") or value.get("mappings")
+            if isinstance(nested, list):
+                rows = nested
+            else:
+                rows = [{"problem_term": key, "alternatives": alt} for key, alt in value.items()]
+        else:
+            continue
+        for row in rows:
+            term = _problem_term_from_row(row)
+            if not term or term in seen:
+                continue
+            seen.add(term)
+            entries.append(
+                {
+                    "term": term,
+                    "alternatives": _alternatives_from_row(row),
+                    "evidence_id": item.get("id"),
+                }
+            )
+    entries.sort(key=lambda entry: len(entry["term"]), reverse=True)
+    return entries
+
+
 def validate_content(
     *,
     title: str,
@@ -108,6 +169,27 @@ def validate_content(
                     "suggestion": "删除或改写该表达",
                 }
             )
+
+    for entry in forbidden_replacement_entries(evidence_bundle):
+        term = entry["term"]
+        if term not in combined:
+            continue
+        alternatives = entry["alternatives"]
+        if alternatives:
+            suggestion = f"按封禁词库替换为表内候选之一：{' / '.join(alternatives[:5])}"
+        else:
+            suggestion = "在不改变事实的前提下重写整句，使该概念不再需要出现；不得编造表外替代词"
+        checks.append(
+            {
+                "code": "CONTENT_FORBIDDEN_TERM",
+                "level": "error",
+                "location": "content",
+                "message": f"成品仍含平台封禁词“{term}”",
+                "evidence_ids": [evidence_id] if (evidence_id := entry.get("evidence_id")) else [],
+                "suggestion": suggestion,
+                "matched_terms": [term],
+            }
+        )
 
     for term in brief.get("required_terms") or []:
         if term and term not in combined:

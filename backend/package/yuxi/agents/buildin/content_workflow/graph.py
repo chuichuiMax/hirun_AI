@@ -714,7 +714,7 @@ class ContentWorkflowAgent(BaseAgent):
                     kind="conflict",
                 )
             if skip_formula_lexicon_pipeline(state):
-                answer = {"decision": "approved", "note": "好评笔记自动审批"}
+                answer = {"decision": "approved", "note": "好评笔记自动审批", "reviewer_uid": "system"}
             else:
                 answer = require_resume(
                     {
@@ -741,11 +741,13 @@ class ContentWorkflowAgent(BaseAgent):
                     separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()
+            note = str(answer.get("note") or "").strip()
+            reviewer_uid = str(answer.get("reviewer_uid") or state.get("uid") or "").strip() or "system"
             return {
                 "approval_result": {
                     "status": "approved",
-                    "note": "固定校验通过后自动批准",
-                    "reviewer_uid": "system",
+                    "note": note or None,
+                    "reviewer_uid": reviewer_uid,
                 },
                 "artifact_version": {
                     "id": f"cav_{artifact_hash[:32]}",

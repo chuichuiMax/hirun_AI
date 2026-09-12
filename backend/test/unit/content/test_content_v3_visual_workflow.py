@@ -946,6 +946,8 @@ async def test_content_approval_does_not_interrupt_for_review_notes(monkeypatch)
     )
 
     assert result["approval_result"]["status"] == "approved"
+    assert result["approval_result"]["note"] == "好评笔记自动审批"
+    assert result["approval_result"]["reviewer_uid"] == "system"
     assert result["artifact_version"]["status"] == "approved_content"
 
 

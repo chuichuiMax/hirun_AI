@@ -6,7 +6,15 @@
 
 ## v0.7.1 (current)
 
-- 修复内容生产 SiliconFlow `Pro/MiniMaxAI/MiniMax-M2.5` 返回 403 Model disabled：默认聊天模型改为 `MiniMaxAI/MiniMax-M2.5`。
+- 装修获客可审计链路对齐：人工终审快照写入真实 `reviewer_uid` 与审批备注（好评笔记仍记系统自动审批）；运行详情展示 `content.formula_lexicons.loaded`（公式码、词库数量、bundle hash）；策略节点文案改为「固定规则锁定」，与 V3.7 确定性选组一致。
+
+- 修复工艺展示部署后矩阵 fixture 校验失败：保留矩阵原候选以符合 91/48/166 不变量，CT05 仍由运行时过滤禁用 C01/C02；正文生成首包空闲超时由 120s 调整为 180s（节点总时限同步），缓解 SiliconFlow 大输入偶发首包过慢。
+
+- 装修家居「工艺施工展示」口径调整：标题须点明工艺主题且可读；正文以工艺类型/名称与标准细节讲解为主，禁止旧况改造完工案例分享；CT05 运行时禁用 C01/C02（报价转化/实景案例流量），优先 C03 干货公式；同步写作说明、正文调用、生成禁止项与标题/正文/审核 Skill。
+
+- 内容生成规避知识库平台违禁词：确定性校验读取 `forbidden_replacement_map` 阻断成品中的问题词（如「报价」「私信」）；写作说明/正文调用/引流示例改为同城咨询、留言、评论区；正文与表达 Skill 要求词库命中问题词时先改写再提交；生成模型视图不再截断封禁词替换表。
+
+- 修复内容生产 SiliconFlow MiniMax（含 `Pro/MiniMaxAI/MiniMax-M2.5`）整系返回 403 Model disabled：默认聊天模型改为可用的 `deepseek-ai/DeepSeek-V4-Flash`。
 
 - 修复内容成品 AI 修改在「只改标题」时模型漏回 `body` 导致接口 500：未改字段回填原文；模型输出仍非法时改为 422 可读错误。
 

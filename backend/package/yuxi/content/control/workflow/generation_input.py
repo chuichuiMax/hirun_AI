@@ -16,6 +16,11 @@ def _trim_text(value: object, limit: int) -> object:
     return value[: limit - 1].rstrip() + "…"
 
 
+def _is_forbidden_replacement_map(item: dict) -> bool:
+    metadata = item.get("metadata")
+    return isinstance(metadata, dict) and metadata.get("rule_kind") == "forbidden_replacement_map"
+
+
 def _build_evidence_cite_index(items: list) -> list[dict]:
     index: list[dict] = []
     for item in items:
@@ -61,7 +66,8 @@ def project_generation_input(payload: dict) -> dict:
     for item in evidence_items:
         for field in ("source_hash", "source_version", "created_at"):
             item.pop(field, None)
-        if "value" in item:
+        if "value" in item and not _is_forbidden_replacement_map(item):
+            # 封禁词替换表必须完整到达生成端，截断会导致问题词漏替换。
             item["value"] = _trim_text(item["value"], _MAX_EVIDENCE_VALUE_CHARS)
     lexicon = projected.get("formula_lexicon_bundle") or {}
     for scope in ("title", "body"):

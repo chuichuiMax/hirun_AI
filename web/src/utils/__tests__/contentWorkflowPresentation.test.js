@@ -73,9 +73,26 @@ assert.equal(groups[0].currentText, '已完成 3 个内部节点')
 assert.equal(groups[1].status, 'running')
 assert.equal(groups[1].isOpen, true)
 assert.equal(groups[1].currentNode.id, 'select_creation_strategy')
-assert.equal(groups[1].currentText, '当前：Agent 匹配创作手法、标题公式和正文公式')
+assert.equal(groups[1].currentText, '当前：固定规则锁定创作手法、标题公式和正文公式')
 assert.equal(groups[1].completedCount, 0)
 assert.equal(groups[1].totalCount, 10)
+
+const lexiconLoadedTimeline = buildContentRuntimeTimeline([], [{
+  event_type: 'content.formula_lexicons.loaded',
+  payload: {
+    node_id: 'load_formula_lexicons',
+    title_formula_code: 'T02',
+    body_formula_code: 'C01',
+    title_lexicons: ['标题词库A.xlsx'],
+    body_lexicons: ['正文词库B.xlsx', '正文词库C.xlsx'],
+    bundle_hash: 'abcdef0123456789'
+  }
+}])
+assert.equal(lexiconLoadedTimeline[0].label, '公式必选词库已加载')
+assert.ok(lexiconLoadedTimeline[0].detail.includes('T02/C01'))
+assert.ok(lexiconLoadedTimeline[0].detail.includes('标题词库 1'))
+assert.ok(lexiconLoadedTimeline[0].detail.includes('正文词库 2'))
+assert.ok(lexiconLoadedTimeline[0].detail.includes('hash abcdef01'))
 
 const priceRecoveryGroup = buildContentWorkflowGroups([
   { node_id: 'research_strategy_prices', status: 'completed' },
@@ -141,11 +158,11 @@ const timeline = buildContentRuntimeTimeline(
   ]
 )
 assert.equal(timeline.length, 3)
-assert.equal(timeline[0].label, 'Agent 匹配创作手法与公式')
+assert.equal(timeline[0].label, '固定规则锁定创作手法与公式')
 assert.equal(timeline[0].nodeId, 'select_creation_strategy')
 assert.equal(timeline[1].detail, 'content-strategy-agent')
 assert.equal(timeline[1].nodeId, 'select_creation_strategy')
-assert.equal(timeline[1].nodeLabel, 'Agent 匹配创作手法与公式')
+assert.equal(timeline[1].nodeLabel, '固定规则锁定创作手法与公式')
 assert.deepEqual(timeline[1].inputPreview, { content_brief: { content_goal: 'acquire' } })
 assert.equal(timeline[2].detail, 'products · 杭州装修案例 · 返回 3 条结果')
 assert.equal(timeline[2].knowledgeResults[0].content, '89㎡三居改造案例')
@@ -170,7 +187,7 @@ assert.equal(deduplicatedTimeline.length, 1)
 
 const narrative = buildContentNarrativeStream(timeline)
 assert.equal(narrative.length, 2)
-assert.match(narrative[0].text, /目标受众.*内容方向/)
+assert.match(narrative[0].text, /固定规则锁定创作手法和公式/)
 assert.match(narrative[1].text, /杭州装修案例.*3 条相关资料.*89㎡三居改造案例/)
 assert.ok(narrative.every((item) => !/Agent|Skill|工具调用|content-strategy-agent/.test(item.text)))
 
@@ -452,7 +469,7 @@ const strategyAnchoredNarrative = buildContentNarrativeStream(strategyAnchorActi
   .join('\n\n')
 assert.equal(
   strategyAnchoredNarrative.slice(0, strategyAnchor),
-  '正在结合目标受众、业务优势和现有证据，判断最值得表达的内容方向。'
+  '正在按内容方向、变量与证据覆盖度，用固定规则锁定创作手法和公式。'
 )
 assert.match(strategyAnchoredNarrative.slice(strategyAnchor), /正在检索与当前主题/)
 assert.equal(findContentStrategyNarrativeAnchor([], codeLabels), null)
@@ -625,7 +642,7 @@ assert.deepEqual(completionSummary.skills[0], {
   slug: 'content-strategy',
   version: '1.1.0',
   activations: 1,
-  nodes: ['Agent 匹配创作手法与公式']
+  nodes: ['固定规则锁定创作手法与公式']
 })
 assert.deepEqual(completionSummary.knowledgeBases[0], {
   id: 'kb-1',
@@ -671,7 +688,7 @@ assert.deepEqual(persistedSkillSummary.skills[0], {
   slug: 'content-value-analyzer',
   version: '1.3.0',
   activations: 1,
-  nodes: ['Agent 匹配创作手法与公式']
+  nodes: ['固定规则锁定创作手法与公式']
 })
 assert.equal(formatElapsedDuration(141000), '2分21秒')
 

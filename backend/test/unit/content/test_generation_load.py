@@ -38,7 +38,7 @@ def test_generate_content_allows_three_model_calls_with_matching_watchdog():
     context = SimpleNamespace(reasoning_effort=None)
     AgentDelegationService._apply_node_constraints(context, request)
     assert context.reasoning_effort == "low"
-    assert context.model_call_timeout_seconds == 120
+    assert context.model_call_timeout_seconds == 180
     assert context._content_max_model_calls == 3
     assert CONTENT_NODE_EXECUTION_LIMITS["generate_content"][0] >= (
         context._content_max_model_calls * context.model_call_timeout_seconds + 3 + 15
@@ -275,6 +275,57 @@ def test_generation_projection_keeps_price_sources_rules_and_revision_without_mu
     assert chunks[0] == "短词条"
     assert chunks[1].endswith("…") and len(chunks[1]) == 400
     assert len(chunks) == 3
+
+
+def test_generation_projection_keeps_forbidden_replacement_map_intact():
+    long_map = [{"problem_term": f"问题词{i}", "alternatives": [f"替代表达{i}"]} for i in range(80)]
+    serialized = "报价" * 200 + "私信" * 200
+    payload = {
+        "strategy_snapshot": {"snapshot_hash": "s" * 64, "body_formula": {"full_rules": "x"}},
+        "content_brief": {"business_variables": {}},
+        "evidence_bundle": {
+            "bundle_hash": "frozen",
+            "items": [
+                {
+                    "id": "ev-map-list",
+                    "value": long_map,
+                    "source_id": "forbidden-kb",
+                    "allowed_usage": ["title", "body"],
+                    "verified_status": "user_confirmed",
+                    "risk_level": "sensitive",
+                    "metadata": {"material_type": "platform_rule", "rule_kind": "forbidden_replacement_map"},
+                },
+                {
+                    "id": "ev-map-str",
+                    "value": serialized,
+                    "source_id": "forbidden-kb-2",
+                    "allowed_usage": ["title", "body"],
+                    "verified_status": "user_confirmed",
+                    "risk_level": "sensitive",
+                    "metadata": {"material_type": "platform_rule", "rule_kind": "forbidden_replacement_map"},
+                },
+                {
+                    "id": "ev-normal",
+                    "value": "y" * 500,
+                    "source_id": "brand",
+                    "allowed_usage": ["body"],
+                    "verified_status": "user_confirmed",
+                    "risk_level": "normal",
+                    "metadata": {"material_type": "brand"},
+                },
+            ],
+        },
+        "runtime_config_snapshot": {"creation_mode": "original"},
+        "formula_lexicon_bundle": {},
+        "channel_profile": {},
+        "persona_profile": {},
+    }
+    result = project_generation_input(payload)
+    items = {item["id"]: item for item in result["evidence_bundle"]["items"]}
+    assert items["ev-map-list"]["value"] == long_map
+    assert items["ev-map-str"]["value"] == serialized
+    assert items["ev-normal"]["value"].endswith("…")
+    assert len(items["ev-normal"]["value"]) == 320
 
 
 def test_visual_text_max_char_floor_raises_cover_copy_limits():

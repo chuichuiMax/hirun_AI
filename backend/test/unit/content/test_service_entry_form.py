@@ -234,15 +234,41 @@ def test_map_service_entry_form_values_quotation_list_brand_over_price():
         },
     )
     assert "一眼看懂" in mapped["writing_instruction"]
-    assert "报价不是鸿扬核心卖点" in mapped["writing_instruction"]
+    assert "费用数字不是鸿扬核心卖点" in mapped["writing_instruction"]
+    assert "forbidden_replacement_map" in mapped["writing_instruction"]
     assert "品牌优势" in mapped["writing_instruction"]
     assert "不以低价作为卖点" in mapped["advantage"]
+    assert "留言私信" not in mapped["writing_instruction"]
+    assert "报价参考" not in mapped["writing_instruction"]
     assert "鸿扬家居品牌" in mapped["advantage"]
     assert "定制化家装" in mapped["advantage"]
     assert "整装" not in mapped["advantage"]
     assert mapped["brand_positioning"] == "定制化家装"
     assert "定制化家装" in mapped["writing_instruction"]
     assert "禁止把鸿扬写成整装" in mapped["writing_instruction"]
+
+
+def test_map_service_entry_form_values_craft_showcase_not_case_story():
+    from yuxi.content.service_entry_form import filter_body_formulas_for_content_direction
+
+    mapped = map_service_entry_form_values(
+        "装修家居",
+        {
+            "mp_content_type_name": "工艺施工展示",
+            "工艺类型": "防渗漏系统",
+            "工艺名称": "HYB-厨卫及顶楼防漏吊顶工艺",
+            "楼盘信息": "星河湾",
+            "外框面积": "110-130㎡",
+        },
+    )
+    assert "工艺科普与标准讲解" in mapped["writing_instruction"]
+    assert "禁止写成装修案例分享" in mapped["writing_instruction"]
+    assert "旧况→改造过程→完工效果" in mapped["writing_instruction"]
+    assert "防渗漏系统" in mapped["advantage"]
+    assert "HYB-厨卫及顶楼防漏吊顶工艺" in mapped["craft_and_materials"]
+    assert filter_body_formulas_for_content_direction("CT05", ["C02", "C01", "C03", "C04"]) == ["C03", "C04"]
+    assert filter_body_formulas_for_content_direction("CT05", ["C02", "C01"]) == ["C03", "C04"]
+    assert filter_body_formulas_for_content_direction("CT02", ["C01", "C02"]) == ["C01", "C02"]
 
 
 def test_map_service_entry_form_values_keeps_configured_names():

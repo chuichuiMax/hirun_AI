@@ -59,7 +59,7 @@ async def _ensure_channel(db: AsyncSession, now) -> None:
                 body_constraints={"min_length": 100, "max_length": 1000, "emoji_allowed": True},
                 topic_constraints={"min_count": 1, "max_count": 10},
                 media_constraints={"min_count": 1, "max_count": 18, "ratios": ["3:4", "1:1"]},
-                cta_policy={"allowed": ["收藏", "评论", "私信了解"], "forbidden": ["强制关注"]},
+                cta_policy={"allowed": ["收藏", "评论", "留言了解"], "forbidden": ["强制关注", "私信"]},
                 link_policy={"external_link": "blocked", "contact_info": "confirm"},
                 preview_schema={"type": "xiaohongshu-note"},
                 connector_config_ref="xiaohongshu",

@@ -1352,7 +1352,7 @@ async def test_final_approval_is_a_backend_hard_gate_for_both_reports():
 
 
 @pytest.mark.asyncio
-async def test_final_approval_is_automatic_after_reports_pass():
+async def test_final_approval_records_human_resume_for_decoration(monkeypatch):
     agent = ContentWorkflowAgent()
     state = {
         "task_id": "task-1",
@@ -1364,7 +1364,20 @@ async def test_final_approval_is_automatic_after_reports_pass():
         "evidence_bundle": {"bundle_hash": "bundle-1"},
         "validation_report": {"status": "passed", "checks": []},
         "review_report": {"status": "passed", "checks": []},
+        "content_brief": {"form_values": {"mp_service_entry": "装修家居"}},
     }
+
+    monkeypatch.setattr(
+        content_workflow_graph_module,
+        "interrupt",
+        lambda _payload: {
+            "run_id": "run-1",
+            "node_id": "human_content_approval",
+            "expected_state_version": 1,
+            "decision": "approved",
+            "note": "人工确认可发布",
+        },
+    )
 
     result = await agent._v3_human_review(
         {"id": "human_content_approval", "interrupt_type": "content_approval"},
@@ -1373,8 +1386,8 @@ async def test_final_approval_is_automatic_after_reports_pass():
 
     assert result["approval_result"] == {
         "status": "approved",
-        "note": "固定校验通过后自动批准",
-        "reviewer_uid": "system",
+        "note": "人工确认可发布",
+        "reviewer_uid": "user-1",
     }
 
 

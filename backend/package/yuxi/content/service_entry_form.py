@@ -24,19 +24,49 @@ DECORATION_WRITING_INSTRUCTION = (
     "卡点文字必须与简报/证据原文一致（面积保留区间原文，禁止改成130m²等中间值）；"
     "写出的每个卡点与数字都要在 paragraph_evidence 挂载对应 evidence_bundle.items[].id（或 evidence_cite_index.id），逐字复制，禁止编造 ID；"
     "若有可用于正文的业务知识证据，至少再挂一条；"
-    "必须写出鸿扬家居/鸿扬家装品牌优势（定位为定制化家装，禁止写整装或标准化整装），并带明确引流点（同城咨询、报价参考、留言私信等）；"
+    "必须写出鸿扬家居/鸿扬家装品牌优势（定位为定制化家装，禁止写整装或标准化整装），"
+    "并带明确引流点（同城咨询、留言、评论区聊聊等；成品禁用「私信」「报价」等平台封禁词，以 evidence 中 forbidden_replacement_map 为准）；"
     "封面/副标/话题也不得出现整装、标准化整装；事实只来自简报与冻结证据，不得编造户型缺陷、改造前后效果或他人案例细节。"
 )
 QUOTATION_LIST_TYPE_NAMES = frozenset({"装修报价清单", "报价清单"})
 QUOTATION_LIST_WRITING_INSTRUCTION = (
-    "内容类型为装修报价清单：标题必须让人一眼看懂在说什么（预算参考/报价透明/避坑清单等），"
+    "内容类型为装修报价清单：标题必须让人一眼看懂在说什么（预算参考/费用透明/避坑清单等），"
     "句子通顺、语义完整，禁止词库堆砌、暗号式缩写或看不懂的标题；"
     "标题可用痛点或悬念，但主题要落在「看清单/看预算口径/避隐形增项」，不要吹嘘最低价；"
-    "正文把基础/木制品/主材等报价仅作参考信息卡点展示，明确报价不是鸿扬核心卖点，禁止主推「更便宜、低价、性价比碾压」；"
+    "正文把基础/木制品/主材等费用仅作参考信息卡点展示，明确费用数字不是鸿扬核心卖点，禁止主推「更便宜、低价、性价比碾压」；"
     "正文重点写鸿扬家居/鸿扬家装品牌优势：定制化家装、透明施工、自有/规范工艺、售后与靠谱服务，用品牌与交付能力收尾引流；"
+    "成品标题/正文/话题必须规避平台封禁词库问题词（见 evidence forbidden_replacement_map），"
+    "引流只用同城咨询、留言、评论区等安全表达，不得出现「私信」「报价」等表内问题词；词库原文含问题词时须改写后再写入；"
     "禁止把鸿扬写成整装或标准化整装；仍须写清小区、面积（原文）、风格、项目施工鸿扬家装等信息卡点，并正确挂载 Evidence ID；"
     "不展开某套房案例故事，不编造数字与改造情节。"
 )
+CRAFT_SHOWCASE_TYPE_NAMES = frozenset({"工艺施工展示", "工艺展示"})
+CRAFT_SHOWCASE_DIRECTION_CODE = "CT05"
+# 工艺展示禁用报价转化（C01）与实景案例流量（C02），优先干货工艺讲解。
+CRAFT_SHOWCASE_BLOCKED_BODY_FORMULAS = frozenset({"C01", "C02"})
+CRAFT_SHOWCASE_PREFERRED_BODY_FORMULAS = ("C03", "C04")
+CRAFT_SHOWCASE_WRITING_INSTRUCTION = (
+    "内容类型为工艺施工展示：标题必须让人一眼看懂在讲哪类工艺/哪道工序（工艺标准、施工细节、避坑要点），"
+    "句子通顺、语义完整，禁止词库硬拼、暗号缩写或不知所云；"
+    "正文主线是工艺科普与标准讲解：写清简报中的工艺类型、工艺名称，说明规范做法、关键细节和为什么重要；"
+    "可用信息卡点写小区、面积、布局（有填才写）、风格、项目施工鸿扬家装，仅作定位背书；"
+    "禁止写成装修案例分享：不得展开某套房旧况→改造过程→完工效果叙事，不得虚构客户经历或前后对比故事；"
+    "收尾可写鸿扬家居/鸿扬家装品牌优势（定制化家装，禁止整装/标准化整装）与同城咨询、留言、评论区引流；"
+    "成品规避平台封禁词库问题词（见 evidence forbidden_replacement_map）；卡点与数字须挂载正确 Evidence ID。"
+)
+
+
+def filter_body_formulas_for_content_direction(
+    direction_code: str,
+    codes: list[str] | tuple[str, ...],
+) -> list[str]:
+    """按内容方向收窄正文公式；工艺展示不得落入案例/报价转化公式。"""
+    ordered = [str(code).strip() for code in codes if str(code).strip()]
+    if direction_code != CRAFT_SHOWCASE_DIRECTION_CODE:
+        return ordered
+    filtered = [code for code in ordered if code not in CRAFT_SHOWCASE_BLOCKED_BODY_FORMULAS]
+    return filtered or list(CRAFT_SHOWCASE_PREFERRED_BODY_FORMULAS)
+
 
 
 def prioritize_form_fields(
@@ -234,7 +264,11 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
         product = community or f"{BRAND_POSITIONING}项目"
         process = budget_text or f"{style} {frame_area}".strip() or f"{BRAND_POSITIONING}交付"
         content_type_name = str(values.get("mp_content_type_name") or "").strip()
+        process_type = str(values.get("工艺类型") or "").strip()
+        process_name = str(values.get("工艺名称") or "").strip()
+        craft_text = "；".join(part for part in (process_type, process_name) if part)
         is_quotation_list = content_type_name in QUOTATION_LIST_TYPE_NAMES
+        is_craft_showcase = content_type_name in CRAFT_SHOWCASE_TYPE_NAMES
         if is_quotation_list:
             pain = f"{community or '业主'}关心装修预算口径与隐形增项，更需要看清品牌与交付是否靠谱"
             advantage = "；".join(
@@ -242,11 +276,25 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
                 for part in (
                     f"{BRAND_NAME}品牌与{BRAND_POSITIONING}交付",
                     f"项目施工{CONSTRUCTION_BRAND}",
-                    "透明工艺与售后服务（报价仅作参考，不以低价作为卖点）",
+                    "透明工艺与售后服务（费用数字仅作参考，不以低价作为卖点）",
                 )
                 if part
             )
             values["writing_instruction"] = QUOTATION_LIST_WRITING_INSTRUCTION
+        elif is_craft_showcase:
+            pain = f"业主关心{process_type or '施工'}工艺是否规范、细节是否到位、会不会偷工减料"
+            advantage = "；".join(
+                part
+                for part in (
+                    craft_text,
+                    f"项目施工{CONSTRUCTION_BRAND}",
+                    f"{BRAND_NAME}{BRAND_POSITIONING}与透明施工",
+                )
+                if part
+            )
+            if craft_text:
+                process = craft_text
+            values["writing_instruction"] = CRAFT_SHOWCASE_WRITING_INSTRUCTION
         else:
             pain = f"{community or '业主'}关注{frame_area or '户型'}装修落地"
             advantage = "；".join(

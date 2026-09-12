@@ -31,12 +31,12 @@ def test_content_reviewer_blocks_flattened_viral_layout():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "content-reviewer")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "1.10.0"
+    assert spec.version == "1.10.2"
     assert "selected_reference=true" in skill_text
     assert "多个独立信息块被压成一行" in skill_text
     assert "CONTENT_STRUCTURE_MISMATCH" in skill_text
     assert "不得设置固定段落数、双换行数或条目数" in skill_text
-    assert "报价、材料、步骤或改造清单参考连续使用行首 Emoji" in skill_text
+    assert "费用、材料、步骤或改造清单参考连续使用行首 Emoji" in skill_text
     assert "句号前或自然段末尾" in skill_text
 
 
