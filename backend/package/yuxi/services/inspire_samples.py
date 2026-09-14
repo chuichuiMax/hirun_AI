@@ -298,7 +298,9 @@ class InspireDirectCrawler:
                             else f"{INSPIRE_URL}#rank-{index + 1}"
                         ),
                         "title": title,
-                        "body": "",
+                        # 聚光卡片只公开当前可见文案；按原文保存，避免详情页空白，
+                        # 同时不把未获取到的笔记正文伪造成平台数据。
+                        "body": title,
                         "cover_url": cover_url,
                         "metrics": metrics,
                     }
@@ -379,7 +381,7 @@ def _present_sample(sample, snapshot, *, now, include_body: bool, media=None) ->
         "snapshot_id": snapshot.id,
         "industry_slug": sample.industry_slug,
         "title": sample.title,
-        "body": None if expired or not include_body else snapshot.body_text,
+        "body": None if expired or not include_body else snapshot.body_text or sample.title,
         "body_expired": expired,
         "tags": sample.tags_json or [],
         "cover_url": f"/api/content/inspire/media/{media.id}" if media else None,
@@ -608,7 +610,7 @@ async def bind_inspire_reference(db, user: User, task_id: str, snapshot_id: str)
     }
 
 
-async def get_inspire_media_url(db, user: User, media_id: str) -> str:
+async def get_inspire_media_content(db, user: User, media_id: str) -> tuple[bytes, str]:
     media = await db.get(ContentInspireMedia, media_id)
     if media is None:
         raise _error(404, "INSPIRE_MEDIA_NOT_FOUND", "聚光媒体不存在")
@@ -617,4 +619,5 @@ async def get_inspire_media_url(db, user: User, media_id: str) -> str:
         raise _error(404, "INSPIRE_MEDIA_NOT_FOUND", "聚光媒体不存在或无权访问")
     if media.expires_at and media.expires_at <= utc_now_naive():
         raise _error(410, "INSPIRE_MEDIA_EXPIRED", "聚光封面缓存已过期")
-    return get_minio_client().get_presigned_url("public", media.object_key, days=1)
+    data = await get_minio_client().adownload_file("public", media.object_key)
+    return data, media.mime_type

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, File, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.content.schemas import (
     ContentArtifactAIEdit,
@@ -126,7 +126,7 @@ from yuxi.services.inspire_samples import (
     get_inspire_browser_screenshot,
     get_inspire_browser_session,
     get_inspire_sample,
-    get_inspire_media_url,
+    get_inspire_media_content,
     heartbeat_inspire_browser_session,
     bind_inspire_reference,
     list_inspire_samples,
@@ -403,7 +403,9 @@ async def get_inspire_media(
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return RedirectResponse(await get_inspire_media_url(db, current_user, media_id), status_code=307)
+    """通过已鉴权 API 返回缓存封面，避免暴露对象存储内网地址。"""
+    data, media_type = await get_inspire_media_content(db, current_user, media_id)
+    return Response(content=data, media_type=media_type, headers={"Cache-Control": "private, max-age=300"})
 
 
 @content.post("/inspire/crawl-runs")
