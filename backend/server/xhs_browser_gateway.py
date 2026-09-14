@@ -59,7 +59,7 @@ class SessionRequest(BaseModel):
     session_id: str = Field(min_length=8, max_length=80)
     owner_uid: str = Field(min_length=1, max_length=255)
     account_id: str = Field(min_length=1, max_length=80)
-    target: str = Field(default="home", pattern="^(home|drafts)$")
+    target: str = Field(default="home", pattern="^(home|drafts|inspire)$")
 
 
 class ActionRequest(SessionRequest):

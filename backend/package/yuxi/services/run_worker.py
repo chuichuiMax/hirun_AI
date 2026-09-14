@@ -16,8 +16,10 @@ from yuxi.repositories.agent_run_repository import TERMINAL_RUN_STATUSES, AgentR
 from yuxi.services.chat_service import stream_agent_chat, stream_agent_resume
 from yuxi.services.content_run_worker import process_content_run, resume_content_run_from_cover
 from yuxi.services.content_cover_worker import process_content_cover_job
+from yuxi.image_design.worker import process_image_design_job
 from yuxi.services.viral_asset_worker import process_viral_asset
 from yuxi.services.viral_document_worker import process_viral_document
+from yuxi.services.inspire_samples import process_inspire_crawl
 from yuxi.services.xiaohongshu_worker import (
     process_xiaohongshu_distribution,
     process_xiaohongshu_login,
@@ -533,12 +535,14 @@ class WorkerSettings:
         process_content_run,
         resume_content_run_from_cover,
         process_content_cover_job,
+        process_image_design_job,
         process_viral_asset,
         process_viral_document,
         process_xiaohongshu_login,
         process_xiaohongshu_status_check,
         process_xiaohongshu_profile_cleanup,
         process_xiaohongshu_distribution,
+        process_inspire_crawl,
     ]
     max_tries = 2
     retry_jobs = True

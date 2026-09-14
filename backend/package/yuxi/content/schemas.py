@@ -40,7 +40,6 @@ class ContentTaskBatchDelete(BaseModel):
     task_ids: list[str] = Field(min_length=1, max_length=100)
 
 
-
 class ContentVisualMaterialSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -72,6 +71,19 @@ class ContentBriefPayload(BaseModel):
 
 class ContentBriefSave(BaseModel):
     brief: ContentBriefPayload
+
+
+class InspireCrawlCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    industry_slugs: list[str] = Field(default_factory=list, max_length=6)
+    limit: int = Field(default=10, ge=1, le=10)
+
+
+class InspireReferenceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str = Field(min_length=1, max_length=64)
 
 
 class ContentOCRCorrection(BaseModel):
@@ -156,7 +168,7 @@ class XiaohongshuDistributionCreate(BaseModel):
 
 
 class XiaohongshuBrowserOpen(BaseModel):
-    target: Literal["home", "drafts"] = "home"
+    target: Literal["home", "drafts", "inspire"] = "home"
 
 
 class XiaohongshuBrowserAction(BaseModel):

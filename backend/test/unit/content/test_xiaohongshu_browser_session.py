@@ -90,6 +90,9 @@ class FakeRuntime:
         del page
         return {"nickname": "测试账号", "account_id": "platform-1"}
 
+    async def _is_inspire_logged_in(self, page):
+        return page.url.startswith("https://ad.xiaohongshu.com/")
+
     async def open_drafts(self, page):
         self.drafts_opened += 1
         page.url = "https://creator.xiaohongshu.com/publish/drafts"
@@ -156,6 +159,25 @@ async def test_drafts_target_opens_once_and_is_reported_in_status():
     assert opened["view"] == "drafts"
     assert reopened["view"] == "drafts"
     assert runtime.drafts_opened == 1
+    await manager.close_all()
+
+
+@pytest.mark.asyncio
+async def test_inspire_target_opens_authorized_content_square():
+    runtime = FakeRuntime()
+    manager = XiaohongshuBrowserSessionManager(runtime=runtime)
+    manager._playwright = FakePlaywright()
+
+    opened = await manager.open(
+        "session-1",
+        "owner-1",
+        "inspire-account",
+        target="inspire",
+    )
+
+    assert runtime.page.url == "https://ad.xiaohongshu.com/microapp/creativity/inspire"
+    assert opened["logged_in"] is True
+    assert opened["view"] == "inspire"
     await manager.close_all()
 
 
