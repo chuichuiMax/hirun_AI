@@ -11,6 +11,7 @@ import yuxi.services.material_library_service as material_library_service
 from yuxi.services.material_library_service import (
     MATERIAL_LIBRARY_BUCKET,
     MaterialCategoryCreate,
+    MaterialCategoryUpdate,
     MaterialShareCreate,
     _make_image_thumbnail,
     _normalize_image,
@@ -137,6 +138,15 @@ def test_material_share_selection_requires_distinct_nonempty_image_ids():
         MaterialShareCreate(item_ids=[f"mli_{index}" for index in range(1001)])
 
 
+@pytest.mark.parametrize("raw_area", ["120㎡", "120m²", "120 m²", "120m2"])
+def test_material_category_area_strips_supported_units_before_persisting(raw_area):
+    create_payload = MaterialCategoryCreate(material_type="image", name="客厅案例", area=raw_area)
+    update_payload = MaterialCategoryUpdate(area=raw_area)
+
+    assert create_payload.area == "120"
+    assert update_payload.area == "120"
+
+
 def test_public_material_share_serializer_exposes_only_snapshot_data_in_display_order():
     share = ContentMaterialShare(
         id="mls_internal",
@@ -197,6 +207,42 @@ def test_public_material_share_serializer_exposes_only_snapshot_data_in_display_
             ],
         }
     }
+
+
+def test_public_material_share_serializer_normalizes_legacy_area_units():
+    share = ContentMaterialShare(
+        id="mls_legacy",
+        token="legacy-share-token",
+        owner_uid="private-owner",
+        category_id="private-category",
+        title="旧分享",
+        building_name="桂语云峰",
+        area="120m²",
+        design_style="复古风潮",
+    )
+
+    payload = serialize_public_material_share(share, [])
+
+    assert payload["share"]["area"] == "120"
+
+
+@pytest.mark.parametrize("raw_area", ["120", "120㎡", "120m²", "120 m²", "120m2"])
+def test_public_material_share_page_renders_exactly_one_area_unit(raw_area):
+    share = ContentMaterialShare(
+        id="mls_area",
+        token="area-share-token",
+        owner_uid="owner-1",
+        category_id="gallery-2",
+        title="桂语云峰·120m²",
+        building_name="桂语云峰",
+        area=raw_area,
+        design_style="复古风潮",
+    )
+
+    page = render_public_material_share_page(share, [], "https://share.example.test")
+
+    assert "面积：120㎡" in page
+    assert "桂语云峰｜120㎡｜复古风潮" in page
 
 
 def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_metadata(monkeypatch):

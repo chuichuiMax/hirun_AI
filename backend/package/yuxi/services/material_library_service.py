@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Literal
@@ -69,6 +70,17 @@ DECORATION_GALLERY_DESIGN_STYLES = frozenset(
 )
 
 
+def _normalize_area_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return re.sub(r"\s*(?:㎡|m(?:²|2))\s*$", "", value.strip(), flags=re.IGNORECASE).strip()
+
+
+def _display_area_value(value: str | None) -> str:
+    normalized = _normalize_area_value(value)
+    return f"{normalized}㎡" if normalized else ""
+
+
 class MaterialItemUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     category: str | None = Field(default=None, min_length=1, max_length=80)
@@ -114,6 +126,11 @@ class MaterialCategoryCreate(BaseModel):
             raise ValueError("名称不能为空")
         return value
 
+    @field_validator("area")
+    @classmethod
+    def normalize_area(cls, value: str | None) -> str | None:
+        return _normalize_area_value(value)
+
 
 class MaterialCategoryUpdate(BaseModel):
     @field_validator("visibility")
@@ -138,6 +155,11 @@ class MaterialCategoryUpdate(BaseModel):
         if value is not None and not value.strip():
             raise ValueError("名称不能为空")
         return value
+
+    @field_validator("area")
+    @classmethod
+    def normalize_area(cls, value: str | None) -> str | None:
+        return _normalize_area_value(value)
 
 
 class MaterialCategoryDelete(BaseModel):
@@ -194,7 +216,7 @@ def _share_public_url(path: str, public_base_url: str | None = None) -> str:
 def _share_description(building_name: str | None, area: str | None, design_style: str | None) -> str:
     if not building_name or not area or not design_style:
         return ""
-    area_text = area if area.endswith("㎡") else f"{area}㎡"
+    area_text = _display_area_value(area)
     return f"{building_name}｜{area_text}｜{design_style}"
 
 
@@ -601,7 +623,7 @@ def serialize_public_material_share(
             "id": share.token,
             "gallery_name": share.title,
             "building_name": share.building_name,
-            "area": share.area,
+            "area": _normalize_area_value(share.area),
             "design_style": share.design_style,
             "cover_url": _share_image_path(share.token, 1) if ordered_items else None,
             "images": [
@@ -633,7 +655,7 @@ def render_public_material_share_page(
     first_image_width = first_item.image_width if first_item else ""
     first_image_height = first_item.image_height if first_item else ""
     building_name = html.escape(share.building_name or "")
-    area = html.escape(share.area or "")
+    area = html.escape(_display_area_value(share.area))
     design_style = html.escape(share.design_style or "")
     description = html.escape(_share_description(share.building_name, share.area, share.design_style), quote=True)
     details = ""
@@ -641,7 +663,7 @@ def render_public_material_share_page(
         details = (
             '<section class="project-info-card">'
             f'<span>楼盘：{building_name}</span>'
-            f'<span>面积：{area}㎡</span>'
+            f'<span>面积：{area}</span>'
             f'<span>风格：{design_style}</span>'
             "</section>"
         )
