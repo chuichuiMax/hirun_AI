@@ -40,6 +40,7 @@ import ContentOcrDrawer from '@/components/content/ContentOcrDrawer.vue'
 import ContentWorkflowStrategyPanel from '@/components/content/ContentWorkflowStrategyPanel.vue'
 import ContentStrategyDecision from '@/components/content/ContentStrategyDecision.vue'
 import XiaohongshuAccountPublishModal from '@/components/content/XiaohongshuAccountPublishModal.vue'
+import XiaohongshuBrowserDrawer from '@/components/content/XiaohongshuBrowserDrawer.vue'
 import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import { contentApi } from '@/apis/content_api'
 import { materialLibraryApi } from '@/apis/material_library_api'
@@ -88,6 +89,14 @@ const pendingAiEdit = ref(null)
 const aiEditHistoryElement = ref(null)
 const versionDrawerOpen = ref(false)
 const resultDetailOpen = ref(false)
+const inspireSamples = ref([])
+const inspireLoading = ref(false)
+const inspireDetail = ref(null)
+const inspireDetailOpen = ref(false)
+const inspireReferenceSaving = ref(false)
+const inspireBrowserOpen = ref(false)
+const selectedInspireSnapshotId = ref('')
+const inspireAutoRefreshKey = ref('')
 const resultPreviewTab = ref('cover')
 const viralReferenceLoading = ref(false)
 const viralReference = ref(null)
@@ -1749,6 +1758,10 @@ watch(
   }
 )
 
+watch([selectedIndustrySlug, () => store.task?.runtime_config_snapshot?.creation_mode], () => {
+  if (stage.value === 1) void loadInspireSamples()
+})
+
 watch(selectedHyCanvasTemplateId, initializeHyCanvasFields)
 watch(directionOptions, (options) => {
   if (!options.some((item) => item.code === creation.content_type_code)) creation.content_type_code = undefined
@@ -1806,6 +1819,7 @@ onMounted(async () => {
       initializeVisualSelection()
       await initializeReviewNotePhotos()
       syncEditor()
+      await loadInspireSamples()
       if (route.query.resultDetail === '1' && store.artifact) resultDetailOpen.value = true
       if (stage.value === 1 && !isReviewNotes.value) await loadVisualMaterials()
       if (
@@ -1874,8 +1888,8 @@ const createTask = async () => {
     await router.replace(`/content/tasks/${task.id}`)
     initializeFormValues()
     initializeVisualSelection()
-    await initializeReviewNotePhotos()
-    if (!isReviewNotes.value) await loadVisualMaterials()
+    await loadVisualMaterials()
+    await loadInspireSamples()
     message.success('内容任务已创建')
   } catch (error) {
     message.error(error.message || '创建任务失败')
@@ -2168,6 +2182,79 @@ const copyResultText = async (value, label) => {
   }
 }
 
+const loadInspireSamples = async ({ refresh = false } = {}) => {
+  if (!store.task || store.task.runtime_config_snapshot?.creation_mode !== 'viral_rewrite' || !selectedIndustrySlug.value) {
+    inspireSamples.value = []
+    return
+  }
+  inspireLoading.value = true
+  try {
+    if (refresh) {
+      const crawlResponse = await contentApi.createInspireCrawlRuns({ industry_slugs: [selectedIndustrySlug.value], limit: 10 })
+      const run = crawlResponse.runs?.[0]
+      if (run?.id) {
+        const terminal = new Set(['succeeded', 'partial', 'login_required', 'rate_limited', 'schema_changed', 'media_failed', 'failed'])
+        let status = run.status
+        for (let attempt = 0; attempt < 45 && !terminal.has(status); attempt += 1) {
+          await new Promise(resolve => window.setTimeout(resolve, 1500))
+          status = (await contentApi.getInspireCrawlRun(run.id)).status
+        }
+        if (status === 'login_required') throw new Error('聚光平台登录已失效，请点击“打开聚光”重新登录')
+        if (status === 'failed' || status === 'rate_limited' || status === 'schema_changed') throw new Error('聚光样本采集失败，请查看管理员任务状态')
+      }
+    }
+    const response = await contentApi.listInspireSamples({ industry_slug: selectedIndustrySlug.value, limit: 10 })
+    inspireSamples.value = response.items || []
+    selectedInspireSnapshotId.value = store.task.runtime_config_snapshot?.selected_inspire_snapshot_id || ''
+    if (!refresh && !inspireSamples.value.length) {
+      const key = `${store.task.id}:${selectedIndustrySlug.value}`
+      if (inspireAutoRefreshKey.value !== key) {
+        inspireAutoRefreshKey.value = key
+        await loadInspireSamples({ refresh: true })
+      }
+    }
+  } catch (error) {
+    inspireSamples.value = []
+    message.warning(error.message || '热门爆款样本加载失败')
+  } finally {
+    inspireLoading.value = false
+  }
+}
+
+const openInspireDetail = async (sample) => {
+  inspireDetailOpen.value = true
+  inspireDetail.value = null
+  try {
+    inspireDetail.value = await contentApi.getInspireSample(sample.id)
+  } catch (error) {
+    inspireDetailOpen.value = false
+    message.error(error.message || '样本详情加载失败')
+  }
+}
+
+const setInspireReference = async (sample) => {
+  if (!store.task?.id || !sample?.snapshot_id) return
+  inspireReferenceSaving.value = true
+  try {
+    const response = await contentApi.bindInspireReference(store.task.id, sample.snapshot_id)
+    selectedInspireSnapshotId.value = sample.snapshot_id
+    if (store.task.runtime_config_snapshot) {
+      store.task.runtime_config_snapshot = {
+        ...store.task.runtime_config_snapshot,
+        selected_inspire_snapshot_id: sample.snapshot_id,
+        selected_inspire_sample_id: sample.id,
+        selected_inspire_source_hash: sample.source_hash,
+        selected_inspire_blueprint_version: sample.blueprint_version
+      }
+    }
+    message.success(`已设为参考：${response.sample?.title || sample.title}`)
+  } catch (error) {
+    message.error(error.message || '设置参考失败')
+  } finally {
+    inspireReferenceSaving.value = false
+  }
+}
+
 const showPreviousResultImage = () => {
   resultGalleryIndex.value = Math.max(0, resultGalleryIndex.value - 1)
 }
@@ -2437,15 +2524,25 @@ const openVersions = async () => {
                 </section>
               </div>
             </div>
-            <aside class="facts-preview">
-              <BookOpenCheck :size="22" />
-              <h3>事实优先</h3>
-              <p>提交后系统会形成 ContentBrief，并把人工输入标准化为带来源的 EvidenceBundle。</p>
-              <ul>
-                <li>数字和结果必须可验证</li>
-                <li>知识库由内容调研 Agent 统一配置</li>
-                <li>规则组合不通过 RAG 判断</li>
-              </ul>
+            <aside class="inspire-preview">
+              <div class="inspire-preview-heading">
+                <div><Sparkles :size="18" /><div><h3>热门爆款模板</h3><p>聚光样本 · 每赛道最多 10 条</p></div></div>
+                <div v-if="store.task?.runtime_config_snapshot?.creation_mode === 'viral_rewrite'" class="inspire-heading-actions">
+                  <a-button v-if="userStore.isAdmin" type="link" size="small" @click="inspireBrowserOpen = true"><ExternalLink :size="14" />打开聚光</a-button>
+                  <a-button type="link" size="small" :loading="inspireLoading" @click="loadInspireSamples({ refresh: true })"><RefreshCw :size="14" />刷新</a-button>
+                </div>
+              </div>
+              <div v-if="store.task?.runtime_config_snapshot?.creation_mode !== 'viral_rewrite'" class="inspire-empty">切换到“爆款仿写”后可选择聚光样本。</div>
+              <a-spin v-else :spinning="inspireLoading">
+                <div v-if="inspireSamples.length" class="inspire-sample-list">
+                  <article v-for="sample in inspireSamples" :key="sample.id" class="inspire-sample-card" :class="{ selected: selectedInspireSnapshotId === sample.snapshot_id }">
+                    <img v-if="sample.cover_url" :src="sample.cover_url" :alt="sample.title" />
+                    <div class="inspire-sample-copy"><div class="inspire-sample-meta"><span>{{ sample.industry_slug }}</span><time>{{ formatDateTime(sample.fetched_at) }}</time></div><strong>{{ sample.title }}</strong><p>{{ sample.body || '已保存结构蓝图，正文缓存将在 1 小时后过期。' }}</p><div class="inspire-sample-actions"><a-button size="small" @click="openInspireDetail(sample)">查看详情</a-button><a-button size="small" type="primary" :loading="inspireReferenceSaving && selectedInspireSnapshotId === sample.snapshot_id" :disabled="!sample.reference_ready" @click="setInspireReference(sample)">{{ selectedInspireSnapshotId === sample.snapshot_id ? '已设为参考' : '设为参考' }}</a-button></div></div>
+                  </article>
+                </div>
+                <a-empty v-else description="暂无聚光样本；管理员可先打开聚光完成登录，再刷新采集" />
+              </a-spin>
+              <small class="inspire-footnote">样本仅供结构参考，业务事实以本次资料与知识库为准。</small>
             </aside>
           </div>
           <section v-if="!isReviewNotes" class="visual-material-card">
@@ -3086,6 +3183,23 @@ const openVersions = async () => {
     </main>
 
     <div v-else class="page-loading"><LoaderCircle class="spin" :size="28" />正在加载内容工作台</div>
+
+    <XiaohongshuBrowserDrawer v-model:open="inspireBrowserOpen" mode="inspire" />
+
+    <a-modal
+      v-model:open="inspireDetailOpen"
+      class="result-detail-modal inspire-detail-modal"
+      title="热门爆款样本详情"
+      :width="920"
+      centered
+      destroy-on-close
+    >
+      <div v-if="inspireDetail" class="inspire-detail-layout">
+        <section class="inspire-detail-cover"><img v-if="inspireDetail.cover_url" :src="inspireDetail.cover_url" :alt="inspireDetail.title" /><div v-else class="result-detail-cover-state empty"><Image :size="30" /><span>封面暂时无法预览</span></div></section>
+        <section class="inspire-detail-content"><div class="inspire-sample-meta"><span>{{ inspireDetail.industry_slug }}</span><time>{{ formatDateTime(inspireDetail.fetched_at) }}</time></div><h2>{{ inspireDetail.title }}</h2><div class="inspire-detail-tags"><a-tag v-for="tag in inspireDetail.tags || []" :key="tag">#{{ tag }}</a-tag></div><div v-if="inspireDetail.body_expired" class="inspire-expired">正文缓存已过期，仅保留结构蓝图与来源信息。</div><MarkdownPreview v-else :content="inspireDetail.body || '暂无正文内容'" /><div class="inspire-detail-actions"><a-button @click="copyResultText(inspireDetail.body || '', '样本文案')"><Copy :size="14" />复制</a-button><a-button type="primary" :disabled="!inspireDetail.reference_ready" @click="setInspireReference(inspireDetail)">设为参考</a-button><a :href="inspireDetail.source_url" target="_blank" rel="noreferrer"><ExternalLink :size="14" />打开来源</a></div></section>
+      </div>
+      <a-spin v-else />
+    </a-modal>
 
     <a-modal
       v-model:open="resultDetailOpen"

@@ -15,13 +15,13 @@ import {
   Users,
   IdCard,
   SlidersHorizontal,
-  Tags,
   UserRoundPen,
   ShieldCheck,
   Layers,
   UsersRound,
   House,
   PanelsTopLeft,
+  ImagePlus,
   Braces,
   ListTree,
   Hammer,
@@ -153,11 +153,11 @@ const mainList = computed(() => {
   })
 
   items.push({
-    name: '图片打标',
-    path: 'http://47.111.188.85:18081/',
-    external: true,
-    icon: Tags,
-    activeIcon: Tags
+    name: '图片设计',
+    path: '/content/image-design',
+    activePaths: ['/content/image-design'],
+    icon: ImagePlus,
+    activeIcon: ImagePlus
   })
 
   items.push({

@@ -17,6 +17,8 @@ from yuxi.content.schemas import (
     ContentTaskCreate,
     ContentTaskBatchDelete,
     ContentTaskUpdate,
+    InspireCrawlCreate,
+    InspireReferenceCreate,
     ChannelPreviewRequest,
     MaterialConfirmation,
     MaterialCreate,
@@ -43,8 +45,12 @@ from yuxi.content.infrastructure.postgres.strategy_preview_repository import Pos
 from yuxi.content.model.viral_assets import ViralAssetImport
 from yuxi.repositories.viral_asset_repository import asset_dict
 from yuxi.services.content_viral_assets import (
-    check_asset_source, import_viral_assets, list_viral_assets,
-    preparation_skill_hash, require_asset, retry_viral_asset,
+    check_asset_source,
+    import_viral_assets,
+    list_viral_assets,
+    preparation_skill_hash,
+    require_asset,
+    retry_viral_asset,
 )
 from yuxi.services.agent_run_service import cancel_agent_run_view, stream_agent_run_events
 from yuxi.services.content_ocr_service import (
@@ -110,6 +116,21 @@ from yuxi.services.xiaohongshu_service import (
     start_account_login,
     open_browser_session,
     update_account,
+)
+from yuxi.services.inspire_samples import (
+    act_inspire_browser_session,
+    create_inspire_crawl_runs,
+    claim_inspire_browser_session,
+    close_inspire_browser_session,
+    get_inspire_crawl_run,
+    get_inspire_browser_screenshot,
+    get_inspire_browser_session,
+    get_inspire_sample,
+    get_inspire_media_content,
+    heartbeat_inspire_browser_session,
+    bind_inspire_reference,
+    list_inspire_samples,
+    open_inspire_browser_session,
 )
 from yuxi.storage.postgres.models_business import User
 
@@ -294,6 +315,125 @@ async def get_content_distribution_screenshot(
 @content.get("/bootstrap")
 async def content_bootstrap(current_user: User = Depends(get_required_user), db: AsyncSession = Depends(get_db)):
     return await get_content_bootstrap(db, current_user)
+
+
+@content.get("/inspire/samples")
+async def list_inspire_sample_feed(
+    industry_slug: str = Query(..., min_length=1, max_length=80),
+    limit: int = Query(default=10, ge=1, le=10),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return {
+        "items": await list_inspire_samples(db, current_user, industry_slug=industry_slug, limit=limit),
+        "limit": limit,
+    }
+
+
+@content.post("/inspire/browser-session")
+async def open_inspire_browser(
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await open_inspire_browser_session(db, current_user)
+
+
+@content.get("/inspire/browser-session")
+async def get_inspire_browser(
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_inspire_browser_session(db, current_user)
+
+
+@content.post("/inspire/browser-session/heartbeat")
+async def heartbeat_inspire_browser(
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await heartbeat_inspire_browser_session(db, current_user)
+
+
+@content.post("/inspire/browser-session/claim")
+async def claim_inspire_browser(
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await claim_inspire_browser_session(db, current_user)
+
+
+@content.post("/inspire/browser-session/action")
+async def act_inspire_browser(
+    payload: XiaohongshuBrowserAction,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await act_inspire_browser_session(db, current_user, payload.model_dump(exclude_none=True))
+
+
+@content.get("/inspire/browser-session/screenshot")
+async def screenshot_inspire_browser(
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    data = await get_inspire_browser_screenshot(db, current_user)
+    return Response(content=data, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@content.delete("/inspire/browser-session")
+async def close_inspire_browser(
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await close_inspire_browser_session(db, current_user)
+
+
+@content.get("/inspire/samples/{sample_id}")
+async def get_inspire_sample_detail(
+    sample_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_inspire_sample(db, current_user, sample_id)
+
+
+@content.get("/inspire/media/{media_id}")
+async def get_inspire_media(
+    media_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """通过已鉴权 API 返回缓存封面，避免暴露对象存储内网地址。"""
+    data, media_type = await get_inspire_media_content(db, current_user, media_id)
+    return Response(content=data, media_type=media_type, headers={"Cache-Control": "private, max-age=300"})
+
+
+@content.post("/inspire/crawl-runs")
+async def create_inspire_crawl(
+    payload: InspireCrawlCreate,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return {"runs": await create_inspire_crawl_runs(db, current_user, payload.industry_slugs, payload.limit)}
+
+
+@content.get("/inspire/crawl-runs/{run_id}")
+async def get_inspire_crawl_status(
+    run_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_inspire_crawl_run(db, current_user, run_id)
+
+
+@content.post("/tasks/{task_id}/reference")
+async def bind_inspire_task_reference(
+    task_id: str,
+    payload: InspireReferenceCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await bind_inspire_reference(db, current_user, task_id, payload.snapshot_id)
 
 
 @content.post("/tasks")
@@ -491,17 +631,22 @@ async def import_viral_asset_file(
 
 @content.get("/viral-file-jobs")
 async def get_viral_file_jobs(
-    current_user: User = Depends(get_required_user), db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
 ):
     from yuxi.services.viral_document_service import list_reference_file_jobs
+
     return await list_reference_file_jobs(db, current_user)
 
 
 @content.post("/viral-file-jobs")
 async def prepare_viral_files(
-    payload: dict = Body(...), current_user: User = Depends(get_admin_user), db: AsyncSession = Depends(get_db),
+    payload: dict = Body(...),
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
 ):
     from yuxi.services.viral_document_service import schedule_reference_file
+
     kb_id, file_ids = payload.get("kb_id"), payload.get("file_ids")
     if not isinstance(kb_id, str) or not isinstance(file_ids, list) or not 1 <= len(file_ids) <= 100:
         raise HTTPException(422, "请选择知识库和 1—100 个原文文件")
@@ -581,24 +726,36 @@ async def get_strategy_decision(
     while run and run.thread_id == task_id and run.id not in run_ids:
         run_ids.append(run.id)
         run = await db.get(AgentRun, run.parent_run_id) if run.parent_run_id else None
-    rows = list((await db.execute(
-        select(ContentNodeRun).where(
-            ContentNodeRun.task_id == task_id,
-            ContentNodeRun.agent_run_id.in_(run_ids),
-            ContentNodeRun.node_id.in_(["select_creation_strategy", "lock_creation_strategy"]),
-            ContentNodeRun.status == "completed",
-        ).order_by(ContentNodeRun.finished_at.desc(), ContentNodeRun.id.desc()).limit(6)
-    )).scalars())
+    rows = list(
+        (
+            await db.execute(
+                select(ContentNodeRun)
+                .where(
+                    ContentNodeRun.task_id == task_id,
+                    ContentNodeRun.agent_run_id.in_(run_ids),
+                    ContentNodeRun.node_id.in_(["select_creation_strategy", "lock_creation_strategy"]),
+                    ContentNodeRun.status == "completed",
+                )
+                .order_by(ContentNodeRun.finished_at.desc(), ContentNodeRun.id.desc())
+                .limit(6)
+            )
+        ).scalars()
+    )
     selection_row = next((row for row in rows if row.node_id == "select_creation_strategy"), None)
     selection_input = ((selection_row.input_snapshot or {}).get("visible_payload") or {}) if selection_row else {}
     candidates = (
         ((selection_row.input_snapshot or {}).get("visible_payload") or {}).get("strategy_candidates", {})
-        if selection_row else {}
+        if selection_row
+        else {}
     )
-    automatic_view = {
-        "automatic_direction": candidates.get("auto_direction", False),
-        "direction_names": {item["code"]: item["name"] for item in candidates.get("direction_options", [])},
-    } if candidates.get("auto_direction") else {}
+    automatic_view = (
+        {
+            "automatic_direction": candidates.get("auto_direction", False),
+            "direction_names": {item["code"]: item["name"] for item in candidates.get("direction_options", [])},
+        }
+        if candidates.get("auto_direction")
+        else {}
+    )
     for row in rows:
         output = (row.output_snapshot or {}).get("result") or {}
         snapshot = output.get("strategy_snapshot")
@@ -608,8 +765,11 @@ async def get_strategy_decision(
 
             return {
                 **build_decision_presentation(decision, selection_input),
-                "decision": decision, "snapshot": snapshot, "node_run_id": row.id,
-                "run_id": row.agent_run_id, **automatic_view,
+                "decision": decision,
+                "snapshot": snapshot,
+                "node_run_id": row.id,
+                "run_id": row.agent_run_id,
+                **automatic_view,
             }
     return {"decision": None, "snapshot": None, **automatic_view}
 

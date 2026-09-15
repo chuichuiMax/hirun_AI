@@ -17,6 +17,7 @@ XHS_LOGIN_URL = "https://creator.xiaohongshu.com/login"
 XHS_HOME_URL = "https://creator.xiaohongshu.com/new/home"
 XHS_PUBLISH_NOTE_URL = "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=image"
 XHS_SUCCESS_URL_PATTERN = "**/publish/success?**"
+XHS_INSPIRE_URL = "https://ad.xiaohongshu.com/microapp/creativity/inspire"
 XHS_DRAFT_ENTRY_PATTERN = re.compile(r"^草稿箱\s*(?:[（(]\d+[)）])?$")
 XHS_DRAFT_TAB_PATTERN = re.compile(r"视频笔记\s*[（(]\d+[)）]")
 LOGIN_BOX_SELECTOR = "div[class*='login-box']"
@@ -104,6 +105,17 @@ class XiaohongshuRuntime:
                 if nickname:
                     break
         return {"nickname": nickname, "account_id": account_id}
+
+    @staticmethod
+    async def _is_inspire_logged_in(page) -> bool:
+        """判断聚光内容广场是否已进入授权后的业务页面。"""
+        if not page.url.startswith("https://ad.xiaohongshu.com/") or "/login" in page.url:
+            return False
+        marker = page.locator("[class*='square-tabs-item-']").first
+        try:
+            return bool(await marker.count()) and await marker.is_visible()
+        except Exception:
+            return False
 
     async def open_drafts(self, page) -> None:
         """Open the creator-platform draft drawer without exposing arbitrary navigation."""

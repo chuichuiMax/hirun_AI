@@ -26,9 +26,7 @@ async def prepare_strategy_candidates(*, db, state, node_run_id):
     del node_run_id
     from yuxi.content.v3.joint_workflow import BLUEPRINT_FIRST_WORKFLOW_IDS
 
-    auto_direction = (
-        state["runtime_config_snapshot"].get("workflow_version_id") in BLUEPRINT_FIRST_WORKFLOW_IDS
-    )
+    auto_direction = state["runtime_config_snapshot"].get("workflow_version_id") in BLUEPRINT_FIRST_WORKFLOW_IDS
     user = (await db.execute(select(User).where(User.uid == state["uid"], User.is_deleted == 0))).scalar_one()
     result = await PostgresStrategyPreviewRepository(db).load_candidates(
         task_id=state["task_id"],
@@ -77,15 +75,56 @@ async def prepare_strategy_candidates(*, db, state, node_run_id):
             # 检索输入保留用户事实，排除字段名和运行元数据；语义判断由选择 Agent 完成。
             query = " ".join(dict.fromkeys(str(value) for value in fact_values.values()))
         queries = [query]
-        references = await search_ready_viral_assets(
-            db,
-            user,
-            industry_slug=catalog["industry_slug"],
-            query=query,
-            kb_ids=list(context.knowledges or []),
-            limit=catalog["reference_candidate_limit"],
-            include_structure=auto_direction,
-        )
+        selected_snapshot_id = state["runtime_config_snapshot"].get("selected_inspire_snapshot_id")
+        if selected_snapshot_id:
+            from yuxi.storage.postgres.models_content import ContentInspireSample, ContentInspireSampleSnapshot
+
+            external = (
+                await db.execute(
+                    select(ContentInspireSample, ContentInspireSampleSnapshot)
+                    .join(
+                        ContentInspireSampleSnapshot, ContentInspireSampleSnapshot.sample_id == ContentInspireSample.id
+                    )
+                    .where(
+                        ContentInspireSampleSnapshot.id == selected_snapshot_id,
+                        ContentInspireSample.owner_uid == str(user.uid),
+                        ContentInspireSampleSnapshot.reference_ready.is_(True),
+                    )
+                )
+            ).first()
+            if not external:
+                raise ValueError("选中的聚光样本已失效，请重新选择")
+            sample, snapshot = external
+            if state["runtime_config_snapshot"].get("selected_inspire_source_hash") != sample.source_hash:
+                raise ValueError("聚光参考样本哈希不一致，请重新选择")
+            references = [
+                {
+                    "id": snapshot.id,
+                    "source_hash": sample.source_hash,
+                    "reference_card": {
+                        "audience": "本次任务受众",
+                        "scene": "本次任务场景",
+                        "goal": "完成本次内容目标",
+                        "channel": "小红书",
+                        "summary": "聚光样本的抽象结构参考",
+                        "required_slots": [],
+                        "anchors": [{"section": "title", "start": 0, "end": 1, "quote": "结构"}],
+                    },
+                    "reference_blueprint": snapshot.reference_blueprint_json or {},
+                    "source": "xiaohongshu_inspire",
+                    "title": sample.title,
+                }
+            ]
+        else:
+            references = await search_ready_viral_assets(
+                db,
+                user,
+                industry_slug=catalog["industry_slug"],
+                query=query,
+                kb_ids=list(context.knowledges or []),
+                limit=catalog["reference_candidate_limit"],
+                include_structure=auto_direction,
+            )
     return {
         "strategy_catalog": catalog,
         "strategy_candidates": candidates,
@@ -151,67 +190,138 @@ async def lock_joint_strategy(*, db, state, node_run_id):
     selection = {"selected_candidate_id": None, "selection_reason": result.reference.reason, "unresolved_questions": []}
     if result.reference.status == "selected":
         user = (await db.execute(select(User).where(User.uid == state["uid"], User.is_deleted == 0))).scalar_one()
-        asset = await require_asset(db, user, result.reference.selected_asset_id)
-        if (
-            asset.status != "ready"
-            or asset.source_hash != result.reference.source_hash
-            or not await check_asset_source(db, asset)
-        ):
-            raise ValueError("选中的参考原文已失效，请重新选择")
-        if asset.preparation_skill_hash != preparation_skill_hash():
-            raise ValueError("参考准备标准已变化，请重新准备")
-        reference_snapshot = {
-            "id": asset.id,
-            "article_id": asset.article_id,
-            "kb_id": asset.kb_id,
-            "file_id": asset.file_id,
-            "locator": asset.source_json["locator"],
-            "source_hash": asset.source_hash,
-            "preparation_skill_hash": asset.preparation_skill_hash,
-            "reference_card": next(
-                item["reference_card"] for item in state["reference_candidates"] if item["id"] == asset.id
-            ),
-            "reference_blueprint": asset.prepared_json["reference_blueprint"],
-            "slot_mapping": result.reference.slot_mapping,
-        }
-        source_id = f"{asset.kb_id}/{asset.file_id}/{asset.source_json['locator']}"
-        # 创作证据只带抽象蓝图，原文与锚点留在可追溯资产快照中。
-        viral_collection["evidence_items"] = [
-            {
-                "id": asset.id,
-                "variable_codes": [],
-                "value": "已准备的单篇结构参考",
-                "source_type": "knowledge_base",
-                "source_id": source_id,
-                "source_version": asset.source_hash,
-                "source_hash": asset.source_hash,
-                "verified_status": "retrieved",
-                "allowed_usage": ["style_reference"],
-                "risk_level": "normal",
-                "metadata": {
-                    "material_type": "viral_example",
-                    "asset_id": asset.id,
-                    "usage_mode": "structure_reference_only",
-                },
+        selected_inspire_id = state["runtime_config_snapshot"].get("selected_inspire_snapshot_id")
+        if selected_inspire_id:
+            from yuxi.storage.postgres.models_content import ContentInspireSample, ContentInspireSampleSnapshot
+
+            external = (
+                await db.execute(
+                    select(ContentInspireSample, ContentInspireSampleSnapshot)
+                    .join(
+                        ContentInspireSampleSnapshot, ContentInspireSampleSnapshot.sample_id == ContentInspireSample.id
+                    )
+                    .where(
+                        ContentInspireSampleSnapshot.id == selected_inspire_id,
+                        ContentInspireSample.owner_uid == str(user.uid),
+                    )
+                )
+            ).first()
+            if not external:
+                raise ValueError("选中的聚光样本已失效，请重新选择")
+            sample, snapshot = external
+            if not snapshot.reference_ready or sample.source_hash != result.reference.source_hash:
+                raise ValueError("聚光参考样本哈希或蓝图已失效，请重新选择")
+            reference_snapshot = {
+                "id": snapshot.id,
+                "sample_id": sample.id,
+                "source_hash": sample.source_hash,
+                "source_url": sample.canonical_url,
+                "title": sample.title,
+                "reference_card": next(
+                    item["reference_card"] for item in state["reference_candidates"] if item["id"] == snapshot.id
+                ),
+                "reference_blueprint": snapshot.reference_blueprint_json,
+                "slot_mapping": result.reference.slot_mapping,
+                "provider": "xiaohongshu_inspire",
             }
-        ]
-        selected_assessment = next(item for item in result.reference.assessments if item.candidate_id == asset.id)
-        # 将已核验的新决策投影为现有创作契约；不再评分，也不补造旧式选择结果。
-        selection.update(
-            selected_candidate_id=asset.id,
-            selection_basis={
-                "schema_version": 2,
-                "input_variable_paths": selected_assessment.input_paths,
-                "matched_dimensions": selected_assessment.dimensions,
-                "structure_fillability": {
-                    "filled_slots": result.reference.slot_mapping,
-                    "unfilled_required_slots": [],
+            viral_collection["evidence_items"] = [
+                {
+                    "id": snapshot.id,
+                    "variable_codes": [],
+                    "value": "已准备的聚光结构参考",
+                    "source_type": "external_reference",
+                    "source_id": sample.canonical_url,
+                    "source_version": sample.source_hash,
+                    "source_hash": sample.source_hash,
+                    "verified_status": "retrieved",
+                    "allowed_usage": ["style_reference"],
+                    "risk_level": "normal",
+                    "metadata": {
+                        "material_type": "viral_example",
+                        "usage_mode": "structure_reference_only",
+                        "provider": "xiaohongshu_inspire",
+                    },
+                }
+            ]
+            selected_assessment = next(
+                item for item in result.reference.assessments if item.candidate_id == snapshot.id
+            )
+            selection.update(
+                selected_candidate_id=snapshot.id,
+                selection_basis={
+                    "schema_version": 2,
+                    "input_variable_paths": selected_assessment.input_paths,
+                    "matched_dimensions": selected_assessment.dimensions,
+                    "structure_fillability": {
+                        "filled_slots": result.reference.slot_mapping,
+                        "unfilled_required_slots": [],
+                    },
+                    "candidate_comparison": [item.model_dump() for item in result.reference.assessments],
+                    "prepared_reference_decision": result.reference.model_dump(),
                 },
-                "candidate_comparison": [item.model_dump() for item in result.reference.assessments],
-                "prepared_reference_decision": result.reference.model_dump(),
-            },
-            reference_blueprint=asset.prepared_json["reference_blueprint"],
-        )
+                reference_blueprint=snapshot.reference_blueprint_json,
+            )
+        else:
+            asset = await require_asset(db, user, result.reference.selected_asset_id)
+        if not selected_inspire_id:
+            if (
+                asset.status != "ready"
+                or asset.source_hash != result.reference.source_hash
+                or not await check_asset_source(db, asset)
+            ):
+                raise ValueError("选中的参考原文已失效，请重新选择")
+            if asset.preparation_skill_hash != preparation_skill_hash():
+                raise ValueError("参考准备标准已变化，请重新准备")
+            reference_snapshot = {
+                "id": asset.id,
+                "article_id": asset.article_id,
+                "kb_id": asset.kb_id,
+                "file_id": asset.file_id,
+                "locator": asset.source_json["locator"],
+                "source_hash": asset.source_hash,
+                "preparation_skill_hash": asset.preparation_skill_hash,
+                "reference_card": next(
+                    item["reference_card"] for item in state["reference_candidates"] if item["id"] == asset.id
+                ),
+                "reference_blueprint": asset.prepared_json["reference_blueprint"],
+                "slot_mapping": result.reference.slot_mapping,
+            }
+            source_id = f"{asset.kb_id}/{asset.file_id}/{asset.source_json['locator']}"
+            viral_collection["evidence_items"] = [
+                {
+                    "id": asset.id,
+                    "variable_codes": [],
+                    "value": "已准备的单篇结构参考",
+                    "source_type": "knowledge_base",
+                    "source_id": source_id,
+                    "source_version": asset.source_hash,
+                    "source_hash": asset.source_hash,
+                    "verified_status": "retrieved",
+                    "allowed_usage": ["style_reference"],
+                    "risk_level": "normal",
+                    "metadata": {
+                        "material_type": "viral_example",
+                        "asset_id": asset.id,
+                        "usage_mode": "structure_reference_only",
+                    },
+                }
+            ]
+            selected_assessment = next(item for item in result.reference.assessments if item.candidate_id == asset.id)
+            selection.update(
+                selected_candidate_id=asset.id,
+                selection_basis={
+                    "schema_version": 2,
+                    "input_variable_paths": selected_assessment.input_paths,
+                    "matched_dimensions": selected_assessment.dimensions,
+                    "structure_fillability": {
+                        "filled_slots": result.reference.slot_mapping,
+                        "unfilled_required_slots": [],
+                    },
+                    "candidate_comparison": [item.model_dump() for item in result.reference.assessments],
+                    "prepared_reference_decision": result.reference.model_dump(),
+                },
+                reference_blueprint=asset.prepared_json["reference_blueprint"],
+            )
     payload = {
         "schema_version": 2,
         "industry_slug": decision.industry_slug,

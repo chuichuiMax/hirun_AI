@@ -285,7 +285,13 @@ async def open_browser_session(
     return {"session": session.to_dict(), "browser": state}
 
 
-async def get_browser_session(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
+async def get_browser_session(
+    db: AsyncSession,
+    user: User,
+    account_id: str,
+    *,
+    target: str = "drafts",
+) -> dict[str, Any]:
     owner_uid = _owner_uid(user)
     repo = XiaohongshuRepository(db)
     account = await repo.get_account(account_id, owner_uid)
@@ -309,14 +315,21 @@ async def get_browser_session(db: AsyncSession, user: User, account_id: str) -> 
             session.id,
             owner_uid,
             account_id,
+            target=target,
         )
     await _sync_browser_state(db, account, session, state)
     await db.commit()
     return {"session": session.to_dict(), "browser": state}
 
 
-async def heartbeat_browser_session(db: AsyncSession, user: User, account_id: str) -> dict[str, Any]:
-    result = await get_browser_session(db, user, account_id)
+async def heartbeat_browser_session(
+    db: AsyncSession,
+    user: User,
+    account_id: str,
+    *,
+    target: str = "drafts",
+) -> dict[str, Any]:
+    result = await get_browser_session(db, user, account_id, target=target)
     result["control_claimed"] = await _has_browser_control(
         result["session"]["id"],
         _owner_uid(user),
@@ -361,7 +374,12 @@ async def claim_browser_session(db: AsyncSession, user: User, account_id: str) -
 
 
 async def browser_session_action(
-    db: AsyncSession, user: User, account_id: str, payload: dict[str, Any]
+    db: AsyncSession,
+    user: User,
+    account_id: str,
+    payload: dict[str, Any],
+    *,
+    target: str = "drafts",
 ) -> dict[str, Any]:
     owner_uid = _owner_uid(user)
     repo = XiaohongshuRepository(db)
@@ -385,7 +403,7 @@ async def browser_session_action(
         except HTTPException as exc:
             if exc.status_code != 404:
                 raise
-            await _open_gateway_session(session.id, owner_uid, account_id, target="drafts")
+            await _open_gateway_session(session.id, owner_uid, account_id, target=target)
             raise _error(
                 409,
                 "XHS_BROWSER_SESSION_RECOVERED",
@@ -397,7 +415,13 @@ async def browser_session_action(
     return {"session": session.to_dict(), "browser": state}
 
 
-async def get_browser_screenshot(db: AsyncSession, user: User, account_id: str) -> bytes:
+async def get_browser_screenshot(
+    db: AsyncSession,
+    user: User,
+    account_id: str,
+    *,
+    target: str = "drafts",
+) -> bytes:
     owner_uid = _owner_uid(user)
     repo = XiaohongshuRepository(db)
     account = await repo.get_account(account_id, owner_uid)
@@ -420,6 +444,7 @@ async def get_browser_screenshot(db: AsyncSession, user: User, account_id: str) 
             session.id,
             owner_uid,
             account_id,
+            target=target,
         )
         response = await _gateway_request(
             "GET",
@@ -460,7 +485,7 @@ async def close_browser_session(db: AsyncSession, user: User, account_id: str) -
 
 async def list_accounts(db: AsyncSession, user: User) -> dict[str, Any]:
     items = await XiaohongshuRepository(db).list_accounts(_owner_uid(user))
-    return {"items": [item.to_dict() for item in items]}
+    return {"items": [item.to_dict() for item in items if not item.id.startswith("xhsi_")]}
 
 
 async def create_account(db: AsyncSession, user: User, payload: XiaohongshuAccountCreate) -> dict[str, Any]:

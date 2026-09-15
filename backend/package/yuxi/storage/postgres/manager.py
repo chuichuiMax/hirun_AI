@@ -664,6 +664,8 @@ class PostgresManager(metaclass=SingletonMeta):
 
         self._check_initialized()
         stmts = [
+            "ALTER TABLE IF EXISTS content_inspire_samples "
+            "ADD COLUMN IF NOT EXISTS cover_url VARCHAR(2048)",
             "ALTER TABLE IF EXISTS content_viral_article_versions "
             "DROP CONSTRAINT IF EXISTS content_viral_article_versions_file_id_fkey",
             "ALTER TABLE IF EXISTS content_viral_article_versions "

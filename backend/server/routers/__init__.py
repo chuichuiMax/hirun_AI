@@ -30,6 +30,8 @@ from server.routers.target_audience_router import content_target_audiences
 from server.routers.resident_population_router import content_resident_populations
 from server.routers.mp_router import mp
 from server.routers.material_library_router import material_library, public_share_router as public_share_router
+from server.routers.material_library_router import material_library
+from server.routers.image_design_router import image_design
 
 _LITE_MODE = os.environ.get("LITE_MODE", "").lower() in ("true", "1")
 
@@ -66,6 +68,7 @@ router.include_router(content_variables)  # /api/content-variables/* 业务参�
 router.include_router(content_business_variables)  # /api/content-business-variables/* 业务变量配置
 router.include_router(content_process_standards)  # /api/content-process-standards/* 工艺类型列表
 router.include_router(material_library)  # /api/material-library/* 素材库
+router.include_router(image_design)  # /api/image-design/* 图片设计
 router.include_router(mp)  # /api/mp/* 获客小程序
 
 if not _LITE_MODE:

@@ -1420,6 +1420,105 @@ class ContentReviewRecord(Base):
     created_at = Column(DateTime, default=utc_now_naive)
 
 
+class ImageDesignClient(Base):
+    """图片设计客户档案；输入图片仍归属素材库，任务和结果按客户归档。"""
+
+    __tablename__ = "image_design_clients"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    name = Column(String(120), nullable=False)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (UniqueConstraint("owner_uid", "name", name="uq_image_design_clients_owner_name"),)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ImageDesignJob(Base):
+    """图片设计的异步任务和输入快照，不复用封面任务的业务语义。"""
+
+    __tablename__ = "image_design_jobs"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    client_id = Column(String(64), nullable=True, index=True)
+    workflow = Column(String(32), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    provider_task_ids_json = Column(JSON, nullable=False, default=list)
+    request_json = Column(JSON, nullable=False, default=dict)
+    result_json = Column(JSON, nullable=False, default=dict)
+    error_code = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+    progress = Column(Integer, nullable=False, default=0)
+    idempotency_key = Column(String(128), nullable=False)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_uid", "idempotency_key", name="uq_image_design_jobs_owner_idempotency"),
+        Index("idx_image_design_jobs_owner_created", "owner_uid", "created_at"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "client_id": self.client_id,
+            "workflow": self.workflow,
+            "status": self.status,
+            "provider_task_ids": self.provider_task_ids_json or [],
+            "request": self.request_json or {},
+            "result": self.result_json or {},
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "progress": self.progress,
+            "created_at": format_utc_datetime(self.created_at),
+            "started_at": format_utc_datetime(self.started_at),
+            "completed_at": format_utc_datetime(self.completed_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ImageDesignShowcase(Base):
+    """管理员维护的精选案例提示词，图片复用素材库目录项。"""
+
+    __tablename__ = "image_design_showcases"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    title = Column(String(160), nullable=False)
+    category = Column(String(80), nullable=False, index=True)
+    style_text = Column(Text, nullable=False)
+    image_material_id = Column(String(64), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "category": self.category,
+            "style_text": self.style_text,
+            "image_material_id": self.image_material_id,
+            "enabled": bool(self.enabled),
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
 class XiaohongshuAccount(Base):
     __tablename__ = "xiaohongshu_accounts"
 
@@ -1665,6 +1764,85 @@ class ContentAccount(Base):
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
         }
+
+
+class ContentInspireCrawlRun(Base):
+    """聚光内容灵感页的受控直抓运行记录。"""
+
+    __tablename__ = "content_inspire_crawl_runs"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(64), nullable=False, index=True)
+    account_id = Column(String(64), nullable=False, index=True)
+    industry_slug = Column(String(80), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="queued", index=True)
+    query_json = Column(JSON, nullable=False, default=dict)
+    cursor = Column(String(512), nullable=True)
+    item_count = Column(Integer, nullable=False, default=0)
+    error_code = Column(String(64), nullable=True)
+    error_message = Column(Text, nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+
+
+class ContentInspireSample(Base):
+    """规范化的聚光样本；正文与封面由 snapshot/media 的 TTL 控制。"""
+
+    __tablename__ = "content_inspire_samples"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(64), nullable=False, index=True)
+    provider = Column(String(32), nullable=False, default="xiaohongshu_inspire")
+    note_id = Column(String(128), nullable=True)
+    canonical_url = Column(String(1024), nullable=False)
+    industry_slug = Column(String(80), nullable=False, index=True)
+    title = Column(String(1000), nullable=False)
+    cover_url = Column(String(2048), nullable=True)
+    tags_json = Column(JSON, nullable=False, default=list)
+    published_at = Column(DateTime, nullable=True)
+    author_name = Column(String(255), nullable=True)
+    metrics_json = Column(JSON, nullable=False, default=dict)
+    current_rank = Column(Integer, nullable=True)
+    source_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("owner_uid", "provider", "note_id", name="uq_inspire_sample_owner_note"),
+        UniqueConstraint("owner_uid", "provider", "canonical_url", name="uq_inspire_sample_owner_url"),
+    )
+
+
+class ContentInspireSampleSnapshot(Base):
+    __tablename__ = "content_inspire_sample_snapshots"
+
+    id = Column(String(64), primary_key=True)
+    sample_id = Column(String(64), nullable=False, index=True)
+    raw_json = Column(JSON, nullable=False, default=dict)
+    body_text = Column(Text, nullable=True)
+    body_expires_at = Column(DateTime, nullable=True, index=True)
+    fetched_at = Column(DateTime, default=utc_now_naive, index=True)
+    adapter_version = Column(String(64), nullable=False, default="dom-v1")
+    raw_hash = Column(String(64), nullable=False)
+    reference_blueprint_json = Column(JSON, nullable=False, default=dict)
+    blueprint_version = Column(String(32), nullable=False, default="v1")
+    reference_ready = Column(Boolean, nullable=False, default=False, index=True)
+
+
+class ContentInspireMedia(Base):
+    __tablename__ = "content_inspire_media"
+
+    id = Column(String(64), primary_key=True)
+    sample_id = Column(String(64), nullable=False, index=True)
+    object_key = Column(String(1024), nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    mime_type = Column(String(128), nullable=False)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    fetched_at = Column(DateTime, default=utc_now_naive)
+    expires_at = Column(DateTime, nullable=True, index=True)
 
 
 class ContentEmployee(Base):
@@ -1947,9 +2125,7 @@ class ContentMpFavorite(Base):
     __tablename__ = "content_mp_favorites"
 
     id = Column(String(64), primary_key=True)
-    employee_id = Column(
-        String(64), ForeignKey("content_employees.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    employee_id = Column(String(64), ForeignKey("content_employees.id", ondelete="CASCADE"), nullable=False, index=True)
     task_id = Column(String(64), ForeignKey("content_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at = Column(DateTime, default=utc_now_naive)
 

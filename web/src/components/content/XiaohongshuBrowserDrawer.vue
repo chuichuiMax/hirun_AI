@@ -1,12 +1,13 @@
 <script setup>
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { MousePointer2, RefreshCw, X } from 'lucide-vue-next'
 import { contentApi } from '@/apis/content_api'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  account: { type: Object, default: null }
+  account: { type: Object, default: null },
+  mode: { type: String, default: 'drafts' }
 })
 const emit = defineEmits(['update:open', 'updated'])
 
@@ -26,6 +27,34 @@ let wheelDelta = 0
 let pollingEpoch = 0
 let actionSequence = 0
 let actionQueue = Promise.resolve()
+
+const isInspire = computed(() => props.mode === 'inspire')
+const targetKey = computed(() => isInspire.value ? 'inspire' : props.account?.id)
+const workspaceName = computed(() => isInspire.value ? '聚光内容广场' : '草稿箱')
+const displayName = computed(() => isInspire.value ? '热门爆款模板采集' : props.account?.display_name)
+const isCurrentTarget = (key) => props.open && targetKey.value === key
+
+const openRemoteSession = (accountId) => isInspire.value
+  ? contentApi.openInspireBrowserSession()
+  : contentApi.openXiaohongshuBrowserSession(accountId, { target: 'drafts' })
+const getRemoteSession = (accountId) => isInspire.value
+  ? contentApi.getInspireBrowserSession()
+  : contentApi.getXiaohongshuBrowserSession(accountId)
+const heartbeatRemoteSession = (accountId) => isInspire.value
+  ? contentApi.heartbeatInspireBrowserSession()
+  : contentApi.heartbeatXiaohongshuBrowserSession(accountId)
+const claimRemoteSession = (accountId) => isInspire.value
+  ? contentApi.claimInspireBrowserSession()
+  : contentApi.claimXiaohongshuBrowserSession(accountId)
+const actRemoteSession = (accountId, payload) => isInspire.value
+  ? contentApi.actInspireBrowserSession(payload)
+  : contentApi.actXiaohongshuBrowserSession(accountId, payload)
+const getRemoteScreenshot = (accountId) => isInspire.value
+  ? contentApi.getInspireBrowserScreenshot()
+  : contentApi.getXiaohongshuBrowserScreenshot(accountId)
+const closeRemoteSession = (accountId) => isInspire.value
+  ? contentApi.closeInspireBrowserSession()
+  : contentApi.closeXiaohongshuBrowserSession(accountId)
 
 const revokeScreenshot = () => {
   if (screenshotUrl.value) URL.revokeObjectURL(screenshotUrl.value)
@@ -47,68 +76,68 @@ const stopPolling = () => {
   wheelDelta = 0
 }
 
-const refreshScreenshot = async (epoch = pollingEpoch, accountId = props.account?.id) => {
-  if (!props.open || !accountId || epoch !== pollingEpoch) return
+const refreshScreenshot = async (epoch = pollingEpoch, accountId = targetKey.value) => {
+  if (!accountId || !isCurrentTarget(accountId) || epoch !== pollingEpoch) return
   if (screenshotTimer) window.clearTimeout(screenshotTimer)
   screenshotTimer = null
   try {
-    const response = await contentApi.getXiaohongshuBrowserScreenshot(accountId)
+    const response = await getRemoteScreenshot(accountId)
     const blob = await response.blob()
-    if (epoch !== pollingEpoch || !props.open || props.account?.id !== accountId) return
+    if (epoch !== pollingEpoch || !isCurrentTarget(accountId)) return
     const nextUrl = URL.createObjectURL(blob)
     const previousUrl = screenshotUrl.value
     screenshotUrl.value = nextUrl
     lastUpdatedAt.value = new Date().toLocaleTimeString()
     if (previousUrl) URL.revokeObjectURL(previousUrl)
   } catch (error) {
-    if (epoch === pollingEpoch && props.open && props.account?.id === accountId) {
-      errorMessage.value = error.message || '草稿箱画面暂不可用'
+    if (epoch === pollingEpoch && isCurrentTarget(accountId)) {
+      errorMessage.value = error.message || `${workspaceName.value}画面暂不可用`
     }
   } finally {
-    if (epoch === pollingEpoch && props.open && props.account?.id === accountId) {
+    if (epoch === pollingEpoch && isCurrentTarget(accountId)) {
       screenshotTimer = window.setTimeout(() => refreshScreenshot(epoch, accountId), 1500)
     }
   }
 }
 
-const heartbeat = async (epoch = pollingEpoch, accountId = props.account?.id) => {
-  if (!props.open || !accountId || epoch !== pollingEpoch) return
+const heartbeat = async (epoch = pollingEpoch, accountId = targetKey.value) => {
+  if (!accountId || !isCurrentTarget(accountId) || epoch !== pollingEpoch) return
   if (heartbeatTimer) window.clearTimeout(heartbeatTimer)
   heartbeatTimer = null
   let nextDelay = 20000
   try {
-    const response = await contentApi.heartbeatXiaohongshuBrowserSession(accountId)
-    if (epoch !== pollingEpoch || !props.open || props.account?.id !== accountId) return
+    const response = await heartbeatRemoteSession(accountId)
+    if (epoch !== pollingEpoch || !isCurrentTarget(accountId)) return
     session.value = response
     controlClaimed.value = Boolean(response.control_claimed)
-    if (!response.browser?.logged_in || response.browser?.view !== 'drafts') nextDelay = 3000
+    if (!response.browser?.logged_in || response.browser?.view !== props.mode) nextDelay = 3000
     emit('updated')
   } catch (error) {
-    if (epoch === pollingEpoch && props.open && props.account?.id === accountId) {
-      errorMessage.value = error.message || '草稿箱会话心跳失败'
+    if (epoch === pollingEpoch && isCurrentTarget(accountId)) {
+      errorMessage.value = error.message || `${workspaceName.value}会话心跳失败`
       nextDelay = 3000
     }
   } finally {
-    if (epoch === pollingEpoch && props.open && props.account?.id === accountId) {
+    if (epoch === pollingEpoch && isCurrentTarget(accountId)) {
       heartbeatTimer = window.setTimeout(() => heartbeat(epoch, accountId), nextDelay)
     }
   }
 }
 
 const loadStatus = async () => {
-  if (!props.account?.id) return
-  const accountId = props.account.id
+  if (!targetKey.value) return
+  const accountId = targetKey.value
   const epoch = pollingEpoch
   loading.value = true
   try {
-    const response = await contentApi.getXiaohongshuBrowserSession(accountId)
-    if (epoch !== pollingEpoch || !props.open || props.account?.id !== accountId) return
+    const response = await getRemoteSession(accountId)
+    if (epoch !== pollingEpoch || !isCurrentTarget(accountId)) return
     session.value = response
     errorMessage.value = ''
     await refreshScreenshot(epoch, accountId)
   } catch (error) {
-    if (epoch === pollingEpoch && props.open && props.account?.id === accountId) {
-      errorMessage.value = error.message || '获取草稿箱状态失败'
+    if (epoch === pollingEpoch && isCurrentTarget(accountId)) {
+      errorMessage.value = error.message || `获取${workspaceName.value}状态失败`
     }
   } finally {
     if (epoch === pollingEpoch) loading.value = false
@@ -121,25 +150,25 @@ const start = async () => {
   session.value = null
   controlClaimed.value = false
   errorMessage.value = ''
-  if (!props.account?.id) return
-  const accountId = props.account.id
+  if (!targetKey.value) return
+  const accountId = targetKey.value
   const epoch = pollingEpoch
   loading.value = true
   try {
-    const response = await contentApi.openXiaohongshuBrowserSession(accountId, { target: 'drafts' })
-    if (epoch !== pollingEpoch || !props.open || props.account?.id !== accountId) return
+    const response = await openRemoteSession(accountId)
+    if (epoch !== pollingEpoch || !isCurrentTarget(accountId)) return
     session.value = response
     await claimControl({ notify: false })
-    if (epoch !== pollingEpoch || !props.open || props.account?.id !== accountId) return
+    if (epoch !== pollingEpoch || !isCurrentTarget(accountId)) return
     await refreshScreenshot(epoch, accountId)
-    if (epoch === pollingEpoch && props.open && props.account?.id === accountId) {
-      const delay = response.browser?.logged_in && response.browser?.view === 'drafts' ? 20000 : 3000
+    if (epoch === pollingEpoch && isCurrentTarget(accountId)) {
+      const delay = response.browser?.logged_in && response.browser?.view === props.mode ? 20000 : 3000
       heartbeatTimer = window.setTimeout(() => heartbeat(epoch, accountId), delay)
     }
     emit('updated')
   } catch (error) {
-    if (epoch === pollingEpoch && props.open && props.account?.id === accountId) {
-      errorMessage.value = error.message || '草稿箱启动失败'
+    if (epoch === pollingEpoch && isCurrentTarget(accountId)) {
+      errorMessage.value = error.message || `${workspaceName.value}启动失败`
     }
   } finally {
     if (epoch === pollingEpoch) loading.value = false
@@ -147,20 +176,20 @@ const start = async () => {
 }
 
 const performAction = async (payload) => {
-  if (!props.open || !props.account?.id || !controlClaimed.value) return
-  const accountId = props.account.id
+  if (!props.open || !targetKey.value || !controlClaimed.value) return
+  const accountId = targetKey.value
   const epoch = pollingEpoch
   const sequence = ++actionSequence
   acting.value = true
   try {
-    const response = await contentApi.actXiaohongshuBrowserSession(accountId, payload)
-    if (sequence !== actionSequence || epoch !== pollingEpoch || props.account?.id !== accountId) return
+    const response = await actRemoteSession(accountId, payload)
+    if (sequence !== actionSequence || epoch !== pollingEpoch || !isCurrentTarget(accountId)) return
     session.value = response
     errorMessage.value = ''
     await refreshScreenshot(epoch, accountId)
   } catch (error) {
-    if (sequence === actionSequence && epoch === pollingEpoch && props.account?.id === accountId) {
-      errorMessage.value = error.message || '草稿箱操作失败'
+    if (sequence === actionSequence && epoch === pollingEpoch && isCurrentTarget(accountId)) {
+      errorMessage.value = error.message || `${workspaceName.value}操作失败`
       message.error(errorMessage.value)
     }
   } finally {
@@ -243,20 +272,20 @@ const scrollScreen = (event) => {
 }
 
 async function claimControl({ notify = true } = {}) {
-  if (!props.account?.id || claiming.value) return
-  const accountId = props.account.id
+  if (!targetKey.value || claiming.value) return
+  const accountId = targetKey.value
   const epoch = pollingEpoch
   const sequence = ++actionSequence
   claiming.value = true
   try {
-    await contentApi.claimXiaohongshuBrowserSession(accountId)
-    if (sequence !== actionSequence || epoch !== pollingEpoch || props.account?.id !== accountId) return
+    await claimRemoteSession(accountId)
+    if (sequence !== actionSequence || epoch !== pollingEpoch || !isCurrentTarget(accountId)) return
     controlClaimed.value = true
     errorMessage.value = ''
     if (notify) message.success('人工接管已启用，可直接点击、键入和滚动')
     focusKeyboard()
   } catch (error) {
-    if (sequence === actionSequence && epoch === pollingEpoch && props.account?.id === accountId) {
+    if (sequence === actionSequence && epoch === pollingEpoch && isCurrentTarget(accountId)) {
       errorMessage.value = error.message || '启用人工接管失败'
     }
   } finally {
@@ -266,12 +295,12 @@ async function claimControl({ notify = true } = {}) {
 
 const closeSession = async () => {
   stopPolling()
-  const accountId = session.value?.session?.account_id || props.account?.id
+  const accountId = session.value?.session?.account_id || targetKey.value
   if (accountId && session.value?.session) {
     try {
-      await contentApi.closeXiaohongshuBrowserSession(accountId)
+      await closeRemoteSession(accountId)
     } catch (error) {
-      message.error(error.message || '关闭草稿箱会话失败')
+      message.error(error.message || `关闭${workspaceName.value}会话失败`)
     }
   }
   revokeScreenshot()
@@ -280,7 +309,7 @@ const closeSession = async () => {
 }
 
 watch(
-  [() => props.open, () => props.account?.id],
+  [() => props.open, targetKey],
   ([open, accountId], [previousOpen, previousAccountId]) => {
     if (open && accountId && (!previousOpen || accountId !== previousAccountId)) void start()
     else {
@@ -306,7 +335,7 @@ onBeforeUnmount(() => {
     @close="closeSession"
   >
     <template #title>
-      <div class="browser-title"><span>草稿箱</span><small>{{ account?.display_name }}</small></div>
+      <div class="browser-title"><span>{{ workspaceName }}</span><small>{{ displayName }}</small></div>
     </template>
 
     <a-spin :spinning="loading">
@@ -314,8 +343,8 @@ onBeforeUnmount(() => {
         <div class="workspace-toolbar">
           <div class="status-group">
             <span :class="['state-dot', session?.browser?.logged_in ? 'ready' : 'login']" />
-            <span>{{ session?.browser?.logged_in ? '已登录' : '请在画面中完成登录' }}</span>
-            <span v-if="session?.browser?.view === 'drafts'" class="drafts-ready">已进入草稿箱</span>
+            <span>{{ session?.browser?.logged_in ? '已登录' : `请在画面中完成${isInspire ? '聚光' : '小红书'}登录` }}</span>
+            <span v-if="session?.browser?.view === mode" class="drafts-ready">已进入{{ workspaceName }}</span>
             <small v-if="lastUpdatedAt">画面更新于 {{ lastUpdatedAt }}</small>
           </div>
           <div class="toolbar-actions">
@@ -339,7 +368,7 @@ onBeforeUnmount(() => {
           :class="{ claimed: controlClaimed, acting }"
           @wheel.prevent="scrollScreen"
         >
-          <img :src="screenshotUrl" alt="小红书草稿箱远程画面" draggable="false" @click="clickScreen" />
+          <img :src="screenshotUrl" :alt="`${workspaceName}远程画面`" draggable="false" @click="clickScreen" />
           <textarea
             ref="keyboardCapture"
             class="keyboard-capture"
@@ -352,7 +381,7 @@ onBeforeUnmount(() => {
             @keydown="captureKey"
           ></textarea>
         </div>
-        <div v-else class="screen-empty">{{ errorMessage || '正在打开草稿箱…' }}</div>
+        <div v-else class="screen-empty">{{ errorMessage || `正在打开${workspaceName}…` }}</div>
       </div>
     </a-spin>
   </a-drawer>

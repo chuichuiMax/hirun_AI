@@ -7,7 +7,12 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from time import monotonic
 
-from yuxi.integrations.xiaohongshu.runtime import XHS_HOME_URL, XHS_LOGIN_URL, XiaohongshuRuntime
+from yuxi.integrations.xiaohongshu.runtime import (
+    XHS_HOME_URL,
+    XHS_INSPIRE_URL,
+    XHS_LOGIN_URL,
+    XiaohongshuRuntime,
+)
 
 
 class BrowserSessionCapacityError(RuntimeError):
@@ -71,7 +76,7 @@ class XiaohongshuBrowserSessionManager:
         *,
         target: str = "home",
     ) -> dict:
-        if target not in {"home", "drafts"}:
+        if target not in {"home", "drafts", "inspire"}:
             raise ValueError("不支持的浏览器目标页面")
         key = self._key(owner_uid, account_id)
         lock = await self._account_lock(owner_uid, account_id)
@@ -97,9 +102,11 @@ class XiaohongshuBrowserSessionManager:
                 playwright = await self._ensure_playwright()
                 context = await self.runtime._launch_context(playwright, owner_uid, account_id)
                 page = context.pages[0] if context.pages else await context.new_page()
-                await page.goto(XHS_HOME_URL, wait_until="domcontentloaded", timeout=60000)
+                target_url = XHS_INSPIRE_URL if target == "inspire" else XHS_HOME_URL
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
                 await page.wait_for_timeout(1200)
-                if not await self.runtime._is_logged_in(page):
+                inspire_logged_in = target == "inspire" and await self.runtime._is_inspire_logged_in(page)
+                if target != "inspire" and not await self.runtime._is_logged_in(page):
                     await page.goto(XHS_LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
                     await page.wait_for_timeout(1200)
                 session = BrowserSession(
@@ -109,7 +116,9 @@ class XiaohongshuBrowserSessionManager:
                     context=context,
                     page=page,
                     target=target,
-                    view="login" if page.url.startswith(XHS_LOGIN_URL) else "home",
+                    view=("inspire" if inspire_logged_in else "login")
+                    if target == "inspire"
+                    else ("login" if page.url.startswith(XHS_LOGIN_URL) else "home"),
                 )
                 async with self._manager_lock:
                     self._sessions[key] = session
@@ -140,10 +149,16 @@ class XiaohongshuBrowserSessionManager:
             return await self._status_unlocked(session)
 
     async def _status_unlocked(self, session: BrowserSession) -> dict:
-        logged_in = await self.runtime._is_logged_in(session.page)
-        profile = await self.runtime._profile(session.page) if logged_in else {"nickname": "", "account_id": ""}
+        if session.target == "inspire":
+            logged_in = await self.runtime._is_inspire_logged_in(session.page)
+            profile = {"nickname": "", "account_id": ""}
+        else:
+            logged_in = await self.runtime._is_logged_in(session.page)
+            profile = await self.runtime._profile(session.page) if logged_in else {"nickname": "", "account_id": ""}
         if not logged_in:
             session.view = "login"
+        elif session.target == "inspire":
+            session.view = "inspire"
         elif session.target == "drafts" and session.view != "drafts":
             await self.runtime.open_drafts(session.page)
             session.view = "drafts"
