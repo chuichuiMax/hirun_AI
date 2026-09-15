@@ -26,6 +26,8 @@ DECORATION_WRITING_INSTRUCTION = (
     "若有可用于正文的业务知识证据，至少再挂一条；"
     "必须写出鸿扬家居/鸿扬家装品牌优势（定位为定制化家装，禁止写整装或标准化整装），"
     "并带明确引流点（同城咨询、留言、评论区聊聊等；成品禁用「私信」「报价」等平台封禁词，以 evidence 中 forbidden_replacement_map 为准）；"
+    "费用口径一律写「预算价」，禁止写「合同价」（证据或词库原文是合同价时只改称谓，数字保持原样）；"
+    "项目阶段为泥木阶段时，成品写「泥瓦」不写「泥木」；工艺类型或证据未出现木工时不得补写木工；"
     "封面/副标/话题也不得出现整装、标准化整装；事实只来自简报与冻结证据，不得编造户型缺陷、改造前后效果或他人案例细节。"
 )
 QUOTATION_LIST_TYPE_NAMES = frozenset({"装修报价清单", "报价清单"})
@@ -37,23 +39,88 @@ QUOTATION_LIST_WRITING_INSTRUCTION = (
     "正文重点写鸿扬家居/鸿扬家装品牌优势：定制化家装、透明施工、自有/规范工艺、售后与靠谱服务，用品牌与交付能力收尾引流；"
     "成品标题/正文/话题必须规避平台封禁词库问题词（见 evidence forbidden_replacement_map），"
     "引流只用同城咨询、留言、评论区等安全表达，不得出现「私信」「报价」等表内问题词；词库原文含问题词时须改写后再写入；"
+    "费用口径一律写「预算价」，禁止写「合同价」（证据原文是合同价时只改称谓、数字保持原样）；"
     "禁止把鸿扬写成整装或标准化整装；仍须写清小区、面积（原文）、风格、项目施工鸿扬家装等信息卡点，并正确挂载 Evidence ID；"
     "不展开某套房案例故事，不编造数字与改造情节。"
 )
 CRAFT_SHOWCASE_TYPE_NAMES = frozenset({"工艺施工展示", "工艺展示"})
 CRAFT_SHOWCASE_DIRECTION_CODE = "CT05"
+CONTENT_TYPE_NAME_TO_DIRECTION = {
+    "工艺施工展示": "CT05",
+    "工艺展示": "CT05",
+    "装修报价清单": "CT02",
+    "报价清单": "CT02",
+    "装修避坑分享": "CT03",
+    "避坑分享": "CT03",
+    "装修省钱攻略": "CT04",
+    "省钱攻略": "CT04",
+    "装修案例分享": "CT01",
+    "案例分享": "CT01",
+    "装修知识科普": "CT06",
+    "知识科普": "CT06",
+    "人设自荐": "CT07",
+    "装修人设自荐": "CT07",
+}
 # 工艺展示禁用报价转化（C01）与实景案例流量（C02），优先干货工艺讲解。
 CRAFT_SHOWCASE_BLOCKED_BODY_FORMULAS = frozenset({"C01", "C02"})
 CRAFT_SHOWCASE_PREFERRED_BODY_FORMULAS = ("C03", "C04")
+# T02 会把「听劝/真香」和「远超预期」硬拼进标题，不适合工艺验收口吻。
+CRAFT_SHOWCASE_BLOCKED_TITLE_FORMULAS = frozenset({"T02"})
+CRAFT_SHOWCASE_PREFERRED_TITLE_FORMULAS = ("T03", "T05", "T07", "T04")
+STAGE_CRAFT_TOPICS = {
+    "水电阶段": "水电施工与隐蔽验收",
+    "拆改阶段": "拆改施工",
+    "泥木阶段": "泥瓦施工",
+    "油漆阶段": "油漆施工",
+    "竣工交付": "竣工验收",
+}
 CRAFT_SHOWCASE_WRITING_INSTRUCTION = (
-    "内容类型为工艺施工展示：标题必须让人一眼看懂在讲哪类工艺/哪道工序（工艺标准、施工细节、避坑要点），"
-    "句子通顺、语义完整，禁止词库硬拼、暗号缩写或不知所云；"
-    "正文主线是工艺科普与标准讲解：写清简报中的工艺类型、工艺名称，说明规范做法、关键细节和为什么重要；"
-    "可用信息卡点写小区、面积、布局（有填才写）、风格、项目施工鸿扬家装，仅作定位背书；"
+    "内容类型为工艺施工展示：标题必须是普通人能读完的口语句，点明工序或当前阶段主题"
+    "（水电阶段写水电验收细节，不要写成整屋案例；泥木阶段对外写泥瓦验收/泥瓦施工，不要写泥木，"
+    "工艺或证据没出现木工时不要补写木工）。禁止词库硬拼"
+    "（反例：水电施工听劝，规范验收远超预期；正例：水电做得好不好，验收细节见分晓／"
+    "水电藏进墙之前，这些细节要验清／旧房翻新，水电验收千万别走过场）。"
+    "正文主线是工艺科普与标准讲解：写清工艺类型、工艺名称或项目阶段，说明规范做法、关键细节和为什么重要；"
+    "不要强调装修风格，也不要把风格、小区、面积写成资料卡；有工艺名称时写成"
+    "「在定制化家装项目中，鸿扬家装采用〔工艺名称〕，属于〔工艺类型〕。从〔关键环节〕……每个环节都按工艺规范落实」。"
+    "正例：在定制化家装项目中，鸿扬家装采用HYB-强电箱内空开安装工艺，属于安全用电系统。"
+    "从空开选型、回路划分到接线、标识，每个环节都严格按照工艺规范落实，不赶工、不省步骤，扎实做好用电安全的每一处细节。"
     "禁止写成装修案例分享：不得展开某套房旧况→改造过程→完工效果叙事，不得虚构客户经历或前后对比故事；"
     "收尾可写鸿扬家居/鸿扬家装品牌优势（定制化家装，禁止整装/标准化整装）与同城咨询、留言、评论区引流；"
-    "成品规避平台封禁词库问题词（见 evidence forbidden_replacement_map）；卡点与数字须挂载正确 Evidence ID。"
+    "费用口径一律写「预算价」，禁止写「合同价」；成品规避平台封禁词库问题词（见 evidence forbidden_replacement_map）；卡点与数字须挂载正确 Evidence ID。"
 )
+
+
+def content_direction_from_form_values(values: dict[str, Any] | None) -> str | None:
+    if not isinstance(values, dict):
+        return None
+    name = str(values.get("mp_content_type_name") or "").strip()
+    return CONTENT_TYPE_NAME_TO_DIRECTION.get(name)
+
+
+def content_direction_from_brief(brief: dict[str, Any] | None) -> str | None:
+    if not isinstance(brief, dict):
+        return None
+    for key in ("form_values", "business_variables"):
+        section = brief.get(key)
+        direction = content_direction_from_form_values(section if isinstance(section, dict) else None)
+        if direction:
+            return direction
+    return None
+
+
+def _filter_formulas_for_craft_showcase(
+    direction_code: str,
+    codes: list[str] | tuple[str, ...],
+    *,
+    blocked: frozenset[str],
+    preferred: tuple[str, ...],
+) -> list[str]:
+    ordered = [str(code).strip() for code in codes if str(code).strip()]
+    if direction_code != CRAFT_SHOWCASE_DIRECTION_CODE:
+        return ordered
+    filtered = [code for code in ordered if code not in blocked]
+    return filtered or list(preferred)
 
 
 def filter_body_formulas_for_content_direction(
@@ -61,11 +128,25 @@ def filter_body_formulas_for_content_direction(
     codes: list[str] | tuple[str, ...],
 ) -> list[str]:
     """按内容方向收窄正文公式；工艺展示不得落入案例/报价转化公式。"""
-    ordered = [str(code).strip() for code in codes if str(code).strip()]
-    if direction_code != CRAFT_SHOWCASE_DIRECTION_CODE:
-        return ordered
-    filtered = [code for code in ordered if code not in CRAFT_SHOWCASE_BLOCKED_BODY_FORMULAS]
-    return filtered or list(CRAFT_SHOWCASE_PREFERRED_BODY_FORMULAS)
+    return _filter_formulas_for_craft_showcase(
+        direction_code,
+        codes,
+        blocked=CRAFT_SHOWCASE_BLOCKED_BODY_FORMULAS,
+        preferred=CRAFT_SHOWCASE_PREFERRED_BODY_FORMULAS,
+    )
+
+
+def filter_title_formulas_for_content_direction(
+    direction_code: str,
+    codes: list[str] | tuple[str, ...],
+) -> list[str]:
+    """按内容方向收窄标题公式；工艺展示禁用听劝/远超预期类情绪硬拼公式。"""
+    return _filter_formulas_for_craft_showcase(
+        direction_code,
+        codes,
+        blocked=CRAFT_SHOWCASE_BLOCKED_TITLE_FORMULAS,
+        preferred=CRAFT_SHOWCASE_PREFERRED_TITLE_FORMULAS,
+    )
 
 
 
@@ -266,7 +347,11 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
         content_type_name = str(values.get("mp_content_type_name") or "").strip()
         process_type = str(values.get("工艺类型") or "").strip()
         process_name = str(values.get("工艺名称") or "").strip()
-        craft_text = "；".join(part for part in (process_type, process_name) if part)
+        project_stage = str(values.get("项目阶段") or "").strip()
+        stage_topic = STAGE_CRAFT_TOPICS.get(project_stage, project_stage)
+        craft_text = "；".join(
+            part for part in (process_type, process_name, stage_topic if not process_type else "") if part
+        )
         is_quotation_list = content_type_name in QUOTATION_LIST_TYPE_NAMES
         is_craft_showcase = content_type_name in CRAFT_SHOWCASE_TYPE_NAMES
         if is_quotation_list:
@@ -282,7 +367,9 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
             )
             values["writing_instruction"] = QUOTATION_LIST_WRITING_INSTRUCTION
         elif is_craft_showcase:
-            pain = f"业主关心{process_type or '施工'}工艺是否规范、细节是否到位、会不会偷工减料"
+            pain = (
+                f"业主关心{process_type or stage_topic or '施工'}是否规范、细节是否到位、会不会走过场"
+            )
             advantage = "；".join(
                 part
                 for part in (

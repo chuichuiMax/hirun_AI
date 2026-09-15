@@ -53,6 +53,29 @@ def test_strategy_rule_bundle_keeps_only_current_industry_and_content_type_candi
     assert [item["code"] for item in filtered["content_formulas"]] == ["C02"]
 
 
+def test_strategy_rule_bundle_drops_craft_showcase_emotion_title_formula():
+    bundle = {
+        "methods": [{"code": "M03"}],
+        "title_formulas": [{"code": "T02"}, {"code": "T03"}, {"code": "T05"}],
+        "content_formulas": [{"code": "C01"}, {"code": "C03"}],
+        "combination_rules": [
+            {
+                "id": "decoration-ct05",
+                "industry_scope": ["decoration"],
+                "content_type_codes": ["CT05"],
+                "method_members": [{"method_code": "M03"}],
+                "title_formula_candidate_codes": ["T02", "T03", "T05"],
+                "body_formula_candidate_codes": ["C01", "C03"],
+            }
+        ],
+    }
+
+    filtered = _filter_strategy_rule_bundle(bundle, industry_slug="decoration", content_type_code="CT05")
+
+    assert [item["code"] for item in filtered["title_formulas"]] == ["T03", "T05"]
+    assert [item["code"] for item in filtered["content_formulas"]] == ["C03"]
+
+
 @pytest.mark.parametrize(
     "runtime",
     [

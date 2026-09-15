@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.content.control.errors import ContentApplicationError
 from yuxi.content.control.strategy.recommend_v3 import StrategyPreviewActor, StrategyPreviewContext
 from yuxi.content.model.rules.engine import CombinationGroup
+from yuxi.content.service_entry_form import content_direction_from_brief
 from yuxi.content.v3.seed import DECORATION_INDUSTRY_PACK_V3_ID
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.storage.postgres.models_content import (
@@ -122,7 +123,11 @@ class PostgresStrategyPreviewRepository:
         )
         selected_angle = task.selected_angle_json or {}
         content_direction_code = (
-            requested_content_direction_code or task.content_type_code or selected_angle.get("content_type_code") or ""
+            requested_content_direction_code
+            or content_direction_from_brief(task.brief_json)
+            or task.content_type_code
+            or selected_angle.get("content_type_code")
+            or ""
         )
         return StrategyPreviewContext(
             task_id=task.id,

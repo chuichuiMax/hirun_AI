@@ -14,6 +14,7 @@ from yuxi.content.rules import CONTENT_GOALS
 from yuxi.content.service_entry_form import (
     catalog_select_options,
     configured_business_variable_fields,
+    content_direction_from_form_values,
     map_service_entry_form_values,
 )
 from yuxi.content.schemas import (
@@ -395,7 +396,8 @@ def compile_content_brief(
         "task_id": task.id,
         "industry": template.slug,
         "content_goal": task.content_goal,
-        "content_type_code": getattr(task, "content_type_code", None),
+        "content_type_code": content_direction_from_form_values(form_values)
+        or getattr(task, "content_type_code", None),
         "industry_pack_version_id": getattr(task, "industry_pack_version_id", None),
         "channel_profile_version_id": getattr(task, "channel_profile_version_id", None),
         "persona_profile_version_id": getattr(task, "persona_profile_version_id", None),
@@ -1103,6 +1105,14 @@ async def save_content_brief(
         else None
     )
     task.brief_json = compiled
+    form_direction = content_direction_from_form_values(compiled.get("form_values") or {})
+    if form_direction:
+        task.content_type_code = form_direction
+        compiled["content_type_code"] = form_direction
+        task.brief_json = compiled
+        snapshot = dict(task.runtime_config_snapshot_json or {})
+        snapshot["content_type_code"] = form_direction
+        task.runtime_config_snapshot_json = snapshot
     task.updated_by = str(user.uid)
     task.updated_at = utc_now_naive()
     if compile_now and missing:

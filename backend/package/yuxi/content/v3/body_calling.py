@@ -152,7 +152,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "industry_suspense",
                 "name": "行业悬念开篇",
-                "instruction": "抛出与当前工艺主题相关的内行细节或隐形坑，制造信息差；若简报有工艺类型/工艺名称，悬念须围绕该工艺，不要写成整屋案例故事开头",
+                "instruction": "抛出与当前工艺主题相关的内行细节或隐形坑，制造信息差；若简报有工艺类型/工艺名称，悬念须围绕该工艺，不要写成整屋案例故事开头，不要写装修风格",
                 "fill_rule": "使用行业悬念词库勾起好奇，不把无来源数字当作悬念；不得编造某套房旧况",
                 "lexicon_calls": ["body.industry_suspense"],
                 "fact_source": "lexicon_and_evidence",
@@ -168,7 +168,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "professional_answer",
                 "name": "专业正解反差",
-                "instruction": "错误做法 VS 标准化施工工艺或正确方案；须点明简报中的工艺类型/工艺名称（有填必写），讲清规范做法与关键细节，禁止展开旧况改造完工案例",
+                "instruction": "错误做法 VS 标准化施工工艺或正确方案；须点明简报中的工艺类型/工艺名称（有填必写），讲清规范做法与关键细节；不要写装修风格；泥木阶段对外写泥瓦不写泥木，无木工证据不写木工；费用写预算价不写合同价；禁止展开旧况改造完工案例",
                 "fill_rule": "使用专业正解词库，标准和事实必须有证据支持；工艺名称等字段原样引用并挂 evidence_ids",
                 "lexicon_calls": ["body.professional_answer"],
                 "fact_source": "lexicon_and_evidence",

@@ -27,6 +27,7 @@ from yuxi.content.schemas import (
 )
 from yuxi.content.service_entry_form import (
     BRAND_NAME,
+    CONTENT_TYPE_NAME_TO_DIRECTION,
     FIELD_SELECT_OPTIONS,
     catalog_select_options,
     configured_business_variable_fields,
@@ -89,21 +90,7 @@ NRLX_TO_CT = {
     "NRLX0006": "CT06",
     "NRLX0007": "CT07",
 }
-NAME_TO_CT = {
-    "工艺施工展示": "CT05",
-    "装修报价清单": "CT02",
-    "报价清单": "CT02",
-    "装修避坑分享": "CT03",
-    "避坑分享": "CT03",
-    "装修省钱攻略": "CT04",
-    "省钱攻略": "CT04",
-    "装修案例分享": "CT01",
-    "案例分享": "CT01",
-    "装修知识科普": "CT06",
-    "知识科普": "CT06",
-    "人设自荐": "CT07",
-    "装修人设自荐": "CT07",
-}
+NAME_TO_CT = CONTENT_TYPE_NAME_TO_DIRECTION
 FRAME_AREA_PRICING: tuple[dict[str, Any], ...] = (
     {"value": "50-70㎡", "label": "50-70㎡", "quotes": {"基础": "4-5万", "木制品": "2-3万", "主材": "2-3万"}},
     {"value": "90-110㎡", "label": "90-110㎡", "quotes": {"基础": "7-8万", "木制品": "3-4万", "主材": "4-5万"}},

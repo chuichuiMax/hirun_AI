@@ -648,7 +648,7 @@ onBeforeUnmount(() => {
               @dragleave="onDragLeave('source', $event)"
               @drop="onDrop('source', $event)"
             >
-              <ImagePlus :size="24" /><strong>拖拽图片到这里</strong><span>或点击上传 · PNG / JPG / WebP，单张不超过 20 MB</span>
+              <ImagePlus :size="24" /><strong>拖拽图片到这里</strong><span>或点击上传 · PNG / JPG / WebP，单张不超过 100 MB</span>
               <input type="file" accept="image/*" multiple :disabled="store.isRunning" @change="uploadSource" />
             </label>
           </div>

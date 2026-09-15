@@ -41,7 +41,7 @@ from yuxi.utils.upload_utils import read_upload_with_limit
 logger = logging.getLogger(__name__)
 
 MATERIAL_LIBRARY_BUCKET = "image"
-MAX_MATERIAL_BYTES = 20 * 1024 * 1024
+MAX_MATERIAL_BYTES = 100 * 1024 * 1024
 MAX_MATERIAL_DIMENSION = 8192
 MAX_MATERIAL_PIXELS = 40_000_000
 MATERIAL_THUMBNAIL_SIZE = (480, 480)
@@ -466,13 +466,13 @@ async def import_material_images(
             raw = await read_upload_with_limit(
                 file,
                 max_size_bytes=MAX_MATERIAL_BYTES,
-                too_large_message="图片过大，当前仅支持 20 MB 以内的文件",
+                too_large_message="图片过大，当前仅支持 100 MB 以内的文件",
             )
         except ValueError as exc:
             raise _error(400, "MATERIAL_IMAGE_TOO_LARGE", str(exc)) from exc
         normalized, width, height, content_type = _normalize_image(raw)
         if len(normalized) > MAX_MATERIAL_BYTES:
-            raise _error(400, "MATERIAL_IMAGE_TOO_LARGE", "图片规范化后超过 20 MB")
+            raise _error(400, "MATERIAL_IMAGE_TOO_LARGE", "图片规范化后超过 100 MB")
         asset_id = f"cca_{uuid.uuid4().hex}"
         object_name = f"material-library/{owner_uid}/images/{asset_id}/image.png"
         try:

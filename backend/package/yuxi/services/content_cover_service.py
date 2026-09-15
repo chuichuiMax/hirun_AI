@@ -90,7 +90,7 @@ from yuxi.utils.logging_config import logger
 from yuxi.utils.upload_utils import read_upload_with_limit
 
 COVER_BUCKET = os.getenv("CONTENT_COVER_BUCKET", "content-covers")
-MAX_COVER_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_COVER_IMAGE_BYTES = 100 * 1024 * 1024
 MAX_COVER_DIMENSION = 8192
 MAX_COVER_PIXELS = 40_000_000
 SUPPORTED_ROLES = {"source", "template", "mask"}
@@ -556,7 +556,7 @@ async def create_cover_asset(
         raw = await read_upload_with_limit(
             file,
             max_size_bytes=MAX_COVER_IMAGE_BYTES,
-            too_large_message="图片过大，当前仅支持 20 MB 以内的文件",
+            too_large_message="图片过大，当前仅支持 100 MB 以内的文件",
         )
     except ValueError as exc:
         raise _error(400, "COVER_IMAGE_TOO_LARGE", str(exc)) from exc
@@ -564,7 +564,7 @@ async def create_cover_asset(
         raise _error(400, "COVER_IMAGE_EMPTY", "上传图片不能为空")
     normalized, width, height, content_type = _normalize_upload(raw, role)
     if len(normalized) > MAX_COVER_IMAGE_BYTES:
-        raise _error(400, "COVER_IMAGE_TOO_LARGE", "图片规范化后超过 20 MB，请降低分辨率后重试")
+        raise _error(400, "COVER_IMAGE_TOO_LARGE", "图片规范化后超过 100 MB，请降低分辨率后重试")
     owner_uid = _owner_uid(user)
     asset_id = f"cca_{uuid.uuid4().hex}"
     material_type = "image" if role == "source" else "cover_template"
@@ -672,7 +672,7 @@ async def import_poster_templates(
                 raw = await read_upload_with_limit(
                     file,
                     max_size_bytes=MAX_COVER_IMAGE_BYTES,
-                    too_large_message="图片过大，当前仅支持 20 MB 以内的文件",
+                    too_large_message="图片过大，当前仅支持 100 MB 以内的文件",
                 )
                 if not raw:
                     raise _error(400, "COVER_IMAGE_EMPTY", "上传图片不能为空")

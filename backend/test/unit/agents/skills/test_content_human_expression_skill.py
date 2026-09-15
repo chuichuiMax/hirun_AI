@@ -47,10 +47,13 @@ def test_body_generator_preserves_channel_expression_in_original_lists():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "content-body-generator")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "2.6.2"
+    assert spec.version == "2.7.3"
     assert "保持平台无关正文" not in skill_text
-    assert "一组短行仍属于原结构段" in skill_text
-    assert "content-human-expression" in skill_text
-    assert "明确禁用时不用" in skill_text
+    assert "一组短行仍属原结构段" in skill_text
+    assert "禁用时不用" in skill_text
     assert "forbidden_replacement_map" in skill_text
     assert "词库原文若命中" in skill_text
+    assert "预算价" in skill_text
+    assert "泥瓦" in skill_text
+    assert "不要写装修风格" in skill_text
+    assert "HYB-强电箱内空开安装工艺" in skill_text

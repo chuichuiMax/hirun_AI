@@ -248,6 +248,54 @@ def test_map_service_entry_form_values_quotation_list_brand_over_price():
     assert "禁止把鸿扬写成整装" in mapped["writing_instruction"]
 
 
+def test_map_service_entry_form_values_craft_showcase_uses_project_stage_when_craft_blank():
+    mapped = map_service_entry_form_values(
+        "装修家居",
+        {
+            "mp_content_type_name": "工艺施工展示",
+            "项目阶段": "水电阶段",
+            "目标人群": "精装房",
+            "楼盘信息": "洋湖1号",
+            "外框面积": "150-200㎡",
+        },
+    )
+    assert mapped["craft_and_materials"] == "水电施工与隐蔽验收"
+    assert "水电施工与隐蔽验收" in mapped["pain"]
+    assert "走过场" in mapped["pain"]
+
+
+def test_map_service_entry_form_values_craft_showcase_nimu_stage_uses_niwa_copy():
+    mapped = map_service_entry_form_values(
+        "装修家居",
+        {
+            "mp_content_type_name": "工艺施工展示",
+            "项目阶段": "泥木阶段",
+            "目标人群": "毛坯",
+            "楼盘信息": "洋湖1号",
+            "外框面积": "110-130㎡",
+        },
+    )
+    assert mapped["craft_and_materials"] == "泥瓦施工"
+    assert "泥瓦施工" in mapped["pain"]
+    assert "泥木施工" not in mapped["pain"]
+    assert "泥木施工" not in mapped["advantage"]
+    assert "不要写泥木" in mapped["writing_instruction"]
+    assert "预算价" in mapped["writing_instruction"]
+
+
+def test_map_service_entry_form_values_quotation_list_uses_budget_price_wording():
+    mapped = map_service_entry_form_values(
+        "装修家居",
+        {
+            "mp_content_type_name": "装修报价清单",
+            "楼盘信息": "星河湾",
+            "基础": "4万",
+        },
+    )
+    assert "预算价" in mapped["writing_instruction"]
+    assert "禁止写「合同价」" in mapped["writing_instruction"]
+
+
 def test_map_service_entry_form_values_craft_showcase_not_case_story():
     from yuxi.content.service_entry_form import filter_body_formulas_for_content_direction
 
@@ -264,11 +312,24 @@ def test_map_service_entry_form_values_craft_showcase_not_case_story():
     assert "工艺科普与标准讲解" in mapped["writing_instruction"]
     assert "禁止写成装修案例分享" in mapped["writing_instruction"]
     assert "旧况→改造过程→完工效果" in mapped["writing_instruction"]
+    assert "水电施工听劝，规范验收远超预期" in mapped["writing_instruction"]
+    assert "水电藏进墙之前，这些细节要验清" in mapped["writing_instruction"]
+    assert "泥瓦" in mapped["writing_instruction"]
+    assert "预算价" in mapped["writing_instruction"]
+    assert "合同价" in mapped["writing_instruction"]
+    assert "不要强调装修风格" in mapped["writing_instruction"]
+    assert "HYB-强电箱内空开安装工艺" in mapped["writing_instruction"]
+    assert "空开选型" in mapped["writing_instruction"]
     assert "防渗漏系统" in mapped["advantage"]
     assert "HYB-厨卫及顶楼防漏吊顶工艺" in mapped["craft_and_materials"]
     assert filter_body_formulas_for_content_direction("CT05", ["C02", "C01", "C03", "C04"]) == ["C03", "C04"]
     assert filter_body_formulas_for_content_direction("CT05", ["C02", "C01"]) == ["C03", "C04"]
     assert filter_body_formulas_for_content_direction("CT02", ["C01", "C02"]) == ["C01", "C02"]
+    from yuxi.content.service_entry_form import filter_title_formulas_for_content_direction
+
+    assert filter_title_formulas_for_content_direction("CT05", ["T01", "T02", "T03", "T07"]) == ["T01", "T03", "T07"]
+    assert filter_title_formulas_for_content_direction("CT05", ["T02"]) == ["T03", "T05", "T07", "T04"]
+    assert filter_title_formulas_for_content_direction("CT01", ["T01", "T02"]) == ["T01", "T02"]
 
 
 def test_map_service_entry_form_values_keeps_configured_names():
@@ -290,6 +351,8 @@ def test_map_service_entry_form_values_keeps_configured_names():
     assert "引流点" in mapped["writing_instruction"]
     assert "evidence_cite_index" in mapped["writing_instruction"] or "Evidence ID" in mapped["writing_instruction"] or "paragraph_evidence" in mapped["writing_instruction"]
     assert "中间值" in mapped["writing_instruction"]
+    assert "预算价" in mapped["writing_instruction"]
+    assert "泥瓦" in mapped["writing_instruction"]
     assert mapped.get("voice") != "业主第一人称"
     assert "好评知识库" not in str(mapped.get("writing_instruction") or "")
     assert "基础 4万" in mapped["craft_and_materials"]

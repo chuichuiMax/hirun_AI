@@ -49,6 +49,10 @@ def _filter_strategy_rule_bundle(
     bundle: dict[str, Any], *, industry_slug: str, content_type_code: str
 ) -> dict[str, Any]:
     from yuxi.content.industry_matrix import resolve_industry_formula
+    from yuxi.content.service_entry_form import (
+        filter_body_formulas_for_content_direction,
+        filter_title_formulas_for_content_direction,
+    )
 
     rules = [
         item
@@ -78,6 +82,8 @@ def _filter_strategy_rule_bundle(
         if code
     }
     body_codes.update(str(rule["content_formula_code"]) for rule in rules if rule.get("content_formula_code"))
+    title_codes = set(filter_title_formulas_for_content_direction(content_type_code, title_codes))
+    body_codes = set(filter_body_formulas_for_content_direction(content_type_code, body_codes))
     return {
         **bundle,
         "methods": [item for item in bundle.get("methods") or [] if item.get("code") in method_codes],

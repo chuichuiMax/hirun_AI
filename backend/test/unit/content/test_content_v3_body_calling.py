@@ -47,9 +47,13 @@ def test_body_calling_catalog_covers_all_formulas_and_five_source_columns() -> N
     c01 = DECORATION_BODY_CALLING["C01"]
     brand_section = c01["sections"][3]["instruction"]
     assert "定制化家装" in brand_section
-    assert "标准化整装" not in brand_section
+    assert "禁止写成整装或标准化整装" in brand_section
     assert "定制化家装" in c02["sections"][3]["instruction"]
-    assert "标准化整装" not in c02["sections"][3]["instruction"]
+    assert "禁止整装/标准化整装" in c02["sections"][3]["instruction"]
+    c03 = DECORATION_BODY_CALLING["C03"]
+    assert "泥瓦" in c03["sections"][2]["instruction"]
+    assert "预算价" in c03["sections"][2]["instruction"]
+    assert "不要写装修风格" in c03["sections"][2]["instruction"]
 
 
 def test_outline_must_follow_body_calling_section_order_and_choose_one_variant() -> None:

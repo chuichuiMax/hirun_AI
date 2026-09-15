@@ -83,7 +83,7 @@ const shareOpen = ref(false)
 const shareCreating = ref(false)
 const shareUrlForManualCopy = ref('')
 const previewUrls = new Map()
-const maxUploadBytes = 20 * 1024 * 1024
+const maxUploadBytes = 100 * 1024 * 1024
 const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp'])
 
 const categoryMap = computed(() => Object.fromEntries(categories.value.map((item) => [item.code, item])))
@@ -417,7 +417,7 @@ function addSelectedFiles(fileList) {
   selectedFiles.value = next
   const warnings = []
   if (unsupported) warnings.push(`${unsupported} 个文件格式不支持`)
-  if (oversized) warnings.push(`${oversized} 个文件超过 20 MB`)
+  if (oversized) warnings.push(`${oversized} 个文件超过 100 MB`)
   if (duplicated) warnings.push(`${duplicated} 个重复文件已忽略`)
   if (overflowed) warnings.push(`${overflowed} 个文件超出 ${uploadFileLimit.value} 张上限`)
   if (warnings.length) message.warning(warnings.join('；'))
@@ -809,7 +809,7 @@ onBeforeUnmount(releasePreviews)
         >
           <Upload :size="22" />
           <span>{{ uploadDragging ? '松开鼠标添加图片' : (selectedFiles.length ? `已选择 ${selectedFiles.length} 个文件，可继续拖入` : '点击选择或拖拽 PNG、JPG、WebP 图片到此处') }}</span>
-          <small>单张不超过 20 MB；素材图片最多 50 张，封面模板最多 100 张</small>
+          <small>单张不超过 100 MB；素材图片最多 50 张，封面模板最多 100 张</small>
         </button>
         <label><span>分类 <b>*</b></span><a-select v-model:value="uploadCategory" placeholder="请选择一个明确分类">
           <a-select-option v-for="item in uploadCategories" :key="item.code" :value="item.code"><strong>{{ categoryOptionLabel(item) }}</strong> — {{ item.description }}</a-select-option>

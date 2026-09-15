@@ -22,9 +22,12 @@ def test_research_skill_freezes_forbidden_replacement_map_from_knowledge_base():
 def test_review_skill_blocks_unreplaced_or_invalid_forbidden_terms():
     version, skill_text = _skill_text("content-reviewer")
 
-    assert version == "1.10.2"
+    assert version == "1.10.5"
     assert "rule_kind=forbidden_replacement_map" in skill_text
     assert "逐项复查最终标题、正文和话题" in skill_text
     assert "FACT_CHECK_FAILED" in skill_text
     assert "候选列表为空" in skill_text
     assert "不得误算为爆款蓝图要求" in skill_text
+    assert "合同价" in skill_text
+    assert "泥瓦" in skill_text
+    assert "装修风格" in skill_text

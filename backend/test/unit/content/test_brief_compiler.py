@@ -75,6 +75,46 @@ def test_compile_brief_requires_configured_variables_for_studio_entry():
     assert missing == [{"field": "主材", "label": "主材"}]
 
 
+def test_compile_brief_syncs_craft_showcase_direction_from_form():
+    task = SimpleNamespace(id="ct_craft", content_goal="acquire", mode="quick", content_type_code="CT01")
+    template = SimpleNamespace(slug="decoration", quick_form_schema=[], pro_form_schema=[])
+    brief = ContentBriefPayload(
+        form_values={
+            "mp_service_entry": "装修家居",
+            "mp_content_type_name": "工艺施工展示",
+            "项目阶段": "水电阶段",
+            "楼盘信息": "洋湖1号",
+        }
+    )
+
+    compiled, missing = compile_content_brief(task=task, template=template, brief=brief)
+
+    assert missing == []
+    assert compiled["content_type_code"] == "CT05"
+    assert compiled["form_values"]["craft_and_materials"] == "水电施工与隐蔽验收"
+
+
+def test_compile_brief_maps_nimu_stage_to_niwa_copy():
+    task = SimpleNamespace(id="ct_nimu", content_goal="acquire", mode="quick", content_type_code="CT01")
+    template = SimpleNamespace(slug="decoration", quick_form_schema=[], pro_form_schema=[])
+    brief = ContentBriefPayload(
+        form_values={
+            "mp_service_entry": "装修家居",
+            "mp_content_type_name": "工艺施工展示",
+            "项目阶段": "泥木阶段",
+            "楼盘信息": "洋湖1号",
+        }
+    )
+
+    compiled, missing = compile_content_brief(task=task, template=template, brief=brief)
+
+    assert missing == []
+    assert compiled["form_values"]["craft_and_materials"] == "泥瓦施工"
+    assert "不要写泥木" in compiled["form_values"]["writing_instruction"]
+    assert "预算价" in compiled["form_values"]["writing_instruction"]
+    assert "不要强调装修风格" in compiled["form_values"]["writing_instruction"]
+
+
 def test_compile_brief_maps_review_notes_variables():
     task = SimpleNamespace(id="ct_4", content_goal="brand", mode="quick")
     template = SimpleNamespace(slug="decoration", quick_form_schema=[], pro_form_schema=[])

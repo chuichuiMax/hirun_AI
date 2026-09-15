@@ -436,7 +436,7 @@ onBeforeUnmount(() => {
 
       <div v-if="showImport" class="import-panel">
         <label class="dropzone compact" :class="{ dragging: dragging === 'library' }" @dragover="onDragOver('library', $event)" @dragleave="onDragLeave('library', $event)" @drop="onDrop('library', $event)">
-          <UploadCloud :size="24" /><strong>{{ importFiles.length ? `已选择 ${importFiles.length} 张模板` : '拖拽或点击选择透明 PNG 模板' }}</strong><span>建议使用透明背景 PNG；单次最多 100 张，单张不超过 20 MB</span>
+          <UploadCloud :size="24" /><strong>{{ importFiles.length ? `已选择 ${importFiles.length} 张模板` : '拖拽或点击选择透明 PNG 模板' }}</strong><span>建议使用透明背景 PNG；单次最多 100 张，单张不超过 100 MB</span>
           <input type="file" accept="image/png,image/jpeg,image/webp" multiple @change="collectFiles" />
         </label>
         <div class="import-settings">

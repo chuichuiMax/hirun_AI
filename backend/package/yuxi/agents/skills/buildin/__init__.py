@@ -125,14 +125,14 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-title-generator",
         source_dir=_SKILLS_ROOT / "content-title-generator",
         description="按锁定标题公式生成候选，并从确定性校验通过的候选中选择最终标题。",
-        version="2.3.0",
+        version="2.5.6",
         tool_dependencies=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
     ),
     BuiltinSkillSpec(
         slug="content-body-generator",
         source_dir=_SKILLS_ROOT / "content-body-generator",
         description="使用人工锁定标题、正文公式和同源证据生成正文与话题。",
-        version="2.6.2",
+        version="2.7.3",
         tool_dependencies=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
     ),
     BuiltinSkillSpec(
@@ -172,7 +172,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-reviewer",
         source_dir=_SKILLS_ROOT / "content-reviewer",
         description="审核公式执行、事实一致性、人设语气和内容风险。",
-        version="1.10.2",
+        version="1.10.5",
         tool_dependencies=(
             "query_kb",
             "open_kb_document",
@@ -183,7 +183,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-visual-planner",
         source_dir=_SKILLS_ROOT / "content-visual-planner",
         description="按内容快照和渠道规范产出字段不重复的结构化视觉方案。",
-        version="1.6.0",
+        version="1.6.3",
     ),
     BuiltinSkillSpec(
         slug="content-cover-generator",
