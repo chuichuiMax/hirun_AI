@@ -982,6 +982,9 @@ async def list_mp_galleries(
                 **item,
                 "visibility": visibility,
                 "cover_file_url": f"/api/mp/content/gallery-items/{cover_item_id}/file" if cover_item_id else None,
+                "cover_thumbnail_file_url": (
+                    f"/api/mp/content/gallery-items/{cover_item_id}/thumbnail" if cover_item_id else None
+                ),
             }
         )
     return {"galleries": galleries}

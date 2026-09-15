@@ -483,6 +483,7 @@ async def test_list_mp_galleries_includes_enterprise_scope(monkeypatch):
     all_galleries = await list_mp_galleries(None, ctx)
     assert [item["id"] for item in all_galleries["galleries"]] == ["mine", "shared"]
     assert all_galleries["galleries"][1]["cover_file_url"].endswith("/mli_2/file")
+    assert all_galleries["galleries"][1]["cover_thumbnail_file_url"].endswith("/mli_2/thumbnail")
     shared = await list_mp_galleries(None, ctx, scope="enterprise")
     assert [item["id"] for item in shared["galleries"]] == ["shared"]
     private = await list_mp_galleries(None, ctx, scope="private")
