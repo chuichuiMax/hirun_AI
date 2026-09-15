@@ -24,7 +24,10 @@ from yuxi.content.control.workflow.external_wait import (
     REVIEW_NOTES_KNOWLEDGE_BASE_ALIASES,
     REVIEW_NOTES_KNOWLEDGE_BASE_NAME,
 )
-from yuxi.content.control.workflow.generation_input import project_generation_input
+from yuxi.content.control.workflow.generation_input import (
+    project_generation_input,
+    project_visual_plan_input,
+)
 from yuxi.content.control.workflow.strategy_input import load_strategy_profiles, project_strategy_input
 from yuxi.content.execution_trace import build_execution_preview
 from yuxi.content.model.contracts import (
@@ -50,6 +53,9 @@ CONTENT_NODE_EXECUTION_LIMITS = {
     "generate_content": (560, 180, "low", 3),
     "select_creation_strategy": (150, 65, "low", 2),
     "reselect_creation_strategy": (150, 65, "low", 2),
+    # 封面规划与正文同一套纠错额度；输入投影后单次仍可能 >120s，总时限覆盖 3×150。
+    "plan_visuals": (500, 150, "low", 3),
+    "visual_review": (300, 120, "low", 2),
 }
 
 
@@ -135,6 +141,9 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
         if request.node_run.node_id == "generate_content":
             snapshot["generation_policy_version"] = 2
             snapshot["model_input_contract"] = "GenerateContentPromptV1"
+        elif request.node_run.node_id == "plan_visuals":
+            snapshot["visual_execution_policy_version"] = 2
+            snapshot["model_input_contract"] = "PlanVisualsPromptV1"
         else:
             snapshot["strategy_execution_policy_version"] = 2
             snapshot["model_input_contract"] = "JointStrategyPromptV1"
@@ -240,8 +249,14 @@ class AgentDelegationService:
                 request.node_run.node_id == "generate_content"
                 and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
             ):
-                # 原创不需仿写结构 Skill；有人味由 content-human-expression 覆盖，省去 humanizer 注入体积。
-                drop = {"viral-structure-rewriter", "humanizer-zh"}
+                # 原创不需仿写结构/排版/独立大纲/长篇人味 Skill；表达要点并入 content-body-generator。
+                drop = {
+                    "viral-structure-rewriter",
+                    "humanizer-zh",
+                    "viral-layout-formatter",
+                    "content-outline-builder",
+                    "content-human-expression",
+                }
                 context._required_skill_closure = [
                     slug for slug in context._required_skill_closure if slug not in drop
                 ]
@@ -278,6 +293,8 @@ class AgentDelegationService:
         model_view = None
         if request.node_run.node_id == "generate_content":
             model_view = project_generation_input(node_input.payload)
+        elif request.node_run.node_id == "plan_visuals":
+            model_view = project_visual_plan_input(node_input.payload)
         elif request.node_run.node_id in {"select_creation_strategy", "reselect_creation_strategy"}:
             channel, persona = await load_strategy_profiles(
                 self.content_repo,

@@ -436,18 +436,24 @@ class AgentNodeHandler:
         assembly_state = state
         if node["id"] == "plan_visuals":
             from yuxi.content.control.visual_template_fields import (
+                is_ordinal_badge_template_field,
                 missing_required_template_fields,
                 resolved_visual_text_max_chars,
             )
 
             limits: dict[str, int] = {}
             allowed_template_fields: dict[str, dict[str, int]] = {}
+            decorative_template_fields: list[str] = []
             for field in visual_material.get("hycanvas_fillable_fields") or []:
                 role = str(field.get("semanticRole") or "")
+                field_key = str(field.get("key") or field.get("label") or "").strip()
+                if is_ordinal_badge_template_field(field):
+                    if field_key:
+                        decorative_template_fields.append(field_key)
+                    continue
                 if role == "label" or role not in {"title", "subtitle", "body_excerpt"}:
                     continue
                 constraints = field.get("constraints") or {}
-                field_key = str(field.get("key") or field.get("label") or "").strip()
                 if field_key:
                     field_limits = {
                         key: value
@@ -462,14 +468,22 @@ class AgentNodeHandler:
                     limits[role] = min(limits.get(role, max_chars), max_chars)
             locked_values["visual_text_max_chars"] = limits
             locked_values["allowed_visual_template_fields"] = allowed_template_fields
+            locked_values["decorative_visual_template_fields"] = decorative_template_fields
             required_template_fields = missing_required_template_fields(
                 visual_material.get("hycanvas_fillable_fields") or [], task.brief_json or {}
             )
             locked_values["required_visual_template_fields"] = required_template_fields
             runtime_snapshot = dict(state.get("runtime_config_snapshot") or {})
+            narrative_fields = [
+                field
+                for field in (visual_material.get("hycanvas_fillable_fields") or [])
+                if isinstance(field, dict) and not is_ordinal_badge_template_field(field)
+            ]
             runtime_snapshot["visual_material"] = {
                 **visual_material,
+                "hycanvas_fillable_fields": narrative_fields,
                 "required_template_field_repairs": required_template_fields,
+                "decorative_template_field_keys": decorative_template_fields,
             }
             assembly_state = {**state, "runtime_config_snapshot": runtime_snapshot}
         if node["id"] == "submit_cover_job":
@@ -542,7 +556,7 @@ class AgentNodeHandler:
                     else (
                         f"执行内容工作流节点 {node['id']} 的唯一职责；"
                         "首轮直接调用 submit_content_node_result，不要 read_file 或空转工具"
-                        if node["id"] == "generate_content"
+                        if node["id"] in {"generate_content", "plan_visuals"}
                         else f"执行内容工作流节点 {node['id']} 的唯一职责"
                     )
                 ),

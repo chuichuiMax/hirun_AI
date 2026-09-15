@@ -284,7 +284,7 @@ WORKFLOW_V3_NODES = [
             "runtime_config_snapshot",
         ),
         max_execution_steps=40,
-        timeout_seconds=180,
+        timeout_seconds=360,
     ),
     _agent(
         "submit_cover_job",
@@ -317,7 +317,7 @@ WORKFLOW_V3_NODES = [
             "evidence_bundle",
         ),
         max_execution_steps=20,
-        timeout_seconds=180,
+        timeout_seconds=240,
     ),
     _human("select_cover", "cover_selection"),
     _fixed("save_artifact_snapshot"),

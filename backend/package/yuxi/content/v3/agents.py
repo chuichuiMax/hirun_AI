@@ -186,7 +186,8 @@ CONTENT_AGENT_SPECS = (
         description="制定视觉方案、提交封面任务并审核返回资产。",
         skills=("content-visual-planner", "content-cover-generator", "content-visual-reviewer"),
         skill_tools=("create_content_cover_job",),
-        config_version=3,
+        reasoning_effort="low",
+        config_version=4,
     ),
 )
 

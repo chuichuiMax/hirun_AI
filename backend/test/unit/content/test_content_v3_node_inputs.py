@@ -363,6 +363,7 @@ def test_input_contract_registry_contains_every_agent_payload_contract():
         "PersonaStylePolishInputV1",
         "GenerateContentInputV1",
         "GenerateContentPromptV1",
+        "PlanVisualsPromptV1",
         "SemanticReviewInputV1",
         "PlanVisualsInputV1",
         "SubmitCoverJobInputV1",

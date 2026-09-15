@@ -3,7 +3,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from yuxi.content.control.workflow.generation_input import project_generation_input
+from yuxi.content.control.workflow.generation_input import (
+    project_generation_input,
+    project_visual_plan_input,
+)
 from yuxi.content.rules import canonical_brief_facts
 from yuxi.agents.middlewares.model_call_timeout import (
     ModelCallTimeoutMiddleware,
@@ -43,6 +46,68 @@ def test_generate_content_allows_three_model_calls_with_matching_watchdog():
     assert CONTENT_NODE_EXECUTION_LIMITS["generate_content"][0] >= (
         context._content_max_model_calls * context.model_call_timeout_seconds + 3 + 15
     )
+
+
+def test_plan_visuals_has_execution_budget_for_slow_model_calls():
+    from yuxi.services.agent_delegation_service import AgentDelegationService, CONTENT_NODE_EXECUTION_LIMITS
+
+    request = SimpleNamespace(
+        node_run=SimpleNamespace(node_id="plan_visuals"),
+        knowledge_policy="frozen_evidence_only",
+    )
+    context = SimpleNamespace(reasoning_effort=None)
+    AgentDelegationService._apply_node_constraints(context, request)
+    assert context.reasoning_effort == "low"
+    assert context.model_call_timeout_seconds == 150
+    assert context._content_max_model_calls == 3
+    assert CONTENT_NODE_EXECUTION_LIMITS["plan_visuals"][0] >= (
+        context._content_max_model_calls * context.model_call_timeout_seconds + 3 + 15
+    )
+
+
+def test_original_generate_content_drops_heavy_layout_skills():
+    from yuxi.services.agent_delegation_service import AgentDelegationService
+
+    request = SimpleNamespace(
+        node_run=SimpleNamespace(node_id="generate_content"),
+        knowledge_policy="frozen_evidence_only",
+        input_payload={"runtime_config_snapshot": {"creation_mode": "original"}},
+        required_skills=(
+            "content-title-generator",
+            "content-outline-builder",
+            "content-body-generator",
+            "viral-structure-rewriter",
+            "viral-layout-formatter",
+            "humanizer-zh",
+            "content-human-expression",
+        ),
+    )
+    context = SimpleNamespace(
+        reasoning_effort=None,
+        _required_skill_closure=list(request.required_skills),
+        _prompt_skills=["catalog"],
+        _runtime_skill_snapshots=[{"slug": slug} for slug in request.required_skills],
+    )
+    # Simulate the generate_content original narrowing branch used after skill prep.
+    if (
+        request.node_run.node_id == "generate_content"
+        and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
+    ):
+        drop = {
+            "viral-structure-rewriter",
+            "humanizer-zh",
+            "viral-layout-formatter",
+            "content-outline-builder",
+            "content-human-expression",
+        }
+        context._required_skill_closure = [slug for slug in context._required_skill_closure if slug not in drop]
+    assert "viral-layout-formatter" not in context._required_skill_closure
+    assert "content-outline-builder" not in context._required_skill_closure
+    assert "humanizer-zh" not in context._required_skill_closure
+    assert "content-human-expression" not in context._required_skill_closure
+    assert "content-body-generator" in context._required_skill_closure
+    assert "content-title-generator" in context._required_skill_closure
+    _ = AgentDelegationService
 
 
 @pytest.mark.asyncio
@@ -221,7 +286,13 @@ def test_generation_projection_keeps_price_sources_rules_and_revision_without_mu
             "decision": {"scores": [1, 2]},
             "body_formula": {"full_rules": "不能改动"},
         },
-        "content_brief": {"business_variables": {"budget": "18万"}, "visual_material": {"template": "large"}},
+        "content_brief": {
+            "business_variables": {"budget": "18万", "mp_content_type_id": "a" * 36},
+            "form_values": {"budget": "18万", "mp_service_entry": "装修家居"},
+            "visual_material": {"template": "large"},
+            "required_terms": [],
+            "attachments": [],
+        },
         "evidence_bundle": {
             "bundle_hash": "frozen",
             "items": [
@@ -236,7 +307,16 @@ def test_generation_projection_keeps_price_sources_rules_and_revision_without_mu
                     "verified_status": "user_confirmed",
                     "risk_level": "high",
                     "metadata": {"price_basis": "standard_unit_price", "scope": "不含主材"},
-                }
+                },
+                {
+                    "id": "price-dup",
+                    "value": "标准单价100元/㎡，含基层",
+                    "source_id": "报价表-2b",
+                    "allowed_usage": ["title", "body"],
+                    "verified_status": "user_confirmed",
+                    "risk_level": "high",
+                    "variable_codes": ["price"],
+                },
             ],
         },
         "runtime_config_snapshot": {
@@ -260,28 +340,51 @@ def test_generation_projection_keeps_price_sources_rules_and_revision_without_mu
     result = project_generation_input(payload)
     assert payload == before
     assert "decision" not in result["strategy_snapshot"]
-    assert result["strategy_snapshot"]["body_formula"] == payload["strategy_snapshot"]["body_formula"]
+    assert "source_content" not in result["strategy_snapshot"]["body_formula"]
+    assert "full_rules" not in result["strategy_snapshot"]["body_formula"]
     assert result["runtime_config_snapshot"] == {"creation_mode": "original"}
     assert result["content_draft"] == payload["content_draft"]
-    evidence = result["evidence_bundle"]["items"][0]
-    for key in ("id", "value", "source_id", "allowed_usage", "verified_status", "risk_level", "metadata"):
-        assert evidence[key] == payload["evidence_bundle"]["items"][0][key]
+    assert "form_values" not in result["content_brief"]
+    assert "mp_content_type_id" not in result["content_brief"]["business_variables"]
+    evidence_items = result["evidence_bundle"]["items"]
+    assert len(evidence_items) == 1
+    evidence = evidence_items[0]
+    assert evidence["id"] == "price-1"
+    assert set(evidence["allowed_usage"]) == {"body", "title"}
+    assert evidence["variable_codes"] == ["price"]
+    assert evidence["value"] == payload["evidence_bundle"]["items"][0]["value"]
     assert "source_hash" not in evidence
     cite = result["evidence_cite_index"]
-    assert cite[0]["id"] == payload["evidence_bundle"]["items"][0]["id"]
+    assert cite[0]["id"] == "price-1"
     assert "title" in cite[0]["allowed_usage"] or "body" in cite[0]["allowed_usage"]
-    assert cite[0]["value_preview"] == payload["evidence_bundle"]["items"][0]["value"]
+    assert "value_preview" not in cite[0]
+    assert "source_id" not in cite[0]
     chunks = result["formula_lexicon_bundle"]["body"][0]["chunks"]
     assert chunks[0] == "短词条"
-    assert chunks[1].endswith("…") and len(chunks[1]) == 400
-    assert len(chunks) == 3
+    assert len(chunks) == 1
+    assert chunks[0] == "短词条"
 
 
-def test_generation_projection_keeps_forbidden_replacement_map_intact():
-    long_map = [{"problem_term": f"问题词{i}", "alternatives": [f"替代表达{i}"]} for i in range(80)]
+def test_generation_projection_compacts_forbidden_replacement_map():
+    long_map = [{"problem_term": f"问题词{i}", "alternatives": [f"替代表达{i}", f"备选{i}", f"多余{i}", f"再多{i}"]} for i in range(80)]
     serialized = "报价" * 200 + "私信" * 200
     payload = {
-        "strategy_snapshot": {"snapshot_hash": "s" * 64, "body_formula": {"full_rules": "x"}},
+        "strategy_snapshot": {
+            "snapshot_hash": "s" * 64,
+            "body_formula": {
+                "code": "C03",
+                "name": "干货",
+                "source_content": {"huge": "x" * 500},
+                "body_calling": {
+                    "formula_name": "干货",
+                    "sections": [{"id": "a", "name": "开篇", "instruction": "讲工艺", "fill_rule": "用证据", "lexicon_calls": []}],
+                    "variants": [],
+                },
+            },
+            "creation_method_definitions": [
+                {"code": "M03", "name": "价值法", "sentence_patterns": ["a", "b", "c", "d"], "principle": "p"}
+            ],
+        },
         "content_brief": {"business_variables": {}},
         "evidence_bundle": {
             "bundle_hash": "frozen",
@@ -317,20 +420,106 @@ def test_generation_projection_keeps_forbidden_replacement_map_intact():
         },
         "runtime_config_snapshot": {"creation_mode": "original"},
         "formula_lexicon_bundle": {},
-        "channel_profile": {},
-        "persona_profile": {},
+        "channel_profile": {"emoji_allowed": True, "connector_config_ref": "drop-me"},
+        "persona_profile": {"name": "工长", "extra": "drop"},
     }
     result = project_generation_input(payload)
     items = {item["id"]: item for item in result["evidence_bundle"]["items"]}
-    assert items["ev-map-list"]["value"] == long_map
-    assert items["ev-map-str"]["value"] == serialized
+    assert len(items["ev-map-list"]["value"]) == 40
+    assert items["ev-map-list"]["value"][0] == {
+        "problem_term": "问题词0",
+        "alternatives": ["替代表达0", "备选0"],
+    }
+    assert isinstance(items["ev-map-str"]["value"], str)
+    assert len(items["ev-map-str"]["value"]) <= 4000
     assert items["ev-normal"]["value"].endswith("…")
-    assert len(items["ev-normal"]["value"]) == 320
+    assert len(items["ev-normal"]["value"]) == 120
+    body = result["strategy_snapshot"]["body_formula"]
+    assert body["code"] == "C03"
+    assert "source_content" not in body
+    assert body["body_calling"]["sections"][0]["id"] == "a"
+    assert len(result["strategy_snapshot"]["creation_method_definitions"][0]["sentence_patterns"]) == 3
+    assert result["channel_profile"] == {"emoji_allowed": True}
+    assert result["persona_profile"] == {"name": "工长"}
+    cite_by_id = {row["id"]: row for row in result["evidence_cite_index"]}
+    assert "value_preview" not in cite_by_id["ev-map-list"]
+    assert cite_by_id["ev-map-list"]["material_type"] == "platform_rule"
+    assert "value_preview" not in cite_by_id["ev-map-str"]
+    assert "value_preview" not in cite_by_id["ev-normal"]
+    assert set(cite_by_id["ev-normal"]["allowed_usage"]) == {"body"}
+
+
+def test_visual_plan_projection_drops_duplicate_evidence_and_heavy_runtime():
+    payload = {
+        "selected_title": {"text": "洋湖天旭工艺", "evidence_ids": ["ev-1"], "debug": "drop-me"},
+        "content_draft": {
+            "body": "正文" * 400,
+            "lexicon_usage": {"body": ["x"]},
+            "paragraph_evidence": [{"evidence_ids": ["ev-1"]}],
+        },
+        "strategy_snapshot": {
+            "snapshot_hash": "s" * 64,
+            "decision": {"scores": [1]},
+            "body_formula": {"code": "C03", "source_content": {"huge": "x" * 200}},
+            "title_formula": {"code": "T01", "reference_examples": ["a", "b"]},
+            "creation_method_definitions": [],
+        },
+        "evidence_bundle": {
+            "bundle_hash": "frozen",
+            "items": [
+                {
+                    "id": "ev-1",
+                    "value": "90-110㎡",
+                    "source_hash": "h" * 64,
+                    "allowed_usage": ["title"],
+                    "verified_status": "user_confirmed",
+                },
+                {
+                    "id": "ev-2",
+                    "value": "90-110㎡",
+                    "allowed_usage": ["body"],
+                    "verified_status": "user_confirmed",
+                },
+            ],
+        },
+        "media_evidence_items": [
+            {
+                "id": "asset-1",
+                "selected_for_cover": True,
+                "extracted_text": "很长的 OCR " * 80,
+                "display_name": "长沙图",
+            }
+        ],
+        "artifact_version": {"id": "av-1", "payload": {"huge": True}},
+        "channel_profile": {"emoji_allowed": True, "connector_config_ref": "drop"},
+        "runtime_config_snapshot": {
+            "creation_mode": "original",
+            "visual_material": {
+                "image_asset_id": "asset-1",
+                "hycanvas_fillable_fields": [{"key": "t1", "semanticRole": "title"}],
+                "unused_blob": "x" * 500,
+            },
+        },
+    }
+    result = project_visual_plan_input(payload)
+    assert result["selected_title"] == {"text": "洋湖天旭工艺", "evidence_ids": ["ev-1"]}
+    assert "lexicon_usage" not in result["content_draft"]
+    assert len(result["content_draft"]["body"]) <= 650
+    assert "decision" not in result["strategy_snapshot"]
+    assert "source_content" not in result["strategy_snapshot"]["body_formula"]
+    assert len(result["evidence_bundle"]["items"]) == 1
+    assert set(result["evidence_bundle"]["items"][0]["allowed_usage"]) == {"title", "body"}
+    assert result["media_evidence_items"] == [{"id": "asset-1", "selected_for_cover": True}]
+    assert result["artifact_version"] == {"id": "av-1"}
+    assert result["runtime_config_snapshot"]["visual_material"]["image_asset_id"] == "asset-1"
+    assert "unused_blob" not in result["runtime_config_snapshot"]["visual_material"]
+    assert result["channel_profile"] == {"emoji_allowed": True}
 
 
 def test_visual_text_max_char_floor_raises_cover_copy_limits():
     from yuxi.content.control.visual_template_fields import (
         apply_visual_text_max_char_floor,
+        is_ordinal_badge_template_field,
         resolved_visual_text_max_chars,
         resolve_visual_cover_title,
     )
@@ -341,6 +530,32 @@ def test_visual_text_max_char_floor_raises_cover_copy_limits():
     assert apply_visual_text_max_char_floor("label", 4) == 4
     assert resolved_visual_text_max_chars("title", {"maxChars": 8, "layoutMeasured": True}) == 8
     assert resolved_visual_text_max_chars("title", {"maxChars": 8}) == 8
+    assert is_ordinal_badge_template_field(
+        {"key": "field_2", "label": "01", "semanticRole": "title", "constraints": {"maxChars": 1}}
+    )
+    assert is_ordinal_badge_template_field(
+        {"key": "field_x", "label": "副标题", "semanticRole": "title", "constraints": {"maxChars": 2}}
+    )
+    assert not is_ordinal_badge_template_field(
+        {"key": "field_1", "label": "标题醒目", "semanticRole": "title", "constraints": {"maxChars": 22}}
+    )
+    # 序号角标不得把整页 title 上限压到 1。
+    narrative = [
+        {"key": "field_1", "label": "主标题", "semanticRole": "title", "constraints": {"maxChars": 22}},
+        {"key": "field_2", "label": "01", "semanticRole": "title", "constraints": {"maxChars": 1}},
+        {"key": "field_3", "label": "强调", "semanticRole": "title", "constraints": {"maxChars": 12}},
+    ]
+    limits: dict[str, int] = {}
+    allowed: dict[str, dict[str, int]] = {}
+    for field in narrative:
+        if is_ordinal_badge_template_field(field):
+            continue
+        role = field["semanticRole"]
+        max_chars = resolved_visual_text_max_chars(role, field["constraints"])
+        allowed[field["key"]] = {"maxChars": max_chars}
+        limits[role] = min(limits.get(role, max_chars), max_chars)
+    assert "field_2" not in allowed
+    assert limits["title"] == 12
     assert (
         resolve_visual_cover_title(
             visual_text=[],
@@ -350,6 +565,20 @@ def test_visual_text_max_char_floor_raises_cover_copy_limits():
         == "后悔没早知道！洋湖天旭装修"
     )
     assert resolve_visual_cover_title(visual_text=["封面标题"], template_fields={}) == "封面标题"
+    assert (
+        resolve_visual_cover_title(
+            visual_text=["1"],
+            template_fields={
+                "field_1": "旧房改造130-150㎡预算避坑",
+                "field_2": "1",
+            },
+            declarations=[
+                {"key": "field_1", "semanticRole": "title"},
+                {"key": "field_2", "semanticRole": "title"},
+            ],
+        )
+        == "旧房改造130-150㎡预算避坑"
+    )
 
 
 @pytest.mark.asyncio

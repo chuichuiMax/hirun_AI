@@ -1021,6 +1021,32 @@ def test_hycanvas_template_fields_use_distinct_agent_text_for_repeated_title_rol
     assert fields == {"field_1": "89㎡收纳焕新", "field_2": "复尺后规划"}
 
 
+def test_hycanvas_template_fields_skip_ordinal_badge_title():
+    fields = content_tools._hycanvas_template_fields(
+        [
+            {
+                "kind": "text",
+                "key": "field_1",
+                "label": "标题醒目",
+                "semanticRole": "title",
+                "constraints": {"maxChars": 22, "required": True},
+            },
+            {
+                "kind": "text",
+                "key": "field_2",
+                "label": "01",
+                "semanticRole": "title",
+                "constraints": {"maxChars": 1, "required": True},
+            },
+        ],
+        visual_text=["洋湖天旭工艺避坑"],
+        brief={},
+        template_fields={"field_1": "洋湖天旭工艺避坑", "field_2": "01"},
+    )
+
+    assert fields == {"field_1": "洋湖天旭工艺避坑", "field_2": "1"}
+
+
 def test_hycanvas_template_fields_reject_missing_required_fact():
     with pytest.raises(ValueError, match="完成年份"):
         content_tools._hycanvas_template_fields(

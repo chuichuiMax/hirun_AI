@@ -250,6 +250,8 @@ def _hycanvas_template_fields(
 ) -> dict[str, str]:
     """Resolve author-declared template semantics from locked content inputs."""
     from yuxi.content.control.visual_template_fields import (
+        is_ordinal_badge_template_field,
+        ordinal_badge_fill_value,
         resolved_visual_text_max_chars,
         template_fact_sources,
     )
@@ -268,7 +270,11 @@ def _hycanvas_template_fields(
         label = str(field["label"])
         field_key = str(field.get("key") or label)
         role = str(field.get("semanticRole") or "")
+        # HyCanvas 对 semanticRole=label 不接收填值；序号角标仍是 required text，需传容量内装饰值。
         if role == "label":
+            continue
+        if is_ordinal_badge_template_field(field):
+            fields[field_key] = ordinal_badge_fill_value(field)
             continue
         value = str(template_fields.get(field_key) or sources.get(role) or "").strip()
         if not role:

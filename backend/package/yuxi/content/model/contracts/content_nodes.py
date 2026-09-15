@@ -109,6 +109,19 @@ class GenerateContentPromptV1(StrictContract):
     evidence_cite_index: list[dict[str, Any]] | None = None
 
 
+class PlanVisualsPromptV1(StrictContract):
+    """封面规划模型视图：审计仍用 PlanVisualsInputV1，模型只读精简字段。"""
+
+    selected_title: dict[str, Any]
+    content_draft: dict[str, Any]
+    strategy_snapshot: dict[str, Any]
+    evidence_bundle: dict[str, Any]
+    media_evidence_items: list[dict[str, Any]]
+    artifact_version: dict[str, Any]
+    channel_profile: dict[str, Any]
+    runtime_config_snapshot: dict[str, Any]
+
+
 class AnalyzeContentValueInputV1(StrictContract):
     content_brief: dict[str, Any] = Field(min_length=1)
     evidence_bundle: dict[str, Any] = Field(min_length=1)
@@ -499,6 +512,7 @@ INPUT_CONTRACT_REGISTRY: dict[str, type[StrictContract]] = {
         PersonaStylePolishInputV1,
         GenerateContentInputV1,
         GenerateContentPromptV1,
+        PlanVisualsPromptV1,
         JointStrategyPromptV1,
         SemanticReviewInputV1,
         PlanVisualsInputV1,
@@ -924,6 +938,7 @@ class ContractDomainContext:
     visual_text_max_chars: dict[str, int] = field(default_factory=dict)
     allowed_visual_template_fields: dict[str, dict[str, int]] = field(default_factory=dict)
     required_visual_template_fields: dict[str, dict[str, int]] = field(default_factory=dict)
+    decorative_visual_template_fields: frozenset[str] = frozenset()
 
     @classmethod
     def from_node_input(cls, node_input: ContentAgentNodeInputV1) -> ContractDomainContext:
@@ -1080,6 +1095,11 @@ class ContractDomainContext:
                 for label, constraints in (locks.get("required_visual_template_fields") or {}).items()
                 if isinstance(constraints, dict)
             },
+            decorative_visual_template_fields=frozenset(
+                str(label)
+                for label in (locks.get("decorative_visual_template_fields") or [])
+                if str(label).strip()
+            ),
             viral_candidate_ids=frozenset(
                 str(item["id"])
                 for item in (viral_candidate_collection or {}).get("evidence_items") or []
@@ -1743,6 +1763,18 @@ def validate_content_node_result(
         for index, asset_id in enumerate(result.source_asset_ids):
             _require_member(asset_id, context.allowed_asset_ids, f"source_asset_ids.{index}")
         _validate_evidence_ids(result.evidence_ids, "visual", context, "evidence_ids")
+        from yuxi.content.control.visual_template_fields import is_decorative_cover_label
+
+        if context.decorative_visual_template_fields:
+            result = result.model_copy(
+                update={
+                    "template_fields": {
+                        key: value
+                        for key, value in result.template_fields.items()
+                        if key not in context.decorative_visual_template_fields
+                    }
+                }
+            )
         _validate_numbers("\n".join([*result.text, *result.template_fields.values()]), context, "text", "visual")
         if not any(str(item).strip() for item in result.text) and not any(
             str(value).strip() for value in result.template_fields.values()
@@ -1751,6 +1783,22 @@ def validate_content_node_result(
                 "visual_text_missing",
                 "text",
                 "视觉方案必须提供 text 或 template_fields 封面文案",
+            )
+        if result.text and is_decorative_cover_label(result.text[0]):
+            raise ContractDomainValidationError(
+                "visual_title_invalid",
+                "text.0",
+                "封面主标题 text[0] 不能只写 1/01 这类序号，请写可读的主标题钩子",
+            )
+        narrative_titles = [
+            str(result.template_fields.get(label) or "").strip()
+            for label in context.allowed_visual_template_fields
+        ]
+        if narrative_titles and all(is_decorative_cover_label(value) for value in narrative_titles if value):
+            raise ContractDomainValidationError(
+                "visual_title_invalid",
+                "template_fields",
+                "封面叙事字段不能只有序号角标，请至少提供一条可读主标题",
             )
         allowed_template_fields = {
             **context.allowed_visual_template_fields,

@@ -144,7 +144,7 @@ def test_generation_and_review_have_budget_for_multi_skill_nodes():
     assert review["timeout_seconds"] == 180
     assert review["max_execution_steps"] == 20
     assert plan_visuals["max_execution_steps"] == 40
-    assert plan_visuals["timeout_seconds"] == 180
+    assert plan_visuals["timeout_seconds"] == 360
 
 
 @pytest.mark.unit

@@ -479,6 +479,26 @@ def test_visual_plan_rejects_duplicate_template_text_for_same_cover():
     assert exc_info.value.field_path == "template_fields.强调标题"
 
 
+def test_visual_plan_strips_ordinal_badge_fields_before_validation():
+    context = replace(
+        DOMAIN_CONTEXT,
+        visual_text_max_chars={"title": 12},
+        allowed_visual_template_fields={"field_1": {"maxChars": 22}, "field_3": {"maxChars": 12}},
+        decorative_visual_template_fields=frozenset({"field_2"}),
+    )
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["text"] = ["洋湖天旭工艺避坑"]
+    payload["template_fields"] = {
+        "field_1": "洋湖天旭工艺避坑",
+        "field_2": "1",
+        "field_3": "施工细节要盯牢",
+    }
+
+    result = validate_content_node_result("VisualPlanResultV1", payload, context)
+    assert "field_2" not in result.template_fields
+    assert result.template_fields["field_1"] == "洋湖天旭工艺避坑"
+
+
 def test_visual_plan_requires_copy_for_each_authorized_narrative_field():
     context = replace(
         DOMAIN_CONTEXT,

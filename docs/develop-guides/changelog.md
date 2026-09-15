@@ -8,7 +8,9 @@
 
 - 装修获客可审计链路对齐：人工终审快照写入真实 `reviewer_uid` 与审批备注（好评笔记仍记系统自动审批）；运行详情展示 `content.formula_lexicons.loaded`（公式码、词库数量、bundle hash）；策略节点文案改为「固定规则锁定」，与 V3.7 确定性选组一致。
 
-- 修复工艺展示部署后矩阵 fixture 校验失败：保留矩阵原候选以符合 91/48/166 不变量，CT05 仍由运行时过滤禁用 C01/C02；正文生成首包空闲超时由 120s 调整为 180s（节点总时限同步），缓解 SiliconFlow 大输入偶发首包过慢。
+- 内容生产再提速（中位 2 分钟目标）：`generate_content` 模型视图进一步压缩——去掉与 `business_variables` 重复的 `form_values`、同值证据去重、cite 去掉 `value_preview`、词库 1×220、证据值 120 字、封禁词表最多 40 行×2 候选；原创模式不再注入 `content-human-expression`（自然语气/报幕禁止/封禁词/emoji 要点并入 `content-body-generator`）。验收：`freeze`→`generate`→`adapt`→`validate` 首通出稿墙钟 p50 &lt;120s。小程序封面规划同步同一套优化：`plan_visuals` 投影精简证据/策略/正文、纠错额度 2→3、错误文案改为「封面规划」而非误报「正文生成」。修复爆款模板把 `01` 序号框（maxChars=1）当成叙事 title、把整页标题上限压成 1 字导致方案校验反复失败：序号角标退出叙事字段与 `visual_text_max_chars` 聚合，提交时自动剥离；出图填字 `_hycanvas_template_fields` 不再把主标题灌进 `01` 序号框，改为写入不超过 `maxChars` 的装饰值（如 `01`→`1`），避免漏填必填框触发 HyCanvas `invalid request`。
+
+- 内容生产再提速：`generate_content` 模型视图进一步压缩（词库 2×280、证据值 200 字、策略去掉 source_content/手法冗余、封禁词表最多 60 行×3 候选）；修复 `evidence_cite_index` 对 list 型封禁词表整表塞进 `value_preview` 的重复膨胀（约可再省 8–10k user 字）；原创模式不注入 `viral-layout-formatter` / `content-outline-builder`（排版由 human-expression、大纲由 body 同轮产出）。修复封面规划 `plan_visuals` 硬超时 180s 误杀（高峰期与正文撞车）：节点总时限抬至 400s、`reasoning=low`、最多 2 次模型调用；`visual_review` 同步放宽。修复爆款笔记模板多 title 字段时把序号 `1/01` 当成封面主标题：解析优先取可读标题，并校验 `text[0]` 不得仅为序号。
 
 - 装修家居「工艺施工展示」口径调整：标题须点明工艺主题且可读；正文以工艺类型/名称与标准细节讲解为主，禁止旧况改造完工案例分享；CT05 运行时禁用 C01/C02（报价转化/实景案例流量），优先 C03 干货公式；同步写作说明、正文调用、生成禁止项与标题/正文/审核 Skill。
 
