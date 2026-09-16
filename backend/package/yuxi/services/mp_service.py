@@ -42,12 +42,14 @@ from yuxi.services.business_variable_service import list_business_variables
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.services.content_cover_service import get_cover_asset_file, serialize_asset
 from yuxi.services.material_library_service import (
+    delete_material_item,
     get_material_file,
     get_material_thumbnail,
     import_material_images,
     list_image_galleries,
     list_material_items,
 )
+from yuxi.services.mp_works_logic import visible_work_items
 from yuxi.services.content_service import (
     create_content_run,
     create_content_task,
@@ -1054,6 +1056,64 @@ async def read_mp_gallery_item_file(db: AsyncSession, ctx: MpContext, item_id: s
 async def read_mp_gallery_item_thumbnail(db: AsyncSession, ctx: MpContext, item_id: str) -> bytes:
     data, _ = await get_material_thumbnail(db, ctx.user, item_id)
     return data
+
+
+async def delete_mp_gallery_item(db: AsyncSession, ctx: MpContext, item_id: str) -> dict[str, Any]:
+    return await delete_material_item(db, ctx.user, item_id)
+
+
+async def list_mp_works(
+    db: AsyncSession,
+    ctx: MpContext,
+    *,
+    page: int,
+    page_size: int,
+) -> dict[str, Any]:
+    owner_uid = str(ctx.user.uid)
+    repo = ContentCoverRepository(db)
+    jobs = await repo.list_succeeded_jobs_for_user(owner_uid)
+    asset_ids = [
+        asset_id
+        for job in jobs
+        for asset_id in ((job.result_json or {}).get("asset_ids") or [])
+    ]
+    assets = await repo.get_assets_for_user(list(dict.fromkeys(asset_ids)), owner_uid)
+    flattened = visible_work_items(jobs, {asset.id: asset for asset in assets})
+    total = len(flattened)
+    start = (page - 1) * page_size
+    items = []
+    for item in flattened[start : start + page_size]:
+        asset_id = item["id"]
+        items.append(
+            {
+                **item,
+                "created_at": format_utc_datetime(item["created_at"]),
+                "file_url": f"/api/mp/image/works/{asset_id}/file",
+                "thumbnail_file_url": f"/api/mp/image/works/{asset_id}/file",
+            }
+        )
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+async def hide_mp_work(db: AsyncSession, ctx: MpContext, asset_id: str) -> dict[str, bool]:
+    owner_uid = str(ctx.user.uid)
+    repo = ContentCoverRepository(db)
+    asset = await repo.get_output_asset_for_user(asset_id, owner_uid, for_update=True)
+    if asset is None:
+        raise _mp_error(404, "MP_WORK_NOT_FOUND", "作品不存在")
+    jobs = await repo.list_succeeded_jobs_for_user(owner_uid)
+    if not any(asset_id in ((job.result_json or {}).get("asset_ids") or []) for job in jobs):
+        raise _mp_error(404, "MP_WORK_NOT_FOUND", "作品不存在")
+    asset.hidden_from_works_at = utc_now_naive()
+    await db.commit()
+    return {"success": True}
+
+
+async def read_mp_work_file(db: AsyncSession, ctx: MpContext, asset_id: str) -> tuple[bytes, str, str]:
+    asset = await ContentCoverRepository(db).get_output_asset_for_user(asset_id, str(ctx.user.uid))
+    if asset is None:
+        raise _mp_error(404, "MP_WORK_NOT_FOUND", "作品不存在")
+    return await get_cover_asset_file(db, ctx.user, asset_id)
 
 
 async def upload_cover(

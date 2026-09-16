@@ -365,6 +365,34 @@ class ContentCoverRepository:
             )
         ).scalar_one_or_none()
 
+    async def list_succeeded_jobs_for_user(self, owner_uid: str) -> list[ContentCoverJob]:
+        return list(
+            (
+                await self.db.execute(
+                    select(ContentCoverJob)
+                    .where(ContentCoverJob.owner_uid == owner_uid, ContentCoverJob.status == "succeeded")
+                    .order_by(ContentCoverJob.completed_at.desc(), ContentCoverJob.created_at.desc())
+                )
+            ).scalars()
+        )
+
+    async def get_output_asset_for_user(
+        self,
+        asset_id: str,
+        owner_uid: str,
+        *,
+        for_update: bool = False,
+    ) -> ContentCoverAsset | None:
+        query = select(ContentCoverAsset).where(
+            ContentCoverAsset.id == asset_id,
+            ContentCoverAsset.owner_uid == owner_uid,
+            ContentCoverAsset.role == "output",
+            ContentCoverAsset.deleted_at.is_(None),
+        )
+        if for_update:
+            query = query.with_for_update()
+        return (await self.db.execute(query)).scalar_one_or_none()
+
     async def list_jobs(
         self,
         owner_uid: str,

@@ -483,6 +483,14 @@ class PostgresManager(metaclass=SingletonMeta):
             ),
             ("ALTER TABLE IF EXISTS content_cover_image2_settings ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP"),
             (
+                "ALTER TABLE IF EXISTS content_cover_assets "
+                "ADD COLUMN IF NOT EXISTS hidden_from_works_at TIMESTAMP"
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_content_cover_assets_hidden_from_works_at "
+                "ON content_cover_assets(hidden_from_works_at)"
+            ),
+            (
                 "ALTER TABLE IF EXISTS content_cover_poster_templates "
                 "DROP CONSTRAINT IF EXISTS uq_content_cover_poster_owner_checksum"
             ),
