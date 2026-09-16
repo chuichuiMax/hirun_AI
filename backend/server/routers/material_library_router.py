@@ -22,6 +22,8 @@ from yuxi.services.material_library_service import (
     get_material_file,
     get_material_thumbnail,
     get_public_material_share,
+    get_public_material_share_card_cover,
+    get_public_material_share_display_webp,
     get_public_material_share_image,
     get_material_categories,
     import_material_images,
@@ -146,6 +148,23 @@ async def public_share_data(
     return serialize_public_material_share(share, items)
 
 
+@material_library.get("/shares/{token}/images/{display_order}.webp")
+async def public_share_display_image(
+    token: str,
+    display_order: int,
+    db: AsyncSession = Depends(get_db),
+):
+    data = await get_public_material_share_display_webp(db, token, display_order)
+    return Response(
+        content=data,
+        media_type="image/webp",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Content-Disposition": f'inline; filename="share-{display_order}.webp"',
+        },
+    )
+
+
 @material_library.get("/shares/{token}/images/{display_order}")
 async def public_share_image(
     token: str,
@@ -160,6 +179,22 @@ async def public_share_image(
         headers={
             "Cache-Control": "public, max-age=31536000, immutable",
             "Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}",
+        },
+    )
+
+
+@material_library.get("/shares/{token}/cover.jpg")
+async def public_share_card_cover(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+):
+    data = await get_public_material_share_card_cover(db, token)
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Content-Disposition": 'inline; filename="share-cover.jpg"',
         },
     )
 

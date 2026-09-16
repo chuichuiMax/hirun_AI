@@ -679,6 +679,9 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
     assert share["url"] == f"https://share.example.test/boyun/share/case/{share['token']}"
     assert share["page_url"] == share["url"]
     assert share["image_url"] == f"https://share.example.test/boyun{share['image_path']}"
+    assert share["card_cover_url"] == (
+        f"https://share.example.test/boyun/api/material-library/shares/{share['token']}/cover.jpg"
+    )
 
     deleted = await test_client.delete(f"/api/material-library/items/{first_item['id']}", headers=headers)
     assert deleted.status_code == 200, deleted.text
@@ -688,6 +691,14 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
         "X-Forwarded-Host": "share.example.test",
         "X-Forwarded-Prefix": "/boyun",
     }
+    card_cover = await test_client.get(f"/api/material-library/shares/{share['token']}/cover.jpg")
+    assert card_cover.status_code == 200, card_cover.text
+    assert card_cover.headers["content-type"] == "image/jpeg"
+    assert "public" in card_cover.headers["cache-control"]
+    assert "immutable" in card_cover.headers["cache-control"]
+    with Image.open(io.BytesIO(card_cover.content)) as image:
+        assert image.size == (500, 400)
+
     public_page = await test_client.get(share["page_path"], headers=public_headers)
     assert public_page.status_code == 200, public_page.text
     assert "洋湖天序·三居式·复古写意" in public_page.text
@@ -718,3 +729,12 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
         assert image.size == (1080, 1440)
     with Image.open(io.BytesIO(first_snapshot.content)) as image:
         assert image.size == (48, 36)
+
+    display_image = await test_client.get(f"/api/material-library/shares/{share['token']}/images/1.webp")
+    assert display_image.status_code == 200, display_image.text
+    assert display_image.headers["content-type"] == "image/webp"
+    assert "public" in display_image.headers["cache-control"]
+    assert "immutable" in display_image.headers["cache-control"]
+    with Image.open(io.BytesIO(display_image.content)) as image:
+        assert image.format == "WEBP"
+        assert image.size == (1080, 1440)
