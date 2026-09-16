@@ -45,6 +45,7 @@ import { materialLibraryApi } from '@/apis/material_library_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
 import { formatEvidenceReference, hasSelectedViralReference } from '@/utils/contentEvidencePresentation'
+import { formatInspireDetailBody } from '@/utils/inspirePresentation'
 import { formatDateTime } from '@/utils/time'
 import {
   appendContentNarrativeText,
@@ -216,6 +217,9 @@ const selectedHyCanvasTemplate = computed(() =>
   hycanvasTemplates.value.find((item) => item.id === selectedHyCanvasTemplateId.value) || null
 )
 const hasViralReference = computed(() => hasSelectedViralReference(store.artifact))
+const inspireDetailBody = computed(() =>
+  formatInspireDetailBody(inspireDetail.value?.body, inspireDetail.value?.tags)
+)
 const resultVisualMaterial = computed(() => (
   store.artifact?.runtime_config_snapshot?.visual_material ||
   store.task?.runtime_config_snapshot?.visual_material ||
@@ -2845,7 +2849,7 @@ const openVersions = async () => {
     >
       <div v-if="inspireDetail" class="inspire-detail-layout">
         <section class="inspire-detail-cover"><img v-if="inspireCoverUrls[inspireDetail.media_id]" :src="inspireCoverUrls[inspireDetail.media_id]" :alt="inspireDetail.title" /><div v-else class="result-detail-cover-state empty"><Image :size="30" /><span>封面暂时无法预览</span></div></section>
-        <section class="inspire-detail-content"><div class="inspire-sample-meta"><span>{{ inspireDetail.industry_slug }}</span><time>{{ formatDateTime(inspireDetail.fetched_at) }}</time></div><h2>{{ inspireDetail.title }}</h2><div class="inspire-detail-tags"><a-tag v-for="tag in inspireDetail.tags || []" :key="tag">#{{ tag }}</a-tag><span v-if="!(inspireDetail.tags || []).length" class="inspire-empty-tags">平台未公开话题标签</span></div><MarkdownPreview :content="inspireDetail.body || '平台未提供可展示正文'" /><div class="inspire-detail-actions"><a-button @click="copyResultText(inspireDetail.body || '', '样本文案')"><Copy :size="14" />复制</a-button><a-button type="primary" :disabled="!inspireDetail.reference_ready" @click="setInspireReference(inspireDetail)">设为参考</a-button><a :href="inspireDetail.source_url" target="_blank" rel="noreferrer"><ExternalLink :size="14" />打开来源</a></div></section>
+        <section class="inspire-detail-content"><div class="inspire-sample-meta"><span>{{ inspireDetail.industry_slug }}</span><time>{{ formatDateTime(inspireDetail.fetched_at) }}</time></div><h2>{{ inspireDetail.title }}</h2><MarkdownPreview :content="inspireDetailBody || '平台未提供可展示正文'" /><div class="inspire-detail-actions"><a-button @click="copyResultText(inspireDetailBody, '样本文案')"><Copy :size="14" />复制</a-button><a-button type="primary" :disabled="!inspireDetail.reference_ready" @click="setInspireReference(inspireDetail)">设为参考</a-button><a :href="inspireDetail.source_url" target="_blank" rel="noreferrer"><ExternalLink :size="14" />打开来源</a></div></section>
       </div>
       <a-spin v-else />
     </a-modal>
@@ -3245,7 +3249,6 @@ const openVersions = async () => {
 .inspire-detail-cover { min-height: 420px; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden; background: var(--gray-50); }
 .inspire-detail-cover img { width: 100%; height: 100%; max-height: 560px; object-fit: contain; }
 .inspire-detail-content h2 { margin: 8px 0 12px; font-size: 20px; line-height: 1.4; }
-.inspire-detail-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
 .inspire-empty-tags { color: var(--color-text-tertiary); font-size: 13px; }
 @media (max-width: 760px) { .inspire-detail-layout { grid-template-columns: 1fr; } .inspire-detail-cover { min-height: 240px; } }
 .visual-material-card { margin-top: 20px; padding: 20px; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
