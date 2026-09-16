@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import { MousePointer2, RefreshCw, X } from 'lucide-vue-next'
+import { Check, MousePointer2, RefreshCw, X } from 'lucide-vue-next'
 import { contentApi } from '@/apis/content_api'
 
 const props = defineProps({
@@ -9,7 +9,7 @@ const props = defineProps({
   account: { type: Object, default: null },
   mode: { type: String, default: 'drafts' }
 })
-const emit = defineEmits(['update:open', 'updated'])
+const emit = defineEmits(['update:open', 'updated', 'inspire-ready'])
 
 const loading = ref(false)
 const acting = ref(false)
@@ -32,6 +32,8 @@ const isInspire = computed(() => props.mode === 'inspire')
 const targetKey = computed(() => isInspire.value ? 'inspire' : props.account?.id)
 const workspaceName = computed(() => isInspire.value ? '聚光内容广场' : '草稿箱')
 const displayName = computed(() => isInspire.value ? '热门爆款模板采集' : props.account?.display_name)
+const inspireAuthenticated = computed(() => isInspire.value && Boolean(session.value?.browser?.logged_in))
+const closeActionLabel = computed(() => inspireAuthenticated.value ? '采集并返回' : '关闭')
 const isCurrentTarget = (key) => props.open && targetKey.value === key
 
 const openRemoteSession = (accountId) => isInspire.value
@@ -296,7 +298,8 @@ async function claimControl({ notify = true } = {}) {
 const closeSession = async () => {
   stopPolling()
   const accountId = session.value?.session?.account_id || targetKey.value
-  if (accountId && session.value?.session) {
+  const collectAfterClose = inspireAuthenticated.value
+  if (accountId && session.value?.session && !collectAfterClose) {
     try {
       await closeRemoteSession(accountId)
     } catch (error) {
@@ -306,6 +309,7 @@ const closeSession = async () => {
   revokeScreenshot()
   emit('update:open', false)
   emit('updated')
+  if (collectAfterClose) emit('inspire-ready')
 }
 
 watch(
@@ -343,12 +347,12 @@ onBeforeUnmount(() => {
         <div class="workspace-toolbar">
           <div class="status-group">
             <span :class="['state-dot', session?.browser?.logged_in ? 'ready' : 'login']" />
-            <span>{{ session?.browser?.logged_in ? '已登录' : `请在画面中完成${isInspire ? '聚光' : '小红书'}登录` }}</span>
+            <span>{{ session?.browser?.logged_in ? '已登录' : `请在画面中完成${isInspire ? '聚光采集浏览器' : '小红书'}登录` }}</span>
             <span v-if="session?.browser?.view === mode" class="drafts-ready">已进入{{ workspaceName }}</span>
             <small v-if="lastUpdatedAt">画面更新于 {{ lastUpdatedAt }}</small>
           </div>
           <div class="toolbar-actions">
-            <span class="interaction-tip">接管后可直接点击、键入、粘贴和滚动</span>
+            <span class="interaction-tip">{{ isInspire ? '须在此远程画面登录；普通浏览器登录不会共享' : '接管后可直接点击、键入、粘贴和滚动' }}</span>
             <a-button
               :type="controlClaimed ? 'default' : 'primary'"
               :loading="claiming"
@@ -358,7 +362,7 @@ onBeforeUnmount(() => {
               <MousePointer2 :size="15" />{{ controlClaimed ? '人工接管中' : '人工接管' }}
             </a-button>
             <a-button :loading="loading" @click="loadStatus"><RefreshCw :size="15" />刷新</a-button>
-            <a-button danger @click="closeSession"><X :size="15" />关闭</a-button>
+            <a-button :danger="!inspireAuthenticated" :type="inspireAuthenticated ? 'primary' : 'default'" @click="closeSession"><Check v-if="inspireAuthenticated" :size="15" /><X v-else :size="15" />{{ closeActionLabel }}</a-button>
           </div>
         </div>
         <a-alert v-if="errorMessage" class="workspace-alert" type="warning" :message="errorMessage" show-icon />

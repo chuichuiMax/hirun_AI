@@ -1413,6 +1413,91 @@ class ImageDesignClient(Base):
         }
 
 
+class ImageDesignAnalysis(Base):
+    """A role-specific, model-versioned visual analysis of one immutable material asset."""
+
+    __tablename__ = "image_design_analyses"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    material_item_id = Column(String(64), nullable=False, index=True)
+    asset_sha256 = Column(String(64), nullable=False, index=True)
+    analysis_role = Column(String(32), nullable=False, index=True)
+    schema_version = Column(Integer, nullable=False)
+    model_spec = Column(String(255), nullable=False)
+    cache_key = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="running", index=True)
+    result_json = Column(JSON, nullable=False, default=dict)
+    error_code = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_uid", "cache_key", name="uq_image_design_analyses_owner_cache"),
+        Index("idx_image_design_analyses_material_role", "owner_uid", "material_item_id", "analysis_role"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "material_item_id": self.material_item_id,
+            "asset_sha256": self.asset_sha256,
+            "role": self.analysis_role,
+            "schema_version": self.schema_version,
+            "model_spec": self.model_spec,
+            "status": self.status,
+            "result": self.result_json or {},
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ImageDesignRefinement(Base):
+    """Server-verifiable semantic snapshot and compiled prompt plan."""
+
+    __tablename__ = "image_design_refinements"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    workflow = Column(String(32), nullable=False, index=True)
+    workflow_version = Column(Integer, nullable=False)
+    input_fingerprint = Column(String(64), nullable=False, index=True)
+    request_json = Column(JSON, nullable=False, default=dict)
+    analysis_ids_json = Column(JSON, nullable=False, default=list)
+    plan_json = Column(JSON, nullable=False, default=dict)
+    compiled_prompt = Column(Text, nullable=False)
+    coverage_json = Column(JSON, nullable=False, default=dict)
+    conflicts_json = Column(JSON, nullable=False, default=list)
+    model_spec = Column(String(255), nullable=False)
+    status = Column(String(32), nullable=False, default="completed", index=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+    __table_args__ = (Index("idx_image_design_refinements_owner_created", "owner_uid", "created_at"),)
+
+    def to_dict(self) -> dict[str, Any]:
+        plan = self.plan_json or {}
+        return {
+            "id": self.id,
+            "workflow": self.workflow,
+            "workflow_version": self.workflow_version,
+            "input_fingerprint": self.input_fingerprint,
+            "analysis_ids": self.analysis_ids_json or [],
+            "plan": plan,
+            "compiled_prompt": self.compiled_prompt,
+            "coverage": self.coverage_json or {},
+            "conflicts": self.conflicts_json or [],
+            "warnings": plan.get("warnings") or [],
+            "model_spec": self.model_spec,
+            "status": self.status,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
 class ImageDesignJob(Base):
     """图片设计的异步任务和输入快照，不复用封面任务的业务语义。"""
 

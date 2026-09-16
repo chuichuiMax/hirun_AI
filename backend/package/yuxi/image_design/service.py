@@ -1,37 +1,58 @@
 from __future__ import annotations
 
 import hashlib
-import re
+import json
+import os
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from fastapi import HTTPException
-from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content_cover.image2_settings import get_image2_config_state
-from yuxi.agents import load_chat_model, resolve_chat_model_spec
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
 from yuxi.services.run_queue_service import get_arq_pool
 from yuxi.storage.minio import get_minio_client
 from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import (
     ContentCoverAsset,
+    ImageDesignAnalysis,
     ImageDesignClient,
     ImageDesignJob,
+    ImageDesignRefinement,
     ImageDesignShowcase,
 )
 from yuxi.utils.datetime_utils import utc_now_naive
 
+from .analysis import (
+    VisualModelUnavailableError,
+    analysis_cache_key,
+    resolve_visual_model_spec,
+    run_visual_analysis,
+)
+from .prompt_compiler import apply_edited_prompt, build_prompt_plan, compile_prompt, validate_plan_coverage
 from .schemas import (
+    ANALYSIS_SCHEMA_VERSION,
     ASPECT_SIZES,
-    DEFAULT_REFINE_MODEL_SPEC,
+    DEFAULT_VISION_MODEL_SPEC,
+    PROMPT_COMPILER_SPEC,
+    WORKFLOW_PROFILE_VERSION,
+    CrossSpaceRefinementCreate,
+    ImageDesignAnalysisCreate,
     ImageDesignClientCreate,
     ImageDesignGenerateCreate,
+    ImageDesignRefinementCreate,
     ImageDesignShowcaseCreate,
+    PromptPlan,
+    RoomAdaptRefinementCreate,
+    StyleTransferRefinementCreate,
 )
+from .workflow_profiles import public_profiles
+
+ANALYSIS_RUNNING_TTL = timedelta(minutes=5)
 
 
 def _owner_uid(user: User) -> str:
@@ -78,78 +99,11 @@ def _serialize_result(asset: ContentCoverAsset) -> dict[str, Any]:
     }
 
 
-def _model_response_text(response: Any) -> str:
-    text = getattr(response, "text", None)
-    if isinstance(text, str) and text.strip():
-        return _clean_model_text(text)
-    content = getattr(response, "content", None)
-    if isinstance(content, str) and content.strip():
-        return _clean_model_text(content)
-    if isinstance(content, list):
-        parts = [str(item.get("text", "")) for item in content if isinstance(item, dict)]
-        text = "".join(parts).strip()
-        if text:
-            return _clean_model_text(text)
-    raise ValueError("模型没有返回可用的润色结果")
-
-
-def _clean_model_text(text: str) -> str:
-    """去掉推理模型可能附带的思考段和 Markdown 包装，只保留最终提示词。"""
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-    if "</think>" in cleaned:
-        cleaned = cleaned.rsplit("</think>", 1)[-1].strip()
-    cleaned = re.sub(r"^```(?:text|markdown)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
-    cleaned = cleaned.strip('"“”')
-    if not cleaned:
-        raise ValueError("模型没有返回可用的润色结果")
-    return cleaned
-
-
-def _build_refine_messages(payload: Any) -> list[SystemMessage | HumanMessage]:
-    workflow_labels = {
-        "style_transfer": "原房换装",
-        "room_adapt": "户型适配",
-        "cross_space": "跨空间迁移",
-    }
-    workflow_rules = {
-        "style_transfer": "保留参考图的墙体、门窗、层高、透视与镜头位置，只替换软装、家具、材质和灯光。",
-        "room_adapt": "以毛坯实拍图的户型结构和镜头为准，将参考效果图的设计语言适配进去，不得照搬错误户型。",
-        "cross_space": "只迁移参考图的风格、配色和材质语言，严格生成指定目标空间、布局及附加元素。",
-    }
-    return [
-        SystemMessage(
-            content=(
-                "你是专业室内设计案例图提示词编辑。把用户想法改写成可直接用于 gpt-image-2 的中文提示词。"
-                "必须保留用户明确要求，补足空间主体、材质、配色、自然或人工光线、镜头视角、景深和真实摄影质感；"
-                "把约束写成肯定且可执行的画面描述。禁止输出解释、标题、编号、Markdown、文字水印或互相冲突的要求。"
-                "最终只输出一段完整提示词，建议 180 至 500 个中文字符。"
-            )
-        ),
-        HumanMessage(
-            content=(
-                f"工作流：{workflow_labels[payload.workflow]}\n"
-                f"工作流硬约束：{workflow_rules[payload.workflow]}\n"
-                f"风格：{payload.style_label or '以用户补充描述为准'}\n"
-                f"风格补充：{payload.style_details or '无'}\n"
-                f"目标空间：{payload.target_space_label or '沿用参考空间'}\n"
-                f"布局：{payload.space_layout_desc or '沿用参考图布局'}\n"
-                f"附加元素：{payload.space_addons_desc or '无'}\n"
-                f"用户原始描述：{payload.user_prompt.strip()}"
-            )
-        ),
-    ]
-
-
-async def refine_prompt(payload: Any) -> str:
-    model_spec = resolve_chat_model_spec(payload.model_spec, fallback=DEFAULT_REFINE_MODEL_SPEC)
-    model = load_chat_model(fully_specified_name=model_spec)
-    response = await model.ainvoke(_build_refine_messages(payload))
-    result = _model_response_text(response)
-    if result == payload.user_prompt.strip():
-        raise ValueError("模型未产生有效的润色结果")
-    if len(result) > 3000:
-        result = result[:3000].rstrip()
-    return result
+def _serialize_refinement(row: ImageDesignRefinement) -> dict[str, Any]:
+    data = row.to_dict()
+    plan = PromptPlan.model_validate(row.plan_json or {})
+    data["compiled_prompts"] = {aspect_ratio: compile_prompt(plan, aspect_ratio) for aspect_ratio in ASPECT_SIZES}
+    return data
 
 
 async def _get_material_item_and_asset(db: AsyncSession, owner_uid: str, material_id: str):
@@ -202,9 +156,7 @@ async def list_showcase(db: AsyncSession, user: User, category: str | None = Non
     return {"items": items, "categories": categories}
 
 
-async def create_showcase(
-    db: AsyncSession, user: User, payload: ImageDesignShowcaseCreate
-) -> dict[str, Any]:
+async def create_showcase(db: AsyncSession, user: User, payload: ImageDesignShowcaseCreate) -> dict[str, Any]:
     await _get_material_item_and_asset(db, _owner_uid(user), payload.image_material_id)
     row = ImageDesignShowcase(
         id=f"ids_{uuid.uuid4().hex}",
@@ -247,68 +199,327 @@ async def create_client(db: AsyncSession, user: User, payload: ImageDesignClient
 
 async def get_bootstrap(db: AsyncSession, user: User) -> dict[str, Any]:
     image2 = await get_image2_config_state(db, owner_uid=_owner_uid(user))
-    clients = await list_clients(db, user)
     return {
         "image2": image2,
-        "clients": clients["clients"],
-        "general_client": clients["general"],
         "aspect_sizes": ASPECT_SIZES,
-        "refine_model_spec": DEFAULT_REFINE_MODEL_SPEC,
+        "prompt_compiler_spec": PROMPT_COMPILER_SPEC,
+        "vision_model_spec": os.getenv("IMAGE_DESIGN_VISION_MODEL_SPEC", DEFAULT_VISION_MODEL_SPEC),
+        "profiles": public_profiles(),
     }
 
 
-async def validate_materials(db: AsyncSession, user: User, payload: ImageDesignGenerateCreate) -> dict[str, Any]:
+async def create_analysis(
+    db: AsyncSession,
+    user: User,
+    payload: ImageDesignAnalysisCreate,
+) -> dict[str, Any]:
     owner_uid = _owner_uid(user)
-    reference_item, reference_asset = await _get_material_item_and_asset(db, owner_uid, payload.reference_material_id)
-    raw_item = raw_asset = None
-    if payload.workflow == "room_adapt":
-        if not payload.raw_room_material_id:
-            raise _error("IMAGE_DESIGN_RAW_ROOM_REQUIRED", "户型适配必须选择毛坯实拍图")
-        raw_item, raw_asset = await _get_material_item_and_asset(db, owner_uid, payload.raw_room_material_id)
-    if payload.workflow == "style_transfer" and not payload.style_label:
-        if not payload.use_prompt_as_style or not payload.user_prompt.strip():
-            raise _error("IMAGE_DESIGN_STYLE_REQUIRED", "原房换装请选择风格或使用补充描述作为风格提示词")
-    if payload.workflow == "cross_space":
-        if not payload.target_space or not payload.space_layout:
-            raise _error("IMAGE_DESIGN_SPACE_REQUIRED", "跨空间迁移必须选择目标空间和布局")
-        if not payload.user_prompt.strip():
-            raise _error("IMAGE_DESIGN_PROMPT_REQUIRED", "跨空间迁移需要填写补充描述")
-    if payload.client_id:
-        client = await db.scalar(
-            select(ImageDesignClient).where(
-                ImageDesignClient.id == payload.client_id,
-                ImageDesignClient.owner_uid == owner_uid,
-                ImageDesignClient.deleted_at.is_(None),
+    _, asset = await _get_material_item_and_asset(db, owner_uid, payload.material_item_id)
+    configured_model = os.getenv("IMAGE_DESIGN_VISION_MODEL_SPEC", DEFAULT_VISION_MODEL_SPEC).strip()
+    try:
+        model_spec = resolve_visual_model_spec(configured_model)
+    except Exception as exc:
+        raise _error(
+            "IMAGE_DESIGN_ANALYSIS_MODEL_UNAVAILABLE",
+            "图片视觉分析模型未配置或当前不可用",
+            503,
+            retryable=True,
+        ) from exc
+    asset_sha256 = asset.sha256
+    if not asset_sha256:
+        data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+        asset_sha256 = hashlib.sha256(data).hexdigest()
+    else:
+        data = None
+    cache_key = analysis_cache_key(asset_sha256, payload.role, model_spec, ANALYSIS_SCHEMA_VERSION)
+    row = await db.scalar(
+        select(ImageDesignAnalysis).where(
+            ImageDesignAnalysis.owner_uid == owner_uid,
+            ImageDesignAnalysis.cache_key == cache_key,
+        )
+    )
+    if row is not None and row.status == "completed":
+        return {"analysis": row.to_dict(), "reused": True}
+    now = utc_now_naive()
+    if (
+        row is not None
+        and row.status == "running"
+        and row.updated_at is not None
+        and row.updated_at > now - ANALYSIS_RUNNING_TTL
+    ):
+        return {"analysis": row.to_dict(), "reused": True}
+    if row is None:
+        row = ImageDesignAnalysis(
+            id=f"ida_{uuid.uuid4().hex}",
+            owner_uid=owner_uid,
+            material_item_id=payload.material_item_id,
+            asset_sha256=asset_sha256,
+            analysis_role=payload.role,
+            schema_version=ANALYSIS_SCHEMA_VERSION,
+            model_spec=model_spec,
+            cache_key=cache_key,
+            status="running",
+        )
+        db.add(row)
+    else:
+        row.status = "running"
+        row.error_code = None
+        row.error_message = None
+        row.updated_at = now
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await db.scalar(
+            select(ImageDesignAnalysis).where(
+                ImageDesignAnalysis.owner_uid == owner_uid,
+                ImageDesignAnalysis.cache_key == cache_key,
             )
         )
-        if client is None:
-            raise _error("IMAGE_DESIGN_CLIENT_NOT_FOUND", "客户档案不存在", 404)
-    return {
-        "reference_item": reference_item,
-        "reference_asset": reference_asset,
-        "raw_item": raw_item,
-        "raw_asset": raw_asset,
+        if existing is not None:
+            return {"analysis": existing.to_dict(), "reused": True}
+        raise
+    try:
+        if data is None:
+            data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+        result, resolved_model = await run_visual_analysis(data, payload.role, model_spec=model_spec)
+        row.result_json = result.model_dump(mode="json")
+        row.model_spec = resolved_model
+        row.status = "completed"
+        row.updated_at = utc_now_naive()
+        await db.commit()
+    except VisualModelUnavailableError as exc:
+        row.status = "failed"
+        row.error_code = "IMAGE_DESIGN_ANALYSIS_MODEL_UNAVAILABLE"
+        row.error_message = "图片视觉分析模型未配置或当前不可用"
+        row.updated_at = utc_now_naive()
+        await db.commit()
+        raise _error(row.error_code, row.error_message, 503, retryable=True) from exc
+    except Exception as exc:
+        row.status = "failed"
+        row.error_code = "IMAGE_DESIGN_ANALYSIS_FAILED"
+        row.error_message = "图片视觉分析失败，请确认视觉模型可用后重试"
+        row.updated_at = utc_now_naive()
+        await db.commit()
+        raise _error(row.error_code, row.error_message, 503, retryable=True) from exc
+    return {"analysis": row.to_dict(), "reused": False}
+
+
+async def get_analysis(db: AsyncSession, user: User, analysis_id: str) -> dict[str, Any]:
+    row = await db.scalar(
+        select(ImageDesignAnalysis).where(
+            ImageDesignAnalysis.id == analysis_id,
+            ImageDesignAnalysis.owner_uid == _owner_uid(user),
+        )
+    )
+    if row is None:
+        raise _error("IMAGE_DESIGN_ANALYSIS_NOT_FOUND", "图片分析记录不存在", 404)
+    return {"analysis": row.to_dict()}
+
+
+def _material_roles(payload: ImageDesignRefinementCreate) -> list[tuple[str, str]]:
+    if isinstance(payload, StyleTransferRefinementCreate):
+        return [("structure_source", payload.source_material_id)]
+    if isinstance(payload, RoomAdaptRefinementCreate):
+        return [
+            ("style_reference", payload.style_reference_material_id),
+            ("structure_source", payload.raw_structure_material_id),
+        ]
+    if isinstance(payload, CrossSpaceRefinementCreate):
+        return [("cross_space_style", payload.style_reference_material_id)]
+    raise TypeError("unsupported image design workflow")
+
+
+def refinement_fingerprint(semantic_request: dict[str, Any], materials: list[dict[str, str]]) -> str:
+    source = {
+        "workflow_version": WORKFLOW_PROFILE_VERSION,
+        "analysis_schema_version": ANALYSIS_SCHEMA_VERSION,
+        "request": semantic_request,
+        "materials": materials,
     }
+    return hashlib.sha256(
+        json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def validate_refinement_integrity(
+    refinement: ImageDesignRefinement,
+    current_materials: list[dict[str, str]],
+) -> PromptPlan:
+    semantic_request = dict((refinement.request_json or {}).get("semantic") or {})
+    current_fingerprint = refinement_fingerprint(semantic_request, current_materials)
+    if (
+        refinement.workflow_version != WORKFLOW_PROFILE_VERSION
+        or current_fingerprint != refinement.input_fingerprint
+    ):
+        raise _error("IMAGE_DESIGN_REFINEMENT_STALE", "优化记录与当前语义输入不一致，请重新进行 AI 深度优化", 409)
+    plan = PromptPlan.model_validate(refinement.plan_json or {})
+    coverage = validate_plan_coverage(plan)
+    if coverage["missing"] or coverage["unexpected"]:
+        raise _error("IMAGE_DESIGN_REFINEMENT_STALE", "优化记录的生成计划已失效，请重新进行 AI 深度优化", 409)
+    planned_materials = [{"role": item["role"], "material_id": item["material_id"]} for item in plan.image_roles]
+    snapshot_materials = [
+        {"role": item["role"], "material_id": item["material_id"]} for item in current_materials
+    ]
+    if planned_materials != snapshot_materials:
+        raise _error("IMAGE_DESIGN_REFINEMENT_STALE", "优化记录的图片角色已失效，请重新进行 AI 深度优化", 409)
+    return plan
+
+
+async def create_refinement(
+    db: AsyncSession,
+    user: User,
+    payload: ImageDesignRefinementCreate,
+) -> dict[str, Any]:
+    owner_uid = _owner_uid(user)
+    parent: ImageDesignRefinement | None = None
+    if payload.parent_refinement_id:
+        parent = await db.scalar(
+            select(ImageDesignRefinement).where(
+                ImageDesignRefinement.id == payload.parent_refinement_id,
+                ImageDesignRefinement.owner_uid == owner_uid,
+            )
+        )
+        if parent is None or parent.workflow != payload.workflow or parent.status != "completed":
+            raise _error("IMAGE_DESIGN_REFINEMENT_INVALID", "父级优化记录不存在或工作流不匹配", 409)
+
+    analyses: dict[str, dict[str, Any]] = {}
+    analysis_ids: list[str] = []
+    materials: list[dict[str, str]] = []
+    for role, material_id in _material_roles(payload):
+        _, asset = await _get_material_item_and_asset(db, owner_uid, material_id)
+        sha256 = asset.sha256
+        if not sha256:
+            data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+            sha256 = hashlib.sha256(data).hexdigest()
+        materials.append({"role": role, "material_id": material_id, "asset_sha256": sha256})
+        response = await create_analysis(
+            db,
+            user,
+            ImageDesignAnalysisCreate(material_item_id=material_id, role=role),
+        )
+        analysis = response["analysis"]
+        if analysis["status"] != "completed":
+            raise _error("IMAGE_DESIGN_ANALYSIS_PENDING", "图片正在分析，请稍后重试", 409, retryable=True)
+        analyses[role] = analysis["result"]
+        analysis_ids.append(analysis["id"])
+
+    semantic_request = payload.model_dump(
+        mode="json",
+        exclude={"parent_refinement_id", "edited_prompt"},
+    )
+    semantic_request["effective_prompt"] = payload.edited_prompt or payload.user_prompt
+    if parent is not None:
+        parent_request = parent.request_json or {}
+        parent_semantic = dict(parent_request.get("semantic") or {})
+        current_base = {key: value for key, value in semantic_request.items() if key != "effective_prompt"}
+        parent_base = {key: value for key, value in parent_semantic.items() if key != "effective_prompt"}
+        if current_base != parent_base or materials != list(parent_request.get("materials") or []):
+            raise _error(
+                "IMAGE_DESIGN_REFINEMENT_INVALID",
+                "编辑版本只能修改优化结果；图片、工作流或语义选项变化后请重新优化",
+                409,
+            )
+    try:
+        if parent is not None:
+            parent_plan = validate_refinement_integrity(parent, materials)
+            plan = apply_edited_prompt(parent_plan, payload.edited_prompt or "")
+            semantic_request["effective_prompt"] = plan.edited_prompt
+        else:
+            plan = build_prompt_plan(payload, analyses)
+    except ValueError as exc:
+        raise _error("IMAGE_DESIGN_REFINEMENT_INVALID", str(exc), 422) from exc
+    fingerprint = refinement_fingerprint(semantic_request, materials)
+    coverage = validate_plan_coverage(plan)
+    if coverage["missing"] or coverage["unexpected"]:
+        raise _error("IMAGE_DESIGN_PROMPT_COVERAGE_FAILED", "生成计划未覆盖全部有效选项", 422)
+    compiled_prompt = compile_prompt(plan)
+    request_snapshot = {
+        "semantic": semantic_request,
+        "materials": materials,
+        "parent_refinement_id": payload.parent_refinement_id,
+        "edited_prompt": payload.edited_prompt,
+    }
+    row = ImageDesignRefinement(
+        id=f"idr_{uuid.uuid4().hex}",
+        owner_uid=owner_uid,
+        workflow=payload.workflow,
+        workflow_version=WORKFLOW_PROFILE_VERSION,
+        input_fingerprint=fingerprint,
+        request_json=request_snapshot,
+        analysis_ids_json=analysis_ids,
+        plan_json=plan.model_dump(mode="json"),
+        compiled_prompt=compiled_prompt,
+        coverage_json=coverage,
+        conflicts_json=plan.conflicts,
+        model_spec=PROMPT_COMPILER_SPEC,
+        status="completed",
+    )
+    db.add(row)
+    await db.commit()
+    return {"refinement": _serialize_refinement(row)}
+
+
+async def get_refinement(db: AsyncSession, user: User, refinement_id: str) -> dict[str, Any]:
+    row = await db.scalar(
+        select(ImageDesignRefinement).where(
+            ImageDesignRefinement.id == refinement_id,
+            ImageDesignRefinement.owner_uid == _owner_uid(user),
+        )
+    )
+    if row is None:
+        raise _error("IMAGE_DESIGN_REFINEMENT_INVALID", "提示词优化记录不存在", 404)
+    return {"refinement": _serialize_refinement(row)}
 
 
 async def create_generate_job(db: AsyncSession, user: User, payload: ImageDesignGenerateCreate) -> dict[str, Any]:
-    image2 = await get_image2_config_state(db, owner_uid=_owner_uid(user))
+    owner_uid = _owner_uid(user)
+    image2 = await get_image2_config_state(db, owner_uid=owner_uid)
     if not image2.get("configured"):
         raise _error("IMAGE_DESIGN_IMAGE2_NOT_CONFIGURED", "请先配置并验证 image2 中转站", 503, retryable=True)
-    await validate_materials(db, user, payload)
-    owner_uid = _owner_uid(user)
-    prompt = payload.user_edited_preview or payload.user_prompt
-    if not prompt.strip():
-        raise _error("IMAGE_DESIGN_PROMPT_REQUIRED", "请填写补充描述")
-    request = payload.model_dump(mode="json")
-    request["prompt"] = prompt.strip()
-    request["size"] = ASPECT_SIZES[payload.aspect_ratio][payload.clarity]
-    request["material_ids"] = [payload.reference_material_id]
-    if payload.raw_room_material_id:
-        request["material_ids"].append(payload.raw_room_material_id)
-    idempotency_key = payload.idempotency_key or hashlib.sha256(
-        f"{owner_uid}:{uuid.uuid4().hex}".encode()
-    ).hexdigest()
+    refinement = await db.scalar(
+        select(ImageDesignRefinement).where(
+            ImageDesignRefinement.id == payload.refinement_id,
+            ImageDesignRefinement.owner_uid == owner_uid,
+        )
+    )
+    if refinement is None or refinement.status != "completed":
+        raise _error("IMAGE_DESIGN_REFINEMENT_INVALID", "请先完成有效的 AI 深度优化", 409)
+    material_snapshots = list((refinement.request_json or {}).get("materials") or [])
+    current_materials: list[dict[str, str]] = []
+    for snapshot in material_snapshots:
+        _, asset = await _get_material_item_and_asset(db, owner_uid, snapshot["material_id"])
+        current_sha = asset.sha256
+        if not current_sha:
+            data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+            current_sha = hashlib.sha256(data).hexdigest()
+        if current_sha != snapshot["asset_sha256"]:
+            raise _error("IMAGE_DESIGN_REFINEMENT_STALE", "输入图片已变化，请重新进行 AI 深度优化", 409)
+        current_materials.append(
+            {
+                "role": snapshot["role"],
+                "material_id": snapshot["material_id"],
+                "asset_sha256": current_sha,
+            }
+        )
+    validated_plan = validate_refinement_integrity(refinement, current_materials)
+    compiled_prompt = compile_prompt(validated_plan, payload.aspect_ratio)
+    material_ids = [item["material_id"] for item in validated_plan.image_roles]
+    request = {
+        **payload.model_dump(mode="json"),
+        "workflow": refinement.workflow,
+        "prompt_contract_version": 2,
+        "plan_version": validated_plan.plan_version,
+        "input_fingerprint": refinement.input_fingerprint,
+        "compiled_prompt": compiled_prompt,
+        "size": ASPECT_SIZES[payload.aspect_ratio][payload.clarity],
+        "material_ids": material_ids,
+        "image_roles": validated_plan.image_roles,
+        "analysis_ids": refinement.analysis_ids_json or [],
+        "reference_material_id": material_ids[0],
+        "raw_room_material_id": material_ids[1] if refinement.workflow == "room_adapt" else None,
+    }
+    idempotency_key = payload.idempotency_key or hashlib.sha256(f"{owner_uid}:{uuid.uuid4().hex}".encode()).hexdigest()
     existing = await db.scalar(
         select(ImageDesignJob).where(
             ImageDesignJob.owner_uid == owner_uid,
@@ -321,8 +532,8 @@ async def create_generate_job(db: AsyncSession, user: User, payload: ImageDesign
         id=f"idj_{uuid.uuid4().hex}",
         owner_uid=owner_uid,
         tenant_id=_tenant_id(user),
-        client_id=payload.client_id,
-        workflow=payload.workflow,
+        client_id=None,
+        workflow=refinement.workflow,
         status="queued",
         request_json=request,
         result_json={"asset_ids": []},
@@ -358,9 +569,7 @@ async def list_jobs(db: AsyncSession, user: User, *, client_id: str | None = Non
         filters.append(ImageDesignJob.client_id == client_id)
     jobs = list(
         (
-            await db.execute(
-                select(ImageDesignJob).where(*filters).order_by(desc(ImageDesignJob.created_at)).limit(60)
-            )
+            await db.execute(select(ImageDesignJob).where(*filters).order_by(desc(ImageDesignJob.created_at)).limit(60))
         ).scalars()
     )
     return {"jobs": [_serialize_job(job) for job in jobs], "total": len(jobs)}

@@ -1,9 +1,8 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import {
   Check,
-  ChevronDown,
   Download,
   ImagePlus,
   LoaderCircle,
@@ -15,7 +14,6 @@ import {
 } from 'lucide-vue-next'
 
 import MaterialImagePickerModal from '@/components/material/MaterialImagePickerModal.vue'
-import ModelSelectorComponent from '@/components/ModelSelectorComponent.vue'
 import { materialLibraryApi } from '@/apis/material_library_api'
 import { imageDesignApi } from '@/apis/image_design_api'
 import { useImageDesignStore } from '@/stores/imageDesign'
@@ -33,34 +31,37 @@ const galleryUrls = ref({})
 const resultUrls = ref({})
 const showcaseItems = ref([])
 const showcaseUrls = ref({})
-const recognitionStatus = ref({})
 const resultDetail = ref(null)
 const detailReferenceUrl = ref('')
 const detailRawRoomUrl = ref('')
 const loadingGallery = ref(false)
+const refinedPromptDraft = ref('')
+const refinedPromptDirty = ref(false)
 const polling = new Map()
 
-const form = reactive({
-  reference: null,
-  rawRoom: null,
-  styleLabel: '现代轻奢',
-  styleDetails: '',
-  usePromptAsStyle: false,
+const commonForm = reactive({
   prompt: '',
+  aspectRatio: '3:4',
+  genCount: 1,
+  clarity: '1K',
+  refining: false
+})
+const styleTransferForm = reactive({
+  reference: null,
+  styleLabel: '现代轻奢',
+  usePromptAsStyle: false
+})
+const roomAdaptForm = reactive({
+  styleReference: null,
+  rawStructure: null
+})
+const crossSpaceForm = reactive({
+  styleReference: null,
   targetSpace: 'living_room',
   targetSpaceLabel: '客厅',
   spaceLayout: 'sofa_wall',
   spaceLayoutDesc: '一字型沙发靠墙',
-  spaceAddons: [],
-  spaceAddonsDesc: '',
-  aspectRatio: '3:4',
-  genCount: 1,
-  clarity: '1K',
-  clientId: null,
-  hasRefined: false,
-  refining: false,
-  promptBeforeRefine: '',
-  refineModelSpec: ''
+  spaceAddons: []
 })
 
 const styles = ['现代轻奢', '意式极简', '新中式', '现代法式', '极简奶油风', '现代简约', '侘寂风', '南洋复古风', '美式现代', '日式极简禅风']
@@ -104,23 +105,53 @@ const spaceConfigs = {
   elder_room: { layouts: [['bed_side', '床靠墙留宽过道'], ['bed_center', '床居中'], ['bed_lounge', '床+休闲椅']], addons: [['grab_bar', '安全扶手'], ['reading_light', '床头阅读灯'], ['storage', '低位收纳柜']] },
   guest_room: { layouts: [['bed_center', '床居中对称'], ['bed_desk', '床铺+书桌'], ['sofa_bed', '沙发床组合']], addons: [['luggage', '行李收纳位'], ['wardrobe', '衣柜'], ['reading_chair', '阅读单椅']] }
 }
-const currentLayouts = computed(() => spaceConfigs[form.targetSpace]?.layouts || layouts)
-const currentAddons = computed(() => spaceConfigs[form.targetSpace]?.addons || addons)
+const activeReference = computed(() => {
+  if (workflow.value === 'style_transfer') return styleTransferForm.reference
+  if (workflow.value === 'room_adapt') return roomAdaptForm.styleReference
+  return crossSpaceForm.styleReference
+})
+const activeReferenceRole = computed(() => {
+  if (workflow.value === 'style_transfer') return 'structure_source'
+  if (workflow.value === 'room_adapt') return 'style_reference'
+  return 'cross_space_style'
+})
+const styleOptions = computed(() => store.bootstrap?.profiles?.styles?.map((item) => item.label) || styles)
+const spaceOptions = computed(() => store.bootstrap?.profiles?.spaces?.map((item) => [item.id, item.label]) || spaces)
+const activeSpaceProfile = computed(() => store.bootstrap?.profiles?.spaces?.find((item) => item.id === crossSpaceForm.targetSpace))
+const currentLayouts = computed(() => activeSpaceProfile.value?.layouts?.map((item) => [item.id, item.label]) || spaceConfigs[crossSpaceForm.targetSpace]?.layouts || layouts)
+const currentAddons = computed(() => activeSpaceProfile.value?.addons?.map((item) => [item.id, item.label]) || spaceConfigs[crossSpaceForm.targetSpace]?.addons || addons)
+const analysisKey = (materialId, role) => `${materialId}:${role}`
+const materialAnalysis = (material, role) => material ? store.analyses[analysisKey(material.id, role)] : null
+const compiledPromptPreview = computed(() => {
+  const refinement = store.activeRefinement
+  if (!refinement) return ''
+  return refinement.compiled_prompts?.[commonForm.aspectRatio] || refinement.compiled_prompt || ''
+})
+
+watch(
+  () => store.activeRefinement?.id,
+  () => {
+    refinedPromptDraft.value = store.activeRefinement?.compiled_prompt || ''
+    refinedPromptDirty.value = false
+  }
+)
 
 const refineIssues = computed(() => {
   const issues = []
-  if (!form.reference) issues.push('请先选择参考图')
-  if (workflow.value === 'room_adapt' && !form.rawRoom) issues.push('请先选择毛坯实拍图')
-  if (!form.prompt.trim()) issues.push('请填写补充描述')
-  if (!form.refineModelSpec) issues.push('请选择 AI 润色模型')
+  if (!activeReference.value) issues.push('请先选择参考图')
+  if (activeReference.value && materialAnalysis(activeReference.value, activeReferenceRole.value)?.status !== 'completed') issues.push('请等待参考图视觉分析完成')
+  if (workflow.value === 'room_adapt' && !roomAdaptForm.rawStructure) issues.push('请先选择毛坯实拍图')
+  if (roomAdaptForm.rawStructure && workflow.value === 'room_adapt' && materialAnalysis(roomAdaptForm.rawStructure, 'structure_source')?.status !== 'completed') issues.push('请等待毛坯图视觉分析完成')
+  if (!commonForm.prompt.trim()) issues.push('请填写补充描述')
   return issues
 })
 
 const generateIssues = computed(() => {
   const issues = [...refineIssues.value]
-  if (workflow.value === 'style_transfer' && !form.styleLabel && !form.usePromptAsStyle) issues.push('请选择换装风格')
-  if (workflow.value === 'cross_space' && (!form.targetSpace || !form.spaceLayout)) issues.push('请选择目标空间和布局')
-  if (!form.hasRefined) issues.push('请先完成 AI 深度润色')
+  if (workflow.value === 'style_transfer' && !styleTransferForm.styleLabel && !styleTransferForm.usePromptAsStyle) issues.push('请选择换装风格')
+  if (workflow.value === 'cross_space' && (!crossSpaceForm.targetSpace || !crossSpaceForm.spaceLayout)) issues.push('请选择目标空间和布局')
+  if (!store.activeRefinement) issues.push('请先完成 AI 深度润色')
+  if (store.activeRefinement && refinedPromptDirty.value) issues.push('优化结果已修改，请先重新校验')
   if (!store.image2Ready) issues.push('请先配置并验证 image2 中转站')
   return issues
 })
@@ -128,67 +159,55 @@ const generateIssues = computed(() => {
 const canSubmit = computed(() => generateIssues.value.length === 0)
 
 function invalidateRefinement() {
-  form.hasRefined = false
-  form.promptBeforeRefine = ''
+  store.invalidateRefinement()
+  refinedPromptDraft.value = ''
+  refinedPromptDirty.value = false
 }
 
 function switchWorkflow(next) {
   workflow.value = next
-  form.prompt = ''
+  commonForm.prompt = ''
   invalidateRefinement()
-  form.rawRoom = null
-  form.targetSpace = 'living_room'
-  form.targetSpaceLabel = '客厅'
-  form.spaceLayout = 'sofa_wall'
-  form.spaceLayoutDesc = '一字型沙发靠墙'
-  form.spaceAddons = []
 }
 
 function chooseSpace([value, label]) {
   invalidateRefinement()
-  form.targetSpace = value
-  form.targetSpaceLabel = label
+  crossSpaceForm.targetSpace = value
+  crossSpaceForm.targetSpaceLabel = label
   const firstLayout = currentLayouts.value[0]
-  form.spaceLayout = firstLayout?.[0] || ''
-  form.spaceLayoutDesc = firstLayout?.[1] || ''
-  form.spaceAddons = []
+  crossSpaceForm.spaceLayout = firstLayout?.[0] || ''
+  crossSpaceForm.spaceLayoutDesc = firstLayout?.[1] || ''
+  crossSpaceForm.spaceAddons = []
 }
 
 function chooseLayout([value, label]) {
   invalidateRefinement()
-  form.spaceLayout = value
-  form.spaceLayoutDesc = label
+  crossSpaceForm.spaceLayout = value
+  crossSpaceForm.spaceLayoutDesc = label
 }
 
 function chooseStyle(style) {
-  form.styleLabel = style
-  form.usePromptAsStyle = false
+  styleTransferForm.styleLabel = style
+  styleTransferForm.usePromptAsStyle = false
   invalidateRefinement()
 }
 
 function usePromptForStyle() {
-  form.usePromptAsStyle = true
-  form.styleLabel = ''
+  styleTransferForm.usePromptAsStyle = true
+  styleTransferForm.styleLabel = ''
   invalidateRefinement()
 }
 
 function toggleAddon(value) {
-  form.spaceAddons = form.spaceAddons.includes(value)
-    ? form.spaceAddons.filter((item) => item !== value)
-    : [...form.spaceAddons, value]
+  crossSpaceForm.spaceAddons = crossSpaceForm.spaceAddons.includes(value)
+    ? crossSpaceForm.spaceAddons.filter((item) => item !== value)
+    : [...crossSpaceForm.spaceAddons, value]
   invalidateRefinement()
 }
 
 function clearPrompt() {
-  form.prompt = ''
+  commonForm.prompt = ''
   invalidateRefinement()
-}
-
-function restorePromptBeforeRefine() {
-  if (!form.promptBeforeRefine) return
-  form.prompt = form.promptBeforeRefine
-  invalidateRefinement()
-  message.info('已恢复润色前描述')
 }
 
 function openPicker(role) {
@@ -197,20 +216,21 @@ function openPicker(role) {
 }
 
 async function setMaterial(role, item) {
-  const previous = role === 'reference' ? form.reference : form.rawRoom
+  const previous = role === 'reference' ? activeReference.value : roomAdaptForm.rawStructure
   if (previous?.url) URL.revokeObjectURL(previous.url)
   try {
     const response = await materialLibraryApi.getItemFile(item.id)
     const url = URL.createObjectURL(await response.blob())
     const value = { id: item.id, name: item.name, url, width: item.width, height: item.height }
-    if (role === 'reference') form.reference = value
-    else form.rawRoom = value
+    if (role === 'reference') {
+      if (workflow.value === 'style_transfer') styleTransferForm.reference = value
+      else if (workflow.value === 'room_adapt') roomAdaptForm.styleReference = value
+      else crossSpaceForm.styleReference = value
+    } else roomAdaptForm.rawStructure = value
     invalidateRefinement()
-    recognitionStatus.value = { ...recognitionStatus.value, [item.id]: 'recognizing' }
-    imageDesignApi.recognize(item.id).then(() => {
-      recognitionStatus.value = { ...recognitionStatus.value, [item.id]: 'completed' }
-    }).catch(() => {
-      recognitionStatus.value = { ...recognitionStatus.value, [item.id]: 'failed' }
+    const analysisRole = role === 'reference' ? activeReferenceRole.value : 'structure_source'
+    store.analyze(item.id, analysisRole).catch((error) => {
+      message.error(error.message || '图片视觉分析失败')
     })
     pickerOpen.value = false
     await refreshGallery()
@@ -218,6 +238,16 @@ async function setMaterial(role, item) {
   } catch (error) {
     message.error(error.message || '素材读取失败')
     return false
+  }
+}
+
+async function retryAnalysis(material, role) {
+  if (!material) return
+  try {
+    await store.analyze(material.id, role)
+    message.success('图片视觉分析已完成')
+  } catch (error) {
+    message.error(error.message || '图片视觉分析失败')
   }
 }
 
@@ -267,8 +297,8 @@ async function loadShowcase() {
 }
 
 async function useShowcase(item) {
-  form.prompt = item.style_text
-  form.hasRefined = false
+  commonForm.prompt = item.style_text
+  invalidateRefinement()
   const selected = await setMaterial('reference', { id: item.image_material_id, name: item.title })
   if (!selected) return
   activeTab.value = 'materials'
@@ -288,35 +318,62 @@ async function uploadToLibrary(event) {
   }
 }
 
+function buildRefinementPayload() {
+  const base = { workflow: workflow.value, user_prompt: commonForm.prompt }
+  if (workflow.value === 'style_transfer') {
+    return {
+      ...base,
+      source_material_id: styleTransferForm.reference.id,
+      style_label: styleTransferForm.usePromptAsStyle ? null : styleTransferForm.styleLabel,
+      use_prompt_as_style: styleTransferForm.usePromptAsStyle
+    }
+  }
+  if (workflow.value === 'room_adapt') {
+    return {
+      ...base,
+      style_reference_material_id: roomAdaptForm.styleReference.id,
+      raw_structure_material_id: roomAdaptForm.rawStructure.id
+    }
+  }
+  return {
+    ...base,
+    style_reference_material_id: crossSpaceForm.styleReference.id,
+    target_space: crossSpaceForm.targetSpace,
+    layout: crossSpaceForm.spaceLayout,
+    addons: crossSpaceForm.spaceAddons
+  }
+}
+
 async function refinePrompt() {
   if (refineIssues.value.length) {
     message.warning(refineIssues.value[0])
     return
   }
-  form.refining = true
+  commonForm.refining = true
   try {
-    const sourcePrompt = form.prompt.trim()
-    const response = await imageDesignApi.refinePrompt({
-      workflow: workflow.value,
-      reference_material_id: form.reference.id,
-      raw_room_material_id: form.rawRoom?.id || null,
-      user_prompt: form.prompt,
-      style_label: form.styleLabel,
-      style_details: form.styleDetails,
-      use_prompt_as_style: form.usePromptAsStyle,
-      target_space_label: form.targetSpaceLabel,
-      space_layout_desc: form.spaceLayoutDesc,
-      space_addons_desc: form.spaceAddons.map((value) => currentAddons.value.find((item) => item[0] === value)?.[1]).filter(Boolean).join('；'),
-      model_spec: form.refineModelSpec
-    })
-    form.promptBeforeRefine = response.data?.source || sourcePrompt
-    form.prompt = response.data?.content || sourcePrompt
-    form.hasRefined = Boolean(response.data?.has_refined)
-    message.success('AI 润色已完成，已生成可直接生图的提示词')
+    await store.refine(buildRefinementPayload())
+    message.success('AI 深度优化已完成，生成约束已由服务端验证')
   } catch (error) {
     message.error(error.message || 'AI 润色失败')
   } finally {
-    form.refining = false
+    commonForm.refining = false
+  }
+}
+
+async function revalidateRefinedPrompt() {
+  if (!store.activeRefinement || !refinedPromptDraft.value.trim()) return
+  commonForm.refining = true
+  try {
+    await store.refine({
+      ...buildRefinementPayload(),
+      parent_refinement_id: store.activeRefinement.id,
+      edited_prompt: refinedPromptDraft.value
+    })
+    message.success('修改后的优化结果已重新校验并生成新版本')
+  } catch (error) {
+    message.error(error.message || '优化结果重新校验失败')
+  } finally {
+    commonForm.refining = false
   }
 }
 
@@ -327,25 +384,10 @@ async function generate() {
   }
   try {
     const job = await store.submit({
-      workflow: workflow.value,
-      reference_material_id: form.reference.id,
-      raw_room_material_id: form.rawRoom?.id || null,
-      client_id: form.clientId,
-      user_prompt: form.prompt,
-      style_label: form.usePromptAsStyle ? null : form.styleLabel,
-      style_details: form.styleDetails,
-      use_prompt_as_style: form.usePromptAsStyle,
-      target_space: form.targetSpace,
-      target_space_label: form.targetSpaceLabel,
-      space_layout: form.spaceLayout,
-      space_layout_desc: form.spaceLayoutDesc,
-      space_addons: form.spaceAddons,
-      space_addons_desc: form.spaceAddons.map((value) => currentAddons.value.find((item) => item[0] === value)?.[1]).filter(Boolean).join('；'),
-      aspect_ratio: form.aspectRatio,
-      gen_count: form.genCount,
-      clarity: form.clarity,
-      has_refined: form.hasRefined,
-      user_edited_preview: form.prompt
+      refinement_id: store.activeRefinement.id,
+      aspect_ratio: commonForm.aspectRatio,
+      gen_count: commonForm.genCount,
+      clarity: commonForm.clarity
     })
     activeTab.value = 'jobs'
     if (job?.id) pollJob(job.id)
@@ -363,7 +405,7 @@ async function pollJob(jobId) {
       if (['succeeded', 'failed', 'cancelled'].includes(job.status)) {
         polling.delete(jobId)
         if (job.status === 'succeeded') {
-          await store.loadResults(form.clientId)
+          await store.loadResults()
           await loadResultPreviews()
           activeTab.value = 'results'
           message.success('案例图生成完成')
@@ -442,7 +484,6 @@ async function downloadResult(result) {
 onMounted(async () => {
   try {
     await store.loadBootstrap()
-    form.refineModelSpec = store.bootstrap?.refine_model_spec || ''
     await Promise.all([store.loadResults(), store.loadJobs(), loadGalleries(), loadShowcase()])
     await loadResultPreviews()
   } catch (error) {
@@ -456,8 +497,8 @@ onBeforeUnmount(() => {
   Object.values(showcaseUrls.value).forEach((url) => URL.revokeObjectURL(url))
   Object.values(resultUrls.value).forEach((url) => URL.revokeObjectURL(url))
   closeResultDetail()
-  if (form.reference?.url) URL.revokeObjectURL(form.reference.url)
-  if (form.rawRoom?.url) URL.revokeObjectURL(form.rawRoom.url)
+  const selected = [styleTransferForm.reference, roomAdaptForm.styleReference, roomAdaptForm.rawStructure, crossSpaceForm.styleReference]
+  new Set(selected.map((item) => item?.url).filter(Boolean)).forEach((url) => URL.revokeObjectURL(url))
 })
 
 async function loadResultPreviews() {
@@ -502,63 +543,80 @@ async function loadResultPreviews() {
 
         <section class="card">
           <div class="section-heading"><div><span class="accent-line" />{{ workflow === 'room_adapt' ? '参考效果图' : '参考图' }}</div><span class="required">*</span></div>
-          <button class="material-slot" :class="{ filled: form.reference }" @click="openPicker('reference')">
-            <img v-if="form.reference?.url" :src="form.reference.url" :alt="form.reference.name" />
+          <button class="material-slot" :class="{ filled: activeReference }" @click="openPicker('reference')">
+            <img v-if="activeReference?.url" :src="activeReference.url" :alt="activeReference.name" />
             <span v-else><ImagePlus :size="21" /><strong>从素材库选择{{ workflow === 'room_adapt' ? '参考效果图' : '参考图' }}</strong><small>直接使用已有素材，不重复上传</small></span>
-            <small v-if="form.reference" class="slot-name">{{ form.reference.name }} · {{ recognitionStatus[form.reference.id] === 'completed' ? '已识别' : recognitionStatus[form.reference.id] === 'recognizing' ? '识别中' : recognitionStatus[form.reference.id] === 'failed' ? '识别失败' : '' }}</small>
+            <small v-if="activeReference" class="slot-name">{{ activeReference.name }} · {{ materialAnalysis(activeReference, activeReferenceRole)?.status === 'completed' ? '视觉分析完成' : materialAnalysis(activeReference, activeReferenceRole)?.status === 'running' ? '视觉分析中' : materialAnalysis(activeReference, activeReferenceRole)?.status === 'failed' ? '视觉分析失败' : '待分析' }}</small>
           </button>
+          <button v-if="materialAnalysis(activeReference, activeReferenceRole)?.status === 'failed'" type="button" class="analysis-retry" @click="retryAnalysis(activeReference, activeReferenceRole)">重试视觉分析</button>
           <label class="upload-inline"><Upload :size="14" /> 上传到素材库 <input ref="uploadInput" type="file" accept="image/jpeg,image/png,image/webp" multiple @change="uploadToLibrary" /></label>
         </section>
 
         <section v-if="workflow === 'room_adapt'" class="card">
           <div class="section-heading"><div><span class="accent-line" />毛坯实拍图</div><span class="required">*</span></div>
-          <button class="material-slot" :class="{ filled: form.rawRoom }" @click="openPicker('rawRoom')">
-            <img v-if="form.rawRoom?.url" :src="form.rawRoom.url" :alt="form.rawRoom.name" />
+          <button class="material-slot" :class="{ filled: roomAdaptForm.rawStructure }" @click="openPicker('rawRoom')">
+            <img v-if="roomAdaptForm.rawStructure?.url" :src="roomAdaptForm.rawStructure.url" :alt="roomAdaptForm.rawStructure.name" />
             <span v-else><ImagePlus :size="21" /><strong>从素材库选择毛坯图</strong><small>选择同一素材库中的图片</small></span>
-            <small v-if="form.rawRoom" class="slot-name">{{ form.rawRoom.name }} · {{ recognitionStatus[form.rawRoom.id] === 'completed' ? '已识别' : recognitionStatus[form.rawRoom.id] === 'recognizing' ? '识别中' : recognitionStatus[form.rawRoom.id] === 'failed' ? '识别失败' : '' }}</small>
+            <small v-if="roomAdaptForm.rawStructure" class="slot-name">{{ roomAdaptForm.rawStructure.name }} · {{ materialAnalysis(roomAdaptForm.rawStructure, 'structure_source')?.status === 'completed' ? '视觉分析完成' : materialAnalysis(roomAdaptForm.rawStructure, 'structure_source')?.status === 'running' ? '视觉分析中' : materialAnalysis(roomAdaptForm.rawStructure, 'structure_source')?.status === 'failed' ? '视觉分析失败' : '待分析' }}</small>
           </button>
+          <button v-if="materialAnalysis(roomAdaptForm.rawStructure, 'structure_source')?.status === 'failed'" type="button" class="analysis-retry" @click="retryAnalysis(roomAdaptForm.rawStructure, 'structure_source')">重试视觉分析</button>
         </section>
 
         <section v-if="workflow === 'style_transfer'" class="card">
           <div class="section-heading"><div><span class="accent-line" />换装风格</div></div>
           <div class="choice-grid styles-grid">
-            <button v-for="item in styles" :key="item" type="button" :class="{ selected: form.styleLabel === item && !form.usePromptAsStyle }" @click="chooseStyle(item)">{{ item }}</button>
-            <button type="button" :class="{ selected: form.usePromptAsStyle }" @click="usePromptForStyle">使用补充描述作为风格提示词</button>
+            <button v-for="item in styleOptions" :key="item" type="button" :class="{ selected: styleTransferForm.styleLabel === item && !styleTransferForm.usePromptAsStyle }" @click="chooseStyle(item)">{{ item }}</button>
+            <button type="button" :class="{ selected: styleTransferForm.usePromptAsStyle }" @click="usePromptForStyle">使用补充描述作为风格提示词</button>
           </div>
         </section>
 
         <section v-if="workflow === 'cross_space'" class="card">
           <div class="section-heading"><div><span class="accent-line" />目标空间</div></div>
-          <div class="choice-grid space-grid"><button v-for="item in spaces" :key="item[0]" :class="{ selected: form.targetSpace === item[0] }" @click="chooseSpace(item)">{{ item[1] }}</button></div>
+          <div class="choice-grid space-grid"><button v-for="item in spaceOptions" :key="item[0]" :class="{ selected: crossSpaceForm.targetSpace === item[0] }" @click="chooseSpace(item)">{{ item[1] }}</button></div>
           <div class="subheading">布局类型</div>
-          <div class="choice-grid layout-grid"><button v-for="item in currentLayouts" :key="item[0]" :class="{ selected: form.spaceLayout === item[0] }" @click="chooseLayout(item)">{{ item[1] }}</button></div>
+          <div class="choice-grid layout-grid"><button v-for="item in currentLayouts" :key="item[0]" :class="{ selected: crossSpaceForm.spaceLayout === item[0] }" @click="chooseLayout(item)">{{ item[1] }}</button></div>
           <div class="subheading">附加元素</div>
-          <div class="choice-grid addon-grid"><button v-for="item in currentAddons" :key="item[0]" type="button" :class="{ selected: form.spaceAddons.includes(item[0]) }" @click="toggleAddon(item[0])">{{ item[1] }}</button></div>
+          <div class="choice-grid addon-grid"><button v-for="item in currentAddons" :key="item[0]" type="button" :class="{ selected: crossSpaceForm.spaceAddons.includes(item[0]) }" @click="toggleAddon(item[0])">{{ item[1] }}</button></div>
         </section>
 
         <section class="card prompt-card">
           <div class="section-heading"><div><span class="accent-line" />补充描述 <span class="required">*</span></div><button type="button" class="clear-button" @click="clearPrompt">清空</button></div>
-          <textarea v-model="form.prompt" maxlength="3000" placeholder="描述你希望生成的空间风格、材质、色彩和氛围…" />
-          <div class="prompt-footer"><span>{{ form.prompt.length }}/3000</span><button type="button" class="refine-button" :class="{ blocked: refineIssues.length }" :disabled="form.refining" @click="refinePrompt"><LoaderCircle v-if="form.refining" class="spin" :size="16" /><Sparkles v-else :size="16" />{{ form.refining ? '正在理解并润色…' : 'AI 深度润色（必做）' }}</button></div>
-          <div class="refine-model-row"><span>润色模型</span><ModelSelectorComponent :model_spec="form.refineModelSpec" placeholder="请选择 AI 润色模型" size="nano" display-name="mini" :disabled="form.refining" @select-model="(spec) => { form.refineModelSpec = spec; invalidateRefinement() }" /></div>
-          <div class="refine-note" :class="{ done: form.hasRefined }"><Check v-if="form.hasRefined" :size="14" /><span>{{ form.hasRefined ? '已完成深度润色；你可以继续微调文字，切换图片或设计条件后需重新润色。' : (refineIssues[0] || '请完成 AI 润色后再提交生成。') }}</span><button v-if="form.hasRefined && form.promptBeforeRefine" type="button" @click="restorePromptBeforeRefine">恢复润色前描述</button></div>
+          <textarea v-model="commonForm.prompt" maxlength="3000" placeholder="描述你希望生成的空间风格、材质、色彩和氛围…" @input="invalidateRefinement" />
+          <div class="prompt-footer"><span>{{ commonForm.prompt.length }}/3000</span><button type="button" class="refine-button" :class="{ blocked: refineIssues.length }" :disabled="commonForm.refining" @click="refinePrompt"><LoaderCircle v-if="commonForm.refining" class="spin" :size="16" /><Sparkles v-else :size="16" />{{ commonForm.refining ? '正在分析并编译…' : 'AI 深度优化（必做）' }}</button></div>
+          <div class="refine-note" :class="{ done: store.activeRefinement }"><Check v-if="store.activeRefinement" :size="14" /><span>{{ store.activeRefinement ? '图片、选项和最终提示词已通过服务端验证；修改语义条件后需重新优化。' : (refineIssues[0] || '请完成 AI 深度优化后再提交生成。') }}</span></div>
+        </section>
+
+        <section v-if="store.activeRefinement" class="card refinement-card">
+          <div class="section-heading"><div><span class="accent-line" />执行预览</div><span class="verified-badge"><Check :size="13" />已验证</span></div>
+          <div class="analysis-summary" v-for="role in store.activeRefinement.plan.image_roles" :key="role.material_id"><strong>{{ role.label }}</strong><span>{{ materialAnalysis({ id: role.material_id }, role.role)?.result?.room_type || '已完成视觉分析' }}</span></div>
+          <div class="effective-options">
+            <strong>本次生效选项</strong>
+            <span>风格：{{ store.activeRefinement.plan.style_profile.label }}</span>
+            <span v-if="store.activeRefinement.plan.target_space">空间：{{ store.activeRefinement.plan.target_space.label }}</span>
+            <span v-if="store.activeRefinement.plan.layout">布局：{{ store.activeRefinement.plan.layout.label }}</span>
+            <span v-if="store.activeRefinement.plan.addons?.length">附加元素：{{ store.activeRefinement.plan.addons.map((item) => item.label).join('、') }}</span>
+          </div>
+          <div class="constraint-list"><strong>工作流硬约束</strong><ul><li v-for="item in store.activeRefinement.plan.hard_constraints" :key="item">{{ item }}</li></ul></div>
+          <div v-if="store.activeRefinement.conflicts.length" class="conflict-list"><strong>已修正冲突</strong><ul><li v-for="item in store.activeRefinement.conflicts" :key="item">{{ item }}</li></ul></div>
+          <label class="compiled-prompt"><span>已验证优化结果</span><textarea v-model="refinedPromptDraft" maxlength="3000" @input="refinedPromptDirty = refinedPromptDraft !== store.activeRefinement.compiled_prompt" /></label>
+          <div v-if="refinedPromptDirty" class="prompt-revalidate"><span>修改后不能直接生成，服务端将重新注入并校验全部硬约束。</span><button type="button" :disabled="commonForm.refining || !refinedPromptDraft.trim()" @click="revalidateRefinedPrompt">重新校验</button></div>
+          <label class="compiled-prompt"><span>最终生成提示词（随画幅实时更新）</span><textarea :value="compiledPromptPreview" readonly /></label>
         </section>
 
         <section class="card options-card">
-          <div class="option-group"><strong>图片比例</strong><div class="option-row"><button v-for="item in [['3:4','竖版 3:4','1152×1536'],['4:3','横版 4:3','1536×1152'],['1:1','方图 1:1','1024×1024']]" :key="item[0]" :class="{ selected: form.aspectRatio === item[0] }" @click="form.aspectRatio = item[0]">{{ item[1] }}<small>{{ item[2] }}</small></button></div></div>
-          <div class="option-group"><strong>生成数量</strong><div class="option-row"><button v-for="count in [1, 2]" :key="count" :class="{ selected: form.genCount === count }" @click="form.genCount = count">{{ count }} 张</button></div></div>
-          <div class="option-group"><strong>清晰度</strong><div class="option-row"><button v-for="quality in ['1K', '2K']" :key="quality" :class="{ selected: form.clarity === quality }" @click="form.clarity = quality">{{ quality }} {{ quality === '1K' ? '标清' : '高清' }}</button></div></div>
+          <div class="option-group"><strong>图片比例</strong><div class="option-row"><button v-for="item in [['3:4','竖版 3:4','1152×1536'],['4:3','横版 4:3','1536×1152'],['1:1','方图 1:1','1024×1024']]" :key="item[0]" :class="{ selected: commonForm.aspectRatio === item[0] }" @click="commonForm.aspectRatio = item[0]">{{ item[1] }}<small>{{ item[2] }}</small></button></div></div>
+          <div class="option-group"><strong>生成数量</strong><div class="option-row"><button v-for="count in [1, 2, 4]" :key="count" :class="{ selected: commonForm.genCount === count }" @click="commonForm.genCount = count">{{ count }} 张</button></div></div>
+          <div class="option-group"><strong>清晰度</strong><div class="option-row"><button v-for="quality in ['1K', '2K']" :key="quality" :class="{ selected: commonForm.clarity === quality }" @click="commonForm.clarity = quality">{{ quality }} {{ quality === '1K' ? '标清' : '高清' }}</button></div></div>
         </section>
 
         <section class="submit-row">
-          <label class="client-select"><span>选择客户</span><select v-model="form.clientId"><option :value="null">通用素材库</option><option v-for="client in store.clients" :key="client.id" :value="client.id">{{ client.name }}</option></select><ChevronDown :size="15" /></label>
           <button type="button" class="generate-button" :class="{ blocked: !canSubmit }" :disabled="store.loading" @click="generate"><WandSparkles :size="18" />{{ store.loading ? '正在提交…' : '生成案例图' }}</button>
         </section>
         <p v-if="generateIssues.length" class="blocked-note">{{ generateIssues[0] }}；点击“生成案例图”可查看提示。</p>
       </main>
 
       <aside class="workspace-panel card">
-        <div class="workspace-tabs"><button :class="{ active: activeTab === 'materials' }" @click="activeTab = 'materials'">素材库 <small>{{ galleryItems.length }}</small></button><button :class="{ active: activeTab === 'results' }" @click="activeTab = 'results'; store.loadResults(form.clientId).then(loadResultPreviews)">生成结果 <small>{{ store.results.length }}</small></button><button :class="{ active: activeTab === 'showcase' }" @click="activeTab = 'showcase'">精选案例提示词 <small>{{ showcaseItems.length }}</small></button><button :class="{ active: activeTab === 'jobs' }" @click="activeTab = 'jobs'; store.loadJobs(form.clientId)">任务 <small>{{ store.jobs.filter((item) => !['succeeded','failed'].includes(item.status)).length }}</small></button><button :class="{ active: activeTab === 'assets' }" @click="activeTab = 'assets'">资产中心</button></div>
+        <div class="workspace-tabs"><button :class="{ active: activeTab === 'materials' }" @click="activeTab = 'materials'">素材库 <small>{{ galleryItems.length }}</small></button><button :class="{ active: activeTab === 'results' }" @click="activeTab = 'results'; store.loadResults().then(loadResultPreviews)">生成结果 <small>{{ store.results.length }}</small></button><button :class="{ active: activeTab === 'showcase' }" @click="activeTab = 'showcase'">精选案例提示词 <small>{{ showcaseItems.length }}</small></button><button :class="{ active: activeTab === 'jobs' }" @click="activeTab = 'jobs'; store.loadJobs()">任务 <small>{{ store.jobs.filter((item) => !['succeeded','failed'].includes(item.status)).length }}</small></button><button :class="{ active: activeTab === 'assets' }" @click="activeTab = 'assets'">资产中心</button></div>
         <div v-if="activeTab === 'materials'" class="workspace-content">
           <div class="library-toolbar"><select v-model="activeGallery" @change="refreshGallery"><option v-for="gallery in galleries" :key="gallery.id" :value="gallery.id">{{ gallery.name }}</option></select><button title="导入到素材库" @click="uploadInput?.click()"><Upload :size="15" /></button><button title="刷新" @click="refreshGallery"><RefreshCw :size="15" /></button></div>
           <div v-if="loadingGallery" class="empty-state"><LoaderCircle class="spin" :size="24" /></div>
@@ -584,7 +642,7 @@ async function loadResultPreviews() {
       </section>
     </div>
 
-    <MaterialImagePickerModal v-model:open="pickerOpen" :selected-item-id="pickerRole === 'reference' ? form.reference?.id : form.rawRoom?.id" title="从素材库选择图片" :description="pickerRole === 'reference' ? '选择参考图' : '选择毛坯实拍图'" :confirm-text="pickerRole === 'reference' ? '使用这张参考图' : '使用这张毛坯图'" @select="(item) => setMaterial(pickerRole, item)" />
+    <MaterialImagePickerModal v-model:open="pickerOpen" :selected-item-id="pickerRole === 'reference' ? activeReference?.id : roomAdaptForm.rawStructure?.id" title="从素材库选择图片" :description="pickerRole === 'reference' ? '选择参考图' : '选择毛坯实拍图'" :confirm-text="pickerRole === 'reference' ? '使用这张参考图' : '使用这张毛坯图'" @select="(item) => setMaterial(pickerRole, item)" />
   </div>
 </template>
 
@@ -604,8 +662,9 @@ h1 { margin: 0; font-size: 28px; letter-spacing: -.04em; } .page-head p:last-chi
 .upload-inline { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; color: var(--main-700); font-size: 12px; cursor: pointer; } .upload-inline input { display: none; }
 .choice-grid { display: grid; gap: 8px; } .styles-grid { grid-template-columns: repeat(5, 1fr); } .space-grid { grid-template-columns: repeat(6, 1fr); } .layout-grid { grid-template-columns: repeat(4, 1fr); } .addon-grid { grid-template-columns: repeat(3, 1fr); } .choice-grid button { min-height: 42px; font-size: 12px; } .subheading { margin: 16px 0 9px; color: var(--gray-700); font-size: 12px; font-weight: 700; }
 .prompt-card textarea { width: 100%; min-height: 156px; box-sizing: border-box; padding: 12px; border: 1px solid var(--gray-200); border-radius: 10px; resize: vertical; font: inherit; line-height: 1.65; outline: none; } .prompt-card textarea:focus { border-color: var(--main-500); box-shadow: 0 0 0 2px var(--main-100); } .prompt-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 9px; color: var(--gray-500); font-size: 12px; } .clear-button { border: 0; background: transparent; color: var(--gray-500); cursor: pointer; } .refine-button { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; padding: 8px 12px; color: #fff; background: var(--main-700); font-weight: 700; cursor: pointer; } .refine-button.blocked { opacity: .68; } .refine-button:disabled { opacity: .45; cursor: not-allowed; } .refine-model-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--gray-600); font-size: 12px; } .refine-model-row > :last-child { min-width: 220px; } .refine-note { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; color: var(--color-error-700); font-size: 12px; } .refine-note span { flex: 1; } .refine-note button { border: 0; padding: 0; color: var(--main-700); background: transparent; cursor: pointer; } .refine-note.done { color: var(--color-success-700); }
+.verified-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 999px; color: var(--color-success-700); background: var(--color-success-10); font-size: 11px; } .analysis-summary { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--gray-100); color: var(--gray-600); font-size: 12px; } .analysis-summary strong { color: var(--gray-800); } .analysis-retry { margin-top: 8px; border: 0; padding: 0; color: var(--main-700); background: transparent; font-size: 12px; font-weight: 700; cursor: pointer; } .effective-options { display: flex; flex-wrap: wrap; gap: 7px 12px; margin-top: 13px; padding: 10px 12px; border-radius: 8px; background: var(--gray-50); color: var(--gray-700); font-size: 12px; } .effective-options strong { width: 100%; color: var(--gray-800); } .constraint-list, .conflict-list { margin-top: 13px; color: var(--gray-700); font-size: 12px; } .constraint-list ul, .conflict-list ul { margin: 7px 0 0; padding-left: 20px; line-height: 1.7; } .conflict-list { color: var(--color-warning-700); } .compiled-prompt { display: grid; gap: 7px; margin-top: 14px; color: var(--gray-700); font-size: 12px; font-weight: 700; } .compiled-prompt textarea { min-height: 190px; padding: 11px; border: 1px solid var(--gray-200); border-radius: 9px; background: var(--gray-50); color: var(--gray-700); font: inherit; font-weight: 400; line-height: 1.65; resize: vertical; } .prompt-revalidate { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--color-warning-700); font-size: 12px; } .prompt-revalidate button { border: 0; border-radius: 7px; padding: 7px 10px; color: #fff; background: var(--main-700); font-weight: 700; cursor: pointer; } .prompt-revalidate button:disabled { opacity: .45; cursor: not-allowed; }
 .option-group + .option-group { margin-top: 15px; } .option-group > strong { display: block; margin-bottom: 8px; font-size: 13px; } .option-row { display: flex; gap: 8px; flex-wrap: wrap; } .option-row button { min-width: 105px; } .option-row small { display: block; margin-top: 3px; color: var(--gray-500); font-size: 10px; }
-.submit-row { display: flex; gap: 10px; align-items: end; } .client-select { position: relative; display: grid; gap: 5px; flex: 1; color: var(--gray-600); font-size: 12px; } .client-select select { appearance: none; width: 100%; padding: 12px 30px 12px 12px; border: 1px solid var(--gray-200); border-radius: 10px; background: var(--main-0); font: inherit; } .client-select svg { position: absolute; right: 10px; bottom: 13px; pointer-events: none; } .generate-button { display: inline-flex; align-items: center; gap: 7px; padding: 13px 18px; border: 0; border-radius: 10px; color: #fff; background: linear-gradient(135deg, var(--main-700), var(--main-500)); font-weight: 800; cursor: pointer; white-space: nowrap; } .generate-button.blocked { opacity: .68; } .generate-button:disabled { opacity: .45; cursor: not-allowed; } .blocked-note { margin: -6px 0 0; color: var(--color-warning-700); font-size: 12px; }
+.submit-row { display: flex; justify-content: flex-end; } .generate-button { display: inline-flex; align-items: center; gap: 7px; padding: 13px 18px; border: 0; border-radius: 10px; color: #fff; background: linear-gradient(135deg, var(--main-700), var(--main-500)); font-weight: 800; cursor: pointer; white-space: nowrap; } .generate-button.blocked { opacity: .68; } .generate-button:disabled { opacity: .45; cursor: not-allowed; } .blocked-note { margin: -6px 0 0; color: var(--color-warning-700); font-size: 12px; }
 .workspace-panel { min-height: 680px; overflow: hidden; position: sticky; top: 18px; } .workspace-tabs { display: flex; gap: 2px; padding: 12px 13px 0; overflow-x: auto; border-bottom: 1px solid var(--gray-200); } .workspace-tabs button { padding: 10px 9px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--gray-600); white-space: nowrap; cursor: pointer; } .workspace-tabs button.active { color: var(--main-800); border-color: var(--main-600); } .workspace-tabs small { margin-left: 4px; color: var(--gray-500); } .workspace-content { padding: 14px; } .library-toolbar { display: flex; gap: 7px; margin-bottom: 12px; } .library-toolbar select { flex: 1; padding: 9px; border: 1px solid var(--gray-200); border-radius: 8px; background: #fff; } .library-toolbar button, .result-actions button { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--gray-200); border-radius: 8px; background: #fff; color: var(--gray-600); cursor: pointer; }
 .material-grid, .result-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; } .material-card { display: grid; gap: 4px; padding: 0 0 8px; border: 1px solid var(--gray-200); border-radius: 10px; overflow: hidden; background: #fff; text-align: left; cursor: pointer; } .material-card img { width: 100%; height: 145px; object-fit: contain; background: var(--gray-50); } .material-card span, .material-card small { padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .material-card span { font-size: 12px; font-weight: 700; } .material-card small { color: var(--gray-500); font-size: 10px; }
 .result-card { overflow: hidden; border: 1px solid var(--gray-200); border-radius: 10px; background: #fff; } .result-card img { width: 100%; height: 190px; object-fit: contain; background: var(--gray-50); } .result-card > div:not(.result-actions) { display: grid; gap: 3px; padding: 8px; } .result-card small { color: var(--gray-500); font-size: 10px; } .result-actions { display: flex; gap: 6px; padding: 0 8px 8px; } .job-list { display: grid; gap: 9px; } .job-card { padding: 10px; border: 1px solid var(--gray-200); border-radius: 9px; } .job-card.failed { border-color: var(--color-error-100); background: var(--color-error-10); } .job-card > div:first-child { display: flex; justify-content: space-between; gap: 8px; } .job-card small { color: var(--gray-500); } .job-card.failed small, .job-error { color: var(--color-error-700); } .job-error { margin: 8px 0 0; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; } .progress { height: 5px; margin-top: 9px; border-radius: 99px; background: var(--gray-100); overflow: hidden; } .progress span { display: block; height: 100%; border-radius: inherit; background: var(--main-600); transition: width .2s; } .job-card.failed .progress span { background: var(--color-error-500); }

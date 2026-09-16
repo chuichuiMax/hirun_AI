@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -10,6 +11,7 @@ import textwrap
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from time import monotonic
+from urllib.parse import urlparse
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -18,12 +20,72 @@ XHS_HOME_URL = "https://creator.xiaohongshu.com/new/home"
 XHS_PUBLISH_NOTE_URL = "https://creator.xiaohongshu.com/publish/publish?from=homepage&target=image"
 XHS_SUCCESS_URL_PATTERN = "**/publish/success?**"
 XHS_INSPIRE_URL = "https://ad.xiaohongshu.com/microapp/creativity/inspire"
+XHS_INSPIRE_SEARCH_PATH = "/api/pgy_leona/content_square/search_note_v2"
 XHS_DRAFT_ENTRY_PATTERN = re.compile(r"^草稿箱\s*(?:[（(]\d+[)）])?$")
 XHS_DRAFT_TAB_PATTERN = re.compile(r"视频笔记\s*[（(]\d+[)）]")
 LOGIN_BOX_SELECTOR = "div[class*='login-box']"
 QR_IMAGE_SELECTOR = "img.css-1lhmg90"
 QR_SWITCH_SELECTOR = "img.css-wemwzq"
 SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+INITIAL_STATE_PATTERN = re.compile(r"window\.__INITIAL_STATE__\s*=\s*(.*?)</script>", re.DOTALL)
+
+
+def _normalize_initial_state_json(source: str) -> str:
+    """将 SSR 状态中字符串外的 JavaScript 非 JSON 值转换为 null。"""
+    output: list[str] = []
+    index = 0
+    in_string = False
+    escaped = False
+    while index < len(source):
+        char = source[index]
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+        replaced = False
+        for token in ("undefined", "NaN", "Infinity"):
+            if not source.startswith(token, index):
+                continue
+            before = source[index - 1] if index else ""
+            after_index = index + len(token)
+            after = source[after_index] if after_index < len(source) else ""
+            if (before and (before.isalnum() or before in "_$")) or (after and (after.isalnum() or after in "_$")):
+                continue
+            output.append("null")
+            index = after_index
+            replaced = True
+            break
+        if not replaced:
+            output.append(char)
+            index += 1
+    return "".join(output)
+
+
+def parse_inspire_note_detail(html: str, note_id: str) -> dict:
+    """从小红书详情页 SSR 状态中读取指定笔记的完整结构化内容。"""
+    match = INITIAL_STATE_PATTERN.search(html)
+    if not match:
+        raise XiaohongshuRuntimeError("INSPIRE_DETAIL_PARSE_FAILED", "聚光笔记详情缺少初始化数据")
+    source = match.group(1).strip().removesuffix(";")
+    try:
+        state = json.loads(_normalize_initial_state_json(source))
+        detail = state["note"]["noteDetailMap"][note_id]["note"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise XiaohongshuRuntimeError("INSPIRE_DETAIL_PARSE_FAILED", "聚光笔记详情结构已变化") from exc
+    if not isinstance(detail, dict):
+        raise XiaohongshuRuntimeError("INSPIRE_DETAIL_PARSE_FAILED", "聚光笔记详情结构已变化")
+    return detail
 
 
 class XiaohongshuRuntimeError(RuntimeError):
@@ -116,6 +178,117 @@ class XiaohongshuRuntime:
             return bool(await marker.count()) and await marker.is_visible()
         except Exception:
             return False
+
+    async def collect_inspire_cards(self, page, *, industry: str, limit: int) -> list[dict]:
+        """通过内容广场接口与签名详情页采集完整榜单内容。"""
+        if not await self._is_inspire_logged_in(page):
+            raise XiaohongshuRuntimeError("INSPIRE_LOGIN_REQUIRED", "聚光平台登录已失效，请重新登录")
+
+        await page.get_by_text("所属行业", exact=True).click()
+        option = page.get_by_text(industry, exact=True).last
+        await option.wait_for(state="visible", timeout=10000)
+
+        def is_target_response(response) -> bool:
+            if XHS_INSPIRE_SEARCH_PATH not in response.url:
+                return False
+            try:
+                request_payload = response.request.post_data_json or {}
+            except Exception:
+                return False
+            return request_payload.get("spuIndustry") == industry
+
+        try:
+            async with page.expect_response(is_target_response, timeout=15000) as response_info:
+                await option.click()
+            response = await response_info.value
+            if response.status != 200:
+                raise XiaohongshuRuntimeError("INSPIRE_LIST_FETCH_FAILED", "聚光内容广场榜单读取失败")
+            payload = await response.json()
+            raw_items = payload["data"]["noteList"]
+        except XiaohongshuRuntimeError:
+            raise
+        except Exception as exc:
+            raise XiaohongshuRuntimeError("INSPIRE_LIST_FETCH_FAILED", "聚光内容广场榜单读取失败") from exc
+        if not isinstance(raw_items, list):
+            raise XiaohongshuRuntimeError("INSPIRE_LIST_FETCH_FAILED", "聚光内容广场榜单结构已变化")
+
+        items = []
+        seen = set()
+        for raw_item in raw_items:
+            note_info = raw_item.get("noteInfo") if isinstance(raw_item, dict) else None
+            if not isinstance(note_info, dict):
+                raise XiaohongshuRuntimeError("INSPIRE_LIST_FETCH_FAILED", "聚光内容广场榜单结构已变化")
+            if str(note_info.get("noteType") or "") != "1":
+                continue
+            note_id = str(note_info.get("noteId") or "").strip()
+            if not note_id or note_id in seen:
+                continue
+            title = str(note_info.get("title") or "").strip()
+            detail_url = str(note_info.get("noteLink") or "").strip()
+            detail_location = urlparse(detail_url)
+            images = note_info.get("noteImages")
+            cover_url = (
+                str(images[0].get("imageUrl") or "").strip()
+                if isinstance(images, list) and images and isinstance(images[0], dict)
+                else ""
+            )
+            if (
+                not title
+                or not cover_url
+                or detail_location.scheme != "https"
+                or detail_location.hostname != "www.xiaohongshu.com"
+            ):
+                raise XiaohongshuRuntimeError("INSPIRE_ITEM_INCOMPLETE", "聚光榜单缺少标题、封面或详情链接")
+            if cover_url and cover_url.startswith("http://"):
+                cover_url = "https://" + cover_url.removeprefix("http://")
+
+            try:
+                detail_response = await page.context.request.get(
+                    detail_url,
+                    headers={"referer": XHS_INSPIRE_URL},
+                    timeout=60000,
+                )
+                if detail_response.status != 200:
+                    raise XiaohongshuRuntimeError("INSPIRE_DETAIL_FETCH_FAILED", "聚光笔记详情读取失败")
+                detail = parse_inspire_note_detail(await detail_response.text(), note_id)
+            except XiaohongshuRuntimeError:
+                raise
+            except Exception as exc:
+                raise XiaohongshuRuntimeError("INSPIRE_DETAIL_FETCH_FAILED", "聚光笔记详情读取失败") from exc
+
+            detail_title = str(detail.get("title") or "").strip()
+            body = str(detail.get("desc") or "").strip()
+            raw_tags = detail.get("tagList")
+            if not detail_title or not body or not isinstance(raw_tags, list):
+                raise XiaohongshuRuntimeError("INSPIRE_ITEM_INCOMPLETE", "聚光笔记缺少标题、正文或话题标签数据")
+            tags = list(
+                dict.fromkeys(
+                    str(tag.get("name") or "").strip()
+                    for tag in raw_tags
+                    if isinstance(tag, dict) and str(tag.get("name") or "").strip()
+                )
+            )
+            if not tags:
+                raise XiaohongshuRuntimeError("INSPIRE_ITEM_INCOMPLETE", "聚光笔记缺少标题、正文或话题标签数据")
+            metrics = {
+                "likes": str(note_info.get("likeNum") or "0"),
+                "collects": str(note_info.get("favNum") or "0"),
+                "comments": str(note_info.get("cmtNum") or "0"),
+            }
+            items.append(
+                {
+                    "note_id": note_id,
+                    "title": detail_title,
+                    "body": body,
+                    "tags": tags,
+                    "cover_url": cover_url,
+                    "metrics": metrics,
+                }
+            )
+            seen.add(note_id)
+            if len(items) >= limit:
+                break
+        return items
 
     async def open_drafts(self, page) -> None:
         """Open the creator-platform draft drawer without exposing arbitrary navigation."""

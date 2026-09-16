@@ -11,15 +11,14 @@ const encodeQuery = (params = {}) => {
 
 export const imageDesignApi = {
   getBootstrap: () => apiGet('/api/image-design/bootstrap'),
-  listClients: () => apiGet('/api/image-design/clients'),
-  createClient: (payload) => apiPost('/api/image-design/clients', payload),
   listShowcase: (category) => apiGet(`/api/image-design/showcase${encodeQuery({ category })}`),
   createShowcase: (payload) => apiPost('/api/image-design/showcase', payload),
   deleteShowcase: (showcaseId) => apiDelete(`/api/image-design/showcase/${showcaseId}`),
-  refinePrompt: (payload) => apiPost('/api/image-design/refine-prompt', payload),
-  recognize: (materialItemId) => apiPost('/api/image-design/recognize', { material_item_id: materialItemId }),
-  listRecognitions: (materialItemId) =>
-    apiGet(`/api/image-design/recognitions${encodeQuery({ material_item_id: materialItemId })}`),
+  createAnalysis: (materialItemId, role) =>
+    apiPost('/api/image-design/analyses', { material_item_id: materialItemId, role }),
+  getAnalysis: (analysisId) => apiGet(`/api/image-design/analyses/${analysisId}`),
+  createRefinement: (payload) => apiPost('/api/image-design/refinements', payload),
+  getRefinement: (refinementId) => apiGet(`/api/image-design/refinements/${refinementId}`),
   generate: (payload) => {
     const controller = new AbortController()
     const timeoutId = globalThis.setTimeout(() => controller.abort(), 30000)

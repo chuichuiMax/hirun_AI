@@ -1,3 +1,4 @@
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -5,12 +6,55 @@ import pytest
 import yuxi.services.inspire_samples as inspire_samples
 
 from yuxi.services.inspire_samples import (
+    InspireDirectCrawler,
     _inspire_account_id,
     _metric_value,
     build_reference_blueprint,
     get_inspire_media_content,
     normalize_inspire_item,
 )
+
+
+@pytest.mark.asyncio
+async def test_inspire_crawler_uses_gateway_session_and_normalizes_cards(monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    class FakeResponse:
+        @staticmethod
+        def json():
+            return {
+                "items": [
+                    {
+                        "note_id": "note-1",
+                        "title": "装修避坑清单",
+                        "body": "装修避坑清单\n#装修避坑[话题]# #全屋定制[话题]#",
+                        "tags": ["装修避坑", "全屋定制"],
+                        "cover_url": "https://ci.xiaohongshu.com/cover.jpg",
+                        "metrics": {"likes": "1w", "collects": "397"},
+                    }
+                ]
+            }
+
+    async def gateway_request(method, path, **kwargs):
+        captured.update(method=method, path=path, **kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr(inspire_samples, "_gateway_request", gateway_request)
+
+    items = await InspireDirectCrawler().collect(
+        owner_uid="owner-1",
+        account_id="account-1",
+        session_id="session-1",
+        industry_slug="decoration",
+        limit=10,
+    )
+
+    assert captured["path"] == "/internal/sessions/session-1/inspire/collect"
+    assert captured["json"]["industry"] == "家居家装"
+    assert items[0]["title"] == "装修避坑清单"
+    assert items[0]["body"] == "装修避坑清单\n#装修避坑[话题]# #全屋定制[话题]#"
+    assert items[0]["tags"] == ["装修避坑", "全屋定制"]
+    assert items[0]["metrics"] == {"likes": 10_000, "collects": 397}
 
 
 def test_normalize_inspire_item_keeps_structure_separate_from_body():
@@ -73,7 +117,8 @@ def test_inspire_browser_account_is_stable_and_hidden_by_prefix():
     assert account_id != _inspire_account_id("owner-2")
 
 
-def test_present_sample_uses_visible_platform_copy_when_snapshot_body_is_empty():
+def test_present_sample_does_not_disguise_missing_body_as_title():
+    now = inspire_samples.utc_now_naive()
     sample = SimpleNamespace(
         id="sample-1",
         industry_slug="decoration",
@@ -88,7 +133,7 @@ def test_present_sample_uses_visible_platform_copy_when_snapshot_body_is_empty()
     snapshot = SimpleNamespace(
         id="snapshot-1",
         body_text=None,
-        body_expires_at=None,
+        body_expires_at=now - timedelta(hours=1),
         fetched_at=None,
         reference_ready=True,
         blueprint_version="v1",
@@ -97,11 +142,46 @@ def test_present_sample_uses_visible_platform_copy_when_snapshot_body_is_empty()
     presented = inspire_samples._present_sample(
         sample,
         snapshot,
-        now=inspire_samples.utc_now_naive(),
-        include_body=True,
     )
 
-    assert presented["body"] == "平台卡片可见文案"
+    assert presented["body"] == ""
+    assert presented["body_expired"] is False
+
+
+@pytest.mark.asyncio
+async def test_inspire_crawler_rejects_incomplete_gateway_item(monkeypatch: pytest.MonkeyPatch):
+    class FakeResponse:
+        @staticmethod
+        def json():
+            return {
+                "items": [
+                    {
+                        "note_id": "note-1",
+                        "title": "装修避坑清单",
+                        "body": "正文完整，但平台没有返回话题标签。",
+                        "tags": [],
+                        "cover_url": "https://ci.xiaohongshu.com/cover.jpg",
+                        "metrics": {},
+                    }
+                ]
+            }
+
+    async def gateway_request(*args, **kwargs):
+        del args, kwargs
+        return FakeResponse()
+
+    monkeypatch.setattr(inspire_samples, "_gateway_request", gateway_request)
+
+    with pytest.raises(inspire_samples.XiaohongshuRuntimeError) as exc_info:
+        await InspireDirectCrawler().collect(
+            owner_uid="owner-1",
+            account_id="account-1",
+            session_id="session-1",
+            industry_slug="decoration",
+            limit=10,
+        )
+
+    assert exc_info.value.code == "INSPIRE_ITEM_INCOMPLETE"
 
 
 @pytest.mark.asyncio
@@ -110,7 +190,7 @@ async def test_inspire_media_is_downloaded_through_backend(monkeypatch: pytest.M
         sample_id="sample-1",
         object_key="inspire-covers/owner/cover.jpg",
         mime_type="image/jpeg",
-        expires_at=None,
+        expires_at=inspire_samples.utc_now_naive() - timedelta(hours=1),
     )
     sample = SimpleNamespace(owner_uid="owner-1")
 

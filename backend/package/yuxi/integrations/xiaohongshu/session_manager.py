@@ -225,6 +225,27 @@ class XiaohongshuBrowserSessionManager:
             session.last_used_at = monotonic()
             return await self._status_unlocked(session)
 
+    async def collect_inspire(
+        self,
+        *,
+        session_id: str,
+        owner_uid: str,
+        account_id: str,
+        industry: str,
+        limit: int,
+    ) -> list[dict]:
+        session = await self.get(session_id, owner_uid, account_id)
+        if session.target != "inspire":
+            raise ValueError("当前远程浏览器不是聚光采集会话")
+        async with session.lock:
+            items = await self.runtime.collect_inspire_cards(
+                session.page,
+                industry=industry,
+                limit=limit,
+            )
+            session.last_used_at = monotonic()
+            return items
+
     @property
     def active_session_count(self) -> int:
         return len(self._sessions)
