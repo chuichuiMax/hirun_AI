@@ -73,10 +73,11 @@ REVIEW_NOTES_RESEARCH_RESULT_FIELDS = {
 
 REVIEW_NOTES_GENERATE_PROHIBITED_ACTIONS = (
     "不按装修获客标题公式或正文调用规则写作",
-    "不检索「好评知识库」或「好评笔记知识库」以外的知识库或网页",
+    "不调用知识库或网页工具，语气只模仿 payload.content_brief.style_excerpts",
     "不以获客种草、员工自荐或销售转化口吻写作",
-    "不编造简报与证据以外的项目事实",
+    "不编造简报与证据以外的项目事实，不把样例中的他人事实写成当前项目事实",
     "标题不出现楼盘、小区或项目案名；可赞美表扬所属店面或门店",
+    "首轮不得 read_file 或探索工具，须直接 submit_content_node_result",
 )
 
 DECORATION_GENERATE_PROHIBITED_ACTIONS = (
@@ -90,9 +91,9 @@ DECORATION_GENERATE_PROHIBITED_ACTIONS = (
     "不得将鸿扬家居/鸿扬家装写成整装或标准化整装，须写定制化家装",
     "不编造 Evidence ID；卡点与数字须原样引用并挂载对应 id；面积禁止改写成中间值",
     "有业务知识证据时 paragraph_evidence 至少挂一条知识库 id",
-    "报价清单类：标题须语义清晰可读；不以低价为主卖点，正文突出鸿扬品牌优势",
+    "报价清单类：标题须语义清晰可读，如面积+旧房翻新+钱要花在哪；不以低价为主卖点，正文突出鸿扬品牌优势，成品不要写口径",
     "工艺展示类：标题须点明工艺主题且可读；正文以工艺标准/细节讲解为主，禁止案例分享叙事，不要强调装修风格",
-    "装修家居成品写预算价不写合同价；泥木阶段对外写泥瓦，无木工证据不写木工",
+    "装修家居成品写预算价不写合同价，不要写口径；泥木阶段对外写泥瓦，无木工证据不写木工",
     "成品标题/正文/话题不得保留 evidence 中 forbidden_replacement_map 的问题词（含「报价」「私信」等平台违禁词）",
 )
 
@@ -320,23 +321,33 @@ class AgentNodeHandler:
         if node["id"] == "research_strategy_prices" and not (
             (state.get("joint_strategy_decision") or {}).get("price_research_questions")
         ):
-            return {"strategy_price_evidence_collection": {
-                "evidence_items": [], "citations": [], "unresolved_questions": [],
-                "skipped": True, "skip_reason": "策略未发现需要检索的报价缺口",
-            }}
-        if node["id"] == "reselect_creation_strategy" and (
-            state["strategy_price_evidence_collection"].get("skipped")
-        ):
-            return {"joint_strategy_decision": state["joint_strategy_decision"],
-                    "strategy_selection": state["strategy_selection"]}
+            return {
+                "strategy_price_evidence_collection": {
+                    "evidence_items": [],
+                    "citations": [],
+                    "unresolved_questions": [],
+                    "skipped": True,
+                    "skip_reason": "策略未发现需要检索的报价缺口",
+                }
+            }
+        if node["id"] == "reselect_creation_strategy" and (state["strategy_price_evidence_collection"].get("skipped")):
+            return {
+                "joint_strategy_decision": state["joint_strategy_decision"],
+                "strategy_selection": state["strategy_selection"],
+            }
         if node["id"] == "collect_price_evidence" and (
             state.get("strategy_price_evidence_collection") is not None
             and not state["strategy_price_evidence_collection"].get("skipped")
         ):
-            return {"price_evidence_collection": {
-                "evidence_items": [], "citations": [], "unresolved_questions": [],
-                "skipped": True, "skip_reason": "策略锁定前已完成本次价格检索，证据已合并",
-            }}
+            return {
+                "price_evidence_collection": {
+                    "evidence_items": [],
+                    "citations": [],
+                    "unresolved_questions": [],
+                    "skipped": True,
+                    "skip_reason": "策略锁定前已完成本次价格检索，证据已合并",
+                }
+            }
 
         research_result_fields = {
             "collect_business_rule_evidence": "business_rule_evidence_collection",
@@ -523,11 +534,6 @@ class AgentNodeHandler:
         if skip_formula_lexicon_pipeline(state) and node["id"] == "generate_content":
             prohibited_actions = list(REVIEW_NOTES_GENERATE_PROHIBITED_ACTIONS)
             knowledge_policy = "agent_scope"
-            max_tool_calls = max(max_tool_calls, 6)
-            max_retrieval_rounds = max(max_retrieval_rounds, 2)
-            max_knowledge_bases = max(max_knowledge_bases, 1)
-            max_chunks_per_knowledge_base = max(max_chunks_per_knowledge_base, 4)
-            max_chars_per_knowledge_chunk = max(max_chars_per_knowledge_chunk, 2400)
         elif node["id"] == "generate_content":
             prohibited_actions = list(DECORATION_GENERATE_PROHIBITED_ACTIONS)
         delegation = AgentDelegationService(db)
@@ -552,7 +558,8 @@ class AgentNodeHandler:
                     "product_material_requirements": state.get("product_material_requirements") or {},
                 },
                 prompt=(
-                    f"执行内容工作流节点 {node['id']}：检索「好评知识库」或「好评笔记知识库」并模仿写作"
+                    f"执行内容工作流节点 {node['id']}：模仿 payload.content_brief.style_excerpts 的语气结构，"
+                    "直接 submit_content_node_result"
                     if skip_formula_lexicon_pipeline(state) and node["id"] == "generate_content"
                     else (
                         f"执行内容工作流节点 {node['id']} 的唯一职责；"

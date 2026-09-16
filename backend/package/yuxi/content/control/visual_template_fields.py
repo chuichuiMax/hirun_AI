@@ -10,6 +10,7 @@ VISUAL_TEXT_MAX_CHAR_FLOORS: dict[str, int] = {
     "subtitle": 16,
     "body_excerpt": 24,
 }
+_VISUAL_UNSUPPORTED_CLAIM_TERMS = ("免费", "保证", "保价", "最低", "第一", "省钱", "零风险")
 
 
 def apply_visual_text_max_char_floor(role: str, max_chars: int | None) -> int | None:
@@ -34,6 +35,77 @@ def is_decorative_cover_label(value: object) -> bool:
     if not text:
         return True
     return bool(re.fullmatch(r"0?\d{1,2}", text))
+
+
+def visual_text_char_count(value: str) -> int:
+    return len(value.replace("\n", ""))
+
+
+def clamp_visual_text(value: str, max_chars: int | None) -> str:
+    """把封面文案压进框容量，优先在标点处收束，避免再打回模型。"""
+    text = str(value or "").strip()
+    if not isinstance(max_chars, int) or max_chars <= 0 or visual_text_char_count(text) <= max_chars:
+        return text
+    plain = text.replace("\n", "")
+    cut = plain[:max_chars]
+    for sep in ("，", "。", "、", "！", "？", "；", ",", ".", " "):
+        idx = cut.rfind(sep)
+        if idx >= max(4, max_chars // 2):
+            cut = cut[:idx]
+            break
+    return cut.strip() or plain[:max_chars]
+
+
+def normalize_visual_text(value: str) -> str:
+    return re.sub(r"[\W_]+", "", value, flags=re.UNICODE).casefold()
+
+
+def contains_unsupported_visual_claim(value: str) -> bool:
+    return any(term in value for term in _VISUAL_UNSUPPORTED_CLAIM_TERMS)
+
+
+def uniquify_visual_template_fields(
+    fields: dict[str, str],
+    *,
+    limits: dict[str, dict[str, int]],
+    extra_texts: list[str],
+) -> dict[str, str]:
+    """超长截入 maxChars；重复框改成不同信息点，避免 visual_text_duplicate 二次调用。"""
+    repaired: dict[str, str] = {}
+    used_norm: dict[str, str] = {}
+    unused_extras = [str(item).strip() for item in extra_texts if str(item).strip()]
+
+    def accept(label: str, raw: str, max_chars: int | None) -> tuple[str, str] | None:
+        value = clamp_visual_text(raw, max_chars)
+        if not value or is_decorative_cover_label(value) or contains_unsupported_visual_claim(value):
+            return None
+        norm = normalize_visual_text(value)
+        if not norm or norm in used_norm:
+            return None
+        return value, norm
+
+    for label, raw in fields.items():
+        max_chars = (limits.get(label) or {}).get("maxChars")
+        chosen = accept(label, raw, max_chars)
+        if chosen is None:
+            for extra in list(unused_extras):
+                chosen = accept(label, extra, max_chars)
+                if chosen is not None:
+                    unused_extras.remove(extra)
+                    break
+        if chosen is None:
+            plain = clamp_visual_text(raw, max_chars).replace("\n", "")
+            for start in range(1, max(1, len(plain) - 3)):
+                chosen = accept(label, plain[start:], max_chars)
+                if chosen is not None:
+                    break
+        if chosen is None:
+            repaired[label] = clamp_visual_text(raw, max_chars)
+            continue
+        value, norm = chosen
+        repaired[label] = value
+        used_norm[norm] = label
+    return repaired
 
 
 def is_ordinal_badge_template_field(field: dict[str, Any]) -> bool:

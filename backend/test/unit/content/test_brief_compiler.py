@@ -132,7 +132,7 @@ def test_compile_brief_maps_review_notes_variables():
     assert missing == []
     assert compiled["form_values"]["project_type"] == "业主好评笔记"
     assert compiled["form_values"]["voice"] == "业主第一人称"
-    assert "好评知识库" in compiled["form_values"]["writing_instruction"]
+    assert "style_excerpts" in compiled["form_values"]["writing_instruction"]
     assert compiled["audience"] == ["业主"]
 
 

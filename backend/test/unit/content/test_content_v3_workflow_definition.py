@@ -138,13 +138,15 @@ def test_generation_and_review_have_budget_for_multi_skill_nodes():
     review = _node(WORKFLOW_V3, "semantic_review")
     plan_visuals = _node(WORKFLOW_V3, "plan_visuals")
 
-    assert generation["timeout_seconds"] == 240
-    assert generation["max_execution_steps"] == 30
+    assert generation["timeout_seconds"] == 200
+    assert generation["max_execution_steps"] == 16
+    assert generation["max_tool_calls"] == 1
     assert generation["max_execution_steps"] > 2 * (generation["max_tool_calls"] + len(generation["required_skills"]))
     assert review["timeout_seconds"] == 180
     assert review["max_execution_steps"] == 20
-    assert plan_visuals["max_execution_steps"] == 40
-    assert plan_visuals["timeout_seconds"] == 360
+    assert plan_visuals["max_execution_steps"] == 12
+    assert plan_visuals["max_tool_calls"] == 1
+    assert plan_visuals["timeout_seconds"] == 90
 
 
 @pytest.mark.unit
@@ -212,12 +214,9 @@ def test_strategy_is_deterministic_and_generation_remains_one_agent_call():
     assert strategy["type"] == "deterministic"
     assert generation["required_skills"] == [
         "content-title-generator",
-        "content-outline-builder",
         "content-body-generator",
         "viral-structure-rewriter",
         "viral-layout-formatter",
-        "humanizer-zh",
-        "content-human-expression",
     ]
     assert node_ids.index("select_creation_strategy") < node_ids.index("lock_creation_strategy")
     assert node_ids.index("freeze_evidence_bundle") < node_ids.index("generate_content")

@@ -1717,10 +1717,10 @@ def validate_content_node_result(
                 f"标题少于 {context.title_min_length} 字",
             )
         if context.title_max_length is not None and title_length > context.title_max_length:
-            raise ContractDomainValidationError(
-                "channel_title_long",
-                "title.text",
-                f"标题超过 {context.title_max_length} 字",
+            result = result.model_copy(
+                update={
+                    "title": result.title.model_copy(update={"text": result.title.text[: context.title_max_length]})
+                }
             )
         _require_equal(result.outline.body_formula_code, context.locked_body_formula_code, "outline.body_formula_code")
         _validate_outline_calling_contract(result.outline, context)
@@ -1763,7 +1763,12 @@ def validate_content_node_result(
         for index, asset_id in enumerate(result.source_asset_ids):
             _require_member(asset_id, context.allowed_asset_ids, f"source_asset_ids.{index}")
         _validate_evidence_ids(result.evidence_ids, "visual", context, "evidence_ids")
-        from yuxi.content.control.visual_template_fields import is_decorative_cover_label
+        from yuxi.content.control.visual_template_fields import (
+            clamp_visual_text,
+            contains_unsupported_visual_claim,
+            is_decorative_cover_label,
+            uniquify_visual_template_fields,
+        )
 
         if context.decorative_visual_template_fields:
             result = result.model_copy(
@@ -1838,12 +1843,33 @@ def validate_content_node_result(
                     f"template_fields.{label}",
                     f"封面补写文案不得沿用无事实依据的承诺词“{unsupported_claim}”，请改为中性描述",
                 )
+        repaired_fields = uniquify_visual_template_fields(
+            dict(result.template_fields),
+            limits=allowed_template_fields,
+            extra_texts=list(result.text),
+        )
+        clamped_text = []
+        for index, value in enumerate(result.text):
+            role = "title" if index == 0 else "subtitle"
+            max_chars = context.visual_text_max_chars.get(role)
+            if max_chars is None and index > 0:
+                max_chars = context.visual_text_max_chars.get("body_excerpt")
+            clamped_text.append(clamp_visual_text(value, max_chars))
+        result = result.model_copy(update={"template_fields": repaired_fields, "text": clamped_text})
+        for label, constraints in allowed_template_fields.items():
+            value = result.template_fields.get(label, "").strip()
             max_chars = constraints.get("maxChars")
             if max_chars and len(value.replace("\n", "")) > max_chars:
                 raise ContractDomainValidationError(
                     "visual_text_too_long",
                     f"template_fields.{label}",
                     f"封面字段“{label}”最多 {max_chars} 个字符，请缩短后重新提交视觉方案",
+                )
+            if contains_unsupported_visual_claim(value):
+                raise ContractDomainValidationError(
+                    "visual_template_claim_unsupported",
+                    f"template_fields.{label}",
+                    "封面补写文案不得沿用无事实依据的承诺词，请改为中性描述",
                 )
         normalized_template_text: dict[str, str] = {}
         for label, value in result.template_fields.items():

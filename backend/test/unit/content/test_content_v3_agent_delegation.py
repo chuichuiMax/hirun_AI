@@ -1318,14 +1318,11 @@ def test_formal_content_agent_catalog_and_conflict_policy():
     generation_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-generation-agent")
     assert generation_spec.skills == (
         "content-title-generator",
-        "content-outline-builder",
         "content-body-generator",
         "viral-structure-rewriter",
         "viral-layout-formatter",
-        "humanizer-zh",
-        "content-human-expression",
     )
-    assert generation_spec.config_version == 8
+    assert generation_spec.config_version == 9
     assert generation_spec.skill_tools == ("query_kb", "open_kb_document", "find_kb_document", "list_kbs")
     assert generation_spec.reasoning_effort == "low"
     spec = CONTENT_AGENT_SPECS[0]
@@ -1504,10 +1501,10 @@ def test_generation_agent_additive_migration_installs_viral_skills():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 8
+    assert existing.config_version == 9
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
-    assert set(existing.config_json["context"]["skills"]) == set(spec.skills)
+    assert set(spec.skills).issubset(existing.config_json["context"]["skills"])
 
 
 def test_generation_agent_additive_migration_installs_viral_layout_formatter():
@@ -1538,10 +1535,11 @@ def test_generation_agent_additive_migration_installs_viral_layout_formatter():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 8
+    assert existing.config_version == 9
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
-    assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}
+    assert set(spec.skills).issubset(existing.config_json["context"]["skills"])
+    assert "user-extra-skill" in existing.config_json["context"]["skills"]
 
 
 def test_generation_agent_additive_migration_installs_humanizer_for_original_content():
@@ -1573,10 +1571,11 @@ def test_generation_agent_additive_migration_installs_humanizer_for_original_con
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 8
+    assert existing.config_version == 9
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
-    assert set(existing.config_json["context"]["skills"]) == {*spec.skills, "user-extra-skill"}
+    assert set(spec.skills).issubset(existing.config_json["context"]["skills"])
+    assert "user-extra-skill" in existing.config_json["context"]["skills"]
 
 
 def test_generation_agent_additive_migration_enables_review_notes_knowledge_tools():
@@ -1600,7 +1599,7 @@ def test_generation_agent_additive_migration_enables_review_notes_knowledge_tool
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 8
+    assert existing.config_version == 9
     assert existing.config_json["context"]["skill_tool_allowlist"] == [
         "query_kb",
         "open_kb_document",

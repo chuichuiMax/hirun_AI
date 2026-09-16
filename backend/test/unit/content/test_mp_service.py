@@ -7,7 +7,10 @@ from yuxi.services.mp_service import (
     REGION_TREE,
     REGIONS,
     _compact_run,
+    _content_approval_auto_resume_payload,
     _cover_asset_ids,
+    _cover_auto_resume_payload,
+    _visible_mp_run,
     _lock_decoration_visual_material,
     _mp_gallery_item,
     _mp_hycanvas_template_item,
@@ -513,7 +516,7 @@ def test_build_mp_brief_payload_review_notes_has_no_photos():
     assert not brief.form_values.get("cover_asset_ids")
     assert brief.audience == ["业主"]
     assert brief.form_values["project_type"] == "业主好评笔记"
-    assert "好评知识库" in brief.form_values["writing_instruction"]
+    assert "style_excerpts" in brief.form_values["writing_instruction"]
     assert "不要写成获客" in brief.form_values["writing_instruction"]
     assert brief.form_values["voice"] == "业主第一人称"
 
@@ -583,3 +586,79 @@ def test_compact_run_exposes_error_message_for_failed_runs():
     assert result["status"] == "failed"
     assert result["error_message"] == "Agent 节点执行超时（120s）"
     assert result["interrupt"] is None
+
+
+def test_cover_auto_resume_payload_uses_first_generated_asset():
+    payload = _cover_auto_resume_payload(
+        {
+            "interrupt_type": "cover_selection",
+            "run_id": "run-parent",
+            "node_id": "select_cover",
+            "expected_state_version": 4,
+            "asset_ids": ["cca_1", "cca_2"],
+        },
+        "run-fallback",
+    )
+    assert payload == {
+        "run_id": "run-parent",
+        "node_id": "select_cover",
+        "expected_state_version": 4,
+        "asset_id": "cca_1",
+    }
+
+
+def test_cover_auto_resume_payload_ignores_non_cover_interrupts():
+    assert _cover_auto_resume_payload({"interrupt_type": "content_approval"}, "run-1") is None
+    assert _cover_auto_resume_payload({"interrupt_type": "cover_selection", "asset_ids": []}, "run-1") is None
+    assert _cover_auto_resume_payload(None, "run-1") is None
+
+
+def test_content_approval_auto_resume_payload_approves_current_interrupt():
+    payload = _content_approval_auto_resume_payload(
+        {
+            "interrupt_type": "content_approval",
+            "run_id": "run-parent",
+            "node_id": "human_content_approval",
+            "expected_state_version": 2,
+        },
+        "run-fallback",
+    )
+    assert payload == {
+        "run_id": "run-parent",
+        "node_id": "human_content_approval",
+        "expected_state_version": 2,
+        "decision": "approved",
+        "note": "小程序自动审批",
+    }
+    assert _content_approval_auto_resume_payload({"interrupt_type": "cover_selection"}, "run-1") is None
+
+
+def test_visible_mp_run_follows_cover_resume_and_completed_task():
+    result = {
+        "run": {
+            "id": "run-parent",
+            "thread_id": "task-1",
+            "status": "interrupted",
+            "request_id": "req-parent",
+        },
+        "continuations": [
+            {
+                "id": "run-parent",
+                "thread_id": "task-1",
+                "status": "interrupted",
+                "request_id": "req-parent",
+            },
+            {
+                "id": "run-child",
+                "thread_id": "task-1",
+                "status": "completed",
+                "request_id": "req-child",
+            },
+        ],
+    }
+    visible = _visible_mp_run(result, task_status="reviewed")
+    assert visible["id"] == "run-child"
+    assert visible["status"] == "completed"
+    following = _visible_mp_run(result, task_status="queued")
+    assert following["id"] == "run-child"
+    assert following["status"] == "completed"

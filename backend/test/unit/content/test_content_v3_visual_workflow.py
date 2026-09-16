@@ -19,6 +19,7 @@ from yuxi.content.control.workflow.external_wait import (
     ExternalWaitNodeHandler,
     skip_content_correction_interrupt,
     skip_cover_pipeline,
+    skip_cover_selection_interrupt,
     skip_formula_lexicon_pipeline,
 )
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
@@ -590,6 +591,17 @@ def test_content_correction_interrupt_only_skipped_for_review_notes():
     )
 
 
+def test_cover_selection_interrupt_skipped_for_mp_content_code():
+    assert skip_cover_selection_interrupt(
+        {"content_brief": {"form_values": {"mp_service_entry": "装修家居", "mp_content_code": "NR20260916001"}}}
+    )
+    assert not skip_cover_selection_interrupt(
+        {"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}}
+    )
+    assert not skip_cover_selection_interrupt({"content_brief": {}})
+    assert not skip_cover_selection_interrupt({})
+
+
 def test_skip_formula_lexicon_pipeline_only_for_review_notes():
     assert skip_formula_lexicon_pipeline({"content_brief": {"form_values": {"mp_service_entry": "好评笔记"}}})
     assert not skip_formula_lexicon_pipeline({"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}})
@@ -880,6 +892,46 @@ async def test_cover_selection_uses_cover_job_assets_when_review_omits_them(monk
     assert len(payloads) == 1
     assert payloads[0]["asset_ids"] == ["cca_cover_1"]
     assert result["selected_cover"] == {"asset_id": "cca_cover_1", "cover_job_id": "ccj_1"}
+
+
+@pytest.mark.asyncio
+async def test_cover_selection_auto_selects_for_mp_without_interrupt(monkeypatch):
+    monkeypatch.setattr(
+        content_workflow_graph_module,
+        "interrupt",
+        lambda _payload: pytest.fail("小程序不应触发人工选封面"),
+    )
+
+    result = await ContentWorkflowAgent()._v3_human_review(
+        {"id": "select_cover", "interrupt_type": "cover_selection"},
+        {
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "state_version": 2,
+            "content_brief": {
+                "form_values": {
+                    "mp_service_entry": "装修家居",
+                    "mp_content_code": "NR20260916001",
+                }
+            },
+            "visual_review": {
+                "assets": [
+                    {"asset_id": "cca_cover_1", "status": "passed"},
+                    {"asset_id": "cca_cover_2", "status": "passed"},
+                ],
+                "recommended_asset_id": "cca_cover_2",
+            },
+            "cover_job": {
+                "cover_job_id": "ccj_1",
+                "status": "succeeded",
+                "asset_ids": ["cca_cover_1", "cca_cover_2"],
+            },
+        },
+    )
+
+    assert result["selected_cover"] == {"asset_id": "cca_cover_2", "cover_job_id": "ccj_1"}
+    assert result["state_version"] == 3
+    assert result["resume_parent_run_id"] is None
 
 
 @pytest.mark.asyncio

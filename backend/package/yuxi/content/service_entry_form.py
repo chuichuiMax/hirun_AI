@@ -13,7 +13,7 @@ FORM_FIELD_PRIORITY_KEYS = ("外框面积", "基础", "木制品", "主材")
 REVIEW_NOTE_ROLE_KEYS = ("设计师", "预算师", "项目经理", "客户经理", "工匠")
 REVIEW_NOTES_WRITING_INSTRUCTION = (
     "以业主第一人称评价设计师、预算师、项目经理、客户经理等项目成员；"
-    "检索并模仿「好评知识库」或「好评笔记知识库」中已有文章的语气、结构和用词；"
+    "模仿简报 style_excerpts 的语气、结构和用词，不得抄录样例中的他人事实；"
     "标题不要出现楼盘、小区或项目案名，可以赞美表扬所属店面或门店；"
     "写内部可归档的真实好评，不要写成获客种草、员工自荐或销售转化文案。"
 )
@@ -26,21 +26,22 @@ DECORATION_WRITING_INSTRUCTION = (
     "若有可用于正文的业务知识证据，至少再挂一条；"
     "必须写出鸿扬家居/鸿扬家装品牌优势（定位为定制化家装，禁止写整装或标准化整装），"
     "并带明确引流点（同城咨询、留言、评论区聊聊等；成品禁用「私信」「报价」等平台封禁词，以 evidence 中 forbidden_replacement_map 为准）；"
-    "费用口径一律写「预算价」，禁止写「合同价」（证据或词库原文是合同价时只改称谓，数字保持原样）；"
+    "费用称谓一律写「预算价」，禁止写「合同价」（证据或词库原文是合同价时只改称谓，数字保持原样）；"
+    "成品标题/正文/话题不要出现「口径」，对外写钱花在哪、费用怎么拆、预算清不清楚；"
     "项目阶段为泥木阶段时，成品写「泥瓦」不写「泥木」；工艺类型或证据未出现木工时不得补写木工；"
     "封面/副标/话题也不得出现整装、标准化整装；事实只来自简报与冻结证据，不得编造户型缺陷、改造前后效果或他人案例细节。"
 )
 QUOTATION_LIST_TYPE_NAMES = frozenset({"装修报价清单", "报价清单"})
 QUOTATION_LIST_WRITING_INSTRUCTION = (
-    "内容类型为装修报价清单：标题必须让人一眼看懂在说什么（预算参考/费用透明/避坑清单等），"
-    "句子通顺、语义完整，禁止词库堆砌、暗号式缩写或看不懂的标题；"
-    "标题可用痛点或悬念，但主题要落在「看清单/看预算口径/避隐形增项」，不要吹嘘最低价；"
+    "内容类型为装修报价清单：标题必须让人一眼看懂在说什么，句子通顺、语义完整，禁止词库堆砌或看不懂的标题；"
+    "正例：130-150m2旧房翻新，钱要花在哪？；反例：旧房翻新业主130-150㎡预算不踩坑。"
+    "旧房改造对外可写旧房翻新；主题落在钱花在哪、费用怎么拆、避隐形增项，不要吹嘘最低价；"
     "正文把基础/木制品/主材等费用仅作参考信息卡点展示，明确费用数字不是鸿扬核心卖点，禁止主推「更便宜、低价、性价比碾压」；"
     "正文重点写鸿扬家居/鸿扬家装品牌优势：定制化家装、透明施工、自有/规范工艺、售后与靠谱服务，用品牌与交付能力收尾引流；"
     "成品标题/正文/话题必须规避平台封禁词库问题词（见 evidence forbidden_replacement_map），"
     "引流只用同城咨询、留言、评论区等安全表达，不得出现「私信」「报价」等表内问题词；词库原文含问题词时须改写后再写入；"
-    "费用口径一律写「预算价」，禁止写「合同价」（证据原文是合同价时只改称谓、数字保持原样）；"
-    "禁止把鸿扬写成整装或标准化整装；仍须写清小区、面积（原文）、风格、项目施工鸿扬家装等信息卡点，并正确挂载 Evidence ID；"
+    "费用称谓一律写「预算价」，禁止写「合同价」（证据原文是合同价时只改称谓、数字保持原样）；"
+    "成品不要出现「口径」；禁止把鸿扬写成整装或标准化整装；仍须写清小区、面积（原文）、风格、项目施工鸿扬家装等信息卡点，并正确挂载 Evidence ID；"
     "不展开某套房案例故事，不编造数字与改造情节。"
 )
 CRAFT_SHOWCASE_TYPE_NAMES = frozenset({"工艺施工展示", "工艺展示"})
@@ -87,7 +88,7 @@ CRAFT_SHOWCASE_WRITING_INSTRUCTION = (
     "从空开选型、回路划分到接线、标识，每个环节都严格按照工艺规范落实，不赶工、不省步骤，扎实做好用电安全的每一处细节。"
     "禁止写成装修案例分享：不得展开某套房旧况→改造过程→完工效果叙事，不得虚构客户经历或前后对比故事；"
     "收尾可写鸿扬家居/鸿扬家装品牌优势（定制化家装，禁止整装/标准化整装）与同城咨询、留言、评论区引流；"
-    "费用口径一律写「预算价」，禁止写「合同价」；成品规避平台封禁词库问题词（见 evidence forbidden_replacement_map）；卡点与数字须挂载正确 Evidence ID。"
+    "费用称谓一律写「预算价」，禁止写「合同价」；成品不要出现「口径」；成品规避平台封禁词库问题词（见 evidence forbidden_replacement_map）；卡点与数字须挂载正确 Evidence ID。"
 )
 
 
@@ -147,7 +148,6 @@ def filter_title_formulas_for_content_direction(
         blocked=CRAFT_SHOWCASE_BLOCKED_TITLE_FORMULAS,
         preferred=CRAFT_SHOWCASE_PREFERRED_TITLE_FORMULAS,
     )
-
 
 
 def prioritize_form_fields(
@@ -355,7 +355,7 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
         is_quotation_list = content_type_name in QUOTATION_LIST_TYPE_NAMES
         is_craft_showcase = content_type_name in CRAFT_SHOWCASE_TYPE_NAMES
         if is_quotation_list:
-            pain = f"{community or '业主'}关心装修预算口径与隐形增项，更需要看清品牌与交付是否靠谱"
+            pain = f"{community or '业主'}关心装修预算怎么花、怕隐形增项，更需要看清品牌与交付是否靠谱"
             advantage = "；".join(
                 part
                 for part in (
@@ -367,9 +367,7 @@ def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any
             )
             values["writing_instruction"] = QUOTATION_LIST_WRITING_INSTRUCTION
         elif is_craft_showcase:
-            pain = (
-                f"业主关心{process_type or stage_topic or '施工'}是否规范、细节是否到位、会不会走过场"
-            )
+            pain = f"业主关心{process_type or stage_topic or '施工'}是否规范、细节是否到位、会不会走过场"
             advantage = "；".join(
                 part
                 for part in (

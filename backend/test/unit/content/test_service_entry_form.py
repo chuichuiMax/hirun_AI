@@ -234,6 +234,7 @@ def test_map_service_entry_form_values_quotation_list_brand_over_price():
         },
     )
     assert "一眼看懂" in mapped["writing_instruction"]
+    assert "钱要花在哪" in mapped["writing_instruction"]
     assert "费用数字不是鸿扬核心卖点" in mapped["writing_instruction"]
     assert "forbidden_replacement_map" in mapped["writing_instruction"]
     assert "品牌优势" in mapped["writing_instruction"]
@@ -294,6 +295,8 @@ def test_map_service_entry_form_values_quotation_list_uses_budget_price_wording(
     )
     assert "预算价" in mapped["writing_instruction"]
     assert "禁止写「合同价」" in mapped["writing_instruction"]
+    assert "钱要花在哪" in mapped["writing_instruction"]
+    assert "不要出现「口径」" in mapped["writing_instruction"]
 
 
 def test_map_service_entry_form_values_craft_showcase_not_case_story():
@@ -365,7 +368,7 @@ def test_map_service_entry_form_values_review_notes_uses_owner_voice():
     )
     assert mapped["project_type"] == "业主好评笔记"
     assert mapped["voice"] == "业主第一人称"
-    assert "好评知识库" in mapped["writing_instruction"]
+    assert "style_excerpts" in mapped["writing_instruction"]
     assert "标题不要出现楼盘" in mapped["writing_instruction"]
     assert "所属店面" in mapped["writing_instruction"]
     assert mapped["audience"] == ["业主"]

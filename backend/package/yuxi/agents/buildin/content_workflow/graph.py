@@ -19,6 +19,7 @@ from yuxi.content.control.workflow.external_wait import (
     ExternalWaitNodeHandler,
     skip_content_correction_interrupt,
     skip_cover_pipeline,
+    skip_cover_selection_interrupt,
     skip_formula_lexicon_pipeline,
 )
 from yuxi.content.control.workflow.revision import (
@@ -308,8 +309,12 @@ class ContentWorkflowAgent(BaseAgent):
                 if persisted:
                     output_snapshot = {"updated_fields": sorted(result.keys())}
                     if cache_key or node_id in {
-                        "select_creation_strategy", "lock_creation_strategy", "research_strategy_prices",
-                        "confirm_strategy_prices", "merge_strategy_prices", "reselect_creation_strategy",
+                        "select_creation_strategy",
+                        "lock_creation_strategy",
+                        "research_strategy_prices",
+                        "confirm_strategy_prices",
+                        "merge_strategy_prices",
+                        "reselect_creation_strategy",
                     }:
                         output_snapshot["result"] = result
                     if node_id == "prepare_strategy_candidates":
@@ -534,8 +539,11 @@ class ContentWorkflowAgent(BaseAgent):
             if set(answer.get("confirmed_evidence_ids") or []) != ids:
                 raise ValueError("检索报价必须逐项确认；标准单价的确认不代表本项目实际成交价")
             collection["evidence_items"] = [{**item, "verified_status": "user_confirmed"} for item in items]
-            return {"strategy_price_evidence_collection": collection,
-                    "state_version": state_version + 1, "resume_parent_run_id": None}
+            return {
+                "strategy_price_evidence_collection": collection,
+                "state_version": state_version + 1,
+                "resume_parent_run_id": None,
+            }
 
         if interrupt_type == "high_risk_facts":
             collection = dict(state.get("evidence_collection") or {})
@@ -782,16 +790,23 @@ class ContentWorkflowAgent(BaseAgent):
                 if isinstance(item, dict) and item.get("asset_id") in cover_asset_ids
             ]
             if reviewed:
-                selectable = [
-                    str(item["asset_id"])
-                    for item in reviewed
-                    if item.get("status") in {"passed", "warning"}
-                ]
+                selectable = [str(item["asset_id"]) for item in reviewed if item.get("status") in {"passed", "warning"}]
                 if not selectable:
                     raise ValueError("视觉审核未通过任何封面，请重试封面生成")
             else:
                 # 审核结果未逐条回填资产时，允许选择本次 CoverJob 产出，避免空候选卡死。
                 selectable = cover_asset_ids
+            if skip_cover_selection_interrupt(state):
+                recommended = str(review.get("recommended_asset_id") or "").strip()
+                asset_id = recommended if recommended in selectable else selectable[0]
+                return {
+                    "selected_cover": {
+                        "asset_id": asset_id,
+                        "cover_job_id": cover_job.get("cover_job_id"),
+                    },
+                    "state_version": state_version + 1,
+                    "resume_parent_run_id": None,
+                }
             answer = require_resume(
                 {
                     "asset_ids": selectable,

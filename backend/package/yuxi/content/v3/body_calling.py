@@ -39,7 +39,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "verified_data",
                 "name": "数据落地铺垫",
-                "instruction": "用简报信息卡点写出小区名称、房屋面积、房屋布局（有填才写）、风格、项目施工鸿扬家装；可并列基础/木制品/主材等费用作参考口径，并点明费用数字仅供参考、不是核心卖点；面积等字段原样抄写证据文本；对应事实写入本段 evidence_ids；不得写「报价」「私信」等封禁词",
+                "instruction": "用简报信息卡点写出小区名称、房屋面积、房屋布局（有填才写）、风格、项目施工鸿扬家装；可并列基础/木制品/主材等费用作参考，并点明费用数字仅供参考、不是核心卖点；面积等字段原样抄写证据文本；对应事实写入本段 evidence_ids；不得写「报价」「私信」等封禁词，也不要写「口径」",
                 "fill_rule": "只使用 ContentBrief 或 EvidenceBundle 中的真实数据，逐字复制匹配条目的 id，不调用词库补造数字，不编造布局与改造细节，不把面积区间改成中间值",
                 "lexicon_calls": [],
                 "fact_source": "evidence",
@@ -48,7 +48,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
                 "id": "single_contrast",
                 "name": "多维度前后反差展示",
                 "instruction": "四选一且单篇只使用一种反差逻辑，禁止混用；优先服务/认知反差；反差结论导向透明交付与品牌靠谱，禁止主推「我们更便宜/低价碾压」",
-                "fill_rule": "按所选反差维度使用对应词库，保持统一正反对比逻辑；涉及预算时强调口径清晰与少踩坑，不强调低价优势；词库问题词须按封禁表改写",
+                "fill_rule": "按所选反差维度使用对应词库，保持统一正反对比逻辑；涉及预算时强调费用明细写清楚与少踩坑，不强调低价优势；词库问题词须按封禁表改写",
                 "lexicon_calls": [],
                 "fact_source": "lexicon_and_evidence",
             },
@@ -71,13 +71,13 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "budget_contrast",
                 "name": "预算反差",
-                "instruction": "业主理想化预算预期 VS 实际装修超支现状；解决方向是口径透明与品牌交付，不是拼最低价",
+                "instruction": "业主理想化预算预期 VS 实际装修超支现状；解决方向是费用透明与品牌交付，不是拼最低价",
                 "lexicon_calls": ["body.owner_expectation_gap", "body.budget_contrast"],
             },
             {
                 "id": "cognitive_contrast",
                 "name": "认知反差",
-                "instruction": "业主错误费用认知 VS 专业正规预算口径与品牌标准",
+                "instruction": "业主错误费用认知 VS 专业正规预算拆分与品牌标准",
                 "lexicon_calls": ["body.quotation_cognitive_contrast"],
             },
             {

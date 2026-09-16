@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import os
 import time
@@ -25,6 +26,7 @@ from yuxi.content.control.workflow.external_wait import (
     REVIEW_NOTES_KNOWLEDGE_BASE_NAME,
 )
 from yuxi.content.control.workflow.generation_input import (
+    attach_review_notes_style_excerpts,
     project_generation_input,
     project_visual_plan_input,
 )
@@ -48,15 +50,17 @@ from yuxi.storage.postgres.models_content import ContentNodeRun
 
 # 节点总时间、单调用时间、默认推理强度、模型调用上限（连接重试与结果纠错共用）。
 CONTENT_NODE_EXECUTION_LIMITS = {
-    # 正文生成以首轮直出为主；low 显著缩短单次推理，校验失败仍可用满 3 次额度纠错。
-    # SiliconFlow 大输入首包偶发 >120s，单调用空闲超时放宽到 180s，节点总时限同步抬高。
-    "generate_content": (560, 180, "low", 3),
+    # 一次直出、不把额度留给纠错；空闲时限覆盖 SiliconFlow 常见 TTFT（正文 60–90s）。
+    "generate_content": (200, 180, "low", 1),
     "select_creation_strategy": (150, 65, "low", 2),
     "reselect_creation_strategy": (150, 65, "low", 2),
-    # 封面规划与正文同一套纠错额度；输入投影后单次仍可能 >120s，总时限覆盖 3×150。
-    "plan_visuals": (500, 150, "low", 3),
+    "plan_visuals": (90, 70, "low", 1),
     "visual_review": (300, 120, "low", 2),
 }
+
+
+def _node_execution_limits(request: AgentDelegationRequest) -> tuple[int, int, str, int]:
+    return CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id]
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,17 +143,17 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
     }
     if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
         if request.node_run.node_id == "generate_content":
-            snapshot["generation_policy_version"] = 2
+            snapshot["generation_policy_version"] = 4
             snapshot["model_input_contract"] = "GenerateContentPromptV1"
         elif request.node_run.node_id == "plan_visuals":
-            snapshot["visual_execution_policy_version"] = 2
+            snapshot["visual_execution_policy_version"] = 4
             snapshot["model_input_contract"] = "PlanVisualsPromptV1"
         else:
             snapshot["strategy_execution_policy_version"] = 2
             snapshot["model_input_contract"] = "JointStrategyPromptV1"
         snapshot["streaming_timeout_policy_version"] = 1
         snapshot["limits"]["timeout_mode"] = "idle"
-        snapshot["limits"]["max_model_calls"] = CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id][3]
+        snapshot["limits"]["max_model_calls"] = _node_execution_limits(request)[3]
         snapshot["limits"]["sdk_max_retries"] = 0
     canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     snapshot["snapshot_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -187,7 +191,7 @@ class AgentDelegationService:
     async def execute(self, request: AgentDelegationRequest) -> AgentDelegationResult:
         if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
             # 版本化运行策略不改写历史任务的已发布工作流定义。
-            request = replace(request, timeout_seconds=CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id][0])
+            request = replace(request, timeout_seconds=_node_execution_limits(request)[0])
         agent, backend = await self._resolve_agent(request)
         thread_id = _bounded_run_identifier(
             f"content:{request.task_id}:{request.node_run.node_id}:{request.node_run.attempt}"
@@ -232,9 +236,11 @@ class AgentDelegationService:
                 "LITE_MODE 不支持 Agent 已配置的知识库检索",
                 "conflict",
             )
-        self._apply_knowledge_tool_scope(context)
         if request.node_run.node_id == "generate_content" and request.knowledge_policy == "agent_scope":
-            self._ensure_knowledge_tools_available(context)
+            excerpts = await self._prefetch_review_notes_style_excerpts(context, request.input_payload)
+            attach_review_notes_style_excerpts(request.input_payload, excerpts)
+            context.knowledges = []
+        self._apply_knowledge_tool_scope(context)
         activated_scope = set(getattr(context, "_required_skill_closure", []) or [])
         if not set(request.required_skills).issubset(activated_scope):
             raise ContentApplicationError(
@@ -257,9 +263,7 @@ class AgentDelegationService:
                     "content-outline-builder",
                     "content-human-expression",
                 }
-                context._required_skill_closure = [
-                    slug for slug in context._required_skill_closure if slug not in drop
-                ]
+                context._required_skill_closure = [slug for slug in context._required_skill_closure if slug not in drop]
             if (
                 request.node_run.node_id in {"select_creation_strategy", "reselect_creation_strategy"}
                 and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
@@ -473,11 +477,11 @@ class AgentDelegationService:
     @staticmethod
     def _apply_node_constraints(context, request: AgentDelegationRequest) -> None:
         if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
-            _, call_timeout, reasoning, max_model_calls = CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id]
+            _, call_timeout, reasoning, max_model_calls = _node_execution_limits(request)
             # 节点时限表覆盖 Agent 种子配置，保证正文生成走低推理延迟。
             context.reasoning_effort = reasoning
             context.model_call_timeout_seconds = call_timeout
-            context.model_retry_times = 1
+            context.model_retry_times = 0 if max_model_calls <= 1 else 1
             context._content_max_model_calls = max_model_calls
         if request.knowledge_policy == "none" or request.knowledge_policy == "frozen_evidence_only":
             context.knowledges = []
@@ -541,10 +545,77 @@ class AgentDelegationService:
         if node_id == "generate_content" and not context.knowledges:
             raise ContentApplicationError(
                 "review_notes_knowledge_not_authorized",
-                f"好评笔记生成未配置可访问的「{REVIEW_NOTES_KNOWLEDGE_BASE_NAME}」"
-                f"或「好评笔记知识库」",
+                f"好评笔记生成未配置可访问的「{REVIEW_NOTES_KNOWLEDGE_BASE_NAME}」或「好评笔记知识库」",
                 "invalid",
             )
+
+    @staticmethod
+    def _review_notes_style_query(payload: dict[str, Any]) -> str:
+        brief = payload.get("content_brief") if isinstance(payload.get("content_brief"), dict) else {}
+        variables = brief.get("business_variables") if isinstance(brief.get("business_variables"), dict) else {}
+        form_values = brief.get("form_values") if isinstance(brief.get("form_values"), dict) else {}
+        source = {**form_values, **variables}
+        parts = ["业主第一人称好评", "语气结构"]
+        store = str(source.get("所属店面") or source.get("门店") or "").strip()
+        if store:
+            parts.append(store)
+        for key in ("设计师", "预算师", "项目经理", "客户经理", "工匠"):
+            value = str(source.get(key) or "").strip()
+            if value:
+                parts.append(f"{key}{value}")
+            if len(parts) >= 5:
+                break
+        return " ".join(parts)
+
+    @classmethod
+    async def _prefetch_review_notes_style_excerpts(cls, context, payload: dict[str, Any]) -> list[str]:
+        visible = [
+            item for item in (getattr(context, "_visible_knowledge_bases", None) or []) if isinstance(item, dict)
+        ]
+        kb_ids = [str(item.get("kb_id") or "").strip() for item in visible if item.get("kb_id")]
+        if not kb_ids:
+            kb_ids = [str(item) for item in (getattr(context, "knowledges", None) or []) if str(item).strip()]
+        if not kb_ids:
+            raise ContentApplicationError(
+                "review_notes_knowledge_not_authorized",
+                f"好评笔记生成未配置可访问的「{REVIEW_NOTES_KNOWLEDGE_BASE_NAME}」或「好评笔记知识库」",
+                "invalid",
+            )
+        retriever = None
+        for item in visible:
+            if str(item.get("kb_id") or "").strip() in kb_ids and callable(item.get("retriever")):
+                retriever = item.get("retriever")
+                break
+        if retriever is None:
+            from yuxi import knowledge_base as kb_runtime
+
+            registry = kb_runtime.get_retrievers()
+            for kb_id in kb_ids:
+                target = registry.get(kb_id)
+                if target and callable(target.get("retriever")):
+                    retriever = target["retriever"]
+                    break
+        if retriever is None:
+            raise ContentApplicationError(
+                "review_notes_knowledge_not_authorized",
+                f"好评笔记生成未配置可访问的「{REVIEW_NOTES_KNOWLEDGE_BASE_NAME}」或「好评笔记知识库」",
+                "invalid",
+            )
+        query = cls._review_notes_style_query(payload)
+        result = retriever(query)
+        if inspect.isawaitable(result):
+            result = await result
+        rows = result.get("results") if isinstance(result, dict) else []
+        excerpts: list[str] = []
+        for item in rows or []:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, str) and content.strip():
+                excerpts.append(content.strip())
+            if len(excerpts) >= 2:
+                break
+        return excerpts
 
     @classmethod
     def _ensure_knowledge_tools_available(cls, context) -> None:

@@ -498,8 +498,6 @@ async def _backfill_cover_selection_assets(
     existing = [str(item) for item in (interrupt.get("asset_ids") or []) if item]
     if existing:
         return interrupt
-    from yuxi.repositories.content_cover_repository import ContentCoverRepository
-
     jobs, _ = await ContentCoverRepository(db).list_jobs(
         owner_uid,
         content_task_id=task_id,
@@ -517,6 +515,56 @@ async def _backfill_cover_selection_assets(
                 "cover_job_id": interrupt.get("cover_job_id") or job.id,
             }
     return interrupt
+
+
+def _cover_auto_resume_payload(interrupt: dict[str, Any] | None, run_id: str) -> dict[str, Any] | None:
+    if not interrupt or interrupt.get("interrupt_type") != "cover_selection":
+        return None
+    asset_ids = [str(item) for item in (interrupt.get("asset_ids") or []) if item]
+    version = interrupt.get("expected_state_version")
+    if not asset_ids or version is None:
+        return None
+    return {
+        "run_id": str(interrupt.get("run_id") or run_id),
+        "node_id": str(interrupt.get("node_id") or "select_cover"),
+        "expected_state_version": version,
+        "asset_id": asset_ids[0],
+    }
+
+
+def _content_approval_auto_resume_payload(interrupt: dict[str, Any] | None, run_id: str) -> dict[str, Any] | None:
+    if not interrupt or interrupt.get("interrupt_type") != "content_approval":
+        return None
+    version = interrupt.get("expected_state_version")
+    if version is None:
+        return None
+    return {
+        "run_id": str(interrupt.get("run_id") or run_id),
+        "node_id": str(interrupt.get("node_id") or "human_content_approval"),
+        "expected_state_version": version,
+        "decision": "approved",
+        "note": "小程序自动审批",
+    }
+
+
+def _continuation_runs(run_result: dict[str, Any]) -> list[dict[str, Any]]:
+    items = [item for item in (run_result.get("continuations") or []) if isinstance(item, dict) and item.get("id")]
+    return items or [run_result["run"]]
+
+
+def _visible_mp_run(run_result: dict[str, Any], *, task_status: str | None) -> dict[str, Any]:
+    """封面续跑会换新 run；轮询旧 run 时仍要跟到最新续跑，成品已保存则视为 completed。"""
+    requested = run_result["run"]
+    runs = _continuation_runs(run_result)
+    latest = runs[-1]
+    if str(task_status or "") in {"reviewed", "completed"}:
+        done = next((item for item in reversed(runs) if item.get("status") == "completed"), latest)
+        return {
+            **done,
+            "status": "completed",
+            "thread_id": requested.get("thread_id") or done.get("thread_id"),
+        }
+    return latest
 
 
 def _compact_run(run_result: dict[str, Any], interrupt: dict[str, Any] | None) -> dict[str, Any]:
@@ -1122,9 +1170,7 @@ async def compile_brief(db: AsyncSession, ctx: MpContext, payload: MpCompileBrie
         await list_enabled_resident_population_names(db) if payload.service_entry == "装修家居" else []
     )
     process_types = await list_enabled_process_type_names(db) if payload.service_entry == "装修家居" else []
-    process_names_by_type = (
-        await list_enabled_process_names_by_type(db) if payload.service_entry == "装修家居" else {}
-    )
+    process_names_by_type = await list_enabled_process_names_by_type(db) if payload.service_entry == "装修家居" else {}
     form_fields = configured_business_variable_fields(
         (await list_business_variables(db))["business_variables"],
         service_entry=payload.service_entry,
@@ -1217,14 +1263,44 @@ async def start_run(db: AsyncSession, ctx: MpContext, task_id: str, payload: MpR
 
 async def get_run(db: AsyncSession, ctx: MpContext, run_id: str) -> dict[str, Any]:
     result = await get_content_run(db, ctx.user, run_id)
-    events = await list_run_stream_events(run_id, limit=500)
+    task_id = str(result["run"]["thread_id"])
+    task = await db.get(ContentTask, task_id)
+    visible = _visible_mp_run(result, task_status=None if task is None else task.status)
+    if visible.get("status") == "completed":
+        return _compact_run({"run": visible}, None)
+    events = await list_run_stream_events(str(visible["id"]), limit=500)
     interrupt = await _backfill_cover_selection_assets(
         db,
-        task_id=str(result["run"]["thread_id"]),
+        task_id=task_id,
         owner_uid=str(ctx.user.uid),
         interrupt=_extract_interrupt(events),
     )
-    return _compact_run(result, interrupt)
+    resume_payload = _cover_auto_resume_payload(interrupt, str(visible["id"]))
+    resume_key = "mp-cover-auto"
+    if resume_payload is None and has_mp_content_code(None if task is None else task.brief_json):
+        resume_payload = _content_approval_auto_resume_payload(interrupt, str(visible["id"]))
+        resume_key = "mp-approval-auto"
+    if resume_payload:
+        try:
+            queued = await resume_content_run(
+                db,
+                ctx.user,
+                str(visible["id"]),
+                ContentRunResume(request_id=f"{resume_key}:{visible['id']}", resume=resume_payload),
+            )
+        except HTTPException:
+            queued = None
+        if queued:
+            return {
+                "run_id": queued["run_id"],
+                "task_id": queued["task_id"],
+                "status": queued["status"],
+                "request_id": queued["request_id"],
+                "error_message": None,
+                "interrupt": None,
+                "stream_url": f"/api/mp/content/runs/{queued['run_id']}/events",
+            }
+    return _compact_run({"run": visible}, interrupt)
 
 
 async def stream_run_events(run_id: str, after_seq: str, ctx: MpContext):

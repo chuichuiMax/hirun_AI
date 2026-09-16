@@ -1,6 +1,7 @@
 from copy import deepcopy
 from types import SimpleNamespace
 
+import json
 import pytest
 
 from yuxi.content.control.workflow.generation_input import (
@@ -25,13 +26,31 @@ def test_strategy_has_time_for_two_calls_and_preserves_explicit_reasoning(node_i
     assert context.model_call_timeout_seconds == 65
     assert context.model_retry_times == 1
     assert context._content_max_model_calls == 2
-    assert CONTENT_NODE_EXECUTION_LIMITS[node_id][0] >= context._content_max_model_calls * context.model_call_timeout_seconds + 3 + 15
+    assert (
+        CONTENT_NODE_EXECUTION_LIMITS[node_id][0]
+        >= context._content_max_model_calls * context.model_call_timeout_seconds + 3 + 15
+    )
     context.reasoning_effort = "medium"
     AgentDelegationService._apply_node_constraints(context, request)
     assert context.reasoning_effort == "low"
 
 
-def test_generate_content_allows_three_model_calls_with_matching_watchdog():
+def test_review_notes_generate_content_uses_single_call_watchdog():
+    from yuxi.services.agent_delegation_service import AgentDelegationService, CONTENT_NODE_EXECUTION_LIMITS
+
+    request = SimpleNamespace(
+        node_run=SimpleNamespace(node_id="generate_content"),
+        knowledge_policy="agent_scope",
+    )
+    context = SimpleNamespace(reasoning_effort=None)
+    AgentDelegationService._apply_node_constraints(context, request)
+    assert context.model_call_timeout_seconds == 180
+    assert context._content_max_model_calls == 1
+    assert context.model_retry_times == 0
+    assert CONTENT_NODE_EXECUTION_LIMITS["generate_content"] == (200, 180, "low", 1)
+
+
+def test_generate_content_uses_single_call_watchdog():
     from yuxi.services.agent_delegation_service import AgentDelegationService, CONTENT_NODE_EXECUTION_LIMITS
 
     request = SimpleNamespace(
@@ -42,13 +61,12 @@ def test_generate_content_allows_three_model_calls_with_matching_watchdog():
     AgentDelegationService._apply_node_constraints(context, request)
     assert context.reasoning_effort == "low"
     assert context.model_call_timeout_seconds == 180
-    assert context._content_max_model_calls == 3
-    assert CONTENT_NODE_EXECUTION_LIMITS["generate_content"][0] >= (
-        context._content_max_model_calls * context.model_call_timeout_seconds + 3 + 15
-    )
+    assert context.model_retry_times == 0
+    assert context._content_max_model_calls == 1
+    assert CONTENT_NODE_EXECUTION_LIMITS["generate_content"] == (200, 180, "low", 1)
 
 
-def test_plan_visuals_has_execution_budget_for_slow_model_calls():
+def test_plan_visuals_uses_single_call_watchdog():
     from yuxi.services.agent_delegation_service import AgentDelegationService, CONTENT_NODE_EXECUTION_LIMITS
 
     request = SimpleNamespace(
@@ -58,11 +76,10 @@ def test_plan_visuals_has_execution_budget_for_slow_model_calls():
     context = SimpleNamespace(reasoning_effort=None)
     AgentDelegationService._apply_node_constraints(context, request)
     assert context.reasoning_effort == "low"
-    assert context.model_call_timeout_seconds == 150
-    assert context._content_max_model_calls == 3
-    assert CONTENT_NODE_EXECUTION_LIMITS["plan_visuals"][0] >= (
-        context._content_max_model_calls * context.model_call_timeout_seconds + 3 + 15
-    )
+    assert context.model_call_timeout_seconds == 70
+    assert context.model_retry_times == 0
+    assert context._content_max_model_calls == 1
+    assert CONTENT_NODE_EXECUTION_LIMITS["plan_visuals"] == (90, 70, "low", 1)
 
 
 def test_original_generate_content_drops_heavy_layout_skills():
@@ -354,11 +371,7 @@ def test_generation_projection_keeps_price_sources_rules_and_revision_without_mu
     assert evidence["variable_codes"] == ["price"]
     assert evidence["value"] == payload["evidence_bundle"]["items"][0]["value"]
     assert "source_hash" not in evidence
-    cite = result["evidence_cite_index"]
-    assert cite[0]["id"] == "price-1"
-    assert "title" in cite[0]["allowed_usage"] or "body" in cite[0]["allowed_usage"]
-    assert "value_preview" not in cite[0]
-    assert "source_id" not in cite[0]
+    assert result["evidence_cite_index"] is None
     chunks = result["formula_lexicon_bundle"]["body"][0]["chunks"]
     assert chunks[0] == "短词条"
     assert len(chunks) == 1
@@ -366,7 +379,10 @@ def test_generation_projection_keeps_price_sources_rules_and_revision_without_mu
 
 
 def test_generation_projection_compacts_forbidden_replacement_map():
-    long_map = [{"problem_term": f"问题词{i}", "alternatives": [f"替代表达{i}", f"备选{i}", f"多余{i}", f"再多{i}"]} for i in range(80)]
+    long_map = [
+        {"problem_term": f"问题词{i}", "alternatives": [f"替代表达{i}", f"备选{i}", f"多余{i}", f"再多{i}"]}
+        for i in range(80)
+    ]
     serialized = "报价" * 200 + "私信" * 200
     payload = {
         "strategy_snapshot": {
@@ -377,7 +393,9 @@ def test_generation_projection_compacts_forbidden_replacement_map():
                 "source_content": {"huge": "x" * 500},
                 "body_calling": {
                     "formula_name": "干货",
-                    "sections": [{"id": "a", "name": "开篇", "instruction": "讲工艺", "fill_rule": "用证据", "lexicon_calls": []}],
+                    "sections": [
+                        {"id": "a", "name": "开篇", "instruction": "讲工艺", "fill_rule": "用证据", "lexicon_calls": []}
+                    ],
                     "variants": [],
                 },
             },
@@ -425,31 +443,190 @@ def test_generation_projection_compacts_forbidden_replacement_map():
     }
     result = project_generation_input(payload)
     items = {item["id"]: item for item in result["evidence_bundle"]["items"]}
-    assert len(items["ev-map-list"]["value"]) == 40
+    assert len(items["ev-map-list"]["value"]) == 16
     assert items["ev-map-list"]["value"][0] == {
         "problem_term": "问题词0",
-        "alternatives": ["替代表达0", "备选0"],
+        "alternatives": ["替代表达0"],
     }
     assert isinstance(items["ev-map-str"]["value"], str)
     assert len(items["ev-map-str"]["value"]) <= 4000
     assert items["ev-normal"]["value"].endswith("…")
-    assert len(items["ev-normal"]["value"]) == 120
+    assert len(items["ev-normal"]["value"]) == 48
     body = result["strategy_snapshot"]["body_formula"]
     assert body["code"] == "C03"
     assert "source_content" not in body
     assert body["body_calling"]["sections"][0]["id"] == "a"
-    assert len(result["strategy_snapshot"]["creation_method_definitions"][0]["sentence_patterns"]) == 3
+    assert len(result["strategy_snapshot"]["creation_method_definitions"][0]["sentence_patterns"]) == 1
     assert result["channel_profile"] == {"emoji_allowed": True}
     assert result["persona_profile"] == {"name": "工长"}
-    cite_by_id = {row["id"]: row for row in result["evidence_cite_index"]}
-    assert "value_preview" not in cite_by_id["ev-map-list"]
-    assert cite_by_id["ev-map-list"]["material_type"] == "platform_rule"
-    assert "value_preview" not in cite_by_id["ev-map-str"]
-    assert "value_preview" not in cite_by_id["ev-normal"]
-    assert set(cite_by_id["ev-normal"]["allowed_usage"]) == {"body"}
+    assert result["evidence_cite_index"] is None
+    assert "source_id" not in items["ev-normal"]
+    assert items["ev-map-list"]["metadata"]["material_type"] == "platform_rule"
+    assert set(items["ev-normal"]["allowed_usage"]) == {"body"}
+    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":"))) <= 10000
+
+
+def test_generation_projection_caps_prompt_under_ten_thousand_chars():
+    payload = {
+        "strategy_snapshot": {
+            "snapshot_hash": "s" * 64,
+            "body_formula": {
+                "code": "C03",
+                "structure_schema": [{"id": f"s{i}", "name": "段落说明很长" * 8} for i in range(12)],
+                "body_calling": {
+                    "sections": [
+                        {"id": "a", "name": "开篇", "instruction": "讲工艺" * 40, "fill_rule": "用证据" * 20}
+                    ]
+                },
+            },
+            "title_formula": {"code": "T01", "variable_schema": [{"id": f"v{i}", "name": "槽位"} for i in range(12)]},
+            "creation_method_definitions": [
+                {"code": "M01", "name": "价值法", "sentence_patterns": ["a", "b", "c"], "principle": "p" * 80}
+            ],
+        },
+        "content_brief": {"business_variables": {"writing_instruction": "写" * 400, "community_name": "洋湖"}},
+        "evidence_bundle": {
+            "bundle_hash": "frozen",
+            "items": [
+                {
+                    "id": f"ev-{i}",
+                    "value": f"事实{i}" + "详" * 120,
+                    "allowed_usage": ["title", "body"],
+                    "verified_status": "user_confirmed",
+                    "metadata": {"material_type": "business_fact"},
+                }
+                for i in range(40)
+            ],
+        },
+        "runtime_config_snapshot": {"creation_mode": "original"},
+        "formula_lexicon_bundle": {"body": [{"chunks": ["词" * 180] * 4}]},
+        "channel_profile": {"emoji_allowed": True},
+        "persona_profile": {},
+    }
+    result = project_generation_input(payload)
+    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":"))) <= 10000
+    assert len(result["evidence_bundle"]["items"]) <= 16
+
+
+def test_review_notes_generation_projection_caps_wrapped_prompt_under_five_thousand_chars():
+    from yuxi.content.control.workflow.agent_node import REVIEW_NOTES_GENERATE_PROHIBITED_ACTIONS
+    from yuxi.content.control.workflow.generation_input import attach_review_notes_style_excerpts
+
+    payload = {
+        "strategy_snapshot": {
+            "snapshot_hash": "s" * 64,
+            "body_formula": {
+                "code": "C03",
+                "structure_schema": [{"id": f"s{i}", "name": "段落说明很长" * 8} for i in range(12)],
+                "body_calling": {
+                    "sections": [
+                        {"id": "a", "name": "开篇", "instruction": "讲工艺" * 40, "fill_rule": "用证据" * 20}
+                    ]
+                },
+            },
+            "title_formula": {"code": "T01", "variable_schema": [{"id": f"v{i}", "name": "槽位"} for i in range(12)]},
+            "creation_method_definitions": [
+                {"code": "M01", "name": "价值法", "sentence_patterns": ["a", "b", "c"], "principle": "p" * 80}
+            ],
+        },
+        "content_brief": {
+            "form_values": {"mp_service_entry": "好评笔记", "设计师": "林工"},
+            "business_variables": {
+                "mp_service_entry": "好评笔记",
+                "writing_instruction": "写" * 400,
+                "设计师": "林工",
+                "项目经理": "陈经理",
+                "所属店面": "芙蓉店",
+                "project_type": "业主好评笔记",
+                "pain": "痛点" * 40,
+                "advantage": "优势" * 40,
+                "craft_and_materials": "材料" * 40,
+            },
+        },
+        "evidence_bundle": {
+            "bundle_hash": "frozen",
+            "items": [
+                {
+                    "id": f"ev-{i}",
+                    "value": f"事实{i}" + "详" * 120,
+                    "allowed_usage": ["title", "body"],
+                    "verified_status": "user_confirmed",
+                    "metadata": {"material_type": "business_fact"},
+                }
+                for i in range(40)
+            ],
+        },
+        "runtime_config_snapshot": {"creation_mode": "original"},
+        "formula_lexicon_bundle": {"body": [{"chunks": ["词" * 180] * 4}]},
+        "channel_profile": {"emoji_allowed": True, "title_constraints": {"min_length": 6, "max_length": 20}},
+        "persona_profile": {"name": "业主", "extra": "drop"},
+    }
+    attach_review_notes_style_excerpts(payload, ["样例甲" * 80, "样例乙" * 80, "多余"])
+    result = project_generation_input(payload)
+    assert result["formula_lexicon_bundle"] == {}
+    assert result["strategy_snapshot"]["body_formula"] == {"code": "C03"}
+    assert "project_type" not in result["content_brief"]["business_variables"]
+    assert result["content_brief"]["business_variables"]["mp_service_entry"] == "好评笔记"
+    excerpts = result["content_brief"]["style_excerpts"]
+    assert len(excerpts) == 2
+    assert all(len(item) <= 400 for item in excerpts)
+    assert len(result["evidence_bundle"]["items"]) <= 8
+    prompt_chars = len(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    assert prompt_chars <= 4000
+    wrapped = json.dumps(
+        {
+            "task_id": "ct_" + "a" * 32,
+            "parent_run_id": "0" * 36,
+            "node_id": "generate_content",
+            "attempt": 1,
+            "input_contract": "GenerateContentPromptV1",
+            "input_snapshot_hash": "h" * 64,
+            "payload": result,
+            "node_responsibility": (
+                "执行内容工作流节点 generate_content：模仿 payload.content_brief.style_excerpts 的语气结构，"
+                "直接 submit_content_node_result"
+            ),
+            "prohibited_actions": list(REVIEW_NOTES_GENERATE_PROHIBITED_ACTIONS),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    assert len(wrapped) <= 5000
+
+
+@pytest.mark.asyncio
+async def test_review_notes_prefetch_keeps_two_style_chunks():
+    from yuxi.content.control.workflow.generation_input import attach_review_notes_style_excerpts
+    from yuxi.services.agent_delegation_service import AgentDelegationService
+
+    async def retriever(query_text: str, **kwargs):
+        assert "业主第一人称好评" in query_text
+        assert "芙蓉店" in query_text
+        return {"results": [{"content": "样例甲" * 50}, {"content": "样例乙" * 50}, {"content": "多余"}]}
+
+    context = SimpleNamespace(
+        knowledges=["kb-review"],
+        _required_skill_tools=["query_kb", "submit_content_node_result"],
+        _visible_knowledge_bases=[
+            {"kb_id": "kb-review", "name": "好评知识库", "retriever": retriever},
+        ],
+    )
+    payload = {
+        "content_brief": {
+            "business_variables": {"设计师": "林工", "所属店面": "芙蓉店", "mp_service_entry": "好评笔记"}
+        }
+    }
+    excerpts = await AgentDelegationService._prefetch_review_notes_style_excerpts(context, payload)
+    attach_review_notes_style_excerpts(payload, excerpts)
+    assert payload["content_brief"]["style_excerpts"] == ["样例甲" * 50, "样例乙" * 50]
+    context.knowledges = []
+    AgentDelegationService._apply_knowledge_tool_scope(context)
+    assert context._required_skill_tools == ["submit_content_node_result"]
 
 
 def test_visual_plan_projection_drops_duplicate_evidence_and_heavy_runtime():
+    import json
+
     payload = {
         "selected_title": {"text": "洋湖天旭工艺", "evidence_ids": ["ev-1"], "debug": "drop-me"},
         "content_draft": {
@@ -460,9 +637,9 @@ def test_visual_plan_projection_drops_duplicate_evidence_and_heavy_runtime():
         "strategy_snapshot": {
             "snapshot_hash": "s" * 64,
             "decision": {"scores": [1]},
-            "body_formula": {"code": "C03", "source_content": {"huge": "x" * 200}},
+            "body_formula": {"code": "C03", "source_content": {"huge": "x" * 200}, "body_calling": {"sections": [{}]}},
             "title_formula": {"code": "T01", "reference_examples": ["a", "b"]},
-            "creation_method_definitions": [],
+            "creation_method_definitions": [{"principle": "x" * 80}],
         },
         "evidence_bundle": {
             "bundle_hash": "frozen",
@@ -480,6 +657,13 @@ def test_visual_plan_projection_drops_duplicate_evidence_and_heavy_runtime():
                     "allowed_usage": ["body"],
                     "verified_status": "user_confirmed",
                 },
+                {
+                    "id": "ev-body-only",
+                    "value": "长篇工艺说明" * 40,
+                    "allowed_usage": ["body"],
+                    "verified_status": "user_confirmed",
+                    "metadata": {"material_type": "knowledge"},
+                },
             ],
         },
         "media_evidence_items": [
@@ -488,32 +672,86 @@ def test_visual_plan_projection_drops_duplicate_evidence_and_heavy_runtime():
                 "selected_for_cover": True,
                 "extracted_text": "很长的 OCR " * 80,
                 "display_name": "长沙图",
-            }
+                "object_uri": "oss://drop",
+            },
+            {
+                "id": "asset-2",
+                "selected_for_cover": False,
+                "extracted_text": "配图",
+            },
         ],
         "artifact_version": {"id": "av-1", "payload": {"huge": True}},
-        "channel_profile": {"emoji_allowed": True, "connector_config_ref": "drop"},
+        "channel_profile": {
+            "emoji_allowed": True,
+            "connector_config_ref": "drop",
+            "title_constraints": {"max_length": 20},
+            "body_constraints": {"max_length": 1000},
+        },
         "runtime_config_snapshot": {
             "creation_mode": "original",
             "visual_material": {
                 "image_asset_id": "asset-1",
-                "hycanvas_fillable_fields": [{"key": "t1", "semanticRole": "title"}],
+                "hycanvas_fillable_fields": [
+                    {
+                        "key": "t1",
+                        "label": "主标题",
+                        "semanticRole": "title",
+                        "kind": "text",
+                        "nodeId": "node-1",
+                        "constraints": {"maxChars": 22, "layoutMeasured": True},
+                        "typography": {
+                            "runs": [{"fontFamily": "SourceHanSans", "fontSize": 64, "fontWeight": 700}],
+                            "paragraphs": [{"style": {"huge": "x" * 400}, "runs": [{"style": {}}]}],
+                            "box": {"x": 0, "y": 0, "width": 1080},
+                        },
+                    }
+                ],
                 "unused_blob": "x" * 500,
             },
         },
     }
     result = project_visual_plan_input(payload)
     assert result["selected_title"] == {"text": "洋湖天旭工艺", "evidence_ids": ["ev-1"]}
-    assert "lexicon_usage" not in result["content_draft"]
-    assert len(result["content_draft"]["body"]) <= 650
-    assert "decision" not in result["strategy_snapshot"]
-    assert "source_content" not in result["strategy_snapshot"]["body_formula"]
-    assert len(result["evidence_bundle"]["items"]) == 1
-    assert set(result["evidence_bundle"]["items"][0]["allowed_usage"]) == {"title", "body"}
+    assert set(result["content_draft"]) == {"body"}
+    assert len(result["content_draft"]["body"]) <= 280
+    assert result["strategy_snapshot"] == {"title_formula": {"code": "T01"}, "body_formula": {"code": "C03"}}
+    assert [item["id"] for item in result["evidence_bundle"]["items"]] == ["ev-1"]
+    assert "allowed_usage" not in result["evidence_bundle"]["items"][0]
     assert result["media_evidence_items"] == [{"id": "asset-1", "selected_for_cover": True}]
     assert result["artifact_version"] == {"id": "av-1"}
-    assert result["runtime_config_snapshot"]["visual_material"]["image_asset_id"] == "asset-1"
-    assert "unused_blob" not in result["runtime_config_snapshot"]["visual_material"]
+    visual = result["runtime_config_snapshot"]["visual_material"]
+    assert visual["image_asset_id"] == "asset-1"
+    assert visual["hycanvas_fillable_fields"] == [
+        {
+            "key": "t1",
+            "label": "主标题",
+            "semanticRole": "title",
+            "kind": "text",
+            "constraints": {"maxChars": 22, "layoutMeasured": True},
+        }
+    ]
+    assert "unused_blob" not in visual
+    assert "typography" not in visual["hycanvas_fillable_fields"][0]
+    assert result["runtime_config_snapshot"]["canvas"] == {
+        "width": 1080,
+        "height": 1440,
+        "safe_area": {"top": 20, "right": 20, "bottom": 20, "left": 20},
+    }
     assert result["channel_profile"] == {"emoji_allowed": True}
+    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":"))) < 1200
+
+
+def test_visual_text_is_clamped_and_uniquified_for_first_pass():
+    from yuxi.content.control.visual_template_fields import clamp_visual_text, uniquify_visual_template_fields
+
+    assert clamp_visual_text("超过七个字符的封面标题", 7) == "超过七个字符的"
+    fields = uniquify_visual_template_fields(
+        {"主标题": "收纳动线焕新", "强调标题": "收纳 动线焕新！"},
+        limits={"主标题": {"maxChars": 12}, "强调标题": {"maxChars": 12}},
+        extra_texts=["复尺后规划"],
+    )
+    assert fields["主标题"] == "收纳动线焕新"
+    assert fields["强调标题"] == "复尺后规划"
 
 
 def test_visual_text_max_char_floor_raises_cover_copy_limits():

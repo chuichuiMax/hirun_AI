@@ -424,17 +424,15 @@ def test_visual_plan_must_use_exactly_the_task_locked_gallery_image():
     assert exc_info.value.code == "visual_source_locked"
 
 
-def test_visual_plan_over_template_limit_is_returned_to_agent_for_revision():
+def test_visual_plan_over_template_limit_is_clamped_without_retry():
     context = replace(DOMAIN_CONTEXT, visual_text_max_chars={"title": 7, "subtitle": 4})
     payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
     payload["text"] = ["超过七个字符的封面标题", "四字以内"]
 
-    with pytest.raises(ContractDomainValidationError) as exc_info:
-        validate_content_node_result("VisualPlanResultV1", payload, context)
+    result = validate_content_node_result("VisualPlanResultV1", payload, context)
 
-    assert exc_info.value.code == "visual_text_too_long"
-    assert exc_info.value.field_path == "text.0"
-    assert "最多 7 个字符" in str(exc_info.value)
+    assert result.text[0] == "超过七个字符的"
+    assert result.text[1] == "四字以内"
 
 
 def test_visual_plan_requires_agent_rewrite_for_missing_template_fact():
@@ -458,7 +456,7 @@ def test_visual_plan_requires_agent_rewrite_for_missing_template_fact():
     assert exc_info.value.code == "visual_template_claim_unsupported"
 
 
-def test_visual_plan_rejects_duplicate_template_text_for_same_cover():
+def test_visual_plan_rewrites_duplicate_template_text_without_retry():
     context = replace(
         DOMAIN_CONTEXT,
         allowed_visual_template_fields={
@@ -467,16 +465,17 @@ def test_visual_plan_rejects_duplicate_template_text_for_same_cover():
         },
     )
     payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["text"] = ["复尺后规划"]
     payload["template_fields"] = {
         "主标题": "收纳动线焕新",
         "强调标题": "收纳 动线焕新！",
     }
 
-    with pytest.raises(ContractDomainValidationError) as exc_info:
-        validate_content_node_result("VisualPlanResultV1", payload, context)
+    result = validate_content_node_result("VisualPlanResultV1", payload, context)
 
-    assert exc_info.value.code == "visual_text_duplicate"
-    assert exc_info.value.field_path == "template_fields.强调标题"
+    assert result.template_fields["主标题"] == "收纳动线焕新"
+    assert result.template_fields["强调标题"] != result.template_fields["主标题"]
+    assert "收纳动线焕新" not in result.template_fields["强调标题"].replace(" ", "")
 
 
 def test_visual_plan_strips_ordinal_badge_fields_before_validation():

@@ -36,6 +36,7 @@ from yuxi.content.service_entry_form import (
 from yuxi.content.validation import ComplianceEngine, validate_numeric_evidence_coverage
 from yuxi.content.validators import validate_content
 from yuxi.content.control.workflow.external_wait import skip_formula_lexicon_pipeline
+from yuxi.content.control.workflow.generation_input import compact_evidence_items_for_bundle
 from yuxi.content.v3.body_calling import SOURCE_METADATA as BODY_CALLING_SOURCE
 from yuxi.content.v3.body_calling import get_decoration_body_calling
 from yuxi.content.industry_matrix import resolve_industry_formula
@@ -788,6 +789,8 @@ class V3DeterministicNodeHandler:
                     metadata={"object_uri": media.get("object_uri")},
                 )
             )
+        compacted = compact_evidence_items_for_bundle([item.model_dump(mode="json") for item in items])
+        items = [EvidenceItemV1.model_validate(item) for item in compacted]
         bundle = freeze_evidence_bundle(task_id=state["task_id"], version=1, items=items)
         await EvidenceApplicationService(db).persist_frozen_bundle(
             bundle,
@@ -966,6 +969,10 @@ class V3DeterministicNodeHandler:
         additions = new_additions
         if not additions:
             return {"evidence_bundle": current.model_dump(mode="json")}
+        additions = [
+            EvidenceItemV1.model_validate(item)
+            for item in compact_evidence_items_for_bundle([item.model_dump(mode="json") for item in additions])
+        ]
         bundle = next_evidence_bundle_version(
             current,
             additions=additions,
@@ -1014,7 +1021,7 @@ class V3DeterministicNodeHandler:
                     },
                 }
             )
-
+        evidence_items = compact_evidence_items_for_bundle(evidence_items)
         citations = list(
             dict.fromkeys(
                 str(citation)

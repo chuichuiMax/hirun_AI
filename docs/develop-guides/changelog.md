@@ -6,11 +6,15 @@
 
 ## v0.7.1 (current)
 
+- 好评笔记 `generate_content` 改为服务端预取 2 条×400 字语气样例后一次直出，不再让模型 `query_kb` 把第二轮撑到 1.6 万字；模型视图硬顶 4000 字（包一层节点输入后 ≤5000）。空闲超时与装修家居共用 180s / 1 次调用。
+
+- 正文与封面规划改为一次直出：模型调用上限 1，不再把额度留给校验纠错。正文模型视图硬顶 1 万字（词库 1×80、证据 16 条×48 字、封禁词 16 行×1 候选）。封面超长按 `maxChars` 截入框内、重复字段改成不同信息点后直接通过，避免 `visual_text_too_long` / `visual_text_duplicate` 二次调用；标题超渠道字数同样截入上限。空闲超时按供应商首包设置：正文 180s、封面规划 70s（30s 会把正常首包误杀）。
+
 - 素材库、封面参考图与海报模板单张上传上限由 20 MB 调整为 100 MB；同步前端校验文案、后端体积拦截，以及 nginx `client_max_body_size`。
 
 - 装修获客可审计链路对齐：人工终审快照写入真实 `reviewer_uid` 与审批备注（好评笔记仍记系统自动审批）；运行详情展示 `content.formula_lexicons.loaded`（公式码、词库数量、bundle hash）；策略节点文案改为「固定规则锁定」，与 V3.7 确定性选组一致。
 
-- 内容生产再提速（中位 2 分钟目标）：`generate_content` 模型视图进一步压缩——去掉与 `business_variables` 重复的 `form_values`、同值证据去重、cite 去掉 `value_preview`、词库 1×220、证据值 120 字、封禁词表最多 40 行×2 候选；原创模式不再注入 `content-human-expression`（自然语气/报幕禁止/封禁词/emoji 要点并入 `content-body-generator`）。验收：`freeze`→`generate`→`adapt`→`validate` 首通出稿墙钟 p50 &lt;120s。小程序封面规划同步同一套优化：`plan_visuals` 投影精简证据/策略/正文、纠错额度 2→3、错误文案改为「封面规划」而非误报「正文生成」。修复爆款模板把 `01` 序号框（maxChars=1）当成叙事 title、把整页标题上限压成 1 字导致方案校验反复失败：序号角标退出叙事字段与 `visual_text_max_chars` 聚合，提交时自动剥离；出图填字 `_hycanvas_template_fields` 不再把主标题灌进 `01` 序号框，改为写入不超过 `maxChars` 的装饰值（如 `01`→`1`），避免漏填必填框触发 HyCanvas `invalid request`。
+- 内容生产再提速（中位 2 分钟目标）：`generate_content` 模型视图进一步压缩——去掉与 `business_variables` 重复的 `form_values`、同值证据去重、**去掉重复的 `evidence_cite_index`**、词库 1×150、证据值 80 字、封禁词表最多 25 行×2 候选、最多 28 条证据、丢弃无关 metadata/`source_id`；合并/冻结证据包入库前压缩封禁词与过长 value；工作流与 Agent 种子不再挂载已并入正文的 `content-outline-builder` / `humanizer-zh` / `content-human-expression`（原创运行时仍会 drop 仿写排版 Skill）。验收：`freeze`→`generate`→`adapt`→`validate` 首通出稿墙钟 p50 &lt;120s。`plan_visuals` 再瘦身：策略只留公式码、正文 280 字、封面证据最多 8 条×40 字、去掉模板 `typography`、Skill 压到抄 `canvas` 直出；空闲超时 150s→70s。验收：封面规划首通成功墙钟 p50 &lt;60s（不含供应商空等重试）。纠错额度仍为 3、错误文案为「封面规划」。修复爆款模板把 `01` 序号框（maxChars=1）当成叙事 title、把整页标题上限压成 1 字导致方案校验反复失败：序号角标退出叙事字段与 `visual_text_max_chars` 聚合，提交时自动剥离；出图填字 `_hycanvas_template_fields` 不再把主标题灌进 `01` 序号框，改为写入不超过 `maxChars` 的装饰值（如 `01`→`1`），避免漏填必填框触发 HyCanvas `invalid request`。
 
 - 内容生产再提速：`generate_content` 模型视图进一步压缩（词库 2×280、证据值 200 字、策略去掉 source_content/手法冗余、封禁词表最多 60 行×3 候选）；修复 `evidence_cite_index` 对 list 型封禁词表整表塞进 `value_preview` 的重复膨胀（约可再省 8–10k user 字）；原创模式不注入 `viral-layout-formatter` / `content-outline-builder`（排版由 human-expression、大纲由 body 同轮产出）。修复封面规划 `plan_visuals` 硬超时 180s 误杀（高峰期与正文撞车）：节点总时限抬至 400s、`reasoning=low`、最多 2 次模型调用；`visual_review` 同步放宽。修复爆款笔记模板多 title 字段时把序号 `1/01` 当成封面主标题：解析优先取可读标题，并校验 `text[0]` 不得仅为序号。
 
@@ -30,7 +34,7 @@
 
 - 内容生产提速：`generate_content` 强制 `reasoning=low`（节点时限表覆盖 Agent 种子）、模型视图词库改为最多 3 段×400 字并缩短证据值；原创模式不再注入 `humanizer-zh`（由 `content-human-expression` 覆盖去机械腔）；装修家居首轮禁止 `read_file`/空转，须直接提交结果。
 
-- 装修家居「报价清单」口径调整：标题须语义清晰可读，禁止词库硬拼看不懂；正文把报价仅作参考信息，不以低价为主卖点，重点写鸿扬品牌与交付优势；同步写作说明、标题/正文/审核 Skill、C01 正文调用与生成禁止项。
+- 装修家居「报价清单」口径调整：标题须语义清晰可读，禁止词库硬拼看不懂；正例如「130-150m2旧房翻新，钱要花在哪？」；正文把报价仅作参考信息，不以低价为主卖点，重点写鸿扬品牌与交付优势；成品标题/正文/话题不要出现「口径」；同步写作说明、标题/正文/审核 Skill、C01 正文调用与生成禁止项。
 
 - 装修家居生成强化 Evidence ID 策略：模型视图新增 `evidence_cite_index`；标题/正文 Skill 明确逐字复制授权 `ev_` ID、面积等卡点必须与证据原文一致（禁止改成中间值）、有业务知识证据时正文至少挂一条；同步写作说明、禁止项与 C01/C02 数据段 fill_rule，降低未授权 ID / 无来源数字导致的定点回修耗尽。
 
@@ -46,7 +50,7 @@
 
 - 好评笔记正文生成同时认知识库名称「好评知识库」与「好评笔记知识库」，避免服务器仅有后者时误报未配置可访问知识库。
 
-- 修复封面选择关口卡住：去掉 `select_cover` 重复人工中断，候选封面优先取 CoverJob 产出（审核未回填资产时不再给空列表）；小程序 getRun 对空 `asset_ids` 回填已成功封面任务资产，避免一直停在「等待选择最终版本」却无可选项。
+- 修复封面选择关口卡住：去掉 `select_cover` 重复人工中断，候选封面优先取 CoverJob 产出（审核未回填资产时不再给空列表）；小程序 getRun 对空 `asset_ids` 回填已成功封面任务资产。小程序没有「确认封面并保存」界面，带 `mp_content_code` 的任务在封面生成成功后自动选定候选（优先审核推荐）并保存成品；已停在选封面关口的小程序任务在下次 getRun 时自动恢复，不再停在「正在生成封面」。出图续跑会换新 run，getRun 轮询旧 run 时跟到最新续跑，任务已是 `reviewed`/`completed` 则返回 `completed`，生成页跳到结果；正文终审同样自动通过。内容工作台 PC 端仍保留人工选封面与终审。
 
 - 修复封面提交节点在 `visual_plan.text` 为空时直接 `text[0]` 触发 `list index out of range`：改为从 text 或 HyCanvas `template_fields` 的 title 叙事字段解析封面标题，两者皆空时返回明确错误。
 

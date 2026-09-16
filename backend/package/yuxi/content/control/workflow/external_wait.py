@@ -18,12 +18,14 @@ REVIEW_NOTES_KNOWLEDGE_BASE_NAME = "好评知识库"
 REVIEW_NOTES_KNOWLEDGE_BASE_ALIASES = frozenset({"好评知识库", "好评笔记知识库"})
 
 
-def _brief_service_entry(state: dict[str, Any]) -> str:
+def _brief_form_values(state: dict[str, Any]) -> dict[str, Any]:
     brief = state.get("content_brief") or {}
     values = brief.get("form_values") if isinstance(brief, dict) else {}
-    if not isinstance(values, dict):
-        values = {}
-    return str(values.get("mp_service_entry") or "")
+    return values if isinstance(values, dict) else {}
+
+
+def _brief_service_entry(state: dict[str, Any]) -> str:
+    return str(_brief_form_values(state).get("mp_service_entry") or "")
 
 
 def skip_formula_lexicon_pipeline(state: dict[str, Any]) -> bool:
@@ -52,6 +54,11 @@ def cover_skip_reason(state: dict[str, Any]) -> str:
 
 def skip_content_correction_interrupt(state: dict[str, Any]) -> bool:
     return skip_formula_lexicon_pipeline(state)
+
+
+def skip_cover_selection_interrupt(state: dict[str, Any]) -> bool:
+    """小程序没有选封面 UI，有内容编码的任务在封面生成成功后自动选定。"""
+    return bool(str(_brief_form_values(state).get("mp_content_code") or "").strip())
 
 
 class ExternalWaitNodeHandler:
@@ -176,6 +183,7 @@ __all__ = [
     "ExternalWaitNodeHandler",
     "cover_skip_reason",
     "skip_content_correction_interrupt",
+    "skip_cover_selection_interrupt",
     "skip_cover_pipeline",
     "skip_formula_lexicon_pipeline",
     "skip_research_pipeline",
