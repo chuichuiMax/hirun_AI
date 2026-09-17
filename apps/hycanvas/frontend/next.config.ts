@@ -55,6 +55,10 @@ const nextConfig: NextConfig = {
   // unnecessary for) the static export build.
   ...(!isStaticExport
     ? {
+        // Large multi-page covers embed material images in the design JSON.
+        // Next's default 10 MB proxy body cap truncates snapshot saves, leaving
+        // the Go API waiting for the missing bytes until the proxy times out.
+        experimental: { proxyClientMaxBodySize: "64mb" },
         async rewrites() {
           const backend = process.env.HYCANVAS_DEV_BACKEND_URL || "http://127.0.0.1:8005";
           return [

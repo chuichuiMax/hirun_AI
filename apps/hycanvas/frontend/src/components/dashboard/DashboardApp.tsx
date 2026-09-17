@@ -657,6 +657,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
     }
   }
 
+
   async function confirmTemplateRename() {
     const title = templateRenameValue.trim();
     if (!templateRenameTarget || !title || templateRenaming) return;
