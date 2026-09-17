@@ -1056,6 +1056,7 @@ class ContentCoverAsset(Base):
     object_name = Column(Text, nullable=False)
     metadata_json = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime, default=utc_now_naive, index=True)
+    hidden_from_works_at = Column(DateTime, nullable=True, index=True)
     deleted_at = Column(DateTime, nullable=True, index=True)
 
     __table_args__ = (Index("idx_content_cover_assets_owner_created", "owner_uid", "created_at"),)
@@ -1073,6 +1074,7 @@ class ContentCoverAsset(Base):
             "sha256": self.sha256,
             "metadata": self.metadata_json or {},
             "created_at": format_utc_datetime(self.created_at),
+            "hidden_from_works_at": format_utc_datetime(self.hidden_from_works_at),
         }
 
 

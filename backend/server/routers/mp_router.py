@@ -25,6 +25,7 @@ from yuxi.services.mp_service import (
     compile_brief,
     confirm_login,
     delete_content,
+    delete_mp_gallery_item,
     duplicate_content,
     get_artifact,
     get_form_schema,
@@ -36,6 +37,7 @@ from yuxi.services.mp_service import (
     list_cover_templates,
     list_mp_galleries,
     list_mp_gallery_items,
+    list_mp_works,
     login_by_sms,
     login_by_wechat_code,
     logout,
@@ -44,6 +46,7 @@ from yuxi.services.mp_service import (
     read_hycanvas_template_preview,
     read_mp_gallery_item_file,
     read_mp_gallery_item_thumbnail,
+    read_mp_work_file,
     remove_favorite,
     resume_run,
     retry_run,
@@ -52,6 +55,7 @@ from yuxi.services.mp_service import (
     stream_run_events,
     update_me,
     upload_cover,
+    hide_mp_work,
 )
 
 from server.utils.auth_middleware import get_db, get_mp_context
@@ -196,6 +200,44 @@ async def mp_gallery_item_thumbnail(
         media_type="image/webp",
         headers={"Cache-Control": "private, max-age=86400"},
     )
+
+
+@mp.delete("/content/gallery-items/{item_id}")
+async def mp_delete_gallery_item(
+    item_id: str,
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await delete_mp_gallery_item(db, ctx, item_id)
+
+
+@mp.get("/image/works")
+async def mp_works(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(24, ge=1, le=100),
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_mp_works(db, ctx, page=page, page_size=page_size)
+
+
+@mp.get("/image/works/{asset_id}/file")
+async def mp_work_file(
+    asset_id: str,
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    data, content_type, file_name = await read_mp_work_file(db, ctx, asset_id)
+    return Response(content=data, media_type=content_type, headers={"Content-Disposition": f'inline; filename="{file_name}"'})
+
+
+@mp.delete("/image/works/{asset_id}")
+async def mp_hide_work(
+    asset_id: str,
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await hide_mp_work(db, ctx, asset_id)
 
 
 @mp.post("/share/cases", status_code=status.HTTP_201_CREATED)

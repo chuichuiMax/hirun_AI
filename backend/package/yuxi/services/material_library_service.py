@@ -55,6 +55,11 @@ MATERIAL_LIBRARY_BUCKET = "image"
 MAX_MATERIAL_BYTES = 100 * 1024 * 1024
 MAX_MATERIAL_DIMENSION = 8192
 MAX_MATERIAL_PIXELS = 40_000_000
+MATERIAL_THUMBNAIL_SIZE = (480, 480)
+SHARE_CARD_COVER_SIZE = (500, 400)
+SHARE_CARD_COVER_MAX_BYTES = 128 * 1024
+SHARE_DISPLAY_WEBP_MAX_WIDTH = 1440
+SHARE_DISPLAY_WEBP_QUALITY = 80
 DECORATION_GALLERY_INDUSTRY_SLUG = "decoration"
 DECORATION_GALLERY_DESIGN_STYLES = frozenset(
     {
@@ -214,6 +219,14 @@ def _share_image_path(token: str, display_order: int) -> str:
     return f"/api/material-library/shares/{token}/images/{display_order}"
 
 
+def _share_webp_image_path(token: str, display_order: int) -> str:
+    return f"{_share_image_path(token, display_order)}.webp"
+
+
+def _share_card_cover_path(token: str) -> str:
+    return f"/api/material-library/shares/{token}/cover.jpg"
+
+
 def _share_case_path(token: str) -> str:
     return f"/share/case/{token}"
 
@@ -328,6 +341,46 @@ def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
             "MATERIAL_IMAGE_INVALID",
             "无法识别该图片（请用系统相册导出为 JPG/PNG 后再传，勿直接传实况图/未解码原片）",
         ) from exc
+
+
+def _make_image_thumbnail(data: bytes) -> bytes:
+    with Image.open(io.BytesIO(data)) as source:
+        image = ImageOps.exif_transpose(source).convert("RGB")
+        image.thumbnail(MATERIAL_THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=78, optimize=True)
+        return output.getvalue()
+
+
+def _make_share_card_cover(data: bytes) -> bytes:
+    with Image.open(io.BytesIO(data)) as source:
+        image = ImageOps.exif_transpose(source).convert("RGB")
+        image = ImageOps.fit(image, SHARE_CARD_COVER_SIZE, Image.Resampling.LANCZOS)
+        candidate = b""
+        for quality in (82, 75, 68, 60, 50):
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=quality, optimize=True)
+            candidate = output.getvalue()
+            if len(candidate) <= SHARE_CARD_COVER_MAX_BYTES:
+                return candidate
+        return candidate
+
+
+def _make_share_display_webp(data: bytes) -> bytes:
+    with Image.open(io.BytesIO(data)) as source:
+        image = ImageOps.exif_transpose(source)
+        if image.width > SHARE_DISPLAY_WEBP_MAX_WIDTH:
+            height = round(image.height * SHARE_DISPLAY_WEBP_MAX_WIDTH / image.width)
+            image = image.resize((SHARE_DISPLAY_WEBP_MAX_WIDTH, height), Image.Resampling.LANCZOS)
+        has_alpha = image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info)
+        output = io.BytesIO()
+        image.convert("RGBA" if has_alpha else "RGB").save(
+            output,
+            format="WEBP",
+            quality=SHARE_DISPLAY_WEBP_QUALITY,
+            method=6,
+        )
+        return output.getvalue()
 
 
 def serialize_item(
@@ -626,6 +679,15 @@ async def create_material_share(
                 content_type=asset.content_type,
             )
             uploaded_objects.append((uploaded.bucket_name, uploaded.object_name))
+            display_object_name = f"{object_name}.display.webp"
+            display_data = await asyncio.to_thread(_make_share_display_webp, data)
+            display_uploaded = await storage.aupload_file(
+                bucket_name=MATERIAL_LIBRARY_BUCKET,
+                object_name=display_object_name,
+                data=display_data,
+                content_type="image/webp",
+            )
+            uploaded_objects.append((display_uploaded.bucket_name, display_uploaded.object_name))
             snapshots.append(
                 ContentMaterialShareItem(
                     share_id=share.id,
@@ -657,6 +719,9 @@ async def create_material_share(
             "id": share.token,
             "url": _share_public_url(_share_case_path(share.token), public_base_url),
             "cover_url": _share_image_path(share.token, 1) if snapshots else None,
+            "card_cover_url": (
+                _share_public_url(_share_card_cover_path(share.token), public_base_url) if snapshots else None
+            ),
             "token": share.token,
             "title": share.title,
             "description": _share_description(share.building_name, share.area, share.design_style),
@@ -690,11 +755,14 @@ def serialize_public_material_share(
             "area": _normalize_area_value(share.area),
             "design_style": share.design_style,
             "cover_url": _share_image_path(share.token, 1) if ordered_items else None,
+            "cover_webp_url": _share_webp_image_path(share.token, 1) if ordered_items else None,
+            "card_cover_url": _share_card_cover_path(share.token) if ordered_items else None,
             "images": [
                 {
                     "order": item.display_order,
                     "file_name": item.original_file_name,
                     "url": _share_image_path(share.token, item.display_order),
+                    "webp_url": _share_webp_image_path(share.token, item.display_order),
                 }
                 for item in ordered_items
             ],
@@ -713,11 +781,12 @@ def render_public_material_share_page(
     ordered_items = sorted(items, key=lambda item: item.display_order)
     title = html.escape(share.title)
     first_item = ordered_items[0] if ordered_items else None
-    first_image = f"{base_url}{_share_image_path(share.token, first_item.display_order)}" if first_item else ""
+    first_image = f"{base_url}{_share_webp_image_path(share.token, first_item.display_order)}" if first_item else ""
+    card_cover = f"{base_url}{_share_card_cover_path(share.token)}" if first_item else ""
     share_url = f"{base_url}{_share_case_path(share.token)}"
-    first_image_type = html.escape(first_item.content_type, quote=True) if first_item else ""
-    first_image_width = first_item.image_width if first_item else ""
-    first_image_height = first_item.image_height if first_item else ""
+    first_image_type = "image/jpeg" if first_item else ""
+    first_image_width = SHARE_CARD_COVER_SIZE[0] if first_item else ""
+    first_image_height = SHARE_CARD_COVER_SIZE[1] if first_item else ""
     building_name = html.escape(share.building_name or "")
     area = html.escape(_display_area_value(share.area))
     design_style = html.escape(share.design_style or "")
@@ -736,13 +805,14 @@ def render_public_material_share_page(
         if items
         else ""
     )
-    images = "".join(
-        (
-            f'<img src="{html.escape(f"{base_url}{_share_image_path(share.token, item.display_order)}", quote=True)}" '
+    image_tags = []
+    for item in ordered_items:
+        image_url = f"{base_url}{_share_webp_image_path(share.token, item.display_order)}"
+        image_tags.append(
+            f'<img src="{html.escape(image_url, quote=True)}" '
             f'alt="{title} 第 {item.display_order} 张" loading="lazy">'
         )
-        for item in ordered_items
-    )
+    images = "".join(image_tags)
     return "\n".join(
         [
             "<!doctype html>",
@@ -755,8 +825,8 @@ def render_public_material_share_page(
             '<meta property="og:site_name" content="Yuxi">',
             f'<meta property="og:title" content="{title}">',
             f'<meta property="og:description" content="{description}">',
-            f'<meta property="og:image" content="{html.escape(first_image, quote=True)}">',
-            f'<meta property="og:image:secure_url" content="{html.escape(first_image, quote=True)}">',
+            f'<meta property="og:image" content="{html.escape(card_cover, quote=True)}">',
+            f'<meta property="og:image:secure_url" content="{html.escape(card_cover, quote=True)}">',
             f'<meta property="og:image:type" content="{first_image_type}">',
             f'<meta property="og:image:width" content="{first_image_width}">',
             f'<meta property="og:image:height" content="{first_image_height}">',
@@ -812,6 +882,37 @@ async def get_public_material_share_image(db: AsyncSession, token: str, display_
     except StorageError as exc:
         raise _error(500, "MATERIAL_SHARE_STORAGE_FAILED", "分享图片读取失败") from exc
     return data, snapshot.content_type, snapshot.original_file_name
+
+
+async def get_public_material_share_display_webp(
+    db: AsyncSession, token: str, display_order: int
+) -> bytes:
+    _, items = await get_public_material_share(db, token)
+    snapshot = next((item for item in items if item.display_order == display_order), None)
+    if snapshot is None:
+        raise _error(404, "MATERIAL_SHARE_IMAGE_NOT_FOUND", "分享图片不存在")
+
+    storage = get_minio_client()
+    display_object_name = f"{snapshot.object_name}.display.webp"
+    try:
+        if await storage.astat_file(snapshot.bucket_name, display_object_name) is not None:
+            return await storage.adownload_file(snapshot.bucket_name, display_object_name)
+        source_data = await storage.adownload_file(snapshot.bucket_name, snapshot.object_name)
+        display_data = await asyncio.to_thread(_make_share_display_webp, source_data)
+        await storage.aupload_file(
+            bucket_name=snapshot.bucket_name,
+            object_name=display_object_name,
+            data=display_data,
+            content_type="image/webp",
+        )
+        return display_data
+    except StorageError as exc:
+        raise _error(500, "MATERIAL_SHARE_STORAGE_FAILED", "分享图片读取失败") from exc
+
+
+async def get_public_material_share_card_cover(db: AsyncSession, token: str) -> bytes:
+    data, _, _ = await get_public_material_share_image(db, token, 1)
+    return await asyncio.to_thread(_make_share_card_cover, data)
 
 
 async def list_material_items(

@@ -13,6 +13,9 @@ from yuxi.services.material_library_service import (
     MaterialCategoryCreate,
     MaterialCategoryUpdate,
     MaterialShareCreate,
+    _make_image_thumbnail,
+    _make_share_card_cover,
+    _make_share_display_webp,
     _normalize_image,
     create_material_category,
     render_public_material_share_page,
@@ -103,6 +106,31 @@ def test_encode_material_thumbnail_limits_dimensions_and_returns_webp():
     with Image.open(io.BytesIO(data)) as image:
         assert image.format == "WEBP"
         assert image.size == (720, 480)
+
+
+def test_share_card_cover_is_a_small_fixed_ratio_jpeg():
+    source = io.BytesIO()
+    Image.new("RGBA", (1200, 800), "royalblue").save(source, format="PNG")
+
+    data = _make_share_card_cover(source.getvalue())
+
+    assert data.startswith(b"\xff\xd8")
+    assert len(data) < 128 * 1024
+    with Image.open(io.BytesIO(data)) as image:
+        assert image.format == "JPEG"
+        assert image.size == (500, 400)
+
+
+def test_share_display_webp_limits_wide_images_and_preserves_transparency():
+    source = io.BytesIO()
+    Image.new("RGBA", (2200, 1100), (65, 105, 225, 128)).save(source, format="PNG")
+
+    data = _make_share_display_webp(source.getvalue())
+
+    with Image.open(io.BytesIO(data)) as image:
+        assert image.format == "WEBP"
+        assert image.size == (1440, 720)
+        assert image.mode == "RGBA"
 
 
 def test_material_categories_normalize_legacy_values_and_reject_free_form():
@@ -205,16 +233,20 @@ def test_public_material_share_serializer_exposes_only_snapshot_data_in_display_
             "area": "120",
             "design_style": "现代简约",
             "cover_url": "/api/material-library/shares/not-enumerable-share-id/images/1",
+            "cover_webp_url": "/api/material-library/shares/not-enumerable-share-id/images/1.webp",
+            "card_cover_url": "/api/material-library/shares/not-enumerable-share-id/cover.jpg",
             "images": [
                 {
                     "order": 1,
                     "file_name": "first.png",
                     "url": "/api/material-library/shares/not-enumerable-share-id/images/1",
+                    "webp_url": "/api/material-library/shares/not-enumerable-share-id/images/1.webp",
                 },
                 {
                     "order": 2,
                     "file_name": "second.png",
                     "url": "/api/material-library/shares/not-enumerable-share-id/images/2",
+                    "webp_url": "/api/material-library/shares/not-enumerable-share-id/images/2.webp",
                 },
             ],
         }
@@ -307,16 +339,16 @@ def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_m
     assert "风格：现代简约" in page
     assert (
         'property="og:image" '
-        'content="https://share.example.test/boyun/api/material-library/shares/share-token/images/1"' in page
+        'content="https://share.example.test/boyun/api/material-library/shares/share-token/cover.jpg"' in page
     )
     assert (
         'property="og:image:secure_url" '
-        'content="https://share.example.test/boyun/api/material-library/shares/share-token/images/1"' in page
+        'content="https://share.example.test/boyun/api/material-library/shares/share-token/cover.jpg"' in page
     )
-    assert '<meta property="og:image:type" content="image/png">' in page
-    assert '<meta property="og:image:width" content="48">' in page
-    assert '<meta property="og:image:height" content="36">' in page
-    assert page.index("/images/1") < page.index("/images/2")
+    assert '<meta property="og:image:type" content="image/jpeg">' in page
+    assert '<meta property="og:image:width" content="500">' in page
+    assert '<meta property="og:image:height" content="400">' in page
+    assert page.index("/images/1.webp") < page.index("/images/2.webp")
 
 
 @pytest.mark.parametrize("design_style", ["工业再造", "优雅缤纷", "极简侘寂", "仿生未来"])
