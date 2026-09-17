@@ -51,6 +51,13 @@ async def _load_material_input(db, owner_uid: str, material_id: str) -> Image2In
 
 
 def _build_prompt(request: dict[str, Any]) -> str:
+    compiled_prompt = str(request.get("compiled_prompt") or "").strip()
+    if compiled_prompt:
+        return compiled_prompt
+    if request.get("prompt_contract_version") or request.get("refinement_id"):
+        raise Image2Error("IMAGE_DESIGN_PROMPT_MISSING", "已验证的图片设计任务缺少编译后提示词")
+
+    # Compatibility path for jobs queued before the refinement contract was introduced.
     workflow = request.get("workflow")
     user_prompt = str(request.get("prompt") or request.get("user_prompt") or "").strip()
     parts = [user_prompt]
@@ -194,7 +201,11 @@ async def process_image_design_job(ctx: dict[str, Any], job_id: str) -> None:
                             "client_id": job.client_id,
                             "reference_material_id": request.get("reference_material_id"),
                             "raw_room_material_id": request.get("raw_room_material_id"),
-                            "prompt": request.get("prompt") or "",
+                            "refinement_id": request.get("refinement_id"),
+                            "analysis_ids": request.get("analysis_ids") or [],
+                            "plan_version": request.get("plan_version"),
+                            "image_roles": request.get("image_roles") or [],
+                            "prompt": request.get("compiled_prompt") or request.get("prompt") or "",
                             "size": request.get("size"),
                             "clarity": request.get("clarity"),
                         },

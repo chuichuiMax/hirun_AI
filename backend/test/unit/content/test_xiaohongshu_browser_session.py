@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from time import monotonic
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
 
 from server import xhs_browser_gateway
+from yuxi.integrations.xiaohongshu.runtime import (
+    XiaohongshuRuntime,
+    XiaohongshuRuntimeError,
+    parse_inspire_note_detail,
+)
 from yuxi.integrations.xiaohongshu.session_manager import (
     BrowserSessionCapacityError,
     XiaohongshuBrowserSessionManager,
@@ -77,6 +85,7 @@ class FakeRuntime:
         self.page = FakePage()
         self.context = FakeContext(self.page)
         self.drafts_opened = 0
+        self.inspire_collections = []
 
     async def _launch_context(self, playwright, owner_uid, account_id):
         del playwright, owner_uid, account_id
@@ -92,6 +101,10 @@ class FakeRuntime:
 
     async def _is_inspire_logged_in(self, page):
         return page.url.startswith("https://ad.xiaohongshu.com/")
+
+    async def collect_inspire_cards(self, page, *, industry, limit):
+        self.inspire_collections.append((page, industry, limit))
+        return [{"note_id": "note-1", "title": "装修样本", "metrics": {"likes": "1w"}}]
 
     async def open_drafts(self, page):
         self.drafts_opened += 1
@@ -110,6 +123,151 @@ class IsolatedFakeRuntime(FakeRuntime):
         self.contexts[(owner_uid, account_id)] = context
         self.all_contexts.append(context)
         return context
+
+
+def test_inspire_detail_parser_reads_exact_ssr_note_and_preserves_string_tokens():
+    html = """<script>window.__INITIAL_STATE__={
+        "note":{"noteDetailMap":{"note-1":{"note":{
+            "title":"完整标题",
+            "desc":"第一段\\n字符串里的 undefined 保持原样",
+            "tagList":[{"name":"家居美学"},{"name":"入住新家"}],
+            "optional":undefined,
+            "score":NaN
+        }}}},"unrelated":Infinity}</script>"""
+
+    detail = parse_inspire_note_detail(html, "note-1")
+
+    assert detail["title"] == "完整标题"
+    assert detail["desc"] == "第一段\n字符串里的 undefined 保持原样"
+    assert [item["name"] for item in detail["tagList"]] == ["家居美学", "入住新家"]
+    assert detail["optional"] is None
+    assert detail["score"] is None
+
+
+def test_inspire_detail_parser_rejects_missing_note_state():
+    with pytest.raises(XiaohongshuRuntimeError, match="结构已变化"):
+        parse_inspire_note_detail("<script>window.__INITIAL_STATE__={}</script>", "note-1")
+
+
+@pytest.mark.asyncio
+async def test_inspire_collection_combines_list_fields_with_signed_detail_ssr():
+    note_id = "note-1"
+    detail_url = f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token=signed"
+    detail_state = {
+        "note": {
+            "noteDetailMap": {
+                note_id: {
+                    "note": {
+                        "title": "110 平彩色小家",
+                        "desc": "第一段\n\n第二段\n\n#家居美学[话题]#",
+                        "tagList": [
+                            {"name": "家居美学"},
+                            {"name": "入住新家"},
+                            {"name": "家居美学"},
+                        ],
+                    }
+                }
+            }
+        }
+    }
+    detail_html = f"<script>window.__INITIAL_STATE__={json.dumps(detail_state, ensure_ascii=False)}</script>"
+
+    class FakeLocator:
+        @property
+        def last(self):
+            return self
+
+        async def click(self):
+            return None
+
+        async def wait_for(self, **kwargs):
+            del kwargs
+
+    class FakeSearchResponse:
+        url = "https://edith.xiaohongshu.com/api/pgy_leona/content_square/search_note_v2"
+        status = 200
+        request = SimpleNamespace(post_data_json={"spuIndustry": "家居家装"})
+
+        async def json(self):
+            return {
+                "data": {
+                    "noteList": [
+                        {
+                            "noteInfo": {
+                                "noteId": "video-1",
+                                "noteType": 2,
+                                "title": "视频样本",
+                                "noteLink": "https://www.xiaohongshu.com/explore/video-1?xsec_token=signed",
+                                "noteImages": [{"imageUrl": "http://ci.xiaohongshu.com/video.jpg"}],
+                            }
+                        },
+                        {
+                            "noteInfo": {
+                                "noteId": note_id,
+                                "noteType": 1,
+                                "title": "110 平彩色小家",
+                                "noteLink": detail_url,
+                                "noteImages": [{"imageUrl": "http://ci.xiaohongshu.com/cover.jpg"}],
+                                "likeNum": 321,
+                                "favNum": 257,
+                                "cmtNum": 24,
+                            }
+                        },
+                    ]
+                }
+            }
+
+    class FakeExpectedResponse:
+        def __init__(self, predicate):
+            response = FakeSearchResponse()
+            assert predicate(response)
+            self.value = asyncio.get_running_loop().create_future()
+            self.value.set_result(response)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            del exc_type, exc, traceback
+
+    class FakeDetailResponse:
+        status = 200
+
+        async def text(self):
+            return detail_html
+
+    class FakeRequest:
+        async def get(self, url, **kwargs):
+            assert url == detail_url
+            assert kwargs["headers"] == {"referer": "https://ad.xiaohongshu.com/microapp/creativity/inspire"}
+            return FakeDetailResponse()
+
+    class FakeInspirePage:
+        context = SimpleNamespace(request=FakeRequest())
+
+        def get_by_text(self, text, **kwargs):
+            del text, kwargs
+            return FakeLocator()
+
+        def expect_response(self, predicate, **kwargs):
+            assert kwargs == {"timeout": 15000}
+            return FakeExpectedResponse(predicate)
+
+    runtime = XiaohongshuRuntime()
+    runtime._is_inspire_logged_in = AsyncMock(return_value=True)
+
+    items = await runtime.collect_inspire_cards(FakeInspirePage(), industry="家居家装", limit=10)
+
+    assert items == [
+        {
+            "note_id": note_id,
+            "title": "110 平彩色小家",
+            "body": "第一段\n\n第二段\n\n#家居美学[话题]#",
+            "tags": ["家居美学", "入住新家"],
+            "cover_url": "https://ci.xiaohongshu.com/cover.jpg",
+            "metrics": {"likes": "321", "collects": "257", "comments": "24"},
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -178,6 +336,27 @@ async def test_inspire_target_opens_authorized_content_square():
     assert runtime.page.url == "https://ad.xiaohongshu.com/microapp/creativity/inspire"
     assert opened["logged_in"] is True
     assert opened["view"] == "inspire"
+    await manager.close_all()
+
+
+@pytest.mark.asyncio
+async def test_inspire_collection_reuses_the_authenticated_gateway_page():
+    runtime = FakeRuntime()
+    manager = XiaohongshuBrowserSessionManager(runtime=runtime)
+    manager._playwright = FakePlaywright()
+    await manager.open("session-1", "owner-1", "inspire-account", target="inspire")
+
+    items = await manager.collect_inspire(
+        session_id="session-1",
+        owner_uid="owner-1",
+        account_id="inspire-account",
+        industry="家居家装",
+        limit=10,
+    )
+
+    assert items == [{"note_id": "note-1", "title": "装修样本", "metrics": {"likes": "1w"}}]
+    assert runtime.inspire_collections == [(runtime.page, "家居家装", 10)]
+    assert runtime.context.closed is False
     await manager.close_all()
 
 
@@ -405,4 +584,33 @@ async def test_gateway_forwards_restricted_drafts_target(monkeypatch: pytest.Mon
         "owner_uid": "owner-1",
         "account_id": "account-1",
         "target": "drafts",
+    }
+
+
+@pytest.mark.asyncio
+async def test_gateway_collects_inspire_cards_from_existing_session(monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    async def collect_inspire(**kwargs):
+        captured.update(kwargs)
+        return [{"note_id": "note-1", "title": "装修样本"}]
+
+    monkeypatch.setattr(xhs_browser_gateway.manager, "collect_inspire", collect_inspire)
+    request = xhs_browser_gateway.InspireCollectRequest(
+        session_id="session-123",
+        owner_uid="owner-1",
+        account_id="inspire-account",
+        industry="家居家装",
+        limit=10,
+    )
+
+    response = await xhs_browser_gateway.session_collect_inspire("session-123", request)
+
+    assert response == {"items": [{"note_id": "note-1", "title": "装修样本"}]}
+    assert captured == {
+        "session_id": "session-123",
+        "owner_uid": "owner-1",
+        "account_id": "inspire-account",
+        "industry": "家居家装",
+        "limit": 10,
     }

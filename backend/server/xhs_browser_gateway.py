@@ -13,6 +13,7 @@ from yuxi.integrations.xiaohongshu.session_manager import (
     BrowserSessionCapacityError,
     XiaohongshuBrowserSessionManager,
 )
+from yuxi.integrations.xiaohongshu.runtime import XiaohongshuRuntimeError
 from yuxi.storage.minio.client import get_minio_client
 from yuxi.utils.logging_config import logger
 
@@ -80,6 +81,12 @@ class DistributeRequest(SessionRequest):
     cover_bucket_name: str | None = Field(default=None, max_length=255)
     cover_object_name: str | None = Field(default=None, max_length=1024)
     cover_sha256: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
+
+
+class InspireCollectRequest(SessionRequest):
+    target: str = Field(default="inspire", pattern="^inspire$")
+    industry: str = Field(min_length=1, max_length=80)
+    limit: int = Field(default=10, ge=1, le=10)
 
 
 @app.get("/health")
@@ -162,6 +169,37 @@ async def session_action(session_id: str, payload: ActionRequest) -> dict:
         raise HTTPException(
             status_code=502,
             detail={"code": "XHS_GATEWAY_ACTION_FAILED", "message": "远程浏览器操作失败"},
+        ) from exc
+
+
+@app.post("/internal/sessions/{session_id}/inspire/collect", dependencies=[Depends(require_internal_token)])
+async def session_collect_inspire(session_id: str, payload: InspireCollectRequest) -> dict:
+    if payload.session_id != session_id:
+        raise HTTPException(status_code=400, detail="session id mismatch")
+    try:
+        items = await manager.collect_inspire(
+            session_id=session_id,
+            owner_uid=payload.owner_uid,
+            account_id=payload.account_id,
+            industry=payload.industry,
+            limit=payload.limit,
+        )
+        return {"items": items}
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "INSPIRE_BROWSER_SESSION_NOT_FOUND", "message": "聚光采集会话已关闭，请重新打开"},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except XiaohongshuRuntimeError as exc:
+        status_code = 409 if exc.code == "INSPIRE_LOGIN_REQUIRED" else 502
+        raise HTTPException(status_code=status_code, detail={"code": exc.code, "message": str(exc)}) from exc
+    except Exception as exc:
+        logger.error(f"Inspire collection failed account={payload.account_id} error_type={type(exc).__name__}")
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "INSPIRE_CRAWL_FAILED", "message": "聚光样本采集失败"},
         ) from exc
 
 

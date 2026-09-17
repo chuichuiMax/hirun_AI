@@ -18,6 +18,8 @@ export const contentApi = {
   retryViralAsset: (assetId) => apiPost(`/api/content/viral-assets/${assetId}/retry`),
   listInspireSamples: (params) => apiGet(`/api/content/inspire/samples${encodeQuery(params)}`),
   getInspireSample: (sampleId) => apiGet(`/api/content/inspire/samples/${sampleId}`),
+  getInspireMedia: (mediaId) =>
+    apiGet(`/api/content/inspire/media/${encodeURIComponent(mediaId)}`, {}, true, 'blob'),
   createInspireCrawlRuns: (payload) => apiPost('/api/content/inspire/crawl-runs', payload),
   getInspireCrawlRun: (runId) => apiGet(`/api/content/inspire/crawl-runs/${runId}`),
   openInspireBrowserSession: () => apiPost('/api/content/inspire/browser-session'),

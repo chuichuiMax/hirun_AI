@@ -7,20 +7,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.utils.auth_middleware import get_admin_user, get_db, get_required_user
 from yuxi.image_design.schemas import (
+    ImageDesignAnalysisCreate,
     ImageDesignClientCreate,
     ImageDesignGenerateCreate,
-    ImageDesignPromptRefineCreate,
+    ImageDesignRefinementCreate,
     ImageDesignRecognizeCreate,
     ImageDesignShowcaseCreate,
 )
 from yuxi.image_design.service import (
     _error,
-    _get_material_item_and_asset,
+    create_analysis,
     create_client,
     create_generate_job,
+    create_refinement,
     delete_result,
+    get_analysis,
     get_bootstrap,
     get_job,
+    get_refinement,
     get_result_file,
     list_clients,
     list_jobs,
@@ -28,7 +32,6 @@ from yuxi.image_design.service import (
     list_showcase,
     create_showcase,
     delete_showcase,
-    refine_prompt,
 )
 from yuxi.storage.postgres.models_business import User
 
@@ -88,31 +91,49 @@ async def image_design_delete_showcase(
     return await delete_showcase(db, showcase_id)
 
 
-@image_design.post("/refine-prompt")
-async def image_design_refine_prompt(
-    payload: ImageDesignPromptRefineCreate,
+@image_design.post("/refinements", status_code=status.HTTP_201_CREATED)
+async def image_design_create_refinement(
+    payload: ImageDesignRefinementCreate,
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_material_item_and_asset(db, str(current_user.uid), payload.reference_material_id)
-    if payload.workflow == "room_adapt" and not payload.raw_room_material_id:
-        raise _error("IMAGE_DESIGN_RAW_ROOM_REQUIRED", "户型适配必须选择毛坯实拍图")
-    if payload.raw_room_material_id:
-        await _get_material_item_and_asset(db, str(current_user.uid), payload.raw_room_material_id)
-    try:
-        preview = await refine_prompt(payload)
-    except Exception as exc:
-        raise _error("IMAGE_DESIGN_REFINE_FAILED", "AI 润色暂时不可用，请稍后重试", 503, retryable=True) from exc
-    return {
-        "success": True,
-        "data": {
-            "preview": preview,
-            "content": preview,
-            "source": payload.user_prompt,
-            "model_spec": payload.model_spec,
-            "has_refined": True,
-        },
-    }
+    return await create_refinement(db, current_user, payload)
+
+
+@image_design.get("/refinements/{refinement_id}")
+async def image_design_get_refinement(
+    refinement_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_refinement(db, current_user, refinement_id)
+
+
+@image_design.post("/refine-prompt", status_code=status.HTTP_201_CREATED)
+async def image_design_refine_prompt_compatibility(
+    payload: ImageDesignRefinementCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_refinement(db, current_user, payload)
+
+
+@image_design.post("/analyses", status_code=status.HTTP_201_CREATED)
+async def image_design_create_analysis(
+    payload: ImageDesignAnalysisCreate,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await create_analysis(db, current_user, payload)
+
+
+@image_design.get("/analyses/{analysis_id}")
+async def image_design_get_analysis(
+    analysis_id: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await get_analysis(db, current_user, analysis_id)
 
 
 @image_design.post("/recognize")
@@ -121,21 +142,8 @@ async def image_design_recognize(
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    item, asset = await _get_material_item_and_asset(db, str(current_user.uid), payload.material_item_id)
-    metadata = dict(item.metadata_json or {})
-    analysis = dict(metadata.get("image_design_recognition") or {})
-    if not analysis:
-        analysis = {
-            "status": "completed",
-            "width": asset.image_width,
-            "height": asset.image_height,
-            "file_name": asset.original_file_name,
-            "message": "已完成基础图片信息识别",
-        }
-        metadata["image_design_recognition"] = analysis
-        item.metadata_json = metadata
-        await db.commit()
-    return {"success": True, "data": {"material_item_id": item.id, "recognition": analysis}}
+    del payload, current_user, db
+    raise _error("IMAGE_DESIGN_ANALYSIS_ROLE_REQUIRED", "图片识别接口已升级，请明确指定图片分析角色", 410)
 
 
 @image_design.get("/recognitions")
@@ -144,17 +152,8 @@ async def image_design_recognitions(
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not material_item_id:
-        return {"recognitions": []}
-    item, _ = await _get_material_item_and_asset(db, str(current_user.uid), material_item_id)
-    return {
-        "recognitions": [
-            {
-                "material_item_id": item.id,
-                "recognition": (item.metadata_json or {}).get("image_design_recognition"),
-            }
-        ]
-    }
+    del material_item_id, current_user, db
+    raise _error("IMAGE_DESIGN_ANALYSIS_ROLE_REQUIRED", "请使用新的角色化图片分析接口", 410)
 
 
 @image_design.post("/generate", status_code=status.HTTP_202_ACCEPTED)

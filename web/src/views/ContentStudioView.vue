@@ -47,6 +47,7 @@ import { materialLibraryApi } from '@/apis/material_library_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
 import { useUserStore } from '@/stores/user'
 import { formatEvidenceReference, hasSelectedViralReference } from '@/utils/contentEvidencePresentation'
+import { formatInspireDetailBody } from '@/utils/inspirePresentation'
 import { formatDateTime } from '@/utils/time'
 import {
   appendContentNarrativeText,
@@ -90,6 +91,7 @@ const aiEditHistoryElement = ref(null)
 const versionDrawerOpen = ref(false)
 const resultDetailOpen = ref(false)
 const inspireSamples = ref([])
+const inspireCoverUrls = ref({})
 const inspireLoading = ref(false)
 const inspireDetail = ref(null)
 const inspireDetailOpen = ref(false)
@@ -196,6 +198,7 @@ let selectedImagePreviewGeneration = 0
 let hycanvasCompositePreviewGeneration = 0
 let posterPreviewGeneration = 0
 let hycanvasTemplateLoadGeneration = 0
+let inspireCoverLoadGeneration = 0
 let posterTemplateSignature = ''
 
 const materialGalleryMap = computed(() => new Map(materialGalleries.value.map((item) => [item.id, item])))
@@ -222,6 +225,9 @@ const selectedHyCanvasTemplate = computed(() =>
   hycanvasTemplates.value.find((item) => item.id === selectedHyCanvasTemplateId.value) || null
 )
 const hasViralReference = computed(() => hasSelectedViralReference(store.artifact))
+const inspireDetailBody = computed(() =>
+  formatInspireDetailBody(inspireDetail.value?.body, inspireDetail.value?.tags)
+)
 const resultVisualMaterial = computed(() => (
   store.artifact?.runtime_config_snapshot?.visual_material ||
   store.task?.runtime_config_snapshot?.visual_material ||
@@ -1952,6 +1958,7 @@ onBeforeUnmount(() => {
   posterPreviewGeneration += 1
   hycanvasTemplateLoadGeneration += 1
   clearReviewNotePhotos()
+  inspireCoverLoadGeneration += 1
   if (coverUrl.value) URL.revokeObjectURL(coverUrl.value)
   Object.values(resultVersionCoverUrls.value).filter(Boolean).forEach(URL.revokeObjectURL)
   Object.values(resultGallerySourceUrls.value).filter(Boolean).forEach(URL.revokeObjectURL)
@@ -1964,6 +1971,7 @@ onBeforeUnmount(() => {
   Object.values(hycanvasTemplateUrls.value).forEach((url) => {
     if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
   })
+  Object.values(inspireCoverUrls.value).filter(Boolean).forEach(URL.revokeObjectURL)
 })
 
 const compileBrief = async () => {
@@ -2182,29 +2190,91 @@ const copyResultText = async (value, label) => {
   }
 }
 
+const getInspireErrorMessage = (error, fallback) => {
+  if (error?.message === 'Failed to fetch' || error instanceof TypeError) {
+    return '内容服务暂时不可用，请稍后重试'
+  }
+  return error?.message || fallback
+}
+
+const loadInspireCoverUrls = async (samples) => {
+  const generation = ++inspireCoverLoadGeneration
+  const previousUrls = { ...inspireCoverUrls.value }
+  const nextUrls = {}
+  for (const sample of samples) {
+    if (!sample.media_id) continue
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await contentApi.getInspireMedia(sample.media_id)
+        nextUrls[sample.media_id] = URL.createObjectURL(await response.blob())
+        break
+      } catch {
+        nextUrls[sample.media_id] = previousUrls[sample.media_id] || ''
+        if (attempt === 0) await new Promise(resolve => window.setTimeout(resolve, 250))
+      }
+    }
+  }
+  if (generation !== inspireCoverLoadGeneration) {
+    Object.values(nextUrls).filter(Boolean).forEach(URL.revokeObjectURL)
+    return
+  }
+  const retainedUrls = new Set(Object.values(nextUrls).filter(Boolean))
+  Object.values(previousUrls)
+    .filter((url) => url && !retainedUrls.has(url))
+    .forEach(URL.revokeObjectURL)
+  inspireCoverUrls.value = nextUrls
+}
+
+const ensureInspireCoverUrl = async (mediaId) => {
+  if (!mediaId || inspireCoverUrls.value[mediaId]) return
+  try {
+    const response = await contentApi.getInspireMedia(mediaId)
+    const url = URL.createObjectURL(await response.blob())
+    if (inspireCoverUrls.value[mediaId]) {
+      URL.revokeObjectURL(url)
+      return
+    }
+    inspireCoverUrls.value = { ...inspireCoverUrls.value, [mediaId]: url }
+  } catch {
+    // 封面不可用不影响样本文案和结构参考。
+  }
+}
+
 const loadInspireSamples = async ({ refresh = false } = {}) => {
   if (!store.task || store.task.runtime_config_snapshot?.creation_mode !== 'viral_rewrite' || !selectedIndustrySlug.value) {
     inspireSamples.value = []
+    await loadInspireCoverUrls([])
     return
   }
   inspireLoading.value = true
+  let refreshError = null
   try {
     if (refresh) {
-      const crawlResponse = await contentApi.createInspireCrawlRuns({ industry_slugs: [selectedIndustrySlug.value], limit: 10 })
-      const run = crawlResponse.runs?.[0]
-      if (run?.id) {
-        const terminal = new Set(['succeeded', 'partial', 'login_required', 'rate_limited', 'schema_changed', 'media_failed', 'failed'])
-        let status = run.status
-        for (let attempt = 0; attempt < 45 && !terminal.has(status); attempt += 1) {
-          await new Promise(resolve => window.setTimeout(resolve, 1500))
-          status = (await contentApi.getInspireCrawlRun(run.id)).status
+      try {
+        const crawlResponse = await contentApi.createInspireCrawlRuns({ industry_slugs: [selectedIndustrySlug.value], limit: 10 })
+        const run = crawlResponse.runs?.[0]
+        if (run?.id) {
+          const terminal = new Set(['succeeded', 'partial', 'login_required', 'rate_limited', 'schema_changed', 'media_failed', 'failed'])
+          let status = run.status
+          for (let attempt = 0; attempt < 45 && !terminal.has(status); attempt += 1) {
+            await new Promise(resolve => window.setTimeout(resolve, 1500))
+            status = (await contentApi.getInspireCrawlRun(run.id)).status
+          }
+          if (status === 'login_required') {
+            inspireBrowserOpen.value = true
+            throw new Error('请在已打开的“聚光采集浏览器”远程画面内登录；普通浏览器登录不会共享')
+          }
+          if (status === 'failed' || status === 'rate_limited' || status === 'schema_changed') throw new Error('聚光样本采集失败，请查看管理员任务状态')
         }
-        if (status === 'login_required') throw new Error('聚光平台登录已失效，请点击“打开聚光”重新登录')
-        if (status === 'failed' || status === 'rate_limited' || status === 'schema_changed') throw new Error('聚光样本采集失败，请查看管理员任务状态')
+      } catch (error) {
+        const code = error.response?.data?.detail?.error?.code
+        if (code === 'INSPIRE_LOGIN_REQUIRED') inspireBrowserOpen.value = true
+        refreshError = error
       }
     }
     const response = await contentApi.listInspireSamples({ industry_slug: selectedIndustrySlug.value, limit: 10 })
     inspireSamples.value = response.items || []
+    await loadInspireCoverUrls(inspireSamples.value)
     selectedInspireSnapshotId.value = store.task.runtime_config_snapshot?.selected_inspire_snapshot_id || ''
     if (!refresh && !inspireSamples.value.length) {
       const key = `${store.task.id}:${selectedIndustrySlug.value}`
@@ -2213,12 +2283,21 @@ const loadInspireSamples = async ({ refresh = false } = {}) => {
         await loadInspireSamples({ refresh: true })
       }
     }
+    if (refreshError) message.warning(`刷新未完成，已保留现有样本：${getInspireErrorMessage(refreshError, '请稍后重试')}`)
   } catch (error) {
-    inspireSamples.value = []
-    message.warning(error.message || '热门爆款样本加载失败')
+    if (!refresh) {
+      inspireSamples.value = []
+      await loadInspireCoverUrls([])
+    }
+    message.warning(getInspireErrorMessage(error, '热门爆款样本加载失败'))
   } finally {
     inspireLoading.value = false
   }
+}
+
+const handleInspireReady = () => {
+  message.success('聚光登录已确认，正在采集爆款样本')
+  void loadInspireSamples({ refresh: true })
 }
 
 const openInspireDetail = async (sample) => {
@@ -2226,9 +2305,10 @@ const openInspireDetail = async (sample) => {
   inspireDetail.value = null
   try {
     inspireDetail.value = await contentApi.getInspireSample(sample.id)
+    await ensureInspireCoverUrl(inspireDetail.value.media_id)
   } catch (error) {
     inspireDetailOpen.value = false
-    message.error(error.message || '样本详情加载失败')
+    message.error(getInspireErrorMessage(error, '样本详情加载失败'))
   }
 }
 
@@ -2536,8 +2616,8 @@ const openVersions = async () => {
               <a-spin v-else :spinning="inspireLoading">
                 <div v-if="inspireSamples.length" class="inspire-sample-list">
                   <article v-for="sample in inspireSamples" :key="sample.id" class="inspire-sample-card" :class="{ selected: selectedInspireSnapshotId === sample.snapshot_id }">
-                    <img v-if="sample.cover_url" :src="sample.cover_url" :alt="sample.title" />
-                    <div class="inspire-sample-copy"><div class="inspire-sample-meta"><span>{{ sample.industry_slug }}</span><time>{{ formatDateTime(sample.fetched_at) }}</time></div><strong>{{ sample.title }}</strong><p>{{ sample.body || '已保存结构蓝图，正文缓存将在 1 小时后过期。' }}</p><div class="inspire-sample-actions"><a-button size="small" @click="openInspireDetail(sample)">查看详情</a-button><a-button size="small" type="primary" :loading="inspireReferenceSaving && selectedInspireSnapshotId === sample.snapshot_id" :disabled="!sample.reference_ready" @click="setInspireReference(sample)">{{ selectedInspireSnapshotId === sample.snapshot_id ? '已设为参考' : '设为参考' }}</a-button></div></div>
+                    <div class="inspire-sample-cover"><img v-if="inspireCoverUrls[sample.media_id]" :src="inspireCoverUrls[sample.media_id]" :alt="sample.title" /><div v-else class="inspire-sample-cover-empty"><Image :size="18" /><span>封面不可用</span></div></div>
+                    <div class="inspire-sample-copy"><div class="inspire-sample-meta"><span>{{ sample.industry_slug }}</span><time>{{ formatDateTime(sample.fetched_at) }}</time></div><strong>{{ sample.title }}</strong><p>{{ sample.body || '平台未提供可展示正文' }}</p><div class="inspire-sample-tags"><a-tag v-for="tag in sample.tags || []" :key="tag">#{{ tag }}</a-tag><span v-if="!(sample.tags || []).length" class="inspire-empty-tags">平台未公开话题标签</span></div><div class="inspire-sample-actions"><a-button size="small" @click="openInspireDetail(sample)">查看详情</a-button><a-button size="small" type="primary" :loading="inspireReferenceSaving && selectedInspireSnapshotId === sample.snapshot_id" :disabled="!sample.reference_ready" @click="setInspireReference(sample)">{{ selectedInspireSnapshotId === sample.snapshot_id ? '已设为参考' : '设为参考' }}</a-button></div></div>
                   </article>
                 </div>
                 <a-empty v-else description="暂无聚光样本；管理员可先打开聚光完成登录，再刷新采集" />
@@ -3184,7 +3264,11 @@ const openVersions = async () => {
 
     <div v-else class="page-loading"><LoaderCircle class="spin" :size="28" />正在加载内容工作台</div>
 
-    <XiaohongshuBrowserDrawer v-model:open="inspireBrowserOpen" mode="inspire" />
+    <XiaohongshuBrowserDrawer
+      v-model:open="inspireBrowserOpen"
+      mode="inspire"
+      @inspire-ready="handleInspireReady"
+    />
 
     <a-modal
       v-model:open="inspireDetailOpen"
@@ -3195,8 +3279,8 @@ const openVersions = async () => {
       destroy-on-close
     >
       <div v-if="inspireDetail" class="inspire-detail-layout">
-        <section class="inspire-detail-cover"><img v-if="inspireDetail.cover_url" :src="inspireDetail.cover_url" :alt="inspireDetail.title" /><div v-else class="result-detail-cover-state empty"><Image :size="30" /><span>封面暂时无法预览</span></div></section>
-        <section class="inspire-detail-content"><div class="inspire-sample-meta"><span>{{ inspireDetail.industry_slug }}</span><time>{{ formatDateTime(inspireDetail.fetched_at) }}</time></div><h2>{{ inspireDetail.title }}</h2><div class="inspire-detail-tags"><a-tag v-for="tag in inspireDetail.tags || []" :key="tag">#{{ tag }}</a-tag></div><div v-if="inspireDetail.body_expired" class="inspire-expired">正文缓存已过期，仅保留结构蓝图与来源信息。</div><MarkdownPreview v-else :content="inspireDetail.body || '暂无正文内容'" /><div class="inspire-detail-actions"><a-button @click="copyResultText(inspireDetail.body || '', '样本文案')"><Copy :size="14" />复制</a-button><a-button type="primary" :disabled="!inspireDetail.reference_ready" @click="setInspireReference(inspireDetail)">设为参考</a-button><a :href="inspireDetail.source_url" target="_blank" rel="noreferrer"><ExternalLink :size="14" />打开来源</a></div></section>
+        <section class="inspire-detail-cover"><img v-if="inspireCoverUrls[inspireDetail.media_id]" :src="inspireCoverUrls[inspireDetail.media_id]" :alt="inspireDetail.title" /><div v-else class="result-detail-cover-state empty"><Image :size="30" /><span>封面暂时无法预览</span></div></section>
+        <section class="inspire-detail-content"><div class="inspire-sample-meta"><span>{{ inspireDetail.industry_slug }}</span><time>{{ formatDateTime(inspireDetail.fetched_at) }}</time></div><h2>{{ inspireDetail.title }}</h2><MarkdownPreview :content="inspireDetailBody || '平台未提供可展示正文'" /><div class="inspire-detail-actions"><a-button @click="copyResultText(inspireDetailBody, '样本文案')"><Copy :size="14" />复制</a-button><a-button type="primary" :disabled="!inspireDetail.reference_ready" @click="setInspireReference(inspireDetail)">设为参考</a-button><a :href="inspireDetail.source_url" target="_blank" rel="noreferrer"><ExternalLink :size="14" />打开来源</a></div></section>
       </div>
       <a-spin v-else />
     </a-modal>
@@ -3638,6 +3722,32 @@ const openVersions = async () => {
 .facts-preview h3 { margin: 10px 0 6px; }
 .facts-preview p, .facts-preview li { color: var(--color-text-secondary); }
 .facts-preview ul { padding-left: 18px; }
+.inspire-preview { min-width: 0; border: 1px solid var(--gray-150); border-radius: 8px; padding: 16px; background: var(--gray-0); display: flex; flex-direction: column; gap: 12px; }
+.inspire-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.inspire-preview-heading > div { display: flex; align-items: center; gap: 8px; }
+.inspire-heading-actions { display: flex; align-items: center; gap: 2px; }
+.inspire-preview-heading h3 { margin: 0; font-size: 15px; }
+.inspire-preview-heading p { margin: 2px 0 0; color: var(--color-text-tertiary); font-size: 11px; }
+.inspire-sample-list { display: flex; flex-direction: column; gap: 10px; max-height: 620px; overflow: auto; }
+.inspire-sample-card { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; padding: 8px; border: 1px solid var(--gray-150); border-radius: 6px; background: var(--gray-0); }
+.inspire-sample-card.selected { border-color: var(--color-primary-500); background: var(--color-primary-50); }
+.inspire-sample-cover { width: 72px; height: 92px; overflow: hidden; border-radius: 4px; background: var(--gray-50); }
+.inspire-sample-cover > img { width: 100%; height: 100%; object-fit: cover; }
+.inspire-sample-cover-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--color-text-tertiary); font-size: 10px; text-align: center; }
+.inspire-sample-copy { min-width: 0; }
+.inspire-sample-copy strong { display: block; margin: 4px 0; font-size: 13px; line-height: 1.45; }
+.inspire-sample-copy p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 0 0 8px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.inspire-sample-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.inspire-sample-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--color-text-tertiary); font-size: 11px; }
+.inspire-sample-actions, .inspire-detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.inspire-footnote { color: var(--color-text-tertiary); font-size: 11px; line-height: 1.5; }
+.inspire-empty { padding: 24px 8px; color: var(--color-text-secondary); font-size: 13px; text-align: center; }
+.inspire-detail-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 20px; }
+.inspire-detail-cover { min-height: 420px; display: flex; align-items: center; justify-content: center; border-radius: 8px; overflow: hidden; background: var(--gray-50); }
+.inspire-detail-cover img { width: 100%; height: 100%; max-height: 560px; object-fit: contain; }
+.inspire-detail-content h2 { margin: 8px 0 12px; font-size: 20px; line-height: 1.4; }
+.inspire-empty-tags { color: var(--color-text-tertiary); font-size: 13px; }
+@media (max-width: 760px) { .inspire-detail-layout { grid-template-columns: 1fr; } .inspire-detail-cover { min-height: 240px; } }
 .visual-material-card { margin-top: 20px; padding: 20px; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
 .visual-material-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--gray-150); }
 .visual-material-heading h3 { margin: 3px 0 5px; font-size: 17px; }

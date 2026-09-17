@@ -5,18 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
-import os
 import uuid
-from datetime import timedelta
 from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from yuxi.integrations.xiaohongshu import XiaohongshuRuntime, XiaohongshuRuntimeError
+from yuxi.integrations.xiaohongshu import XiaohongshuRuntimeError
+from yuxi.repositories.xiaohongshu_repository import XiaohongshuRepository
 from yuxi.services.run_queue_service import get_arq_pool, get_redis_client
 from yuxi.services.xiaohongshu_service import (
+    _gateway_request,
     browser_session_action,
     claim_browser_session,
     close_browser_session,
@@ -37,6 +37,7 @@ from yuxi.storage.postgres.models_content import (
 )
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.utils.datetime_utils import utc_now_naive
+from yuxi.utils.logging_config import logger
 
 MAX_COVER_BYTES = 5 * 1024 * 1024
 
@@ -70,7 +71,7 @@ async def _cache_cover(*, cover_url: str | None, owner_uid: str, sample_id: str,
             sha256=digest,
             mime_type=content_type,
             fetched_at=now,
-            expires_at=now + timedelta(seconds=TTL_SECONDS),
+            expires_at=None,
         )
         return uploaded.url, media
     except Exception:
@@ -79,8 +80,7 @@ async def _cache_cover(*, cover_url: str | None, owner_uid: str, sample_id: str,
 
 INSPIRE_URL = "https://ad.xiaohongshu.com/microapp/creativity/inspire"
 INSPIRE_HOST = "ad.xiaohongshu.com"
-TTL_SECONDS = max(60, int(os.getenv("INSPIRE_SAMPLE_TTL_SECONDS", "3600")))
-ADAPTER_VERSION = "dom-v1"
+ADAPTER_VERSION = "pgy-api-ssr-v1"
 INDUSTRY_MAPPINGS = {
     "professional-services": {"label": "专业服务", "platform_industry": "本地生活"},
     "education": {"label": "教育培训", "platform_industry": "教育培训"},
@@ -239,88 +239,90 @@ def normalize_inspire_item(raw: dict[str, Any], industry_slug: str, rank: int) -
 
 
 class InspireDirectCrawler:
-    """仅访问聚光灵感页及其同域详情页的只读浏览器适配器。"""
+    """通过已登录的受控浏览器会话读取聚光榜单。"""
 
-    async def collect(self, *, owner_uid: str, account_id: str, industry_slug: str, limit: int) -> list[dict[str, Any]]:
+    async def collect(
+        self,
+        *,
+        owner_uid: str,
+        account_id: str,
+        session_id: str,
+        industry_slug: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
         _assert_industry(industry_slug)
         if limit > 10:
             raise ValueError("单赛道最多采集 10 条")
-        from patchright.async_api import async_playwright
+        try:
+            response = await _gateway_request(
+                "POST",
+                f"/internal/sessions/{session_id}/inspire/collect",
+                timeout=60.0,
+                json={
+                    "session_id": session_id,
+                    "owner_uid": owner_uid,
+                    "account_id": account_id,
+                    "target": "inspire",
+                    "industry": INDUSTRY_MAPPINGS[industry_slug]["platform_industry"],
+                    "limit": limit,
+                },
+            )
+        except HTTPException as exc:
+            detail = exc.detail.get("error", {}) if isinstance(exc.detail, dict) else {}
+            code = str(detail.get("code") or "INSPIRE_CRAWL_FAILED")
+            message = str(detail.get("message") or "聚光样本采集失败")
+            if exc.status_code in {404, 409} or code in {
+                "INSPIRE_BROWSER_SESSION_NOT_FOUND",
+                "INSPIRE_LOGIN_REQUIRED",
+            }:
+                raise XiaohongshuRuntimeError("INSPIRE_LOGIN_REQUIRED", message) from exc
+            raise XiaohongshuRuntimeError(code, message) from exc
 
-        runtime = XiaohongshuRuntime(headless=True)
-        async with async_playwright() as playwright:
-            context = await runtime._launch_context(playwright, owner_uid, account_id)
-            try:
-                page = context.pages[0] if context.pages else await context.new_page()
-                await page.goto(INSPIRE_URL, wait_until="domcontentloaded", timeout=45000)
-                await page.wait_for_timeout(1200)
-                if not await runtime._is_inspire_logged_in(page):
-                    raise XiaohongshuRuntimeError("INSPIRE_LOGIN_REQUIRED", "聚光平台登录已失效，请重新登录")
-                await page.get_by_text("所属行业", exact=True).click()
-                industry = INDUSTRY_MAPPINGS[industry_slug]["platform_industry"]
-                option = page.get_by_text(industry, exact=True).last
-                await option.wait_for(state="visible", timeout=10000)
-                await option.click()
-                cards = page.locator(".note-card")
-                await cards.first.wait_for(state="visible", timeout=15000)
-                await page.wait_for_timeout(800)
-                items = []
-                seen = set()
-                for index in range(await cards.count()):
-                    card = cards.nth(index)
-                    await card.scroll_into_view_if_needed(timeout=10000)
-                    title = (await card.locator(".note-meta > span").first.inner_text()).strip()
-                    track = await card.get_attribute("data-track-impression") or ""
-                    try:
-                        note_id = str(json.loads(track).get("attributes", {}).get("triggerValue") or "")
-                    except (TypeError, ValueError):
-                        note_id = ""
-                    identity = note_id or title
-                    if not title or identity in seen:
-                        continue
-                    seen.add(identity)
-                    image = card.locator(".note-covers img").first
-                    cover_url = await image.get_attribute("src") if await image.count() else None
-                    if cover_url and cover_url.startswith("http://"):
-                        cover_url = "https://" + cover_url.removeprefix("http://")
-                    metrics: dict[str, int] = {}
-                    for tag in await card.locator(".note-meta .d-tag").all():
-                        icon = await tag.locator("use").first.get_attribute("xlink:href")
-                        key = {"#icon-like": "likes", "#icon-star": "collects", "#icon-comment": "comments"}.get(icon)
-                        value = _metric_value((await tag.inner_text()).strip())
-                        if key and value is not None:
-                            metrics[key] = value
-                    item = {
-                        "note_id": note_id or None,
-                        "canonical_url": (
-                            f"{INSPIRE_URL}?note_id={note_id}"
-                            if note_id
-                            else f"{INSPIRE_URL}#rank-{index + 1}"
-                        ),
-                        "title": title,
-                        # 聚光卡片只公开当前可见文案；按原文保存，避免详情页空白，
-                        # 同时不把未获取到的笔记正文伪造成平台数据。
-                        "body": title,
-                        "cover_url": cover_url,
-                        "metrics": metrics,
-                    }
-                    items.append(normalize_inspire_item(item, industry_slug, len(items) + 1))
-                    if len(items) >= limit:
-                        break
-                return items
-            finally:
-                await context.close()
+        items = []
+        for index, raw in enumerate(response.json()["items"]):
+            note_id = str(raw.get("note_id") or "")
+            metrics = {}
+            for key, raw_value in (raw.get("metrics") or {}).items():
+                value = _metric_value(str(raw_value))
+                if key in {"likes", "collects", "comments"} and value is not None:
+                    metrics[key] = value
+            title = str(raw.get("title") or "").strip()
+            body = str(raw.get("body") or "").strip()
+            cover_url = str(raw.get("cover_url") or "").strip()
+            raw_tags = raw.get("tags")
+            tags = (
+                list(dict.fromkeys(str(tag).strip() for tag in raw_tags if str(tag).strip()))
+                if isinstance(raw_tags, list)
+                else []
+            )
+            if not note_id or not title or not body or not cover_url or not tags:
+                raise XiaohongshuRuntimeError(
+                    "INSPIRE_ITEM_INCOMPLETE",
+                    "聚光样本缺少封面、标题、正文或话题标签数据",
+                )
+            item = {
+                "note_id": note_id,
+                "canonical_url": f"{INSPIRE_URL}?note_id={note_id}",
+                "title": title,
+                "body": body,
+                "tags": tags,
+                "cover_url": cover_url,
+                "metrics": metrics,
+            }
+            items.append(normalize_inspire_item(item, industry_slug, index + 1))
+        return items
 
 
 async def list_inspire_samples(db, user: User, *, industry_slug: str, limit: int = 10) -> list[dict[str, Any]]:
     _assert_industry(industry_slug)
-    now = utc_now_naive()
     samples = (
         (
             await db.execute(
                 select(ContentInspireSample)
                 .where(
-                    ContentInspireSample.owner_uid == str(user.uid), ContentInspireSample.industry_slug == industry_slug
+                    ContentInspireSample.owner_uid == str(user.uid),
+                    ContentInspireSample.industry_slug == industry_slug,
+                    ContentInspireSample.current_rank.is_not(None),
                 )
                 .order_by(ContentInspireSample.current_rank.asc().nullslast(), ContentInspireSample.updated_at.desc())
                 .limit(min(limit, 10))
@@ -348,7 +350,7 @@ async def list_inspire_samples(db, user: User, *, industry_slug: str, limit: int
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            result.append(_present_sample(sample, snapshot, now=now, include_body=False, media=media))
+            result.append(_present_sample(sample, snapshot, media=media))
     return result
 
 
@@ -371,18 +373,17 @@ async def get_inspire_sample(db, user: User, sample_id: str) -> dict[str, Any]:
             .limit(1)
         )
     ).scalar_one_or_none()
-    return _present_sample(row[0], row[1], now=utc_now_naive(), include_body=True, media=media)
+    return _present_sample(row[0], row[1], media=media)
 
 
-def _present_sample(sample, snapshot, *, now, include_body: bool, media=None) -> dict[str, Any]:
-    expired = bool(snapshot.body_expires_at and snapshot.body_expires_at <= now)
+def _present_sample(sample, snapshot, *, media=None) -> dict[str, Any]:
     return {
         "id": sample.id,
         "snapshot_id": snapshot.id,
         "industry_slug": sample.industry_slug,
         "title": sample.title,
-        "body": None if expired or not include_body else snapshot.body_text or sample.title,
-        "body_expired": expired,
+        "body": snapshot.body_text or "",
+        "body_expired": False,
         "tags": sample.tags_json or [],
         "cover_url": f"/api/content/inspire/media/{media.id}" if media else None,
         "media_id": media.id if media else None,
@@ -404,8 +405,14 @@ async def create_inspire_crawl_runs(db, user: User, industry_slugs: list[str], l
     for slug in slugs:
         _assert_industry(slug)
     account = await _ensure_inspire_account(db, user)
-    if not account.enabled or account.login_status != "logged_in":
-        raise _error(409, "INSPIRE_LOGIN_REQUIRED", "请先打开聚光平台并完成登录")
+    browser_session = await XiaohongshuRepository(db).get_browser_session(account.id, str(user.uid))
+    if (
+        not account.enabled
+        or account.login_status != "logged_in"
+        or browser_session is None
+        or browser_session.status != "ready"
+    ):
+        raise _error(409, "INSPIRE_LOGIN_REQUIRED", "请先打开聚光采集浏览器并在远程画面内完成登录")
     runs = []
     queue = await get_arq_pool()
     for slug in slugs:
@@ -468,6 +475,7 @@ async def process_inspire_crawl(ctx, run_id: str) -> None:
             )
             return
         account = None
+        browser_session = None
         try:
             account = (
                 await db.execute(
@@ -481,14 +489,27 @@ async def process_inspire_crawl(ctx, run_id: str) -> None:
             ).scalar_one_or_none()
             if account is None:
                 raise XiaohongshuRuntimeError("INSPIRE_ACCOUNT_NOT_CONFIGURED", "聚光平台授权会话不可用")
+            browser_session = await XiaohongshuRepository(db).get_browser_session(account.id, run.owner_uid)
+            if browser_session is None or browser_session.status != "ready":
+                raise XiaohongshuRuntimeError("INSPIRE_LOGIN_REQUIRED", "聚光采集会话已关闭，请重新打开并登录")
             items = await InspireDirectCrawler().collect(
                 owner_uid=account.owner_uid,
                 account_id=run.account_id,
+                session_id=browser_session.id,
                 industry_slug=run.industry_slug,
                 limit=int((run.query_json or {}).get("limit", 10)),
             )
             now = utc_now_naive()
             media_failed = False
+            await db.execute(
+                update(ContentInspireSample)
+                .where(
+                    ContentInspireSample.owner_uid == run.owner_uid,
+                    ContentInspireSample.provider == "xiaohongshu_inspire",
+                    ContentInspireSample.industry_slug == run.industry_slug,
+                )
+                .values(current_rank=None)
+            )
             for item in items:
                 existing = (
                     await db.execute(
@@ -538,7 +559,7 @@ async def process_inspire_crawl(ctx, run_id: str) -> None:
                     sample_id=existing.id,
                     raw_json={"title": item["title"], "tags": item.get("tags", []), "source_hash": item["source_hash"]},
                     body_text=item.get("body") or None,
-                    body_expires_at=now + timedelta(seconds=TTL_SECONDS),
+                    body_expires_at=None,
                     fetched_at=now,
                     adapter_version=ADAPTER_VERSION,
                     raw_hash=item["source_hash"],
@@ -566,6 +587,29 @@ async def process_inspire_crawl(ctx, run_id: str) -> None:
                 utc_now_naive(),
             )
         finally:
+            if browser_session is not None:
+                try:
+                    await _gateway_request(
+                        "DELETE",
+                        f"/internal/sessions/{browser_session.id}",
+                        params={"owner_uid": run.owner_uid, "account_id": run.account_id},
+                    )
+                except HTTPException as exc:
+                    logger.warning(
+                        f"Failed to close Inspire browser session account={run.account_id} status={exc.status_code}"
+                    )
+                now = utc_now_naive()
+                browser_session.status = "stopped"
+                browser_session.last_heartbeat_at = now
+                browser_session.last_used_at = now
+                browser_session.expires_at = now
+                try:
+                    await redis.delete(f"xhs:browser-control:{run.owner_uid}:{run.account_id}")
+                except Exception as exc:
+                    logger.warning(
+                        f"Failed to revoke Inspire browser control account={run.account_id} "
+                        f"error_type={type(exc).__name__}"
+                    )
             await lock.release()
 
 
@@ -605,7 +649,7 @@ async def bind_inspire_reference(db, user: User, task_id: str, snapshot_id: str)
     await db.flush()
     return {
         "task_id": task.id,
-        "sample": _present_sample(sample, snapshot, now=utc_now_naive(), include_body=False),
+        "sample": _present_sample(sample, snapshot),
         "forced": True,
     }
 
@@ -617,7 +661,5 @@ async def get_inspire_media_content(db, user: User, media_id: str) -> tuple[byte
     sample = await db.get(ContentInspireSample, media.sample_id)
     if sample is None or sample.owner_uid != str(user.uid):
         raise _error(404, "INSPIRE_MEDIA_NOT_FOUND", "聚光媒体不存在或无权访问")
-    if media.expires_at and media.expires_at <= utc_now_naive():
-        raise _error(410, "INSPIRE_MEDIA_EXPIRED", "聚光封面缓存已过期")
     data = await get_minio_client().adownload_file("public", media.object_key)
     return data, media.mime_type
