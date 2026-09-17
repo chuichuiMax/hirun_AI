@@ -13,7 +13,6 @@ from yuxi.services.material_library_service import (
     MaterialCategoryCreate,
     MaterialCategoryUpdate,
     MaterialShareCreate,
-    _make_image_thumbnail,
     _normalize_image,
     create_material_category,
     render_public_material_share_page,
@@ -63,15 +62,15 @@ def test_material_library_bucket_defaults_to_image():
     assert MATERIAL_LIBRARY_BUCKET not in MinIOClient.PUBLIC_READ_BUCKETS
 
 
-def test_normalize_image_returns_verified_png():
+def test_normalize_image_returns_verified_webp():
     source = io.BytesIO()
     Image.new("RGB", (32, 24), "red").save(source, format="JPEG")
 
     data, width, height, content_type = _normalize_image(source.getvalue())
 
     assert (width, height) == (32, 24)
-    assert content_type == "image/png"
-    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    assert content_type == "image/webp"
+    assert data[8:12] == b"WEBP"
 
 
 def test_normalize_image_rejects_non_image():
@@ -82,15 +81,28 @@ def test_normalize_image_rejects_non_image():
     assert exc_info.value.detail["error"]["code"] == "MATERIAL_IMAGE_INVALID"
 
 
-def test_make_image_thumbnail_limits_dimensions_and_returns_jpeg():
+def test_normalize_design_style_accepts_decoration_styles_only():
+    from yuxi.services.material_library_service import _normalize_design_style
+
+    assert _normalize_design_style("雅致现代") == "雅致现代"
+    assert _normalize_design_style("  ") is None
+    with pytest.raises(HTTPException) as exc_info:
+        _normalize_design_style("不存在的风格")
+    assert exc_info.value.detail["error"]["code"] == "MATERIAL_STYLE_INVALID"
+
+
+def test_encode_material_thumbnail_limits_dimensions_and_returns_webp():
+    from yuxi.services.material_upload_queue import encode_material_thumbnail
+
     source = io.BytesIO()
     Image.new("RGB", (1200, 800), "gray").save(source, format="PNG")
 
-    data = _make_image_thumbnail(source.getvalue())
+    data = encode_material_thumbnail(source.getvalue())
 
-    assert data.startswith(b"\xff\xd8")
+    assert data[8:12] == b"WEBP"
     with Image.open(io.BytesIO(data)) as image:
-        assert image.size == (480, 320)
+        assert image.format == "WEBP"
+        assert image.size == (720, 480)
 
 
 def test_material_categories_normalize_legacy_values_and_reject_free_form():
@@ -290,9 +302,9 @@ def test_public_material_share_page_uses_snapshot_order_and_renders_share_card_m
     assert '<meta property="og:url" content="https://share.example.test/boyun/share/case/share-token">' in page
     assert '<meta property="og:site_name" content="Yuxi">' in page
     assert 'property="og:description" content="万科金域华府｜120㎡｜现代简约"' in page
-    assert '楼盘：万科金域华府' in page
-    assert '面积：120㎡' in page
-    assert '风格：现代简约' in page
+    assert "楼盘：万科金域华府" in page
+    assert "面积：120㎡" in page
+    assert "风格：现代简约" in page
     assert (
         'property="og:image" '
         'content="https://share.example.test/boyun/api/material-library/shares/share-token/images/1"' in page

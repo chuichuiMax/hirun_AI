@@ -31,6 +31,20 @@ from .state import ChatBotState
 from yuxi.agents.middlewares.model_call_timeout import retryable_content_model_error
 
 
+def build_chat_model_kwargs(context) -> dict:
+    """受控内容节点关闭 SiliconFlow DeepSeek thinking；其余节点沿用 reasoning_effort。"""
+    reasoning_effort = getattr(context, "reasoning_effort", None)
+    if getattr(context, "_content_max_model_calls", None):
+        return {
+            "max_retries": 0,
+            "streaming": True,
+            "extra_body": {"enable_thinking": False},
+        }
+    if reasoning_effort:
+        return {"reasoning_effort": reasoning_effort}
+    return {}
+
+
 async def _build_middlewares(context):
     """构建中间件列表"""
     if getattr(context, "_content_node_result_collector", None) is not None:
@@ -126,10 +140,7 @@ class ChatbotAgent(BaseAgent):
 
             tools = [tool for tool in tools if tool.name != "submit_content_node_result"]
             tools.append(build_content_result_tool(result_collector))
-        reasoning_effort = getattr(context, "reasoning_effort", None)
-        model_kwargs = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
-        if getattr(context, "_content_max_model_calls", None):
-            model_kwargs.update(max_retries=0, streaming=True)
+        model_kwargs = build_chat_model_kwargs(context)
         graph = create_agent(
             model=load_chat_model(fully_specified_name=model_spec, **model_kwargs),
             tools=tools,

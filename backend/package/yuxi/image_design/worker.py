@@ -14,6 +14,7 @@ from yuxi.content_cover.image2_client import Image2Client, Image2Error
 from yuxi.content_cover.image2_settings import resolve_image2_config
 from yuxi.content_cover.schemas import Image2Input, Image2Request, Image2Submission
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
+from yuxi.services.material_upload_queue import read_material_bytes
 from yuxi.services.run_queue_service import clear_cancel_signal
 from yuxi.storage.minio import get_minio_client
 from yuxi.storage.postgres.models_content import ContentCoverAsset, ImageDesignJob
@@ -46,7 +47,7 @@ async def _load_material_input(db, owner_uid: str, material_id: str) -> Image2In
     asset = await repo.get_asset(item.asset_id, item.owner_uid)
     if asset is None:
         raise Image2Error("IMAGE_DESIGN_MATERIAL_FILE_MISSING", "图片设计引用的素材文件不存在")
-    data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+    data = await read_material_bytes(asset)
     return Image2Input(data=data, content_type=asset.content_type, file_name=asset.original_file_name)
 
 

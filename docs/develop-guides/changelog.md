@@ -6,9 +6,29 @@
 
 ## v0.7.1 (current)
 
-- 好评笔记 `generate_content` 改为服务端预取 2 条×400 字语气样例后一次直出，不再让模型 `query_kb` 把第二轮撑到 1.6 万字；模型视图硬顶 4000 字（包一层节点输入后 ≤5000）。空闲超时与装修家居共用 180s / 1 次调用。
+- 素材图片上传改为 WebP 入库：HTTP 校验并转码后先写入 Redis，再由队列落到 OSS/MinIO；上传弹窗可选择装修设计风格（一级装修图库按风格路由到唯一二级图库）。读取在入库完成前走 Redis 暂存，避免接口空等对象存储。图库卡片、网格和小程序缩略图改为 720px WebP，Redis 缓存并在入库时写入同目录 `thumb.webp`，列表不再拉 OSS 原图。上传弹窗一次可多选图片（避免 Windows 把扩展名过滤成「自定义文件」后只能单选），也可选择文件夹递归扫描 PNG/JPG/WebP（拖入文件夹同样扫描），并显示传输进度与文件列表。
 
-- 正文与封面规划改为一次直出：模型调用上限 1，不再把额度留给校验纠错。正文模型视图硬顶 1 万字（词库 1×80、证据 16 条×48 字、封禁词 16 行×1 候选）。封面超长按 `maxChars` 截入框内、重复字段改成不同信息点后直接通过，避免 `visual_text_too_long` / `visual_text_duplicate` 二次调用；标题超渠道字数同样截入上限。空闲超时按供应商首包设置：正文 180s、封面规划 70s（30s 会把正常首包误杀）。
+- 正文 `generate_content` 墙钟压到 1 分钟内：实测好评任务首包仅 2.1s，却流式 86s/396 chunk（成稿约 400 字）——SiliconFlow DeepSeek-V4 默认 thinking，`reasoning_effort=low` 仍慢想。受控内容节点改为 `enable_thinking=false`；正文/封面 `max_tokens` 硬顶 1200/900。
+
+- 修复封面提交反复报「封面任务与当前内容节点不一致」：延迟优化后模型消息不再包含 `task_id`，模型幻觉 ID 与节点绑定不符；`create_content_cover_job` 改为只使用运行时绑定的任务 ID，Skill 同步为无参调用。
+
+- 修复正文生成撞硅基流动 `50507 Request failed: Unknown error` 后直接失败：`retryable_content_model_error` 识别 HTTP 5xx / 业务码 50507，受控节点 `model_retry_times` 提到 **2**（连接重试会退还调用计数，不与结果纠错抢额度）。
+
+- 修复正文反复「额度用尽」：硬顶压视图时曾清空 `formula_lexicon_bundle` 且丢掉 `lexicon_codes`，模型无法声明必选词库码，校验 `title_formula_lexicon_usage_incomplete` 后纠错再撞额度。现硬顶必须保留标题/正文词库 code；`generate_content` 纠错额度调至 **3**。
+
+- 修复正文/封面「已用完 1 次模型调用额度」：强制 `submit_content_node_result` 在首轮未带工具调用时需要第 2 次纠错调用；`generate_content` / `plan_visuals` 的 `max_model_calls` 曾调到 2。
+
+- 封面 `plan_visuals` 再提速：模型视图硬顶 **1800**（正文 100 字、证据最多 4 条×24 字、封禁 4 行仅问题词）；去掉策略公式码/`variable_codes`/模板 `kind`/`layoutMeasured`/空 repairs；Skill 压到 1.9.0；输出预算 4000；运行时只注入 `content-visual-planner`。目标缩短封面 TTFT，仍一次直出不拆模型调用。
+
+- 正文 `generate_content` 再提速：模型消息改为只传 `payload/duty/ban`（去掉 task_id/hash 等审计字段）；装修禁令压成 5 条短句；投影硬顶 **4000**（好评 **2800**）；工作流默认只挂标题/正文 Skill，仿写 Skill 仅 `viral_rewrite` 追加；输出预算 8000。目标缩短 TTFT 与 Skill 准备开销，仍不拆成两次模型调用。
+
+- 正文 `generate_content` 模型视图曾压到 5000 字（词库 1×48、证据最多 10 条×36 字、封禁 10 行×1 候选）；标题/正文 Skill 删冗到短版。好评笔记视图硬顶曾为 3500。
+
+- 避免正文/封面规划一次直出被供应商空等和 Evidence ID 抄错打回：封面规划空闲超时与正文对齐为 180s，节点总时限 400s 以容纳 1 次连接恢复；空等/连接失败不占 1 次提交额度；正文模型视图把 `items[].id` 改成 `E01` 短码，提交时映射回真实 ID，避免再抄 16 位 hex；生成结果里与授权 ID 仅差 1 个字符且唯一可对齐的 Evidence ID 仍由服务端改回，不再因 `evidence_forbidden` 耗尽额度。
+
+- 好评笔记 `generate_content` 改为服务端预取语气样例后一次直出，不再让模型 `query_kb`；模型视图硬顶随正文一并下调（好评 3500）。空闲超时与装修家居共用 180s / 1 次调用。
+
+- 正文与封面规划改为一次直出：模型调用上限 1，不再把额度留给校验纠错。正文模型视图由 1 万字继续压到 5000 字。封面超长按 `maxChars` 截入框内、重复字段改成不同信息点后直接通过；标题超渠道字数同样截入上限。空闲超时：正文与封面规划均为 180s。
 
 - 素材库、封面参考图与海报模板单张上传上限由 20 MB 调整为 100 MB；同步前端校验文案、后端体积拦截，以及 nginx `client_max_body_size`。
 

@@ -16,7 +16,8 @@ import {
   Settings2,
   Share2,
   Trash2,
-  Upload
+  Upload,
+  X
 } from 'lucide-vue-next'
 
 import { contentApi } from '@/apis/content_api'
@@ -50,8 +51,11 @@ const sort = ref('newest')
 const uploadOpen = ref(false)
 const selectedFiles = ref([])
 const uploadCategory = ref('')
+const uploadDesignStyle = ref('')
 const fileInput = ref(null)
+const folderInput = ref(null)
 const uploadDragging = ref(false)
+const uploadProgress = reactive({ percent: 0, loaded: 0, total: 0, phase: 'idle' })
 const previewItem = ref(null)
 const ocrReviewOpen = ref(false)
 const ocrReviewItem = ref(null)
@@ -97,6 +101,14 @@ const orderedCategories = computed(() => {
 })
 const uploadCategories = computed(() => orderedCategories.value.filter((item) => (item.visibility || 'private') === (currentGallery.value?.visibility || materialScope.value)))
 const uploadFileLimit = computed(() => materialType.value === 'image' ? 50 : 100)
+const selectedFilesTotalBytes = computed(() => selectedFiles.value.reduce((sum, file) => sum + file.size, 0))
+const uploadProgressText = computed(() => {
+  if (uploadProgress.phase === 'processing') return '文件已送达，正在转码入库…'
+  if (uploadProgress.phase === 'sending') {
+    return `已传输 ${uploadProgress.percent}% · ${formatSize(uploadProgress.loaded)} / ${formatSize(uploadProgress.total)}`
+  }
+  return ''
+})
 const deleteTargetOptions = computed(() => categories.value.filter((item) => item.id !== deletingCategory.value?.id && (deletingCategory.value?.visibility !== 'enterprise' || item.visibility === 'enterprise')))
 const decorationGalleryStyles = [
   '复合写意', '写意木构', '江南印象', '东方古雅', '轻欧简美', '欧美香颂', '欧式田园',
@@ -113,6 +125,14 @@ const isDecorationGalleryPage = computed(() =>
   materialType.value === 'image' &&
   isTopLevelGallery.value &&
   currentGallery.value?.industry_slug === 'decoration'
+)
+const uploadTargetGallery = computed(() => categoryMap.value[uploadCategory.value] || null)
+const uploadTargetParent = computed(() => categoryMap.value[uploadTargetGallery.value?.parent_id] || null)
+const isDecorationUpload = computed(() =>
+  materialType.value === 'image' && Boolean(
+    uploadTargetGallery.value?.industry_slug === 'decoration' ||
+    uploadTargetParent.value?.industry_slug === 'decoration'
+  )
 )
 const filteredGalleries = computed(() => {
   const term = queryInput.value.trim().toLowerCase()
@@ -155,7 +175,7 @@ function releasePreviews() {
 }
 
 async function blobPreview(id, key = id) {
-  const response = await materialLibraryApi.getItemFile(id)
+  const response = await materialLibraryApi.getItemThumbnail(id)
   const url = URL.createObjectURL(await response.blob())
   previewUrls.set(key, url)
   return url
@@ -368,24 +388,139 @@ function categoryOptionLabel(category) {
 
 function openUpload() {
   uploadCategory.value = activeGallery.value || uploadCategories.value[0]?.id || ''
+  uploadDesignStyle.value = currentGallery.value?.design_style || ''
   uploadOpen.value = true
 }
 
 function resetUpload() {
   selectedFiles.value = []
   uploadCategory.value = ''
+  uploadDesignStyle.value = ''
   uploadDragging.value = false
+  uploadProgress.percent = 0
+  uploadProgress.loaded = 0
+  uploadProgress.total = 0
+  uploadProgress.phase = 'idle'
   if (fileInput.value) fileInput.value.value = ''
+  if (folderInput.value) folderInput.value.value = ''
 }
 
-const chooseFiles = () => fileInput.value?.click()
+function isSupportedImageFile(file) {
+  if (!file || !/\.(png|jpe?g|webp)$/i.test(file.name)) return false
+  return !file.type || supportedImageTypes.has(file.type)
+}
+
+function attachRelativePath(file, relativePath) {
+  if (!relativePath || file.webkitRelativePath) return file
+  try {
+    Object.defineProperty(file, 'webkitRelativePath', { configurable: true, value: relativePath })
+  } catch {
+    // File 在部分浏览器上不可扩展
+  }
+  return file
+}
+
+async function collectImagesFromDirectoryHandle(directoryHandle, prefix = '') {
+  const files = []
+  for await (const entry of directoryHandle.values()) {
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.kind === 'file') {
+      files.push(attachRelativePath(await entry.getFile(), relativePath))
+    } else if (entry.kind === 'directory') {
+      files.push(...await collectImagesFromDirectoryHandle(entry, relativePath))
+    }
+  }
+  return files
+}
+
+async function collectFilesFromEntry(entry, prefix = '') {
+  const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
+  if (entry.isFile) {
+    const file = await new Promise((resolve, reject) => entry.file(resolve, reject))
+    return [attachRelativePath(file, relativePath)]
+  }
+  if (!entry.isDirectory) return []
+  const reader = entry.createReader()
+  const children = []
+  while (true) {
+    const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject))
+    if (!batch.length) break
+    children.push(...batch)
+  }
+  const nested = []
+  for (const child of children) {
+    nested.push(...await collectFilesFromEntry(child, relativePath))
+  }
+  return nested
+}
+
+async function collectFilesFromDataTransfer(dataTransfer) {
+  const entries = Array.from(dataTransfer?.items || [])
+    .map((item) => item.webkitGetAsEntry?.())
+    .filter(Boolean)
+  if (!entries.length) return Array.from(dataTransfer?.files || [])
+  const files = []
+  for (const entry of entries) {
+    files.push(...await collectFilesFromEntry(entry))
+  }
+  return files
+}
+
+function addScannedFolderFiles(fileList) {
+  const images = Array.from(fileList || []).filter(isSupportedImageFile)
+  if (!images.length) {
+    message.warning('文件夹中没有可上传的 PNG、JPG、WebP 图片')
+    return
+  }
+  addSelectedFiles(images)
+}
+
+async function chooseFiles() {
+  if (typeof window.showOpenFilePicker === 'function') {
+    try {
+      const handles = await window.showOpenFilePicker({
+        multiple: true,
+        excludeAcceptAllOption: false,
+        types: [
+          {
+            description: '图片',
+            accept: {
+              'image/png': ['.png'],
+              'image/jpeg': ['.jpg', '.jpeg'],
+              'image/webp': ['.webp']
+            }
+          }
+        ]
+      })
+      addSelectedFiles(await Promise.all(handles.map((handle) => handle.getFile())))
+      return
+    } catch (error) {
+      if (error?.name === 'AbortError') return
+    }
+  }
+  fileInput.value?.click()
+}
+
+async function chooseFolder() {
+  if (uploading.value) return
+  if (typeof window.showDirectoryPicker === 'function') {
+    try {
+      const directory = await window.showDirectoryPicker({ mode: 'read' })
+      addScannedFolderFiles(await collectImagesFromDirectoryHandle(directory, directory.name))
+      return
+    } catch (error) {
+      if (error?.name === 'AbortError') return
+    }
+  }
+  folderInput.value?.click()
+}
 
 function addSelectedFiles(fileList) {
   const files = Array.from(fileList || [])
   if (!files.length) return
 
   const next = [...selectedFiles.value]
-  const knownFiles = new Set(next.map((file) => `${file.name}:${file.size}:${file.lastModified}`))
+  const knownFiles = new Set(next.map((file) => `${file.webkitRelativePath || file.name}:${file.size}:${file.lastModified}`))
   let unsupported = 0
   let oversized = 0
   let duplicated = 0
@@ -401,7 +536,7 @@ function addSelectedFiles(fileList) {
       oversized += 1
       return
     }
-    const identity = `${file.name}:${file.size}:${file.lastModified}`
+    const identity = `${file.webkitRelativePath || file.name}:${file.size}:${file.lastModified}`
     if (knownFiles.has(identity)) {
       duplicated += 1
       return
@@ -423,12 +558,23 @@ function addSelectedFiles(fileList) {
   if (warnings.length) message.warning(warnings.join('；'))
 }
 
+function removeSelectedFile(index) {
+  if (uploading.value) return
+  selectedFiles.value = selectedFiles.value.filter((_, current) => current !== index)
+}
+
 function onFiles(event) {
   addSelectedFiles(event.target.files)
   event.target.value = ''
 }
 
+function onFolderFiles(event) {
+  addScannedFolderFiles(event.target.files)
+  event.target.value = ''
+}
+
 function onUploadDragEnter(event) {
+  if (uploading.value) return
   if (Array.from(event.dataTransfer?.types || []).includes('Files')) uploadDragging.value = true
 }
 
@@ -443,30 +589,52 @@ function onUploadDragLeave(event) {
   uploadDragging.value = false
 }
 
-function onUploadDrop(event) {
+async function onUploadDrop(event) {
   uploadDragging.value = false
-  addSelectedFiles(event.dataTransfer?.files)
+  if (uploading.value) return
+  const entries = Array.from(event.dataTransfer?.items || [])
+    .map((item) => item.webkitGetAsEntry?.())
+    .filter(Boolean)
+  const files = await collectFilesFromDataTransfer(event.dataTransfer)
+  if (entries.some((entry) => entry.isDirectory)) addScannedFolderFiles(files)
+  else addSelectedFiles(files)
 }
 
 async function uploadFiles() {
   if (!selectedFiles.value.length) return message.warning('请选择图片文件')
   if (!uploadCategory.value) return message.warning('请选择素材分类')
+  if (isDecorationUpload.value && !uploadDesignStyle.value) return message.warning('请选择设计风格')
   uploading.value = true
+  uploadProgress.percent = 0
+  uploadProgress.loaded = 0
+  uploadProgress.total = selectedFilesTotalBytes.value
+  uploadProgress.phase = 'sending'
+  const onProgress = (event) => {
+    uploadProgress.percent = event.percent
+    uploadProgress.loaded = event.loaded ?? uploadProgress.loaded
+    uploadProgress.total = event.total ?? uploadProgress.total
+    uploadProgress.phase = event.phase || uploadProgress.phase
+  }
   try {
     let response
     if (materialType.value === 'image') {
-      response = await materialLibraryApi.importImages(selectedFiles.value, uploadCategory.value)
+      response = await materialLibraryApi.importImages(
+        selectedFiles.value,
+        uploadCategory.value,
+        uploadDesignStyle.value,
+        onProgress
+      )
     } else {
-      response = await contentApi.importCoverPosterTemplates(selectedFiles.value, uploadCategory.value)
+      response = await contentApi.importCoverPosterTemplates(selectedFiles.value, uploadCategory.value, onProgress)
       pendingReviewTemplates.value = (response.items || [])
         .map((result) => result.template)
         .filter((item) => item?.requires_review)
     }
     message.success(materialType.value === 'cover_template' && pendingReviewTemplates.value.length
       ? '模板上传成功，请校对 OCR 识别结果后启用'
-      : '素材上传成功')
+      : (response?.summary?.queued ? '素材已提交入库，正在写入对象存储' : '素材上传成功'))
     uploadOpen.value = false
-    const uploadedTo = uploadCategory.value
+    const uploadedTo = response?.items?.[0]?.category || uploadCategory.value
     resetUpload()
     page.value = 1
     if (materialType.value === 'image' && activeGallery.value !== uploadedTo) {
@@ -651,6 +819,11 @@ watch(materialType, async () => {
     message.error(error.message || '素材分类加载失败')
   }
 }, { immediate: true })
+
+watch(uploadCategory, (id) => {
+  const gallery = categoryMap.value[id]
+  if (gallery?.design_style) uploadDesignStyle.value = gallery.design_style
+})
 onBeforeUnmount(releasePreviews)
 </script>
 
@@ -773,7 +946,7 @@ onBeforeUnmount(releasePreviews)
             </button>
             <div class="material-info">
               <strong v-if="materialType === 'image'" :title="item.name">{{ item.name }}</strong>
-              <small>上传者 {{ item.uploaded_by_name }} · {{ item.category_name }} · {{ item.width }}×{{ item.height }} · {{ formatSize(item.file_size) }}</small>
+              <small>上传者 {{ item.uploaded_by_name }} · {{ item.category_name }}{{ item.design_style ? ` · ${item.design_style}` : '' }} · {{ item.width }}×{{ item.height }} · {{ formatSize(item.file_size) }}{{ item.storage_status === 'pending' ? ' · 入库中' : '' }}</small>
             </div>
             <div class="card-actions">
               <button type="button" title="预览" @click="previewItem = item"><Eye :size="15" /></button>
@@ -794,26 +967,59 @@ onBeforeUnmount(releasePreviews)
       <a-pagination v-if="!isGalleryRoot && total > 24" v-model:current="page" :total="total" :page-size="24" show-less-items @change="loadItems" />
     </main>
 
-    <a-modal v-model:open="uploadOpen" :title="`上传${materialType === 'image' ? '素材图片' : '封面模板'}`" :confirm-loading="uploading" ok-text="开始上传" @ok="uploadFiles" @cancel="resetUpload">
+    <a-modal
+      v-model:open="uploadOpen"
+      :title="`上传${materialType === 'image' ? '素材图片' : '封面模板'}`"
+      :confirm-loading="uploading"
+      :mask-closable="!uploading"
+      :keyboard="!uploading"
+      :closable="!uploading"
+      :cancel-button-props="{ disabled: uploading }"
+      ok-text="开始上传"
+      @ok="uploadFiles"
+      @cancel="resetUpload"
+    >
       <div class="upload-form">
-        <input ref="fileInput" type="file" multiple accept=".png,.jpg,.jpeg,.webp" hidden @change="onFiles" />
-        <button
-          type="button"
+        <input ref="fileInput" type="file" multiple accept="image/png,image/jpeg,image/webp,image/*" hidden @change="onFiles" />
+        <input ref="folderInput" type="file" webkitdirectory multiple accept="image/png,image/jpeg,image/webp,image/*" hidden @change="onFolderFiles" />
+        <div
           class="upload-drop"
-          :class="{ dragging: uploadDragging }"
-          @click="chooseFiles"
+          :class="{ dragging: uploadDragging, disabled: uploading }"
+          role="button"
+          tabindex="0"
+          @click="uploading ? undefined : chooseFiles()"
+          @keydown.enter.prevent="uploading ? undefined : chooseFiles()"
           @dragenter.prevent="onUploadDragEnter"
           @dragover.prevent="onUploadDragOver"
           @dragleave="onUploadDragLeave"
           @drop.prevent="onUploadDrop"
         >
           <Upload :size="22" />
-          <span>{{ uploadDragging ? '松开鼠标添加图片' : (selectedFiles.length ? `已选择 ${selectedFiles.length} 个文件，可继续拖入` : '点击选择或拖拽 PNG、JPG、WebP 图片到此处') }}</span>
-          <small>单张不超过 100 MB；素材图片最多 50 张，封面模板最多 100 张</small>
-        </button>
-        <label><span>分类 <b>*</b></span><a-select v-model:value="uploadCategory" placeholder="请选择一个明确分类">
+          <span>{{ uploadDragging ? '松开鼠标添加图片' : (selectedFiles.length ? `已选择 ${selectedFiles.length} 个文件，共 ${formatSize(selectedFilesTotalBytes)}，可继续拖入或点此再选` : '点击选择文件，或将文件/文件夹拖到此处') }}</span>
+          <small>可一次多选文件，也可选择文件夹扫描其中的 PNG、JPG、WebP；将转为 WebP 后入库；单张不超过 100 MB；素材图片最多 50 张，封面模板最多 100 张</small>
+          <button type="button" class="upload-folder-action" :disabled="uploading" @click.stop="chooseFolder">
+            <Folder :size="14" />选择文件夹
+          </button>
+        </div>
+        <ul v-if="selectedFiles.length" class="upload-file-list">
+          <li v-for="(file, index) in selectedFiles" :key="`${file.webkitRelativePath || file.name}:${file.size}:${file.lastModified}`">
+            <span :title="file.webkitRelativePath || file.name">{{ file.webkitRelativePath || file.name }}</span>
+            <small>{{ formatSize(file.size) }}</small>
+            <button v-if="!uploading" type="button" title="移除" @click="removeSelectedFile(index)"><X :size="14" /></button>
+          </li>
+        </ul>
+        <div v-if="uploading" class="upload-progress">
+          <a-progress :percent="uploadProgress.percent" status="active" :show-info="true" />
+          <small>{{ uploadProgressText }}</small>
+        </div>
+        <label><span>分类 <b>*</b></span><a-select v-model:value="uploadCategory" placeholder="请选择一个明确分类" :disabled="uploading">
           <a-select-option v-for="item in uploadCategories" :key="item.code" :value="item.code"><strong>{{ categoryOptionLabel(item) }}</strong> — {{ item.description }}</a-select-option>
         </a-select></label>
+        <label v-if="isDecorationUpload"><span>设计风格 <b>*</b></span>
+          <a-select v-model:value="uploadDesignStyle" placeholder="请选择设计风格" :disabled="uploading">
+            <a-select-option v-for="style in decorationGalleryStyles" :key="style" :value="style">{{ style }}</a-select-option>
+          </a-select>
+        </label>
       </div>
     </a-modal>
 
@@ -953,7 +1159,20 @@ onBeforeUnmount(releasePreviews)
 .upload-drop { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 28px; border: 1px dashed var(--gray-300); border-radius: 8px; background: var(--gray-25); color: var(--color-text-secondary); cursor: pointer; }
 .upload-drop:hover, .upload-drop.dragging { border-color: var(--main-500); background: var(--main-20); color: var(--main-700); }
 .upload-drop.dragging { box-shadow: 0 0 0 3px var(--main-100); }
-.upload-drop small { color: var(--color-text-tertiary); }
+.upload-drop.disabled { cursor: default; opacity: .72; pointer-events: none; }
+.upload-drop small { color: var(--color-text-tertiary); text-align: center; }
+.upload-folder-action { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 6px 12px; border: 1px solid var(--gray-300); border-radius: 8px; background: var(--gray-0); color: var(--color-text); cursor: pointer; }
+.upload-folder-action:hover { border-color: var(--main-color); color: var(--main-color); }
+.upload-drop.disabled .upload-folder-action { cursor: default; }
+.upload-file-list { display: flex; flex-direction: column; max-height: 180px; margin: 0; padding: 0; overflow: auto; border: 1px solid var(--gray-150); border-radius: 8px; list-style: none; }
+.upload-file-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--gray-100); }
+.upload-file-list li:last-child { border-bottom: 0; }
+.upload-file-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text); }
+.upload-file-list small { color: var(--color-text-tertiary); }
+.upload-file-list button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--color-text-secondary); cursor: pointer; }
+.upload-file-list button:hover { background: var(--gray-50); color: var(--color-error-700); }
+.upload-progress { display: flex; flex-direction: column; gap: 6px; }
+.upload-progress small { color: var(--color-text-secondary); }
 .share-form { display: flex; flex-direction: column; gap: 14px; }.share-form p, .share-form small { margin: 0; color: var(--color-text-secondary); }.share-form small { font-size: 12px; }
 .large-preview { display: block; max-width: 100%; max-height: 72vh; margin: 0 auto; object-fit: contain; }
 .category-manager-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }.category-manager-head p { margin: 0; color: var(--color-text-secondary); }

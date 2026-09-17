@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPatch, apiPost, apiPut, apiRequest } from './base'
+import { apiDelete, apiGet, apiPatch, apiPost, apiPostFormWithProgress, apiPut, apiRequest } from './base'
 
 const encodeQuery = (params = {}) => {
   const query = new URLSearchParams()
@@ -87,11 +87,11 @@ export const contentApi = {
   testCoverImage2Config: (payload) => apiPost('/api/content/covers/image2-config/test', payload),
   previewCoverTemplateReplication: (payload) =>
     apiPost('/api/content/covers/template-replication/preview', payload),
-  importCoverPosterTemplates: (files, category) => {
+  importCoverPosterTemplates: (files, category, onProgress) => {
     const form = new FormData()
     Array.from(files).forEach((file) => form.append('files', file))
     form.append('category', category)
-    return apiPost('/api/content/covers/poster-templates/import', form)
+    return apiPostFormWithProgress('/api/content/covers/poster-templates/import', form, { onProgress })
   },
   listCoverPosterTemplates: (params = {}) =>
     apiGet(`/api/content/covers/poster-templates${encodeQuery(params)}`),

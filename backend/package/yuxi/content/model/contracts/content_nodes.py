@@ -898,6 +898,23 @@ def knowledge_body_evidence_ids(evidence_bundle: dict[str, Any] | None) -> froze
     )
 
 
+def build_evidence_cite_aliases(items: list[Any] | None) -> dict[str, str]:
+    """按冻结包首次出现顺序分配 E01、E02，模型视图与提交回写必须共用同一份映射。"""
+    aliases: dict[str, str] = {}
+    seen: set[str] = set()
+    index = 0
+    for item in items or []:
+        if not isinstance(item, dict) or not item.get("id") or item.get("verified_status") == "rejected":
+            continue
+        real_id = str(item["id"])
+        if real_id in seen:
+            continue
+        seen.add(real_id)
+        index += 1
+        aliases[f"E{index:02d}"] = real_id
+    return aliases
+
+
 @dataclass(frozen=True, slots=True)
 class ContractDomainContext:
     joint_strategy_input: dict[str, Any] = field(default_factory=dict)
@@ -919,6 +936,7 @@ class ContractDomainContext:
     allowed_body_lexicon_codes: frozenset[str] = frozenset()
     body_variant_lexicon_codes: dict[str, frozenset[str]] = field(default_factory=dict)
     allowed_evidence_by_usage: dict[str, frozenset[str]] = field(default_factory=dict)
+    evidence_cite_aliases: dict[str, str] = field(default_factory=dict)
     allowed_asset_ids: frozenset[str] = frozenset()
     required_source_asset_ids: tuple[str, ...] = ()
     locked_title: str | None = None
@@ -1052,6 +1070,7 @@ class ContractDomainContext:
                 )
             },
             allowed_evidence_by_usage={key: frozenset(value) for key, value in evidence_by_usage.items()},
+            evidence_cite_aliases=build_evidence_cite_aliases(evidence_bundle.get("items") or []),
             allowed_asset_ids=frozenset(locks.get("source_asset_ids") or []),
             required_source_asset_ids=tuple(locks.get("required_source_asset_ids") or []),
             locked_title=locks.get("selected_title"),
@@ -1135,6 +1154,120 @@ def _require_member(value: str, allowed: frozenset[str], field_path: str) -> Non
 def _require_equal(value: str | None, locked: str | None, field_path: str) -> None:
     if not locked or value != locked:
         raise ContractDomainValidationError("locked_value_changed", field_path, f"{field_path} 必须等于锁定值")
+
+
+def _edit_distance_at_most_one(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right, strict=True)) == 1
+    shorter, longer = (left, right) if len(left) < len(right) else (right, left)
+    skipped = False
+    index = 0
+    for char in longer:
+        if index < len(shorter) and shorter[index] == char:
+            index += 1
+            continue
+        if skipped:
+            return False
+        skipped = True
+    return True
+
+
+def _unique_near_miss_evidence_id(value: str, allowed: frozenset[str]) -> str | None:
+    if value in allowed:
+        return value
+    matches = [item for item in allowed if _edit_distance_at_most_one(value, item)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _normalize_cite_alias(value: str) -> str | None:
+    text = str(value).strip().upper()
+    if len(text) >= 2 and text[0] == "E" and text[1:].isdigit() and int(text[1:]) > 0:
+        return f"E{int(text[1:]):02d}"
+    return None
+
+
+def _resolve_submitted_evidence_id(
+    value: str,
+    allowed: frozenset[str],
+    aliases: dict[str, str],
+) -> str | None:
+    if value in allowed:
+        return value
+    alias = _normalize_cite_alias(value)
+    if alias:
+        real = aliases.get(alias)
+        if real:
+            return real
+    near_allowed = _unique_near_miss_evidence_id(value, allowed)
+    if near_allowed:
+        return near_allowed
+    if aliases:
+        near_alias = _unique_near_miss_evidence_id(value, frozenset(aliases))
+        if near_alias:
+            return aliases[near_alias]
+    return None
+
+
+def _repair_submitted_evidence_ids(
+    ids: list[str],
+    allowed: frozenset[str],
+    aliases: dict[str, str],
+) -> list[str]:
+    repaired = []
+    for item in ids:
+        match = _resolve_submitted_evidence_id(item, allowed, aliases)
+        repaired.append(match if match else item)
+    return repaired
+
+
+def _repair_generated_content_evidence_ids(
+    result: GeneratedContentResultV1,
+    context: ContractDomainContext,
+) -> GeneratedContentResultV1:
+    title_allowed = context.allowed_evidence_by_usage.get("title", frozenset())
+    body_allowed = context.allowed_evidence_by_usage.get("body", frozenset())
+    aliases = context.evidence_cite_aliases
+    return result.model_copy(
+        update={
+            "title": result.title.model_copy(
+                update={
+                    "evidence_ids": _repair_submitted_evidence_ids(
+                        result.title.evidence_ids, title_allowed, aliases
+                    )
+                }
+            ),
+            "outline": result.outline.model_copy(
+                update={
+                    "sections": [
+                        item.model_copy(
+                            update={
+                                "evidence_ids": _repair_submitted_evidence_ids(item.evidence_ids, body_allowed, aliases)
+                            }
+                        )
+                        for item in result.outline.sections
+                    ]
+                }
+            ),
+            "draft": result.draft.model_copy(
+                update={
+                    "paragraph_evidence": [
+                        item.model_copy(
+                            update={
+                                "evidence_ids": _repair_submitted_evidence_ids(item.evidence_ids, body_allowed, aliases)
+                            }
+                        )
+                        for item in result.draft.paragraph_evidence
+                    ]
+                }
+            ),
+        }
+    )
 
 
 def _validate_evidence_ids(ids: list[str], usage: str, context: ContractDomainContext, field_path: str) -> None:
@@ -1672,6 +1805,7 @@ def validate_content_node_result(
             _validate_evidence_ids(item.evidence_ids, "body", context, f"paragraph_evidence.{index}.evidence_ids")
         _validate_numbers("\n".join([result.body, *result.topics]), context, "body", "body")
     elif isinstance(result, GeneratedContentResultV1):
+        result = _repair_generated_content_evidence_ids(result, context)
         # 同一错误引用可能出现在多个段落；一次反馈全部位置，避免逐处消耗纠错额度。
         evidence_fields = [("title.evidence_ids", "title", result.title.evidence_ids)]
         evidence_fields.extend(

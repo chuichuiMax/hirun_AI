@@ -111,7 +111,9 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
         asset = await db.get(ContentCoverAsset, item["asset_id"])
         assert asset is not None
         assert asset.bucket_name == "image"
-        assert asset.object_name == f"material-library/{asset.owner_uid}/images/{asset.id}/image.png"
+        assert asset.object_name == f"material-library/{asset.owner_uid}/images/{asset.id}/image.webp"
+        assert asset.content_type == "image/webp"
+        assert (asset.metadata_json or {}).get("ingest_status") in {"pending", "ready"}
     await engine.dispose()
 
     listed = await test_client.get(
@@ -121,9 +123,7 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
     assert listed.status_code == 200, listed.text
     assert item["id"] in {entry["id"] for entry in listed.json()["items"]}
 
-    categories = await test_client.get(
-        "/api/material-library/categories?material_type=image", headers=owner_headers
-    )
+    categories = await test_client.get("/api/material-library/categories?material_type=image", headers=owner_headers)
     assert categories.status_code == 200, categories.text
     assert categories.json()["categories"][0]["code"] == "product"
     cover_categories, cover_categories_again = await asyncio.gather(
@@ -153,12 +153,12 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
     with Image.open(io.BytesIO(downloaded.content)) as image:
         assert image.size == (48, 36)
 
-    thumbnail = await test_client.get(
-        f"/api/material-library/items/{item['id']}/thumbnail", headers=owner_headers
-    )
+    thumbnail = await test_client.get(f"/api/material-library/items/{item['id']}/thumbnail", headers=owner_headers)
     assert thumbnail.status_code == 200, thumbnail.text
-    assert thumbnail.headers["content-type"] == "image/jpeg"
+    assert thumbnail.headers["content-type"] == "image/webp"
+    assert thumbnail.headers["cache-control"] == "private, max-age=86400"
     with Image.open(io.BytesIO(thumbnail.content)) as image:
+        assert image.format == "WEBP"
         assert image.size == (48, 36)
 
     private = await test_client.get(item["file_url"], headers=material_users["other"])
@@ -606,9 +606,7 @@ async def test_poster_template_uses_controlled_category_without_tags(test_client
         assert listed.status_code == 200, listed.text
         assert [item["asset_id"] for item in listed.json()["items"]] == [template["asset_id"]]
     finally:
-        deleted = await test_client.delete(
-            f"/api/content/covers/poster-templates/{template['id']}", headers=headers
-        )
+        deleted = await test_client.delete(f"/api/content/covers/poster-templates/{template['id']}", headers=headers)
         assert deleted.status_code == 200, deleted.text
 
 
@@ -697,7 +695,7 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
     assert "风格：复古风潮" in public_page.text
     assert 'property="og:description" content="洋湖天序｜120㎡｜复古风潮"' in public_page.text
     assert f'property="og:url" content="{share["url"]}"' in public_page.text
-    assert f'https://share.example.test/boyun/api/material-library/shares/{share["token"]}/images/1' in public_page.text
+    assert f"https://share.example.test/boyun/api/material-library/shares/{share['token']}/images/1" in public_page.text
     assert f"/api/material-library/shares/{share['token']}/images/1" in public_page.text
     assert public_page.text.index("/images/1") < public_page.text.index("/images/2")
 
@@ -710,7 +708,7 @@ async def test_second_level_decoration_gallery_share_keeps_ordered_snapshots_and
     first_snapshot = await test_client.get(f"/api/material-library/shares/{share['token']}/images/2")
     assert second_snapshot.status_code == 200, second_snapshot.text
     assert first_snapshot.status_code == 200, first_snapshot.text
-    assert second_snapshot.headers["content-type"] == "image/png"
+    assert second_snapshot.headers["content-type"] == "image/webp"
     assert "inline" in second_snapshot.headers["content-disposition"]
     assert "public" in second_snapshot.headers["cache-control"]
     assert "immutable" in second_snapshot.headers["cache-control"]

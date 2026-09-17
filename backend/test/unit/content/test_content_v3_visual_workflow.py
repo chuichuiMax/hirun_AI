@@ -546,8 +546,75 @@ async def test_cover_tool_rejects_assets_outside_locked_visual_plan():
         )
 
 
-def test_cover_tool_only_accepts_task_id_from_agent():
-    assert set(content_tools.CreateContentCoverJobInput.model_fields) == {"task_id"}
+def test_cover_tool_schema_keeps_optional_task_id_for_compat():
+    fields = content_tools.CreateContentCoverJobInput.model_fields
+    assert set(fields) == {"task_id"}
+    assert fields["task_id"].is_required() is False
+
+
+@pytest.mark.asyncio
+async def test_cover_tool_ignores_model_task_id_and_uses_runtime_binding(monkeypatch):
+    captured = []
+    visual_plan = {**_visual_plan(), "plan_hash": "a" * 64}
+    node_input = SimpleNamespace(task_id="task-bound", parent_run_id="run-parent")
+    context = SimpleNamespace(
+        uid="user-1",
+        _content_task_id="task-bound",
+        _content_node_output_contract="CoverJobSubmissionResultV1",
+        _content_node_result_collector=SimpleNamespace(
+            domain_context=SimpleNamespace(
+                visual_plan_hash="a" * 64,
+                allowed_asset_ids=frozenset({"source-1"}),
+            )
+        ),
+        _content_node_input=node_input,
+        _content_node_governance={
+            "locked_values": {
+                "state_version": 7,
+                "visual_plan_hash": "a" * 64,
+                "visual_plan": visual_plan,
+            }
+        },
+    )
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return SimpleNamespace(uid="user-1")
+
+    class FakeDB:
+        async def execute(self, query):
+            del query
+            return FakeResult()
+
+    @asynccontextmanager
+    async def fake_session():
+        yield FakeDB()
+
+    async def fake_create(db, user, payload):
+        del db, user
+        captured.append(payload)
+        return {"job": {"id": "job-1", "mode": "image_to_image"}, "deduplicated": False}
+
+    async def fake_event(*args, **kwargs):
+        del args, kwargs
+
+    async def fake_get_task_for_user(repo, task_id, user):
+        del repo, user
+        assert task_id == "task-bound"
+        return SimpleNamespace(runtime_config_snapshot_json={})
+
+    monkeypatch.setattr(content_tools.pg_manager, "get_async_session_context", fake_session)
+    monkeypatch.setattr(content_tools.ContentRepository, "get_task_for_user", fake_get_task_for_user)
+    monkeypatch.setattr(content_tools, "create_cover_generate_job", fake_create)
+    monkeypatch.setattr(content_tools, "_emit_content_tool_event", fake_event)
+
+    result = await content_tools.create_content_cover_job.coroutine(
+        task_id="hallucinated-task-id",
+        runtime=SimpleNamespace(context=context),
+    )
+
+    assert result["cover_job_id"] == "job-1"
+    assert captured[0].idempotency_key.startswith("content-v3-")
 
 
 def test_skip_cover_pipeline_for_review_notes_or_missing_gallery_image():

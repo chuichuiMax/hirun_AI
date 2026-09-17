@@ -1,49 +1,22 @@
 ---
 name: content-title-generator
-description: 按锁定策略生成可追溯标题候选，或从已通过确定性校验的候选中选择最终标题。
-version: 2.7.0
+description: 按锁定策略一次生成最终标题（与正文同轮提交）。
+version: 2.8.0
 ---
 
-# 标题候选生成
+# 标题生成
 
-根据当前节点输出契约执行标题候选生成或标题选择，不生成正文、不决定流程跳转。
+入口：`payload.content_brief.business_variables.mp_service_entry`。
 
-0. 服务入口优先读 `payload.content_brief.business_variables.mp_service_entry`（模型视图可能无 `form_values`）。若为「好评笔记」：
-   - 模仿 `payload.content_brief.style_excerpts` 的标题语气、长度与结构；不要调用 `query_kb` 或其他知识库工具；
-   - 事实只来自 `content_brief` / `evidence_bundle`（项目成员、区域、现场信息等），禁止编造，禁止把样例中的他人事实写成当前项目；
-   - 忽略 `strategy_snapshot.title_formula`、`formula_lexicon_bundle` 与装修获客标题公式；
-   - 业主第一人称评价，不要写成获客种草或员工自荐；
-   - 标题禁止出现楼盘/小区/项目案名（含简报「楼盘信息」及同类地名案名）；可赞美、表扬所属店面/门店/服务门店，不要把店面写成楼盘；
-   - 然后跳到本 Skill 第 8 条及之后与渠道长度、提交相关的要求。
-0b. 若入口为「装修家居」（或未标注好评笔记的装修获客任务）：
-   - 仍严格遵守锁定标题公式与词库；
-   - 标题必须有吸引点：情绪共鸣、悬念、反差、利益点或痛点戳中，至少落地一项；禁止「小区/楼盘＋面积＋风格」说明书式平铺；
-   - 可点出区域、面积、风格中的高信息槽，但要用钩子句式组合，不要写成资料卡标题；面积等数字必须与证据原文一致，不得改写成中间值；
-   - 若 `mp_content_type_name` 为「装修报价清单」或「报价清单」（或内容方向 CT02）：标题必须语义完整、普通人一眼看懂。正例：130-150m2旧房翻新，钱要花在哪？反例：旧房翻新业主130-150㎡预算不踩坑。旧房改造可写成旧房翻新；不要把「最低价/更便宜」当标题卖点；标题不要出现「口径」。
-   - 若 `mp_content_type_name` 为「工艺施工展示」或「工艺展示」（或内容方向 CT05）：标题必须是普通人能读完的口语句，一眼看出在讲哪类工艺/工序或当前项目阶段，**不要出现装修风格**。水电阶段写水电验收细节与避坑，不要写成整屋案例分享。泥木阶段对外写「泥瓦」不写「泥木」；工艺类型或证据未出现木工时，标题不要写木工。词库只提供语气/结构，必须化入句子；禁止把「听劝/真香」和「远超预期」等词条原样拼在工艺名后面。反例：水电施工听劝，规范验收远超预期。正例：水电做得好不好，验收细节见分晓；水电藏进墙之前，这些细节要验清；旧房翻新，水电验收千万别走过场。
-   - 鸿扬品牌定位为**定制化家装**，标题与话题禁止写「整装」「标准化整装」「全屋整装」；
-   - 装修家居标题与话题费用称谓写「预算价」，禁止写「合同价」（数字与证据原文一致，只改称谓）；标题不要出现「口径」；
-   - 若 `evidence_bundle` 含 `forbidden_replacement_map`，标题不得保留表内问题词（含「报价」「私信」等），按候选改写或换表述；
-   - 遵守 `content_brief.business_variables.writing_instruction`（若有）。
-0c. Evidence ID：标题 `evidence_ids` 只能逐字复制 `payload.evidence_bundle.items` 中 `allowed_usage` 含 `title` 的 `id`；禁止编造或用 `source_id` 代替。标题写到的面积/风格/区域事实必须挂上对应条目 ID。
-1. 当前 Skill 全文已经注入，不调用 `read_file`。`generate_content` 只有一次模型调用，必须直接 `submit_content_node_result`；标题先压到渠道字数，Evidence ID 一次抄对，不会再给纠错轮次。好评笔记的语气样例已在 `style_excerpts`，禁止再检索知识库。
-2. 只读取当前节点 `payload`；锁定标题公式的完整原版定义位于 `payload.strategy_snapshot.title_formula`，不得再次读取可变规则库，也不得凭记忆补公式。
-3. 业务事实已经完整提供在 `payload.content_brief` 和 `payload.evidence_bundle` 中，不调用业务事实或知识库工具。
-4. 严格使用 `payload.strategy_snapshot.title_formula.code` 锁定的唯一标题公式及其变量 Schema。
-5. `payload.formula_lexicon_bundle.required=true` 时，标题生成必须读取 `formula_lexicon_bundle.title` 中全部指定词库；只从这些词库的 `chunks` 选择与当前主题相符的表达词条，并按锁定标题公式组合。不得跳过、改用正文词库或凭记忆补词。
-6. 词库只提供表达词条，不是事实或数字来源；数字、价格、参数、案例与结果仍必须来自 EvidenceBundle。
-7. 把实际采用的词库编码和原样词条写入 `title.lexicon_usage`；必须覆盖标题公式要求的全部词库，未实际使用的词条不得虚报。
-8. 在 `generate_content` 节点只生成一个最终标题，并与大纲、正文一起提交 `GeneratedContentResultV1`。
-9. 标题字数必须满足 `payload.channel_profile.title_constraints` 的 `min_length` / `max_length`（小红书为 6～20 字，按字符计数含标点和 emoji）。超长时压缩词条，不得提交后再等渠道校验拦截。
-10. 只从 `payload.evidence_bundle` 选择允许用于标题的 Evidence ID，并在标题实际使用相应事实时引用。
-11. 如果 `payload.validation_report.status=blocked` 或 `payload.review_report.status=blocked`，读取上一轮检查并修正全部阻断项；有上一稿 `payload.selected_title` 时在原标题上改，不要另起一套事实。命中 `action=confirm` 的合规词（如「零增项」）不要靠反复改写耗尽回修次数，保留事实并交给人工确认。提交若返回未授权 Evidence ID，只从允许列表逐字复制修正。
-12. `style_reference` 证据只能借鉴结构和节奏，禁止复制原句、事实或数字，也不得放入标题的 `evidence_ids`。
-13. 旧工作流生成候选时仍保持 3～5 个差异明确的候选；简化工作流不再生成候选池。
-14. 旧生成节点仍按其输出契约提交 `TitleCandidatesResultV1`。
-15. 在 `TitleSelectionResultV1` 节点，只能从 `payload.title_candidates` 中选择 `selectable=true` 的候选；综合公式契合度、证据完整度、渠道可读性和吸引力，提交 `selected_title_id` 与 `reason`。
-16. 选择标题时不得改写候选文本、公式或 Evidence ID，也不得选择 `selectable=false` 的候选。
-17. 数字、价格、参数和效果必须关联证据 ID；证据不足时不生成该表达。
-18. 爆款仿写模式先读取唯一参考的 `reference_blueprint.title_pattern` 和 `title_slot_sequence`，再把每个标题槽位绑定到当前 `content_brief` 的非空变量及允许用于标题的真实 Evidence。参考只提供槽位顺序和点击理由，不提供槽位内容；当前没有证据的结果、完工、结算、优惠或效果槽位必须删除或改成不含事实断言的表达。
-19. 标题变量含义不得扩大：“预算”不能写成“预算内搞定”，“预计工期”不能写成“已经完工”，“方案结果”不能写成“最终结算结果”。每个事实词都必须能回指当前输入原意及 `evidence_ids`。
-
-标题选择结果必须完全对应上游候选快照。
+0. **好评笔记**：模仿 `style_excerpts`；忽略标题公式/词库；事实仅简报与证据；业主第一人称；标题禁楼盘/小区案名，可赞美店面；然后按第 8 条。
+0b. **装修家居**：遵守锁定公式与词库；标题须有情绪/悬念/反差/利益吸引点，禁「小区+面积+风格」平铺；面积等与证据原文一致。
+   - CT02：口语句、可读（正例：130-150m2旧房翻新，钱要花在哪？）；不以最低价为主卖点；不写「口径」。
+   - CT05：点明工艺/工序或阶段，不写装修风格；泥木写「泥瓦」；词库化入句子，禁「听劝/远超预期」硬拼。
+   - 品牌写定制化家装，禁整装；费用称预算价，禁合同价；命中封禁表须改写。
+0c. Evidence：`evidence_ids` 只复制 `allowed_usage` 含 `title` 的短码 `id`（如 `E01`）。
+1. Skill 已注入；`generate_content` 仅一次调用，直接 `submit_content_node_result`。
+2. 只用 `title_formula.code` 与 schema；`title_formula.lexicon_codes` 全部写入 `title.lexicon_usage`；词库 `required=true` 时从 `formula_lexicon_bundle.title.chunks` 取材。
+3. 只生成一个最终标题，与大纲正文一并提交 `GeneratedContentResultV1`。
+4. 字数满足 `channel_profile.title_constraints`（小红书 6～20 字）。
+5. 爆款仿写：只借 `reference_blueprint` 槽位顺序，内容用当前证据；无证据槽位删除或改非事实表述。
+6. 变量不得扩大含义（预算≠已搞定、工期≠已完工）。

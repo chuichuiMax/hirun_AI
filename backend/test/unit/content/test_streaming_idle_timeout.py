@@ -85,6 +85,7 @@ async def test_no_output_or_stalled_output_times_out_and_closes_request(initial_
     with pytest.raises(TimeoutError, match="无输出|停滞"):
         await ModelCallTimeoutMiddleware(0.06).awrap_model_call(request, stalled)
     assert stopped.is_set()
+    assert context._content_model_calls == 0
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.content_cover.image2_settings import get_image2_config_state
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
+from yuxi.services.material_upload_queue import read_material_bytes
 from yuxi.services.run_queue_service import get_arq_pool
 from yuxi.storage.minio import get_minio_client
 from yuxi.storage.postgres.models_business import User
@@ -227,7 +228,7 @@ async def create_analysis(
         ) from exc
     asset_sha256 = asset.sha256
     if not asset_sha256:
-        data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+        data = await read_material_bytes(asset)
         asset_sha256 = hashlib.sha256(data).hexdigest()
     else:
         data = None
@@ -281,7 +282,7 @@ async def create_analysis(
         raise
     try:
         if data is None:
-            data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+            data = await read_material_bytes(asset)
         result, resolved_model = await run_visual_analysis(data, payload.role, model_spec=model_spec)
         row.result_json = result.model_dump(mode="json")
         row.model_spec = resolved_model
@@ -390,7 +391,7 @@ async def create_refinement(
         _, asset = await _get_material_item_and_asset(db, owner_uid, material_id)
         sha256 = asset.sha256
         if not sha256:
-            data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+            data = await read_material_bytes(asset)
             sha256 = hashlib.sha256(data).hexdigest()
         materials.append({"role": role, "material_id": material_id, "asset_sha256": sha256})
         response = await create_analysis(
@@ -491,7 +492,7 @@ async def create_generate_job(db: AsyncSession, user: User, payload: ImageDesign
         _, asset = await _get_material_item_and_asset(db, owner_uid, snapshot["material_id"])
         current_sha = asset.sha256
         if not current_sha:
-            data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+            data = await read_material_bytes(asset)
             current_sha = hashlib.sha256(data).hexdigest()
         if current_sha != snapshot["asset_sha256"]:
             raise _error("IMAGE_DESIGN_REFINEMENT_STALE", "输入图片已变化，请重新进行 AI 深度优化", 409)
@@ -622,7 +623,7 @@ async def get_result_file(db: AsyncSession, user: User, asset_id: str) -> tuple[
     if asset is None or (asset.metadata_json or {}).get("domain") != "image_design":
         raise _error("IMAGE_DESIGN_RESULT_NOT_FOUND", "图片设计结果不存在", 404)
     try:
-        data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+        data = await read_material_bytes(asset)
     except Exception as exc:
         raise _error("IMAGE_DESIGN_STORAGE_FAILED", "图片设计结果读取失败", 500, retryable=True) from exc
     return data, asset.content_type, asset.original_file_name

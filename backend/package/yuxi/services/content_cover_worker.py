@@ -47,6 +47,7 @@ from yuxi.services.run_queue_service import (
     get_arq_pool,
     has_cancel_signal,
 )
+from yuxi.services.material_upload_queue import read_material_bytes
 from yuxi.storage.minio.client import StorageError, get_minio_client
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_content import ContentCoverAsset, ContentCoverJob
@@ -130,7 +131,7 @@ async def _finish_cancelled(job_id: str) -> None:
 
 async def _download_asset(asset: ContentCoverAsset) -> bytes:
     try:
-        return await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+        return await read_material_bytes(asset)
     except StorageError as exc:
         raise RuntimeError(f"封面素材读取失败：{asset.id}") from exc
 

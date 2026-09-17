@@ -74,7 +74,7 @@ async function loadItems() {
     const nextUrls = {}
     await Promise.all(items.value.map(async (item) => {
       try {
-        const response = await materialLibraryApi.getItemFile(item.id)
+        const response = await materialLibraryApi.getItemThumbnail(item.id)
         nextUrls[item.id] = URL.createObjectURL(await response.blob())
       } catch {
         nextUrls[item.id] = ''

@@ -17,6 +17,7 @@ from yuxi.services.chat_service import stream_agent_chat, stream_agent_resume
 from yuxi.services.content_run_worker import process_content_run, resume_content_run_from_cover
 from yuxi.services.content_cover_worker import process_content_cover_job
 from yuxi.image_design.worker import process_image_design_job
+from yuxi.services.material_upload_queue import process_material_upload
 from yuxi.services.viral_asset_worker import process_viral_asset
 from yuxi.services.viral_document_worker import process_viral_document
 from yuxi.services.inspire_samples import process_inspire_crawl
@@ -543,6 +544,7 @@ class WorkerSettings:
         process_xiaohongshu_profile_cleanup,
         process_xiaohongshu_distribution,
         process_inspire_crawl,
+        process_material_upload,
     ]
     max_tries = 2
     retry_jobs = True

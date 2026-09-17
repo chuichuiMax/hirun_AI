@@ -72,29 +72,16 @@ REVIEW_NOTES_RESEARCH_RESULT_FIELDS = {
 }
 
 REVIEW_NOTES_GENERATE_PROHIBITED_ACTIONS = (
-    "不按装修获客标题公式或正文调用规则写作",
-    "不调用知识库或网页工具，语气只模仿 payload.content_brief.style_excerpts",
-    "不以获客种草、员工自荐或销售转化口吻写作",
-    "不编造简报与证据以外的项目事实，不把样例中的他人事实写成当前项目事实",
-    "标题不出现楼盘、小区或项目案名；可赞美表扬所属店面或门店",
-    "首轮不得 read_file 或探索工具，须直接 submit_content_node_result",
+    "不按获客公式写作；不检索；语气只模仿 style_excerpts；业主第一人称",
+    "不编造简报/证据外事实；标题禁楼盘案名，可赞美店面；首轮直接 submit_content_node_result",
 )
 
 DECORATION_GENERATE_PROHIBITED_ACTIONS = (
-    "不修改锁定策略与公式",
-    "不检索网页或知识库",
-    "不引入冻结证据外的事实",
-    "首轮不得 read_file 或探索工具，须直接 submit_content_node_result",
-    "标题不做楼盘+面积+风格的说明书式平铺，须有吸引点",
-    "正文不展开某套房案例故事，不编造户型改造前后细节",
-    "正文须含简报已有小区/面积/风格与项目施工鸿扬家装，并写品牌优势与引流点",
-    "不得将鸿扬家居/鸿扬家装写成整装或标准化整装，须写定制化家装",
-    "不编造 Evidence ID；卡点与数字须原样引用并挂载对应 id；面积禁止改写成中间值",
-    "有业务知识证据时 paragraph_evidence 至少挂一条知识库 id",
-    "报价清单类：标题须语义清晰可读，如面积+旧房翻新+钱要花在哪；不以低价为主卖点，正文突出鸿扬品牌优势，成品不要写口径",
-    "工艺展示类：标题须点明工艺主题且可读；正文以工艺标准/细节讲解为主，禁止案例分享叙事，不要强调装修风格",
-    "装修家居成品写预算价不写合同价，不要写口径；泥木阶段对外写泥瓦，无木工证据不写木工",
-    "成品标题/正文/话题不得保留 evidence 中 forbidden_replacement_map 的问题词（含「报价」「私信」等平台违禁词）",
+    "不改锁定策略/公式；不检索；不用冻结外事实；首轮直接 submit_content_node_result",
+    "标题须有吸引点，禁小区+面积+风格平铺；证据用短码 id；面积不改写",
+    "正文不写单户改造故事；须含已有小区/面积/风格与鸿扬家装、品牌优势与引流；写定制化家装禁整装",
+    "CT02 标题可读（面积+翻新+钱花哪），不以低价主卖；CT05 讲工艺禁风格/案例；预算价禁合同价/口径；泥木写泥瓦",
+    "成品禁 forbidden_replacement_map 问题词（含报价/私信）；有知识证据须挂一条",
 )
 
 
@@ -517,6 +504,13 @@ class AgentNodeHandler:
         if node["output_contract"] in {"JointStrategyDecisionV1", "JointStrategyDecisionV2"}:
             domain_context = replace(domain_context, joint_strategy_input=assembly.payload)
             required_skills = (*required_skills, state["strategy_candidates"]["selection_skill"])
+        creation_mode = (state.get("runtime_config_snapshot") or {}).get("creation_mode", "original")
+        if node["id"] == "generate_content" and creation_mode == "viral_rewrite":
+            required_skills = (
+                *required_skills,
+                "viral-structure-rewriter",
+                "viral-layout-formatter",
+            )
         prohibited_actions = list(PROHIBITED_ACTIONS.get(node["id"], ()))
         if skip_formula_lexicon_pipeline(state) and node["id"] == "semantic_review":
             prohibited_actions.extend(

@@ -48,13 +48,14 @@ from yuxi.storage.postgres.models_business import Agent, User
 from yuxi.storage.postgres.models_content import ContentNodeRun
 
 
-# 节点总时间、单调用时间、默认推理强度、模型调用上限（连接重试与结果纠错共用）。
+# 节点总时间、单调用空闲、默认推理强度、成功提交的模型调用上限。
+# 空等/连接失败不占提交额度，节点总时限需容下 1 次连接恢复（2×空闲 + 3s 间隔）。
 CONTENT_NODE_EXECUTION_LIMITS = {
-    # 一次直出、不把额度留给纠错；空闲时限覆盖 SiliconFlow 常见 TTFT（正文 60–90s）。
-    "generate_content": (200, 180, "low", 1),
+    # 额度含：强制 submit + 结果纠错；空等/连接失败不占额度。节点总时限需容下 2×空闲 + 间隔。
+    "generate_content": (400, 180, "low", 3),
     "select_creation_strategy": (150, 65, "low", 2),
     "reselect_creation_strategy": (150, 65, "low", 2),
-    "plan_visuals": (90, 70, "low", 1),
+    "plan_visuals": (400, 180, "low", 2),
     "visual_review": (300, 120, "low", 2),
 }
 
@@ -143,15 +144,15 @@ def build_runtime_config_snapshot(*, agent: Agent, context, request: AgentDelega
     }
     if request.node_run.node_id in CONTENT_NODE_EXECUTION_LIMITS:
         if request.node_run.node_id == "generate_content":
-            snapshot["generation_policy_version"] = 4
+            snapshot["generation_policy_version"] = 7
             snapshot["model_input_contract"] = "GenerateContentPromptV1"
         elif request.node_run.node_id == "plan_visuals":
-            snapshot["visual_execution_policy_version"] = 4
+            snapshot["visual_execution_policy_version"] = 6
             snapshot["model_input_contract"] = "PlanVisualsPromptV1"
         else:
             snapshot["strategy_execution_policy_version"] = 2
             snapshot["model_input_contract"] = "JointStrategyPromptV1"
-        snapshot["streaming_timeout_policy_version"] = 1
+        snapshot["streaming_timeout_policy_version"] = 2
         snapshot["limits"]["timeout_mode"] = "idle"
         snapshot["limits"]["max_model_calls"] = _node_execution_limits(request)[3]
         snapshot["limits"]["sdk_max_retries"] = 0
@@ -264,6 +265,13 @@ class AgentDelegationService:
                     "content-human-expression",
                 }
                 context._required_skill_closure = [slug for slug in context._required_skill_closure if slug not in drop]
+            if (
+                request.node_run.node_id == "plan_visuals"
+            ):
+                # 封面规划只注入 planner；cover/review 在下游节点各自挂载。
+                context._required_skill_closure = [
+                    slug for slug in context._required_skill_closure if slug == "content-visual-planner"
+                ]
             if (
                 request.node_run.node_id in {"select_creation_strategy", "reselect_creation_strategy"}
                 and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
@@ -481,8 +489,11 @@ class AgentDelegationService:
             # 节点时限表覆盖 Agent 种子配置，保证正文生成走低推理延迟。
             context.reasoning_effort = reasoning
             context.model_call_timeout_seconds = call_timeout
-            context.model_retry_times = 0 if max_model_calls <= 1 else 1
+            # 供应商 5xx/空等需至少 1 次连接重试；与结果纠错额度分离计量（空等会退还调用计数）。
+            context.model_retry_times = 2
             context._content_max_model_calls = max_model_calls
+            # 标记关闭 thinking：DeepSeek-V4 默认慢想，受控节点由 ChatbotAgent 传 enable_thinking=false。
+            context._content_disable_thinking = True
         if request.knowledge_policy == "none" or request.knowledge_policy == "frozen_evidence_only":
             context.knowledges = []
         elif request.knowledge_policy == "agent_scope":
@@ -641,11 +652,13 @@ class AgentDelegationService:
     ) -> dict[str, Any]:
         prompt = request.prompt
         if node_input is not None:
+            # 模型只看业务视图 + 短职责/禁令；task_id/hash/schema 留在服务端审计快照。
             prompt = json.dumps(
-                node_input.model_dump(
-                    mode="json",
-                    exclude={"output_json_schema", "runtime_config_snapshot"},
-                ),
+                {
+                    "payload": node_input.payload,
+                    "duty": node_input.node_responsibility,
+                    "ban": node_input.prohibited_actions,
+                },
                 ensure_ascii=False,
                 separators=(",", ":"),
             )

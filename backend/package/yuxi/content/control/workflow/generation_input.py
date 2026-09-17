@@ -4,24 +4,27 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from yuxi.content.model.contracts.content_nodes import GenerateContentPromptV1, PlanVisualsPromptV1
+from yuxi.content.model.contracts.content_nodes import (
+    GenerateContentPromptV1,
+    PlanVisualsPromptV1,
+    build_evidence_cite_aliases,
+)
 
 _MAX_LEXICON_CHUNKS = 1
-_MAX_LEXICON_CHUNK_CHARS = 80
-_MAX_EVIDENCE_VALUE_CHARS = 48
-_MAX_FORBIDDEN_MAP_ROWS = 16
+_MAX_LEXICON_CHUNK_CHARS = 48
+_MAX_EVIDENCE_VALUE_CHARS = 36
+_MAX_FORBIDDEN_MAP_ROWS = 10
 _MAX_FORBIDDEN_ALTERNATIVES = 1
 _MAX_METHOD_PATTERNS = 1
-_MAX_REFERENCE_EXAMPLES = 1
-_MAX_WRITING_INSTRUCTION_CHARS = 180
-_MAX_EVIDENCE_ITEMS = 16
-_MAX_GENERATION_PROMPT_CHARS = 10000
-_MAX_REVIEW_NOTES_GENERATION_PROMPT_CHARS = 4000
+_MAX_WRITING_INSTRUCTION_CHARS = 120
+_MAX_EVIDENCE_ITEMS = 10
+_MAX_GENERATION_PROMPT_CHARS = 4000
+_MAX_REVIEW_NOTES_GENERATION_PROMPT_CHARS = 2800
 _MAX_REVIEW_NOTES_STYLE_EXCERPTS = 2
-_MAX_REVIEW_NOTES_STYLE_CHARS = 400
-_MAX_REVIEW_NOTES_EVIDENCE_ITEMS = 8
-_MAX_REVIEW_NOTES_EVIDENCE_VALUE_CHARS = 40
-_MAX_REVIEW_NOTES_FORBIDDEN_ROWS = 8
+_MAX_REVIEW_NOTES_STYLE_CHARS = 220
+_MAX_REVIEW_NOTES_EVIDENCE_ITEMS = 5
+_MAX_REVIEW_NOTES_EVIDENCE_VALUE_CHARS = 32
+_MAX_REVIEW_NOTES_FORBIDDEN_ROWS = 5
 _REVIEW_NOTES_BRIEF_KEEP = frozenset(
     {
         "mp_service_entry",
@@ -41,13 +44,15 @@ _REVIEW_NOTES_BRIEF_KEEP = frozenset(
         "mp_content_code",
     }
 )
-_MAX_BODY_CALLING_INSTRUCTION_CHARS = 120
-_MAX_BODY_CALLING_FILL_RULE_CHARS = 90
-_MAX_VISUAL_BODY_CHARS = 280
-_MAX_VISUAL_EVIDENCE_ITEMS = 8
-_MAX_VISUAL_EVIDENCE_VALUE_CHARS = 40
-_MAX_VISUAL_FORBIDDEN_ROWS = 12
-_FILLABLE_CONSTRAINT_KEYS = ("maxChars", "maxCharsPerLine", "maxLines", "required", "layoutMeasured")
+_MAX_BODY_CALLING_INSTRUCTION_CHARS = 72
+_MAX_BODY_CALLING_FILL_RULE_CHARS = 48
+_MAX_VISUAL_BODY_CHARS = 100
+_MAX_VISUAL_EVIDENCE_ITEMS = 4
+_MAX_VISUAL_EVIDENCE_VALUE_CHARS = 24
+_MAX_VISUAL_FORBIDDEN_ROWS = 4
+_MAX_VISUAL_PROMPT_CHARS = 1800
+_MAX_VISUAL_FIELD_LABEL_CHARS = 16
+_FILLABLE_CONSTRAINT_KEYS = ("maxChars", "maxCharsPerLine", "maxLines")
 _EVIDENCE_ITEM_DROP_FIELDS = (
     "source_hash",
     "source_version",
@@ -191,13 +196,10 @@ def _slim_body_calling(calling: object) -> object:
         return calling
     slim: dict[str, Any] = {
         "formula_name": calling.get("formula_name"),
-        "lexicon_calls": list(calling.get("lexicon_calls") or []),
-        "variation_rule": calling.get("variation_rule"),
-        "reference_examples": list(calling.get("reference_examples") or [])[:_MAX_REFERENCE_EXAMPLES],
+        "lexicon_calls": list(calling.get("lexicon_calls") or [])[:4],
         "sections": [],
-        "variants": [],
     }
-    for section in calling.get("sections") or []:
+    for section in (calling.get("sections") or [])[:8]:
         if not isinstance(section, dict):
             continue
         slim["sections"].append(
@@ -206,21 +208,23 @@ def _slim_body_calling(calling: object) -> object:
                 "name": section.get("name"),
                 "instruction": _trim_text(section.get("instruction"), _MAX_BODY_CALLING_INSTRUCTION_CHARS),
                 "fill_rule": _trim_text(section.get("fill_rule"), _MAX_BODY_CALLING_FILL_RULE_CHARS),
-                "lexicon_calls": list(section.get("lexicon_calls") or []),
-                "fact_source": section.get("fact_source"),
+                "lexicon_calls": list(section.get("lexicon_calls") or [])[:3],
             }
         )
-    for variant in calling.get("variants") or []:
+    variants = []
+    for variant in (calling.get("variants") or [])[:2]:
         if not isinstance(variant, dict):
             continue
-        slim["variants"].append(
+        variants.append(
             {
                 "id": variant.get("id"),
                 "name": variant.get("name"),
-                "instruction": _trim_text(variant.get("instruction"), 100),
-                "lexicon_calls": list(variant.get("lexicon_calls") or []),
+                "instruction": _trim_text(variant.get("instruction"), 60),
+                "lexicon_calls": list(variant.get("lexicon_calls") or [])[:2],
             }
         )
+    if variants:
+        slim["variants"] = variants
     return slim
 
 
@@ -237,33 +241,28 @@ def _slim_strategy_snapshot(strategy: dict[str, Any]) -> dict[str, Any]:
                 "code": item.get("code"),
                 "name": item.get("name"),
                 "method_type": item.get("method_type"),
-                "principle": _trim_text(item.get("principle"), 100),
+                "principle": _trim_text(item.get("principle"), 60),
                 "sentence_patterns": list(item.get("sentence_patterns") or [])[:_MAX_METHOD_PATTERNS],
-                "risk_rules": list(item.get("risk_rules") or [])[:3],
             }
         )
-    strategy["creation_method_definitions"] = methods
+    strategy["creation_method_definitions"] = methods[:2]
     strategy["title_formula"] = {
         "code": title.get("code"),
         "name": title.get("name"),
-        "core_goal": _trim_text(title.get("core_goal"), 100),
-        "reference_examples": list(title.get("reference_examples") or [])[:_MAX_REFERENCE_EXAMPLES],
-        "variable_schema": _slim_named_entries(title.get("variable_schema")),
-        "compatible_methods": title.get("compatible_methods") or [],
-        "risk_rules": list(title.get("risk_rules") or [])[:3],
-        "lexicon_codes": title.get("lexicon_codes") or [],
+        "core_goal": _trim_text(title.get("core_goal"), 60),
+        "variable_schema": _slim_named_entries(title.get("variable_schema"))[:8],
+        "compatible_methods": (title.get("compatible_methods") or [])[:4],
+        "lexicon_codes": list(title.get("lexicon_codes") or []),
     }
     strategy["body_formula"] = {
         "code": body.get("code"),
         "name": body.get("name"),
-        "structure_schema": _slim_named_entries(body.get("structure_schema")),
-        "reference_examples": list(body.get("reference_examples") or [])[:_MAX_REFERENCE_EXAMPLES],
-        "required_variables": _slim_named_entries(body.get("required_variables"))
+        "structure_schema": _slim_named_entries(body.get("structure_schema"))[:8],
+        "required_variables": _slim_named_entries(body.get("required_variables"))[:8]
         if isinstance(body.get("required_variables"), list)
         else body.get("required_variables") or [],
-        "compatible_methods": body.get("compatible_methods") or [],
-        "risk_rules": list(body.get("risk_rules") or [])[:3],
-        "lexicon_codes": body.get("lexicon_codes") or [],
+        "compatible_methods": (body.get("compatible_methods") or [])[:4],
+        "lexicon_codes": list(body.get("lexicon_codes") or []),
         "body_calling": _slim_body_calling(body.get("body_calling")),
     }
     strategy.pop("body_calling_source", None)
@@ -460,8 +459,15 @@ def project_generation_input(payload: dict) -> dict:
             _slim_evidence_item(item, creation_mode=creation_mode)
     evidence_items = _dedupe_evidence_items(evidence_items)
     evidence_items = _filter_evidence_for_generation(evidence_items, creation_mode=creation_mode)
+    cite_aliases = build_evidence_cite_aliases((payload.get("evidence_bundle") or {}).get("items") or [])
+    real_to_alias = {real: alias for alias, real in cite_aliases.items()}
+    for item in evidence_items:
+        real_id = str(item.get("id") or "")
+        alias = real_to_alias.get(real_id)
+        if alias:
+            item["id"] = alias
     projected["evidence_bundle"]["items"] = evidence_items
-    # 模型直接读 items[].id / allowed_usage；不再附带重复 cite 索引。
+    # 模型只见 E01 短码；真实 ev_ id 由服务端提交时回写。不再附带重复 cite 索引。
     projected["evidence_cite_index"] = None
     lexicon = projected.get("formula_lexicon_bundle") or {}
     for scope in ("title", "body"):
@@ -558,16 +564,55 @@ def _finalize_review_notes_generation(projected: dict[str, Any]) -> dict[str, An
     return _fit_generation_prompt(projected, max_chars=_MAX_REVIEW_NOTES_GENERATION_PROMPT_CHARS)
 
 
+def _minimal_lexicon_bundle(projected: dict[str, Any]) -> dict[str, Any]:
+    """硬顶时仍保留词库 code，避免模型看不到必选码却被 lexicon_usage 校验打回。"""
+    strategy = projected.get("strategy_snapshot") if isinstance(projected.get("strategy_snapshot"), dict) else {}
+    title = strategy.get("title_formula") if isinstance(strategy.get("title_formula"), dict) else {}
+    body = strategy.get("body_formula") if isinstance(strategy.get("body_formula"), dict) else {}
+    calling = body.get("body_calling") if isinstance(body.get("body_calling"), dict) else {}
+    title_codes = [str(code) for code in (title.get("lexicon_codes") or []) if code]
+    body_codes = [str(code) for code in (calling.get("lexicon_calls") or []) if code]
+    existing = projected.get("formula_lexicon_bundle") if isinstance(projected.get("formula_lexicon_bundle"), dict) else {}
+
+    def _stubs(scope: str, codes: list[str]) -> list[dict[str, Any]]:
+        by_code = {
+            str(entry.get("code")): entry
+            for entry in (existing.get(scope) or [])
+            if isinstance(entry, dict) and entry.get("code")
+        }
+        stubs: list[dict[str, Any]] = []
+        for code in codes:
+            entry = by_code.get(code) or {"code": code}
+            chunks = entry.get("chunks") if isinstance(entry.get("chunks"), list) else []
+            stubs.append(
+                {
+                    "code": code,
+                    "name": entry.get("name"),
+                    "required": True,
+                    "chunks": [_trim_text(chunk, 24) for chunk in chunks[:1] if chunk],
+                }
+            )
+        return stubs
+
+    minimal: dict[str, Any] = {}
+    if title_codes:
+        minimal["title"] = _stubs("title", title_codes)
+    if body_codes:
+        minimal["body"] = _stubs("body", body_codes)
+    return minimal
+
+
 def _fit_generation_prompt(
     projected: dict[str, Any],
     *,
     max_chars: int = _MAX_GENERATION_PROMPT_CHARS,
 ) -> dict[str, Any]:
-    """硬顶字数：先丢低优先级证据，再压词库/样例，避免首包被整包证据撑爆。"""
+    """硬顶字数：先丢低优先级证据，再压词库/策略冗余；词库 code 不得被清空。"""
     items = projected.get("evidence_bundle", {}).get("items")
     if not isinstance(items, list):
-        return projected
-    floor = 4 if max_chars <= _MAX_REVIEW_NOTES_GENERATION_PROMPT_CHARS else 8
+        items = []
+        projected.setdefault("evidence_bundle", {})["items"] = items
+    floor = 3 if max_chars <= _MAX_REVIEW_NOTES_GENERATION_PROMPT_CHARS else 5
     while _prompt_chars(projected) > max_chars and len(items) > floor:
         drop_at = next(
             (index for index in range(len(items) - 1, -1, -1) if not _is_forbidden_replacement_map(items[index])),
@@ -578,15 +623,18 @@ def _fit_generation_prompt(
         items.pop(drop_at)
     if _prompt_chars(projected) <= max_chars:
         return projected
+
     brief = projected.get("content_brief") if isinstance(projected.get("content_brief"), dict) else {}
     excerpts = brief.get("style_excerpts")
     if isinstance(excerpts, list) and excerpts:
-        brief["style_excerpts"] = [str(_trim_text(str(item), 200)) for item in excerpts[:1] if str(item).strip()]
+        brief["style_excerpts"] = [str(_trim_text(str(item), 120)) for item in excerpts[:1] if str(item).strip()]
         projected["content_brief"] = brief
-    if _prompt_chars(projected) > max_chars:
-        projected["evidence_bundle"]["items"] = [
-            item for item in items if isinstance(item, dict) and not _is_forbidden_replacement_map(item)
-        ][:floor]
+    variables = brief.get("business_variables") if isinstance(brief.get("business_variables"), dict) else {}
+    if "writing_instruction" in variables:
+        variables["writing_instruction"] = _trim_text(variables.get("writing_instruction"), 80)
+        brief["business_variables"] = variables
+        projected["content_brief"] = brief
+
     lexicon = projected.get("formula_lexicon_bundle") or {}
     for scope in ("title", "body"):
         entries = lexicon.get(scope)
@@ -595,15 +643,71 @@ def _fit_generation_prompt(
         for entry in entries:
             if not isinstance(entry, dict) or not isinstance(entry.get("chunks"), list):
                 continue
-            entry["chunks"] = [_trim_text(chunk, 40) for chunk in entry["chunks"][:1] if chunk]
+            entry["chunks"] = [_trim_text(chunk, 28) for chunk in entry["chunks"][:1] if chunk]
+    if _prompt_chars(projected) > max_chars:
+        projected["formula_lexicon_bundle"] = _minimal_lexicon_bundle(projected)
+
+    strategy = projected.get("strategy_snapshot") if isinstance(projected.get("strategy_snapshot"), dict) else {}
+    title = strategy.get("title_formula") if isinstance(strategy.get("title_formula"), dict) else {}
+    body = strategy.get("body_formula") if isinstance(strategy.get("body_formula"), dict) else {}
+    calling = body.get("body_calling") if isinstance(body.get("body_calling"), dict) else {}
+    title_codes = list(title.get("lexicon_codes") or [])
+    if calling:
+        calling.pop("variants", None)
+        for section in calling.get("sections") or []:
+            if isinstance(section, dict):
+                section["instruction"] = _trim_text(section.get("instruction"), 48)
+                section["fill_rule"] = _trim_text(section.get("fill_rule"), 36)
+                # 保留 lexicon_calls code 列表，仅丢掉长说明。
+        body["body_calling"] = calling
+        strategy["body_formula"] = body
+        projected["strategy_snapshot"] = strategy
+    if _prompt_chars(projected) > max_chars:
+        body_calls = list((calling.get("lexicon_calls") or [])) if calling else []
+        projected["strategy_snapshot"] = {
+            "title_formula": {"code": title.get("code"), "lexicon_codes": title_codes},
+            "body_formula": {
+                "code": body.get("code"),
+                "lexicon_codes": list(body.get("lexicon_codes") or []),
+                "body_calling": {
+                    "sections": calling.get("sections") or [],
+                    **({"lexicon_calls": body_calls} if body_calls else {}),
+                },
+            },
+            "source_snapshot_hash": strategy.get("source_snapshot_hash"),
+            "creation_method_definitions": (strategy.get("creation_method_definitions") or [])[:1],
+        }
+        projected["formula_lexicon_bundle"] = _minimal_lexicon_bundle(projected)
+        persona = projected.get("persona_profile") if isinstance(projected.get("persona_profile"), dict) else {}
+        projected["persona_profile"] = {
+            key: persona.get(key) for key in ("name", "tone") if persona.get(key) is not None
+        } or None
+        kept = [item for item in items if isinstance(item, dict) and not _is_forbidden_replacement_map(item)][:floor]
+        forbidden = [item for item in items if isinstance(item, dict) and _is_forbidden_replacement_map(item)][:1]
+        if forbidden and floor > 0:
+            projected["evidence_bundle"]["items"] = [*kept[: max(0, floor - 1)], *forbidden]
+        else:
+            projected["evidence_bundle"]["items"] = kept
     return projected
 
 
 def _slim_fillable_field(field: dict[str, Any]) -> dict[str, Any]:
-    slim = {key: field[key] for key in ("key", "label", "semanticRole", "kind") if key in field}
+    slim: dict[str, Any] = {}
+    if field.get("key") is not None:
+        slim["key"] = field["key"]
+    if field.get("semanticRole") is not None:
+        slim["semanticRole"] = field["semanticRole"]
+    label = field.get("label")
+    if isinstance(label, str) and label.strip():
+        slim["label"] = _trim_text(label.strip(), _MAX_VISUAL_FIELD_LABEL_CHARS)
     constraints = field.get("constraints")
     if isinstance(constraints, dict):
-        slim["constraints"] = {key: constraints[key] for key in _FILLABLE_CONSTRAINT_KEYS if key in constraints}
+        kept = {key: constraints[key] for key in _FILLABLE_CONSTRAINT_KEYS if key in constraints}
+        max_chars = kept.get("maxChars")
+        if kept.get("maxCharsPerLine") == max_chars:
+            kept.pop("maxCharsPerLine", None)
+        if kept:
+            slim["constraints"] = kept
     return slim
 
 
@@ -618,7 +722,14 @@ def _filter_evidence_for_visuals(items: list) -> list[dict[str, Any]]:
         if _is_forbidden_replacement_map(item):
             value = item.get("value")
             if isinstance(value, list):
-                item["value"] = value[:_MAX_VISUAL_FORBIDDEN_ROWS]
+                # 只留问题词，不塞替代词表。
+                compacted = []
+                for row in value[:_MAX_VISUAL_FORBIDDEN_ROWS]:
+                    if isinstance(row, dict) and row.get("problem_term"):
+                        compacted.append({"problem_term": row["problem_term"]})
+                    elif isinstance(row, str):
+                        compacted.append(row)
+                item = {**item, "value": compacted}
             kept.append(item)
             continue
         usage = set(item.get("allowed_usage") or [])
@@ -633,21 +744,42 @@ def _project_visual_evidence_item(item: dict[str, Any]) -> dict[str, Any]:
     projected = {"id": item.get("id"), "value": item.get("value")}
     if isinstance(projected["value"], str):
         projected["value"] = _trim_text(projected["value"], _MAX_VISUAL_EVIDENCE_VALUE_CHARS)
-    if item.get("variable_codes"):
-        projected["variable_codes"] = item["variable_codes"]
+    return projected
+
+
+def _fit_visual_prompt(projected: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+    """硬顶封面模型视图：先砍证据与正文，再压模板 label。"""
+    if _prompt_chars(projected) <= max_chars:
+        return projected
+    draft = projected.get("content_draft") if isinstance(projected.get("content_draft"), dict) else {}
+    if isinstance(draft.get("body"), str):
+        projected["content_draft"] = {"body": _trim_text(draft["body"], 60)}
+    if _prompt_chars(projected) <= max_chars:
+        return projected
+    items = list((projected.get("evidence_bundle") or {}).get("items") or [])
+    while _prompt_chars(projected) > max_chars and len(items) > 1:
+        items = items[:-1]
+        projected["evidence_bundle"] = {"items": items}
+    if _prompt_chars(projected) <= max_chars:
+        return projected
+    visual = ((projected.get("runtime_config_snapshot") or {}).get("visual_material") or {})
+    fields = list(visual.get("hycanvas_fillable_fields") or [])
+    for field in fields:
+        if isinstance(field, dict):
+            field.pop("label", None)
+    if fields:
+        visual["hycanvas_fillable_fields"] = fields
+    if _prompt_chars(projected) <= max_chars:
+        return projected
+    projected["strategy_snapshot"] = {}
+    projected["channel_profile"] = {}
     return projected
 
 
 def project_visual_plan_input(payload: dict) -> dict:
     """封面规划只看标题、短正文、模板框和封面事实，不把生成节点的整包策略再喂一遍。"""
     projected = deepcopy(payload)
-    strategy = projected.get("strategy_snapshot") or {}
-    title_formula = strategy.get("title_formula") or {}
-    body_formula = strategy.get("body_formula") or {}
-    projected["strategy_snapshot"] = {
-        "title_formula": {"code": title_formula.get("code")},
-        "body_formula": {"code": body_formula.get("code")},
-    }
+    projected["strategy_snapshot"] = {}
     evidence_items = projected.get("evidence_bundle", {}).get("items", [])
     for item in evidence_items:
         if isinstance(item, dict):
@@ -662,20 +794,20 @@ def project_visual_plan_input(payload: dict) -> dict:
         "body": _trim_text(draft.get("body"), _MAX_VISUAL_BODY_CHARS) if draft.get("body") else draft.get("body")
     }
     title = dict(projected.get("selected_title") or {})
-    projected["selected_title"] = {key: title.get(key) for key in ("text", "evidence_ids") if key in title} or title
-    channel = projected.get("channel_profile") or {}
-    projected["channel_profile"] = {key: channel.get(key) for key in ("emoji_allowed",) if key in channel}
+    projected["selected_title"] = {"text": title["text"]} if title.get("text") is not None else {}
+    projected["channel_profile"] = {}
     runtime = dict(projected.get("runtime_config_snapshot") or {})
     visual = dict(runtime.get("visual_material") or {})
     format_ = visual.get("format") if isinstance(visual.get("format"), dict) else {}
     fillable = [
         _slim_fillable_field(field) for field in visual.get("hycanvas_fillable_fields") or [] if isinstance(field, dict)
     ]
-    visual_material = {
-        key: visual.get(key)
-        for key in ("image_asset_id", "template_id", "required_template_field_repairs")
-        if key in visual
+    visual_material: dict[str, Any] = {
+        key: visual.get(key) for key in ("image_asset_id", "template_id") if key in visual
     }
+    repairs = visual.get("required_template_field_repairs")
+    if isinstance(repairs, dict) and repairs:
+        visual_material["required_template_field_repairs"] = repairs
     if fillable or "hycanvas_fillable_fields" in visual:
         visual_material["hycanvas_fillable_fields"] = fillable
     projected["runtime_config_snapshot"] = {
@@ -696,4 +828,7 @@ def project_visual_plan_input(payload: dict) -> dict:
     artifact = dict(projected.get("artifact_version") or {})
     if artifact.get("id"):
         projected["artifact_version"] = {"id": artifact.get("id")}
-    return PlanVisualsPromptV1.model_validate(projected).model_dump(mode="json")
+    else:
+        projected["artifact_version"] = {}
+    fitted = _fit_visual_prompt(projected, max_chars=_MAX_VISUAL_PROMPT_CHARS)
+    return PlanVisualsPromptV1.model_validate(fitted).model_dump(mode="json")

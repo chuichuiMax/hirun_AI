@@ -226,8 +226,8 @@ def test_generated_content_must_fit_channel_title_length() -> None:
         },
         "draft": {"body": "正文", "topics": [], "paragraph_evidence": [], "body_formula_code": "C02"},
     }
-    with pytest.raises(ContractDomainValidationError, match="标题超过 20 字"):
-        validate_content_node_result("GeneratedContentResultV1", payload, context)
+    result = validate_content_node_result("GeneratedContentResultV1", payload, context)
+    assert result.title.text == "长沙老房装修闭眼入不踩雷五十到七十平照着做"[:20]
 
     payload["title"]["text"] = "老房改造更省心"
     result = validate_content_node_result("GeneratedContentResultV1", payload, context)

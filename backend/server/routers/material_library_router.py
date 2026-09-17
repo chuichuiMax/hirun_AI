@@ -1,38 +1,38 @@
 from __future__ import annotations
 
-from urllib.parse import quote
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from server.utils.auth_middleware import get_db, get_required_user
-from server.utils.public_url import request_public_base_url
 from yuxi.services.material_library_service import (
     MaterialCategoryCreate,
     MaterialCategoryDelete,
     MaterialCategoryUpdate,
     MaterialItemUpdate,
     MaterialShareCreate,
-    create_material_share,
     create_material_category,
-    delete_material_item,
+    create_material_share,
     delete_material_category,
+    delete_material_item,
+    get_material_categories,
     get_material_file,
     get_material_thumbnail,
     get_public_material_share,
     get_public_material_share_image,
-    get_material_categories,
     import_material_images,
     list_image_galleries,
     list_material_items,
-    update_material_item,
-    update_material_category,
     render_public_material_share_page,
     serialize_public_material_share,
+    update_material_category,
+    update_material_item,
 )
 from yuxi.storage.postgres.models_business import User
+
+from server.utils.auth_middleware import get_db, get_required_user
+from server.utils.public_url import request_public_base_url
 
 material_library = APIRouter(prefix="/material-library", tags=["material-library"])
 public_share_router = APIRouter(tags=["public-share"])
@@ -42,6 +42,7 @@ public_share_router = APIRouter(tags=["public-share"])
 async def import_images(
     files: list[UploadFile] = File(...),
     category: str = Form(...),
+    design_style: str | None = Form(None),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -50,6 +51,7 @@ async def import_images(
         current_user,
         files,
         category=category,
+        design_style=design_style,
     )
 
 
@@ -231,10 +233,10 @@ async def material_item_thumbnail(
     encoded_name = quote(file_name, safe="")
     return Response(
         content=data,
-        media_type="image/jpeg",
+        media_type="image/webp",
         headers={
-            "Cache-Control": "private, no-cache",
-            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}.thumb.jpg",
+            "Cache-Control": "private, max-age=86400",
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_name}.thumb.webp",
         },
     )
 

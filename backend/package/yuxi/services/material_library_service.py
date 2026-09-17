@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import asyncio
-import html
 import hashlib
+import html
 import io
 import json
 import logging
@@ -17,13 +16,25 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
 from yuxi.services.material_library_categories import (
     list_material_categories,
     resolve_legacy_category,
+)
+from yuxi.services.material_upload_queue import (
+    INGEST_PENDING,
+    delete_material_display_cache,
+    encode_material_thumbnail,
+    enqueue_material_oss_upload,
+    ingest_status_of,
+    material_thumb_object_name,
+    material_upload_redis_key,
+    persist_material_thumbnail,
+    read_material_bytes,
+    stage_material_bytes,
+    stage_material_thumb,
 )
 from yuxi.storage.minio import StorageError, get_minio_client
 from yuxi.storage.postgres.models_business import OperationLog, User
@@ -44,7 +55,6 @@ MATERIAL_LIBRARY_BUCKET = "image"
 MAX_MATERIAL_BYTES = 100 * 1024 * 1024
 MAX_MATERIAL_DIMENSION = 8192
 MAX_MATERIAL_PIXELS = 40_000_000
-MATERIAL_THUMBNAIL_SIZE = (480, 480)
 DECORATION_GALLERY_INDUSTRY_SLUG = "decoration"
 DECORATION_GALLERY_DESIGN_STYLES = frozenset(
     {
@@ -220,6 +230,59 @@ def _share_description(building_name: str | None, area: str | None, design_style
     return f"{building_name}｜{area_text}｜{design_style}"
 
 
+def _material_image_object_name(owner_uid: str, asset_id: str) -> str:
+    return f"material-library/{owner_uid}/images/{asset_id}/image.webp"
+
+
+def _normalize_design_style(value: str | None) -> str | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    if text not in DECORATION_GALLERY_DESIGN_STYLES:
+        raise _error(422, "MATERIAL_STYLE_INVALID", "请选择有效的设计风格")
+    return text
+
+
+def _is_decoration_gallery(category: ContentMaterialCategory, parent: ContentMaterialCategory | None) -> bool:
+    return category.industry_slug == DECORATION_GALLERY_INDUSTRY_SLUG or (
+        parent is not None and parent.industry_slug == DECORATION_GALLERY_INDUSTRY_SLUG
+    )
+
+
+async def _resolve_upload_category(
+    db: AsyncSession,
+    user: User,
+    category_id: str,
+    design_style: str | None,
+) -> tuple[ContentMaterialCategory, str | None]:
+    owner_uid = _owner_uid(user)
+    repo = MaterialLibraryRepository(db, include_shared=True)
+    resolved = await resolve_material_category(
+        db,
+        owner_uid=owner_uid,
+        tenant_id=_tenant_id(user),
+        material_type="image",
+        category_id=category_id,
+    )
+    parent = await repo.get_category(owner_uid, "image", resolved.parent_id) if resolved.parent_id else None
+    style = _normalize_design_style(design_style) or resolved.design_style
+    if _is_decoration_gallery(resolved, parent) and not style:
+        raise _error(422, "MATERIAL_STYLE_REQUIRED", "装修图库上传请选择设计风格")
+    if resolved.parent_id is None and resolved.industry_slug == DECORATION_GALLERY_INDUSTRY_SLUG and style:
+        matches = [
+            child
+            for child in await repo.list_child_categories(owner_uid, "image", resolved.id)
+            if child.design_style == style
+        ]
+        if len(matches) == 1:
+            resolved = matches[0]
+        elif not matches:
+            raise _error(422, "MATERIAL_STYLE_GALLERY_MISSING", f"请先创建「{style}」风格的二级图库")
+        else:
+            raise _error(422, "MATERIAL_STYLE_GALLERY_AMBIGUOUS", "该风格有多个二级图库，请直接选择其中一个")
+    return resolved, style
+
+
 def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
     try:
         try:
@@ -230,7 +293,7 @@ def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
             pass
         with Image.open(io.BytesIO(data)) as source:
             # 不按扩展名/声明格式拦截：微信相册常把 HEIC/MPO/实况图标成 .jpg。
-            # 只要 Pillow（含 HEIF 插件）能解码，就统一转成 PNG 入库。
+            # 只要 Pillow（含 HEIF 插件）能解码，就统一转成 WebP 入库。
             detected = (source.format or "").upper()
             image = ImageOps.exif_transpose(source)
             image.load()
@@ -242,8 +305,12 @@ def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
                 or width * height > MAX_MATERIAL_PIXELS
             ):
                 raise _error(400, "MATERIAL_DIMENSION_INVALID", "图片尺寸必须在 2–8192 像素且不超过 4000 万像素")
+            if image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
+                image = image.convert("RGBA")
+            else:
+                image = image.convert("RGB")
             output = io.BytesIO()
-            image.convert("RGBA").save(output, format="PNG", optimize=True)
+            image.save(output, format="WEBP", quality=80, method=4)
             logger.info(
                 "material image normalized format=%s size=%sx%s bytes_in=%s bytes_out=%s",
                 detected or "unknown",
@@ -252,7 +319,7 @@ def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
                 len(data),
                 output.tell(),
             )
-            return output.getvalue(), width, height, "image/png"
+            return output.getvalue(), width, height, "image/webp"
     except HTTPException:
         raise
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
@@ -261,15 +328,6 @@ def _normalize_image(data: bytes) -> tuple[bytes, int, int, str]:
             "MATERIAL_IMAGE_INVALID",
             "无法识别该图片（请用系统相册导出为 JPG/PNG 后再传，勿直接传实况图/未解码原片）",
         ) from exc
-
-
-def _make_image_thumbnail(data: bytes) -> bytes:
-    with Image.open(io.BytesIO(data)) as source:
-        image = ImageOps.exif_transpose(source).convert("RGB")
-        image.thumbnail(MATERIAL_THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
-        output = io.BytesIO()
-        image.save(output, format="JPEG", quality=78, optimize=True)
-        return output.getvalue()
 
 
 def serialize_item(
@@ -292,6 +350,8 @@ def serialize_item(
             "height": asset.image_height,
             "sha256": asset.sha256,
             "file_url": f"/api/material-library/items/{item.id}/file",
+            "design_style": (item.metadata_json or {}).get("design_style") or category.design_style,
+            "storage_status": ingest_status_of(asset),
         }
     )
     if item.material_type == "cover_template":
@@ -440,23 +500,22 @@ async def import_material_images(
     files: list[UploadFile],
     *,
     category: str,
+    design_style: str | None = None,
 ) -> dict[str, Any]:
     if not files or len(files) > 50:
         raise _error(422, "MATERIAL_FILE_COUNT_INVALID", "每次必须上传 1–50 张图片")
     owner_uid = _owner_uid(user)
-    resolved_category = await resolve_material_category(
-        db,
-        owner_uid=owner_uid,
-        tenant_id=_tenant_id(user),
-        material_type="image",
-        category_id=category,
-    )
+    resolved_category, style = await _resolve_upload_category(db, user, category, design_style)
     category_id = resolved_category.id
     results: list[dict[str, Any]] = []
+    staged_ids: list[str] = []
     for index, file in enumerate(files):
         # 与范围调整互斥；每张上传独立提交，逐次重新校验图库权限。
         resolved_category = await MaterialLibraryRepository(db, include_shared=True).get_category(
-            owner_uid, "image", category_id, for_update=True,
+            owner_uid,
+            "image",
+            category_id,
+            for_update=True,
         )
         if resolved_category is None:
             raise _error(422, "MATERIAL_CATEGORY_INVALID", "图库不存在或共享范围已变更")
@@ -474,16 +533,10 @@ async def import_material_images(
         if len(normalized) > MAX_MATERIAL_BYTES:
             raise _error(400, "MATERIAL_IMAGE_TOO_LARGE", "图片规范化后超过 100 MB")
         asset_id = f"cca_{uuid.uuid4().hex}"
-        object_name = f"material-library/{owner_uid}/images/{asset_id}/image.png"
-        try:
-            uploaded = await get_minio_client().aupload_file(
-                bucket_name=MATERIAL_LIBRARY_BUCKET,
-                object_name=object_name,
-                data=normalized,
-                content_type=content_type,
-            )
-        except StorageError as exc:
-            raise _error(500, "MATERIAL_STORAGE_FAILED", "素材保存失败") from exc
+        object_name = _material_image_object_name(owner_uid, asset_id)
+        await stage_material_bytes(asset_id, normalized)
+        await stage_material_thumb(asset_id, encode_material_thumbnail(normalized))
+        staged_ids.append(asset_id)
         try:
             asset = await ContentCoverRepository(db).create_asset(
                 id=asset_id,
@@ -497,9 +550,13 @@ async def import_material_images(
                 image_width=width,
                 image_height=height,
                 sha256=hashlib.sha256(normalized).hexdigest(),
-                bucket_name=uploaded.bucket_name,
-                object_name=uploaded.object_name,
-                metadata_json={"original_content_type": file.content_type or ""},
+                bucket_name=MATERIAL_LIBRARY_BUCKET,
+                object_name=object_name,
+                metadata_json={
+                    "original_content_type": file.content_type or "",
+                    "ingest_status": INGEST_PENDING,
+                    "redis_key": material_upload_redis_key(asset_id),
+                },
             )
             item = await create_library_item_for_asset(
                 db,
@@ -507,15 +564,21 @@ async def import_material_images(
                 material_type="image",
                 name=Path(file.filename).stem,
                 category=resolved_category.id,
+                metadata={"design_style": style} if style else None,
             )
             _audit(db, user, "material.upload", item_id=item.id, category_id=resolved_category.id)
             await db.commit()
         except Exception:
             await db.rollback()
-            await get_minio_client().adelete_file(uploaded.bucket_name, uploaded.object_name)
+            await delete_material_display_cache(asset_id)
             raise
+        try:
+            await enqueue_material_oss_upload(asset_id)
+        except Exception:
+            logger.exception("material upload enqueue failed: asset=%s", asset_id)
+            raise _error(500, "MATERIAL_UPLOAD_QUEUE_FAILED", "素材已暂存，入库队列提交失败") from None
         results.append(serialize_item(item, asset, resolved_category))
-    return {"items": results, "summary": {"total": len(results), "created": len(results)}}
+    return {"items": results, "summary": {"total": len(results), "created": len(results), "queued": len(staged_ids)}}
 
 
 async def create_material_share(
@@ -553,8 +616,9 @@ async def create_material_share(
     storage = get_minio_client()
     try:
         for display_order, (_, asset, _) in enumerate(ordered_rows, start=1):
-            data = await storage.adownload_file(asset.bucket_name, asset.object_name)
-            object_name = f"material-library-shares/{owner_uid}/{share.id}/{display_order}.png"
+            data = await read_material_bytes(asset)
+            suffix = "webp" if (asset.content_type or "").endswith("webp") else "png"
+            object_name = f"material-library-shares/{owner_uid}/{share.id}/{display_order}.{suffix}"
             uploaded = await storage.aupload_file(
                 bucket_name=MATERIAL_LIBRARY_BUCKET,
                 object_name=object_name,
@@ -662,14 +726,13 @@ def render_public_material_share_page(
     if building_name and area and design_style:
         details = (
             '<section class="project-info-card">'
-            f'<span>楼盘：{building_name}</span>'
-            f'<span>面积：{area}</span>'
-            f'<span>风格：{design_style}</span>'
+            f"<span>楼盘：{building_name}</span>"
+            f"<span>面积：{area}</span>"
+            f"<span>风格：{design_style}</span>"
             "</section>"
         )
     hero = (
-        f'<section class="share-hero"><img src="{html.escape(first_image, quote=True)}" '
-        f'alt="{title} 首图"></section>'
+        f'<section class="share-hero"><img src="{html.escape(first_image, quote=True)}" alt="{title} 首图"></section>'
         if items
         else ""
     )
@@ -702,7 +765,7 @@ def render_public_material_share_page(
             f'<meta name="twitter:image" content="{html.escape(first_image, quote=True)}">',
             '<meta name="twitter:card" content="summary_large_image">',
             "<style>",
-            'body{margin:0;background:#fff;color:#151616;font:16px/1.6 '
+            "body{margin:0;background:#fff;color:#151616;font:16px/1.6 "
             '-apple-system,BlinkMacSystemFont,"Noto Sans SC","Segoe UI",sans-serif}',
             (
                 "header{display:flex;align-items:center;justify-content:center;"
@@ -739,9 +802,7 @@ def render_public_material_share_page(
     )
 
 
-async def get_public_material_share_image(
-    db: AsyncSession, token: str, display_order: int
-) -> tuple[bytes, str, str]:
+async def get_public_material_share_image(db: AsyncSession, token: str, display_order: int) -> tuple[bytes, str, str]:
     _, items = await get_public_material_share(db, token)
     snapshot = next((item for item in items if item.display_order == display_order), None)
     if snapshot is None:
@@ -810,9 +871,7 @@ async def list_material_items(
         )
         posters_by_asset = {poster.asset_id: poster for poster in posters}
     elif material_type == "image":
-        used_image_ids = await repo.list_selected_image_item_ids(
-            _owner_uid(user), exclude_task_id=exclude_task_id
-        )
+        used_image_ids = await repo.list_selected_image_item_ids(_owner_uid(user), exclude_task_id=exclude_task_id)
     await db.commit()
     items = []
     for item, asset, item_category in rows:
@@ -1068,9 +1127,7 @@ async def update_material_category(
         if material_type != "image" or category.parent_id:
             raise _error(422, "MATERIAL_INDUSTRY_INHERITED", "只有一级图片图库可以设置行业")
         category.industry_slug = await _validate_industry_slug(db, changes["industry_slug"]) or "uncategorized"
-        await repo.update_child_category_industry(
-            _owner_uid(user), material_type, category.id, category.industry_slug
-        )
+        await repo.update_child_category_industry(_owner_uid(user), material_type, category.id, category.industry_slug)
     detail_fields = ("design_style", "building_name", "area")
     if any(field in changes for field in detail_fields):
         if material_type != "image" or not category.parent_id:
@@ -1236,19 +1293,27 @@ async def get_material_file(db: AsyncSession, user: User, item_id: str) -> tuple
     if asset is None:
         raise _error(404, "MATERIAL_ASSET_MISSING", "素材文件不存在")
     try:
-        data = await get_minio_client().adownload_file(asset.bucket_name, asset.object_name)
+        data = await read_material_bytes(asset)
     except StorageError as exc:
         raise _error(500, "MATERIAL_STORAGE_FAILED", "素材文件读取失败") from exc
     return data, asset.content_type, asset.original_file_name
 
 
 async def get_material_thumbnail(db: AsyncSession, user: User, item_id: str) -> tuple[bytes, str]:
-    data, _, file_name = await get_material_file(db, user, item_id)
+    repo = MaterialLibraryRepository(db, include_shared=True)
+    item = await repo.get_item_for_user(item_id, _owner_uid(user))
+    if item is None:
+        raise _error(404, "MATERIAL_NOT_FOUND", "素材不存在")
+    asset = await repo.get_asset(item.asset_id, item.owner_uid)
+    if asset is None:
+        raise _error(404, "MATERIAL_ASSET_MISSING", "素材文件不存在")
     try:
-        thumbnail = await asyncio.to_thread(_make_image_thumbnail, data)
+        thumbnail = await persist_material_thumbnail(asset)
+    except StorageError as exc:
+        raise _error(500, "MATERIAL_STORAGE_FAILED", "素材缩略图读取失败") from exc
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise _error(400, "MATERIAL_IMAGE_INVALID", "素材文件不是有效图片") from exc
-    return thumbnail, file_name
+    return thumbnail, Path(asset.original_file_name).stem
 
 
 async def delete_material_item(db: AsyncSession, user: User, item_id: str) -> dict[str, Any]:
@@ -1278,10 +1343,17 @@ async def delete_material_item(db: AsyncSession, user: User, item_id: str) -> di
     )
     if referenced or poster_referenced or task_referenced or poster_task_referenced:
         raise _error(409, "MATERIAL_IN_USE", "素材正在被内容任务或封面任务使用，不能删除")
+    await delete_material_display_cache(asset.id)
+    storage = get_minio_client()
     try:
-        await get_minio_client().adelete_file(asset.bucket_name, asset.object_name)
+        await storage.adelete_file(asset.bucket_name, asset.object_name)
     except StorageError as exc:
-        raise _error(500, "MATERIAL_STORAGE_FAILED", "素材文件删除失败") from exc
+        if ingest_status_of(asset) != INGEST_PENDING:
+            raise _error(500, "MATERIAL_STORAGE_FAILED", "素材文件删除失败") from exc
+    try:
+        await storage.adelete_file(asset.bucket_name, material_thumb_object_name(asset.object_name))
+    except StorageError:
+        pass
     deleted_at = utc_now_naive()
     item.deleted_at = deleted_at
     asset.deleted_at = deleted_at

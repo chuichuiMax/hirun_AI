@@ -226,7 +226,10 @@ class ValidateFactsInput(BaseModel):
 
 
 class CreateContentCoverJobInput(BaseModel):
-    task_id: str = Field(description="当前内容任务 ID；视觉方案由运行时锁定快照提供")
+    task_id: str | None = Field(
+        default=None,
+        description="可选；运行时已绑定当前内容任务，模型无需也不应自行填写",
+    )
 
 
 def _wrap_visual_text(value: str, *, max_chars_per_line: int, max_lines: int) -> str:
@@ -544,7 +547,7 @@ async def validate_content_facts(
     args_schema=CreateContentCoverJobInput,
 )
 async def create_content_cover_job(
-    task_id: str,
+    task_id: str | None = None,
     runtime: ToolRuntime = None,
 ) -> dict[str, Any]:
     """根据已锁定 VisualPlan 幂等创建 CoverJob；本工具不等待任务完成。"""
@@ -557,8 +560,11 @@ async def create_content_cover_job(
     collector = getattr(context, "_content_node_result_collector", None)
     domain = getattr(collector, "domain_context", None)
     node_input = getattr(context, "_content_node_input", None)
-    if node_input is None or node_input.task_id != task_id:
-        raise ValueError("封面任务与当前内容节点不一致")
+    # 模型可见输入已去掉 task_id；一律信任节点运行时绑定，避免幻觉 ID 导致误报不一致。
+    bound_task_id = getattr(node_input, "task_id", None) or getattr(context, "_content_task_id", None)
+    if not bound_task_id:
+        raise ValueError("封面提交节点缺少绑定的内容任务")
+    task_id = str(bound_task_id)
     governance = getattr(context, "_content_node_governance", None) or {}
     locked_values = governance.get("locked_values") or {}
     visual_plan_payload = locked_values.get("visual_plan")

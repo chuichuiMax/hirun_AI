@@ -1,7 +1,7 @@
 ---
 name: content-cover-generator
 description: 根据锁定的视觉方案提交唯一封面生成任务，不在 Agent 中等待图片完成。
-version: 1.2.0
+version: 1.3.0
 ---
 
 # 封面任务提交
@@ -10,7 +10,7 @@ version: 1.2.0
 - 视觉方案已由工作流锁定，禁止自行重建或改写视觉方案字段。
 - 使用 HyCanvas 模板时只能填充模板声明的非标签文字字段；不得新增、删除、移动、缩放或重排任何模板节点，不得修改字体、字号、字重、颜色、对齐、行高、文本框、蒙版、装饰或图层顺序。
 - 模板样式和结构是不可变输入。文案放不下时必须由上游视觉规划节点缩短文字，禁止通过缩放字号、开启自动适配或改变布局来容纳文案。
-- 第一步必须且只能调用一次 `create_content_cover_job`，参数只传当前输入中的 `task_id`。
+- 第一步必须且只能调用一次 `create_content_cover_job`（无需传参；任务 ID 由运行时绑定）。
 - 工具会从可信运行时读取锁定的 plan hash、尺寸、文案、模式和 source asset IDs，并保证幂等与来源可追溯。
 - 工具成功后，必须立即调用一次 `submit_content_node_result`，将工具返回的 `cover_job_id`、`plan_hash` 和 `source_asset_ids` 原样提交。
 - 本节点总共恰好调用两个工具：一次创建、一次提交；不得重试已成功的创建调用。

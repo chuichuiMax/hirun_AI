@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPatch, apiPost } from './base'
+import { apiDelete, apiGet, apiPatch, apiPost, apiPostFormWithProgress } from './base'
 
 const encodeQuery = (params = {}) => {
   const query = new URLSearchParams()
@@ -22,11 +22,12 @@ export const materialLibraryApi = {
   listGalleries: (industrySlug = '') =>
     apiGet(`/api/material-library/galleries${encodeQuery({ industry_slug: industrySlug })}`),
   createShare: (itemIds) => apiPost('/api/material-library/shares', { item_ids: itemIds }),
-  importImages: (files, category) => {
+  importImages: (files, category, designStyle, onProgress) => {
     const form = new FormData()
     Array.from(files).forEach((file) => form.append('files', file))
     form.append('category', category)
-    return apiPost('/api/material-library/images/import', form)
+    if (designStyle) form.append('design_style', designStyle)
+    return apiPostFormWithProgress('/api/material-library/images/import', form, { onProgress })
   },
   updateItem: (itemId, payload) => apiPatch(`/api/material-library/items/${itemId}`, payload),
   deleteItem: (itemId) => apiDelete(`/api/material-library/items/${itemId}`),

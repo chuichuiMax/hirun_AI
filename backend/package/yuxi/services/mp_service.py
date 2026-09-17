@@ -1062,11 +1062,14 @@ async def upload_cover(
     file: UploadFile,
     *,
     category: str | None = None,
+    design_style: str | None = None,
 ) -> dict[str, Any]:
     """Upload via the same material-library import path used by PC 素材库."""
     resolved_category = (category or "uncategorized").strip() or "uncategorized"
     try:
-        imported = await import_material_images(db, ctx.user, [file], category=resolved_category)
+        imported = await import_material_images(
+            db, ctx.user, [file], category=resolved_category, design_style=design_style
+        )
     except HTTPException:
         raise
     item = (imported.get("items") or [None])[0]

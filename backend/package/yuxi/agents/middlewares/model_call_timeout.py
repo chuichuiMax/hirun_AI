@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from openai import APIConnectionError, InternalServerError, RateLimitError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, InternalServerError, RateLimitError
 
 from yuxi.agents.middlewares.token_usage import ContentTokenBudgetExceeded
 from yuxi.services.run_queue_service import append_content_runtime_event
@@ -23,7 +23,21 @@ class ModelExecutionBudgetExceeded(ContentTokenBudgetExceeded):
 
 
 def retryable_content_model_error(exc: Exception) -> bool:
-    return isinstance(exc, (TimeoutError, ConnectionError, APIConnectionError, InternalServerError, RateLimitError))
+    """供应商瞬时故障可重试：超时、连接、限流、5xx（含硅基流动 50507）。"""
+    if isinstance(exc, (TimeoutError, ConnectionError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)):
+        return True
+    if isinstance(exc, APIStatusError):
+        status = int(getattr(exc, "status_code", 0) or 0)
+        if status >= 500:
+            return True
+        body = getattr(exc, "body", None)
+        code = None
+        if isinstance(body, dict):
+            code = body.get("code")
+        if code in {50507, "50507"}:
+            return True
+    text = str(exc)
+    return "50507" in text or "Request failed: Unknown error" in text
 
 
 class ContentModelProgress(AsyncCallbackHandler):
@@ -97,6 +111,11 @@ class ModelCallTimeoutMiddleware(AgentMiddleware):
                 context._content_node_token_budget // context._content_max_model_calls,
                 context._content_node_token_budget - int(getattr(context, "_content_node_tokens_used", 0)),
             )
+            # 正文成稿通常 <650 字；过高 max_tokens 会放大 thinking/空转，硬顶避免失控。
+            if node_id == "generate_content":
+                output_limit = min(output_limit, 1200)
+            elif node_id == "plan_visuals":
+                output_limit = min(output_limit, 900)
             if output_limit <= 0:
                 raise ModelExecutionBudgetExceeded(f"{node_label}输出预算已耗尽")
             request = request.override(model_settings={**request.model_settings, "max_tokens": output_limit})
@@ -163,6 +182,7 @@ class ModelCallTimeoutMiddleware(AgentMiddleware):
         except TimeoutError as exc:
             status, error_type = "timeout", type(exc).__name__
             if controlled:
+                context._content_model_calls = max(0, call_number - 1)
                 raise
             raise TimeoutError(f"模型单次调用超时（{timeout:g}s）") from exc
         except BaseException as exc:
@@ -170,6 +190,8 @@ class ModelCallTimeoutMiddleware(AgentMiddleware):
                 ("cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"),
                 type(exc).__name__,
             )
+            if controlled and retryable_content_model_error(exc):
+                context._content_model_calls = max(0, call_number - 1)
             raise
         finally:
             if invocation is not None and not invocation.done():
