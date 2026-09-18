@@ -255,6 +255,7 @@ class MaterialLibraryRepository:
         *,
         material_type: str,
         category: str | None,
+        category_ids: list[str] | None = None,
         status: str | None,
         query_text: str | None,
         page: int,
@@ -270,7 +271,9 @@ class MaterialLibraryRepository:
         ]
         if scope:
             filters.append(ContentMaterialCategory.visibility == scope)
-        if category:
+        if category_ids:
+            filters.append(ContentMaterialLibraryItem.category.in_(category_ids))
+        elif category:
             filters.append(ContentMaterialLibraryItem.category == category)
         if status:
             filters.append(ContentMaterialLibraryItem.status == status)
@@ -340,7 +343,7 @@ class MaterialLibraryRepository:
                     select(ContentMaterialLibraryItem)
                     .join(ContentCoverAsset, ContentCoverAsset.id == ContentMaterialLibraryItem.asset_id)
                     .where(*filters, ContentMaterialLibraryItem.category == category)
-                    .order_by(ContentMaterialLibraryItem.updated_at.desc())
+                    .order_by(ContentMaterialLibraryItem.created_at.desc())
                     .limit(1)
                 )
             ).scalar_one_or_none()

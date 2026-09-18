@@ -25,6 +25,146 @@ for module in [KnowledgeBase, BusinessBase]:
             setattr(CombinedBase, table_name, table)
 
 
+def material_gallery_role_migration_statements() -> tuple[str, ...]:
+    """Return the ordered, transactional migration for fixed mini-program galleries."""
+    return (
+        (
+            "ALTER TABLE IF EXISTS content_material_categories "
+            "ADD COLUMN IF NOT EXISTS image_design_role VARCHAR(20)"
+        ),
+        """
+        DO $$
+        DECLARE
+            reference_candidates INTEGER;
+            rough_candidates INTEGER;
+            reference_roles INTEGER;
+            rough_roles INTEGER;
+        BEGIN
+            LOCK TABLE content_material_categories IN SHARE ROW EXCLUSIVE MODE;
+
+            IF EXISTS (
+                SELECT 1
+                FROM content_material_categories
+                WHERE deleted_at IS NULL
+                  AND image_design_role IS NOT NULL
+                  AND NOT (
+                      visibility = 'enterprise'
+                      AND material_type = 'image'
+                      AND parent_id IS NULL
+                  )
+            ) THEN
+                RAISE EXCEPTION 'image design role must belong to an active enterprise top-level image gallery';
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM content_material_categories
+                WHERE deleted_at IS NULL
+                  AND visibility = 'enterprise'
+                  AND material_type = 'image'
+                  AND parent_id IS NULL
+                  AND image_design_role = 'reference'
+            ) THEN
+                SELECT COUNT(*) INTO reference_candidates
+                FROM content_material_categories
+                WHERE deleted_at IS NULL
+                  AND visibility = 'enterprise'
+                  AND material_type = 'image'
+                  AND parent_id IS NULL
+                  AND name = '案例图库';
+
+                IF reference_candidates <> 1 THEN
+                    RAISE EXCEPTION 'expected exactly one enterprise case gallery, found %', reference_candidates;
+                END IF;
+
+                UPDATE content_material_categories
+                SET image_design_role = 'reference'
+                WHERE deleted_at IS NULL
+                  AND visibility = 'enterprise'
+                  AND material_type = 'image'
+                  AND parent_id IS NULL
+                  AND name = '案例图库';
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM content_material_categories
+                WHERE deleted_at IS NULL
+                  AND visibility = 'enterprise'
+                  AND material_type = 'image'
+                  AND parent_id IS NULL
+                  AND image_design_role = 'rough'
+            ) THEN
+                SELECT COUNT(*) INTO rough_candidates
+                FROM content_material_categories
+                WHERE deleted_at IS NULL
+                  AND visibility = 'enterprise'
+                  AND material_type = 'image'
+                  AND parent_id IS NULL
+                  AND name IN ('毛坯房图库', '毛坯图库');
+
+                IF rough_candidates <> 1 THEN
+                    RAISE EXCEPTION 'expected exactly one enterprise rough gallery, found %', rough_candidates;
+                END IF;
+
+                UPDATE content_material_categories
+                SET image_design_role = 'rough'
+                WHERE deleted_at IS NULL
+                  AND visibility = 'enterprise'
+                  AND material_type = 'image'
+                  AND parent_id IS NULL
+                  AND name IN ('毛坯房图库', '毛坯图库');
+            END IF;
+
+            SELECT COUNT(*) INTO reference_roles
+            FROM content_material_categories
+            WHERE deleted_at IS NULL
+              AND visibility = 'enterprise'
+              AND material_type = 'image'
+              AND parent_id IS NULL
+              AND image_design_role = 'reference';
+            IF reference_roles <> 1 THEN
+                RAISE EXCEPTION
+                    'expected exactly one active enterprise reference gallery role, found %', reference_roles;
+            END IF;
+
+            SELECT COUNT(*) INTO rough_roles
+            FROM content_material_categories
+            WHERE deleted_at IS NULL
+              AND visibility = 'enterprise'
+              AND material_type = 'image'
+              AND parent_id IS NULL
+              AND image_design_role = 'rough';
+            IF rough_roles <> 1 THEN
+                RAISE EXCEPTION
+                    'expected exactly one active enterprise rough gallery role, found %', rough_roles;
+            END IF;
+        END $$;
+        """,
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'content_material_categories'::regclass
+                  AND conname = 'ck_content_material_category_image_design_role'
+            ) THEN
+                ALTER TABLE content_material_categories
+                ADD CONSTRAINT ck_content_material_category_image_design_role
+                CHECK (image_design_role IS NULL OR image_design_role IN ('reference', 'rough'));
+            END IF;
+        END $$;
+        """,
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_content_material_category_image_design_role_active "
+            "ON content_material_categories(image_design_role) WHERE deleted_at IS NULL "
+            "AND visibility = 'enterprise' AND material_type = 'image' AND parent_id IS NULL "
+            "AND image_design_role IS NOT NULL"
+        ),
+    )
+
+
 class PostgresManager(metaclass=SingletonMeta):
     """PostgreSQL 数据库管理器 - 支持知识库和业务数据"""
 
@@ -426,6 +566,7 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS content_material_shares ADD COLUMN IF NOT EXISTS design_style VARCHAR(32)",
             "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS parent_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS design_style VARCHAR(32)",
+            *material_gallery_role_migration_statements(),
             "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS building_name VARCHAR(80)",
             "ALTER TABLE IF EXISTS content_material_categories ADD COLUMN IF NOT EXISTS area VARCHAR(32)",
             (

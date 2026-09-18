@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -17,6 +18,7 @@ from yuxi.services.material_library_service import (
     _make_share_card_cover,
     _make_share_display_webp,
     _normalize_image,
+    create_material_share,
     create_material_category,
     render_public_material_share_page,
     serialize_public_material_share,
@@ -166,6 +168,11 @@ def test_material_category_exposes_gallery_level():
     assert child.to_dict()["parent_id"] == parent.id
 
 
+def test_material_category_payload_does_not_expose_image_design_role():
+    assert "image_design_role" not in MaterialCategoryCreate.model_fields
+    assert "image_design_role" not in MaterialCategoryUpdate.model_fields
+
+
 def test_material_share_selection_requires_distinct_nonempty_image_ids():
     with pytest.raises(ValidationError):
         MaterialShareCreate(item_ids=[])
@@ -176,6 +183,50 @@ def test_material_share_selection_requires_distinct_nonempty_image_ids():
     assert len(MaterialShareCreate(item_ids=[f"mli_{index}" for index in range(1000)]).item_ids) == 1000
     with pytest.raises(ValidationError):
         MaterialShareCreate(item_ids=[f"mli_{index}" for index in range(1001)])
+
+
+@pytest.mark.parametrize(
+    ("missing_field", "error_code"),
+    [
+        ("design_style", "MATERIAL_DESIGN_STYLE_REQUIRED"),
+        ("building_name", "MATERIAL_BUILDING_NAME_REQUIRED"),
+        ("area", "MATERIAL_AREA_REQUIRED"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_material_share_rejects_legacy_decoration_gallery_without_project_details(
+    monkeypatch, missing_field, error_code
+):
+    class FakeRepo:
+        def __init__(self, _db, **_kwargs):
+            pass
+
+        async def list_image_items_with_assets_and_categories(self, _owner_uid, _item_ids):
+            gallery = ContentMaterialCategory(
+                owner_uid="owner-1",
+                material_type="image",
+                id="gallery-2",
+                parent_id="gallery-1",
+                industry_slug="decoration",
+                name="桂语云峰",
+                design_style="复古风潮",
+                building_name="桂语云峰",
+                area="120",
+            )
+            setattr(gallery, missing_field, None)
+            return [(SimpleNamespace(id="item-1"), SimpleNamespace(), gallery)]
+
+    monkeypatch.setattr(material_library_service, "MaterialLibraryRepository", FakeRepo)
+
+    with pytest.raises(HTTPException) as error:
+        await create_material_share(
+            object(),
+            SimpleNamespace(id="user-1", uid="owner-1", department_id=None),
+            MaterialShareCreate(item_ids=["item-1"]),
+        )
+
+    assert error.value.status_code == 422
+    assert error.value.detail["error"]["code"] == error_code
 
 
 @pytest.mark.parametrize("raw_area", ["120㎡", "120m²", "120 m²", "120m2"])
