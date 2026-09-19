@@ -558,3 +558,40 @@ func TestRasterChartBar(t *testing.T) {
 		t.Fatalf("chart bars not drawn: blue=%d", blue)
 	}
 }
+
+// 16×16 opaque red WebP (gallery originals are stored as WebP).
+const redWebPB64 = "UklGRkQAAABXRUJQVlA4IDgAAABQAgCdASoQABAAAAAAJaACdLoB+AH6AfwAB5AA/v9vVv/8sPx/Unn/yxD//xPTm8RU8r/+JkAAAA=="
+
+func isCream(r, g, b, a uint32) bool {
+	return r > 58000 && g > 56000 && b > 52000 && b < 62000 && a > 40000
+}
+
+// TestRasterWebPMaterialBackgroundShowsOverTemplateCream: a gallery WebP photo
+// must paint over the template cream page fill. Before WebP registration the
+// photo decoded to nothing and export showed only #f3eee6.
+func TestRasterWebPMaterialBackgroundShowsOverTemplateCream(t *testing.T) {
+	file := Design{"pages": []any{map[string]any{
+		"width": 32.0, "height": 32.0,
+		"background": map[string]any{"type": "solid", "color": map[string]any{"srgb": map[string]any{
+			"r": 0.9529411764705882, "g": 0.9333333333333333, "b": 0.9019607843137255, "a": 1.0,
+		}}},
+		"children": []any{map[string]any{
+			"type":      "image",
+			"transform": map[string]any{"x": 0.0, "y": 0.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.0},
+			"size":      map[string]any{"width": 32.0, "height": 32.0},
+			"fit":       "cover",
+			"src":       "data:image/webp;base64," + redWebPB64,
+			"data":      map[string]any{"background": true, "source": "contentswarm-material-library"},
+		}},
+	}}}
+	data, err := ToPNG(file, 0, 1)
+	if err != nil {
+		t.Fatalf("ToPNG: %v", err)
+	}
+	if red := scanImage(t, data, isRed); red < 500 {
+		t.Fatalf("webp gallery photo not drawn: red=%d", red)
+	}
+	if cream := scanImage(t, data, isCream); cream > 20 {
+		t.Fatalf("template cream still covering gallery photo: cream=%d", cream)
+	}
+}

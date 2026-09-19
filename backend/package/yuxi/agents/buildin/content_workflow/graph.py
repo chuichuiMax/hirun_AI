@@ -17,6 +17,7 @@ from yuxi.content.control.workflow.agent_node import AgentNodeHandler
 from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
 from yuxi.content.control.workflow.external_wait import (
     ExternalWaitNodeHandler,
+    skip_content_approval_interrupt,
     skip_content_correction_interrupt,
     skip_cover_pipeline,
     skip_cover_selection_interrupt,
@@ -721,8 +722,9 @@ class ContentWorkflowAgent(BaseAgent):
                     message=f"最终审批前仍有阻断报告: {', '.join(invalid_reports)}",
                     kind="conflict",
                 )
-            if skip_formula_lexicon_pipeline(state):
-                answer = {"decision": "approved", "note": "好评笔记自动审批", "reviewer_uid": "system"}
+            if skip_content_approval_interrupt(state):
+                note = "好评笔记自动审批" if skip_formula_lexicon_pipeline(state) else "PC自动审批"
+                answer = {"decision": "approved", "note": note, "reviewer_uid": "system"}
             else:
                 answer = require_resume(
                     {

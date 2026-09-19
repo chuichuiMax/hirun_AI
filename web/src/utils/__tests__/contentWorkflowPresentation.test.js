@@ -14,7 +14,10 @@ import {
   buildContentRuntimeTimeline,
   buildContentWorkflowGroups,
   findContentStrategyNarrativeAnchor,
-  formatElapsedDuration
+  formatElapsedDuration,
+  shouldOfferFreshContentGeneration,
+  shouldRecoverContentRun,
+  contentHistoryPath
 } from '../contentWorkflowPresentation.js'
 
 assert.deepEqual(buildContentNarrativeCodeLabels(null), {})
@@ -702,3 +705,40 @@ const jointGroups = buildContentWorkflowGroups([
 const jointStrategy = jointGroups.find(group => group.id === 'strategy')
 assert.ok(jointStrategy)
 assert.ok(!jointStrategy.nodes.some(node => ['collect_viral_candidates', 'select_viral_reference'].includes(node.id)))
+
+assert.equal(
+  shouldRecoverContentRun({ latest_run_id: 'run-1', status: 'waiting_human' }),
+  true
+)
+assert.equal(shouldRecoverContentRun({ latest_run_id: 'run-1', status: 'brief_ready' }), false)
+assert.equal(shouldRecoverContentRun({ status: 'waiting_human' }), false)
+assert.equal(shouldOfferFreshContentGeneration({ task: { status: 'brief_ready' } }), true)
+assert.equal(
+  shouldOfferFreshContentGeneration({
+    task: { latest_run_id: 'run-1', status: 'waiting_human' }
+  }),
+  false
+)
+assert.equal(
+  shouldOfferFreshContentGeneration({
+    task: { status: 'brief_ready' },
+    currentRun: { run_id: 'run-1' }
+  }),
+  false
+)
+assert.equal(
+  contentHistoryPath({ id: 'ct_reviewed', status: 'reviewed' }),
+  '/content/results/ct_reviewed'
+)
+assert.equal(
+  contentHistoryPath({ id: 'ct_done', status: 'completed' }),
+  '/content/results/ct_done'
+)
+assert.equal(
+  contentHistoryPath({ id: 'ct_wait', status: 'waiting_human' }),
+  '/content/tasks/ct_wait'
+)
+assert.equal(
+  contentHistoryPath({ id: 'ct_review_stage', status: 'queued', current_stage: 'review' }),
+  '/content/results/ct_review_stage'
+)

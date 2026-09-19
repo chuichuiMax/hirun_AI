@@ -170,6 +170,9 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
       }
     } else if (eventType === 'interrupt') {
       interrupt.value = payload
+    } else if (eventType === 'end') {
+      currentRun.value = { ...(currentRun.value || {}), status: payload.status }
+      if (payload.interrupt) interrupt.value = payload.interrupt
     } else if (eventType === 'error') {
       lastError.value = new Error(payload.message || '内容运行失败')
     }
@@ -264,9 +267,6 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
       if (!response.ok) throw new Error(`运行事件连接失败：${response.status}`)
       await parseSse(response, (eventType, data, eventId) => {
         handleRunEvent(eventType, data, eventId)
-        if (eventType === 'end') {
-          currentRun.value = { ...(currentRun.value || {}), status: data?.payload?.status }
-        }
       })
       const externalWait =
         interrupt.value?.interrupt_type === 'external_wait' ? { ...interrupt.value } : null
@@ -319,7 +319,8 @@ export const useContentStudioStore = defineStore('contentStudio', () => {
       request_id: response.run.request_id
     }
     lastRunSeq = '0-0'
-    await subscribeRun(runId)
+    void subscribeRun(runId)
+    return response
   }
 
   async function retryNode(nodeId, modelSpec = null) {

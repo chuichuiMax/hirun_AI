@@ -47,7 +47,7 @@ def test_body_generator_preserves_channel_expression_in_original_lists():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "content-body-generator")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "2.10.0"
+    assert spec.version == "2.10.2"
     assert "E01" in skill_text
     assert "style_excerpts" in skill_text
     assert "submit_content_node_result" in skill_text
@@ -59,3 +59,5 @@ def test_body_generator_preserves_channel_expression_in_original_lists():
     assert "不要写装修风格" in skill_text or "不写装修风格" in skill_text
     assert "定制化家装" in skill_text
     assert "口径" in skill_text
+    assert "content-human-expression" in skill_text
+    assert "真实换行分段落" in skill_text

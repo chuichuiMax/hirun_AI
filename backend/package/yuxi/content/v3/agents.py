@@ -163,11 +163,12 @@ CONTENT_AGENT_SPECS = (
         skills=(
             "content-title-generator",
             "content-body-generator",
+            "content-human-expression",
             "viral-structure-rewriter",
             "viral-layout-formatter",
         ),
         skill_tools=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
-        config_version=9,
+        config_version=10,
     ),
     ContentAgentSpec(
         slug="content-review-agent",
@@ -332,13 +333,28 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
                     },
                 ),
                 8: (
-                    (),
-                    set(spec.skills),
+                    ("content-human-expression",),
+                    {
+                        "content-title-generator",
+                        "content-body-generator",
+                        "viral-structure-rewriter",
+                        "viral-layout-formatter",
+                    },
                     {
                         "reasoning_effort": spec.reasoning_effort,
                         "model_call_timeout_seconds": spec.model_call_timeout_seconds,
                         "model_retry_times": spec.model_retry_times,
                     },
+                ),
+                9: (
+                    ("content-human-expression",),
+                    {
+                        "content-title-generator",
+                        "content-body-generator",
+                        "viral-structure-rewriter",
+                        "viral-layout-formatter",
+                    },
+                    {},
                 ),
             },
         }

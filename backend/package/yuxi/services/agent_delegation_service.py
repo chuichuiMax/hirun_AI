@@ -59,6 +59,16 @@ CONTENT_NODE_EXECUTION_LIMITS = {
     "visual_review": (300, 120, "low", 2),
 }
 
+# 原创 generate_content 仍注入 content-human-expression，分段/口语/表情同轮落实。
+ORIGINAL_GENERATE_CONTENT_DROP_SKILLS = frozenset(
+    {
+        "viral-structure-rewriter",
+        "humanizer-zh",
+        "viral-layout-formatter",
+        "content-outline-builder",
+    }
+)
+
 
 def _node_execution_limits(request: AgentDelegationRequest) -> tuple[int, int, str, int]:
     return CONTENT_NODE_EXECUTION_LIMITS[request.node_run.node_id]
@@ -256,15 +266,12 @@ class AgentDelegationService:
                 request.node_run.node_id == "generate_content"
                 and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
             ):
-                # 原创不需仿写结构/排版/独立大纲/长篇人味 Skill；表达要点并入 content-body-generator。
-                drop = {
-                    "viral-structure-rewriter",
-                    "humanizer-zh",
-                    "viral-layout-formatter",
-                    "content-outline-builder",
-                    "content-human-expression",
-                }
-                context._required_skill_closure = [slug for slug in context._required_skill_closure if slug not in drop]
+                # 原创不需仿写结构、独立大纲和 humanizer-zh；分段、口语与表情由 content-human-expression 同轮落实。
+                context._required_skill_closure = [
+                    slug
+                    for slug in context._required_skill_closure
+                    if slug not in ORIGINAL_GENERATE_CONTENT_DROP_SKILLS
+                ]
             if (
                 request.node_run.node_id == "plan_visuals"
             ):

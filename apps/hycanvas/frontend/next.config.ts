@@ -20,7 +20,12 @@ const nextConfig: NextConfig = {
   // ContentSwarm embeds the dev frontend from :5173. Allow its localhost
   // origins to keep the HMR connection alive instead of falling back to full
   // iframe reloads, which would discard open modal state and unsaved form data.
-  allowedDevOrigins: ["127.0.0.1", "localhost"],
+  allowedDevOrigins: [
+    "127.0.0.1",
+    "localhost",
+    "ai.hi-run.net",
+    "hycanvas.hi-run.net",
+  ],
   // yjs must load as ONE module instance (two copies break instanceof checks
   // inside the CRDT bridge: yjs issue #438). @hc/realtime is built as ESM so
   // every consumer resolves the same yjs.mjs; no resolve alias needed (a

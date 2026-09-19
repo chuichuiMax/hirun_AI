@@ -8,6 +8,8 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"math"
+
+	_ "golang.org/x/image/webp"
 )
 
 type PhotoCell struct {

@@ -5,6 +5,7 @@ import { message, Modal } from 'ant-design-vue'
 import { Copy, FilePlus2, History, RotateCcw, Trash2 } from 'lucide-vue-next'
 import { contentApi } from '@/apis/content_api'
 import { useContentStudioStore } from '@/stores/contentStudio'
+import { contentHistoryPath } from '@/utils/contentWorkflowPresentation'
 
 const router = useRouter()
 const store = useContentStudioStore()
@@ -104,6 +105,10 @@ const handleSelectionChange = (keys) => {
   selectedTaskIds.value = keys
 }
 
+const openTask = (task) => {
+  router.push(contentHistoryPath(task))
+}
+
 onMounted(load)
 </script>
 
@@ -135,16 +140,19 @@ onMounted(load)
           preserveSelectedRowKeys: true,
           onChange: handleSelectionChange
         }"
+        :custom-row="(record) => ({
+          onClick: () => openTask(record)
+        })"
         @change="(pagination) => handlePageChange(pagination.current, pagination.pageSize)"
       >
         <a-table-column title="任务" key="name">
-          <template #default="{ record }"><button type="button" class="task-link" @click="router.push(`/content/tasks/${record.id}`)"><strong>{{ record.name }}</strong><small>{{ record.id }}</small></button></template>
+          <template #default="{ record }"><button type="button" class="task-link" @click.stop="openTask(record)"><strong>{{ record.name }}</strong><small>{{ record.id }}</small></button></template>
         </a-table-column>
         <a-table-column title="模式" data-index="mode" key="mode"><template #default="{ text }">{{ text === 'quick' ? '简化版' : '专业版' }}</template></a-table-column>
         <a-table-column title="目标" data-index="content_goal" key="goal" />
         <a-table-column title="状态" key="status"><template #default="{ record }"><span class="task-status" :class="record.status">{{ statusLabels[record.status] || record.status }}</span></template></a-table-column>
         <a-table-column title="更新时间" data-index="updated_at" key="updated" />
-        <a-table-column title="操作" key="actions" width="150"><template #default="{ record }"><div class="row-actions"><a-button type="text" @click="duplicate(record)"><Copy :size="15" /></a-button><a-button type="text" danger @click="remove(record)"><Trash2 :size="15" /></a-button></div></template></a-table-column>
+        <a-table-column title="操作" key="actions" width="150"><template #default="{ record }"><div class="row-actions" @click.stop><a-button type="text" @click="duplicate(record)"><Copy :size="15" /></a-button><a-button type="text" danger @click="remove(record)"><Trash2 :size="15" /></a-button></div></template></a-table-column>
       </a-table>
     </section>
   </div>
@@ -159,6 +167,7 @@ header p { margin: 0; color: var(--color-text-secondary); }
 header :deep(.ant-btn), .history-toolbar :deep(.ant-btn) { display: inline-flex; align-items: center; gap: 6px; }
 .history-card { max-width: 1180px; margin: 0 auto; padding: 18px; border: 1px solid var(--gray-150); border-radius: 8px; background: var(--gray-0); }
 .history-toolbar { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 14px; }
+.history-card :deep(.ant-table-tbody > tr) { cursor: pointer; }
 .task-link { display: flex; flex-direction: column; gap: 3px; border: 0; padding: 0; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; }
 .task-link:hover strong { color: var(--main-color); }
 .task-link small { color: var(--color-text-tertiary); }

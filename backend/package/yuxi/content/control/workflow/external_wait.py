@@ -56,6 +56,13 @@ def skip_content_correction_interrupt(state: dict[str, Any]) -> bool:
     return skip_formula_lexicon_pipeline(state)
 
 
+def skip_content_approval_interrupt(state: dict[str, Any]) -> bool:
+    """PC 终审自动通过；小程序带内容编码的任务仍由 getRun 自动续跑。"""
+    if skip_formula_lexicon_pipeline(state):
+        return True
+    return not bool(str(_brief_form_values(state).get("mp_content_code") or "").strip())
+
+
 def skip_cover_selection_interrupt(state: dict[str, Any]) -> bool:
     """小程序没有选封面 UI，有内容编码的任务在封面生成成功后自动选定。"""
     return bool(str(_brief_form_values(state).get("mp_content_code") or "").strip())
@@ -183,6 +190,7 @@ __all__ = [
     "ExternalWaitNodeHandler",
     "cover_skip_reason",
     "skip_content_correction_interrupt",
+    "skip_content_approval_interrupt",
     "skip_cover_selection_interrupt",
     "skip_cover_pipeline",
     "skip_formula_lexicon_pipeline",

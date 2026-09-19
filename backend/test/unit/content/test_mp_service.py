@@ -142,7 +142,10 @@ def test_build_mp_brief_payload_maps_decoration_fields_to_v3_variables():
     assert values["mp_content_type_id"] == "ct-process"
     assert values.get("voice") != "业主第一人称"
     assert "好评知识库" not in str(values.get("writing_instruction") or "")
-    assert values["area"] == "50-70㎡"
+    locked = int(str(values["area"]).removesuffix("㎡"))
+    assert 50 <= locked <= 70
+    assert values["house_area"] == values["area"]
+    assert values["外框面积"] == values["area"]
     assert values["mp_content_code"] == "NR20260825001"
     assert values["audience"] == ["长沙市 岳麓区"]
     assert "基础 4-5万" in values["craft_and_materials"]

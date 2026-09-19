@@ -154,8 +154,8 @@ async def test_generate_content_caps_max_tokens_at_1200():
     assert captured == [1200]
 
 
-def test_original_generate_content_drops_heavy_layout_skills():
-    from yuxi.services.agent_delegation_service import AgentDelegationService
+def test_original_generate_content_keeps_human_expression_skill():
+    from yuxi.services.agent_delegation_service import ORIGINAL_GENERATE_CONTENT_DROP_SKILLS
 
     request = SimpleNamespace(
         node_run=SimpleNamespace(node_id="generate_content"),
@@ -177,26 +177,19 @@ def test_original_generate_content_drops_heavy_layout_skills():
         _prompt_skills=["catalog"],
         _runtime_skill_snapshots=[{"slug": slug} for slug in request.required_skills],
     )
-    # Simulate the generate_content original narrowing branch used after skill prep.
     if (
         request.node_run.node_id == "generate_content"
         and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
     ):
-        drop = {
-            "viral-structure-rewriter",
-            "humanizer-zh",
-            "viral-layout-formatter",
-            "content-outline-builder",
-            "content-human-expression",
-        }
-        context._required_skill_closure = [slug for slug in context._required_skill_closure if slug not in drop]
+        context._required_skill_closure = [
+            slug for slug in context._required_skill_closure if slug not in ORIGINAL_GENERATE_CONTENT_DROP_SKILLS
+        ]
     assert "viral-layout-formatter" not in context._required_skill_closure
     assert "content-outline-builder" not in context._required_skill_closure
     assert "humanizer-zh" not in context._required_skill_closure
-    assert "content-human-expression" not in context._required_skill_closure
+    assert "content-human-expression" in context._required_skill_closure
     assert "content-body-generator" in context._required_skill_closure
     assert "content-title-generator" in context._required_skill_closure
-    _ = AgentDelegationService
 
 
 @pytest.mark.asyncio

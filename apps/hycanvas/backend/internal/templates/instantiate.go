@@ -1,12 +1,19 @@
 package templates
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	stdimage "image"
+	_ "image/jpeg"
+	"image/png"
 	"strings"
 	"unicode/utf8"
+
+	_ "golang.org/x/image/webp"
 )
 
 type InstantiateImage struct {
@@ -136,6 +143,7 @@ func applyBackgroundImage(file map[string]any, image InstantiateImage) error {
 // design asset table. The browser editor resolves image nodes through assetId,
 // while render endpoints inline the same data URL when preparing an export.
 func registerInlineImageAsset(file map[string]any, image InstantiateImage) string {
+	image = rasterizableInlineImage(image)
 	url := fmt.Sprintf("data:%s;base64,%s", image.ContentType, image.DataBase64)
 	assets := asArr(file["assets"])
 	for _, raw := range assets {
@@ -150,6 +158,34 @@ func registerInlineImageAsset(file map[string]any, image InstantiateImage) strin
 		"id": assetID, "kind": "image", "url": url, "mime": image.ContentType, "checksum": fmt.Sprintf("%x", sum[:]),
 	})
 	return assetID
+}
+
+// rasterizableInlineImage re-encodes gallery WebP as PNG so PNG/JPEG export
+// (and DecodeConfig in photo composition) always sees a format the stdlib
+// already understands. Unreadable WebP is left unchanged; the rasterizer also
+// registers a WebP decoder for designs already saved with data:image/webp.
+func rasterizableInlineImage(in InstantiateImage) InstantiateImage {
+	if !strings.EqualFold(in.ContentType, "image/webp") {
+		return in
+	}
+	raw, err := base64.StdEncoding.DecodeString(in.DataBase64)
+	if err != nil || len(raw) == 0 {
+		return in
+	}
+	decoded, _, err := stdimage.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return in
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, decoded); err != nil {
+		return in
+	}
+	in.ContentType = "image/png"
+	in.DataBase64 = base64.StdEncoding.EncodeToString(buf.Bytes())
+	if strings.HasSuffix(strings.ToLower(in.Filename), ".webp") {
+		in.Filename = in.Filename[:len(in.Filename)-5] + ".png"
+	}
+	return in
 }
 
 func fillImageFields(file map[string]any, declarations []any, values map[string]InstantiateImage) error {
@@ -186,9 +222,6 @@ func fillImageFields(file map[string]any, declarations []any, values map[string]
 				delete(remaining, asStr(node["id"]))
 			})
 		}
-	}
-	if len(remaining) > 0 {
-		return ErrBadRequest
 	}
 	return nil
 }
@@ -278,9 +311,9 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 			})
 		}
 	}
-	if len(remaining) > 0 {
-		return ErrBadRequest
-	}
+	// Save-as-template can leave brandEditableFields pointing at nodes the
+	// author later deleted. Skip those slots so a gallery background still
+	// instantiates instead of 400-ing the whole cover job.
 	return nil
 }
 

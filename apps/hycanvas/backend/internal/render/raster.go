@@ -48,6 +48,7 @@ import (
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 	"golang.org/x/image/vector"
+	_ "golang.org/x/image/webp"
 )
 
 // mat is a 2D affine transform [a b c d e f]: (x,y) -> (a*x+c*y+e, b*x+d*y+f).
@@ -1411,11 +1412,14 @@ func toRaster(file Design, pageIndex int, scale float64, transparent bool) (*ima
 
 	// Background: opaque white default, then the page fill over it (solid or
 	// gradient). Pattern/image backgrounds are not rasterized (left white).
+	// A ContentSwarm gallery photo already occupies the bottom layer; painting
+	// the template cream/page color would hide it whenever that photo fails to
+	// decode (WebP) or sits under a restored page.background after editor save.
 	// Skipped entirely in transparent mode (element overlays keep their alpha).
 	if !transparent {
 		fullPage := [][2]float64{{0, 0}, {float64(pw), 0}, {float64(pw), float64(ph)}, {0, float64(ph)}}
 		rc.fillPath(fullPage, color.RGBA{R: 255, G: 255, B: 255, A: 255})
-		if bg := asObj(page["background"]); bg != nil {
+		if bg := asObj(page["background"]); bg != nil && !pageHasMaterialPhotoBackground(page) {
 			if k := asStr(bg["type"]); k != "pattern" && k != "image" {
 				rc.fillPolyPaint(fullPage, bg, scale)
 			}
@@ -1426,6 +1430,20 @@ func toRaster(file Design, pageIndex int, scale float64, transparent bool) (*ima
 		rc.rasterNode(base, asObj(n))
 	}
 	return dst, nil
+}
+
+func pageHasMaterialPhotoBackground(page map[string]any) bool {
+	for _, n := range asArr(page["children"]) {
+		node := asObj(n)
+		if asStr(node["type"]) != "image" {
+			continue
+		}
+		data := asObj(node["data"])
+		if asBool(data["background"]) || asStr(data["source"]) == "contentswarm-material-library" {
+			return true
+		}
+	}
+	return false
 }
 
 // ToElementPNG rasterizes a page's nodes onto a TRANSPARENT background and

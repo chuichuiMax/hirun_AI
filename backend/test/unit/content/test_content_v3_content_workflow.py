@@ -1352,7 +1352,7 @@ async def test_final_approval_is_a_backend_hard_gate_for_both_reports():
 
 
 @pytest.mark.asyncio
-async def test_final_approval_records_human_resume_for_decoration(monkeypatch):
+async def test_final_approval_auto_approves_pc_decoration_without_interrupt(monkeypatch):
     agent = ContentWorkflowAgent()
     state = {
         "task_id": "task-1",
@@ -1370,12 +1370,47 @@ async def test_final_approval_records_human_resume_for_decoration(monkeypatch):
     monkeypatch.setattr(
         content_workflow_graph_module,
         "interrupt",
+        lambda _payload: pytest.fail("PC 装修家居不应触发最终人工审批"),
+    )
+
+    result = await agent._v3_human_review(
+        {"id": "human_content_approval", "interrupt_type": "content_approval"},
+        state,
+    )
+
+    assert result["approval_result"] == {
+        "status": "approved",
+        "note": "PC自动审批",
+        "reviewer_uid": "system",
+    }
+    assert result["artifact_version"]["status"] == "approved_content"
+
+
+@pytest.mark.asyncio
+async def test_final_approval_still_interrupts_for_mp_decoration(monkeypatch):
+    agent = ContentWorkflowAgent()
+    state = {
+        "task_id": "task-1",
+        "run_id": "run-1",
+        "uid": "user-1",
+        "state_version": 1,
+        "selected_title": {"text": "标题"},
+        "content_draft": {"body": "正文"},
+        "evidence_bundle": {"bundle_hash": "bundle-1"},
+        "validation_report": {"status": "passed", "checks": []},
+        "review_report": {"status": "passed", "checks": []},
+        "content_brief": {"form_values": {"mp_service_entry": "装修家居", "mp_content_code": "NR20260918001"}},
+    }
+
+    monkeypatch.setattr(
+        content_workflow_graph_module,
+        "interrupt",
         lambda _payload: {
             "run_id": "run-1",
             "node_id": "human_content_approval",
             "expected_state_version": 1,
             "decision": "approved",
-            "note": "人工确认可发布",
+            "note": "小程序自动审批",
         },
     )
 
@@ -1386,7 +1421,7 @@ async def test_final_approval_records_human_resume_for_decoration(monkeypatch):
 
     assert result["approval_result"] == {
         "status": "approved",
-        "note": "人工确认可发布",
+        "note": "小程序自动审批",
         "reviewer_uid": "user-1",
     }
 

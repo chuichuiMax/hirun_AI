@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import random
+import re
 from typing import Any
 
 BRAND_NAME = "鸿扬家居"
@@ -21,7 +23,7 @@ DECORATION_WRITING_INSTRUCTION = (
     "标题要有吸引点：情绪、悬念、反差或利益点至少占一项，禁止楼盘+面积+风格的说明书式平铺；"
     "正文不要展开某套房的案例故事（旧况、改造过程、完工效果叙事），每套房子不同，细节写错容易失真；"
     "正文优先用信息卡点写清：小区名称、房屋面积、房屋布局（仅简报有填时）、风格、项目施工鸿扬家装；"
-    "卡点文字必须与简报/证据原文一致（面积保留区间原文，禁止改成130m²等中间值）；"
+    "卡点文字必须与简报/证据原文一致（面积只用锁定的具体㎡，如142㎡，禁止写130-150㎡这类区间）；"
     "写出的每个卡点与数字都要在 paragraph_evidence 挂载对应 evidence_bundle.items[].id"
     "（短码如 E01），禁止手写 ev_ 长串或编造 ID；"
     "若有可用于正文的业务知识证据，至少再挂一条；"
@@ -35,14 +37,14 @@ DECORATION_WRITING_INSTRUCTION = (
 QUOTATION_LIST_TYPE_NAMES = frozenset({"装修报价清单", "报价清单"})
 QUOTATION_LIST_WRITING_INSTRUCTION = (
     "内容类型为装修报价清单：标题必须让人一眼看懂在说什么，句子通顺、语义完整，禁止词库堆砌或看不懂的标题；"
-    "正例：130-150m2旧房翻新，钱要花在哪？；反例：旧房翻新业主130-150㎡预算不踩坑。"
+    "正例：142㎡旧房翻新，钱要花在哪？；反例：旧房翻新业主130-150㎡预算不踩坑。"
     "旧房改造对外可写旧房翻新；主题落在钱花在哪、费用怎么拆、避隐形增项，不要吹嘘最低价；"
     "正文把基础/木制品/主材等费用仅作参考信息卡点展示，明确费用数字不是鸿扬核心卖点，禁止主推「更便宜、低价、性价比碾压」；"
     "正文重点写鸿扬家居/鸿扬家装品牌优势：定制化家装、透明施工、自有/规范工艺、售后与靠谱服务，用品牌与交付能力收尾引流；"
     "成品标题/正文/话题必须规避平台封禁词库问题词（见 evidence forbidden_replacement_map），"
     "引流只用同城咨询、留言、评论区等安全表达，不得出现「私信」「报价」等表内问题词；词库原文含问题词时须改写后再写入；"
     "费用称谓一律写「预算价」，禁止写「合同价」（证据原文是合同价时只改称谓、数字保持原样）；"
-    "成品不要出现「口径」；禁止把鸿扬写成整装或标准化整装；仍须写清小区、面积（原文）、风格、项目施工鸿扬家装等信息卡点，并正确挂载 Evidence ID；"
+    "成品不要出现「口径」；禁止把鸿扬写成整装或标准化整装；仍须写清小区、面积（锁定的具体㎡，禁止区间）、风格、项目施工鸿扬家装等信息卡点，并正确挂载 Evidence ID；"
     "不展开某套房案例故事，不编造数字与改造情节。"
 )
 CRAFT_SHOWCASE_TYPE_NAMES = frozenset({"工艺施工展示", "工艺展示"})
@@ -325,10 +327,60 @@ def configured_business_variable_fields(
     return prioritize_form_fields(fields)
 
 
+_AREA_RANGE = re.compile(r"^(\d+)\s*[-~～到至]\s*(\d+)\s*(?:㎡|m²|m2|平米|平)?$", re.I)
+_AREA_PLUS = re.compile(r"^(\d+)\s*(?:㎡|m²|m2|平米|平)?\s*(?:以上|起)$", re.I)
+_AREA_CONCRETE = re.compile(r"^(\d+)\s*(?:㎡|m²|m2|平米|平)?$", re.I)
+_OPEN_AREA_SPAN = 100
+
+
+def frame_area_band(text: str) -> tuple[int, int] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    ranged = _AREA_RANGE.fullmatch(raw)
+    if ranged:
+        low, high = int(ranged.group(1)), int(ranged.group(2))
+        return (high, low) if low > high else (low, high)
+    plus = _AREA_PLUS.fullmatch(raw)
+    if plus:
+        floor = int(plus.group(1))
+        return floor + 1, floor + _OPEN_AREA_SPAN
+    return None
+
+
+def parse_concrete_area_sqm(text: str) -> int | None:
+    raw = str(text or "").strip()
+    if not raw or frame_area_band(raw):
+        return None
+    matched = _AREA_CONCRETE.fullmatch(raw)
+    return int(matched.group(1)) if matched else None
+
+
+def lock_house_area_sqm(*candidates: str, rng: random.Random | None = None) -> str:
+    """把外框面积区间锁成其中一个具体㎡，标题和正文共用同一数字。"""
+    texts = [str(item or "").strip() for item in candidates if str(item or "").strip()]
+    band = next((item for text in texts if (item := frame_area_band(text))), None)
+    if band is None:
+        return texts[0] if texts else ""
+    low, high = band
+    for text in texts:
+        number = parse_concrete_area_sqm(text)
+        if number is not None and low <= number <= high:
+            return f"{number}㎡"
+    number = (rng or random).randint(low, high)
+    return f"{number}㎡"
+
+
 def map_service_entry_form_values(service_entry: str, form_values: dict[str, Any]) -> dict[str, Any]:
     values = {str(key): value for key, value in form_values.items()}
     community = str(values.get("楼盘信息") or "").strip()
-    frame_area = str(values.get("外框面积") or "").strip()
+    frame_area = lock_house_area_sqm(
+        str(values.get("house_area") or "").strip(),
+        str(values.get("area") or "").strip(),
+        str(values.get("外框面积") or "").strip(),
+    )
+    if frame_area:
+        values["外框面积"] = frame_area
     style = str(values.get("设计风格") or "").strip()
     region = str(values.get("所在区域") or "").strip()
     layout = next(

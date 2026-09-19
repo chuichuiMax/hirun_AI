@@ -17,6 +17,7 @@ from yuxi.content.control.workflow.external_wait import (
     MISSING_VISUAL_COVER_SKIP_REASON,
     RESEARCH_SKIP_REASON,
     ExternalWaitNodeHandler,
+    skip_content_approval_interrupt,
     skip_content_correction_interrupt,
     skip_cover_pipeline,
     skip_cover_selection_interrupt,
@@ -655,6 +656,18 @@ def test_content_correction_interrupt_only_skipped_for_review_notes():
     )
     assert not skip_content_correction_interrupt(
         {"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}}
+    )
+
+
+def test_content_approval_interrupt_skipped_for_pc():
+    assert skip_content_approval_interrupt(
+        {"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}}
+    )
+    assert skip_content_approval_interrupt(
+        {"content_brief": {"form_values": {"mp_service_entry": "好评笔记"}}}
+    )
+    assert not skip_content_approval_interrupt(
+        {"content_brief": {"form_values": {"mp_service_entry": "装修家居", "mp_content_code": "NR20260916001"}}}
     )
 
 

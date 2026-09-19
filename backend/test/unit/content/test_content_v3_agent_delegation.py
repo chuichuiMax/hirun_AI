@@ -1319,10 +1319,11 @@ def test_formal_content_agent_catalog_and_conflict_policy():
     assert generation_spec.skills == (
         "content-title-generator",
         "content-body-generator",
+        "content-human-expression",
         "viral-structure-rewriter",
         "viral-layout-formatter",
     )
-    assert generation_spec.config_version == 9
+    assert generation_spec.config_version == 10
     assert generation_spec.skill_tools == ("query_kb", "open_kb_document", "find_kb_document", "list_kbs")
     assert generation_spec.reasoning_effort == "low"
     spec = CONTENT_AGENT_SPECS[0]
@@ -1501,7 +1502,7 @@ def test_generation_agent_additive_migration_installs_viral_skills():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 9
+    assert existing.config_version == 10
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(spec.skills).issubset(existing.config_json["context"]["skills"])
@@ -1535,7 +1536,7 @@ def test_generation_agent_additive_migration_installs_viral_layout_formatter():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 9
+    assert existing.config_version == 10
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(spec.skills).issubset(existing.config_json["context"]["skills"])
@@ -1571,7 +1572,7 @@ def test_generation_agent_additive_migration_installs_humanizer_for_original_con
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 9
+    assert existing.config_version == 10
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(spec.skills).issubset(existing.config_json["context"]["skills"])
@@ -1599,7 +1600,7 @@ def test_generation_agent_additive_migration_enables_review_notes_knowledge_tool
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 9
+    assert existing.config_version == 10
     assert existing.config_json["context"]["skill_tool_allowlist"] == [
         "query_kb",
         "open_kb_document",

@@ -428,6 +428,26 @@ func TestFillTextFieldsRejectsUnknownLabel(t *testing.T) {
 	}
 }
 
+func TestFillTextFieldsSkipsStaleNodeIDs(t *testing.T) {
+	file := map[string]any{
+		"pages": []any{map[string]any{"children": []any{map[string]any{
+			"id": "alive-node", "type": "text",
+			"content": []any{map[string]any{"runs": []any{map[string]any{"text": "old"}}}},
+		}}}},
+	}
+	fields := []any{
+		map[string]any{"nodeId": "missing-node", "kind": "text", "label": "主标题", "key": "field_1", "constraints": map[string]any{"required": true, "maxChars": 22.0}},
+		map[string]any{"nodeId": "alive-node", "kind": "text", "label": "副标题", "key": "field_2"},
+	}
+	if err := fillTextFields(file, fields, map[string]string{"field_1": "标题文案", "field_2": "副文案"}); err != nil {
+		t.Fatalf("stale fillable node must not block instantiate: %v", err)
+	}
+	run := asObj(asArr(asObj(asArr(asObj(asArr(asObj(asArr(file["pages"])[0])["children"])[0])["content"])[0])["runs"])[0])
+	if asStr(run["text"]) != "副文案" {
+		t.Fatalf("alive node = %+v", run)
+	}
+}
+
 func TestFillTextFieldsEnforcesRequiredAndMaxChars(t *testing.T) {
 	file := map[string]any{"pages": []any{}}
 	fields := []any{map[string]any{
@@ -557,6 +577,32 @@ func TestApplyBackgroundImageKeepsTemplateLayersAboveSelectedMaterial(t *testing
 	}
 	if _, ok := background["src"]; ok {
 		t.Fatal("background pixels must live only in file.assets")
+	}
+}
+
+const redWebPB64 = "UklGRkQAAABXRUJQVlA4IDgAAABQAgCdASoQABAAAAAAJaACdLoB+AH6AfwAB5AA/v9vVv/8sPx/Unn/yxD//xPTm8RU8r/+JkAAAA=="
+
+func TestApplyBackgroundImageStoresWebPAsPNG(t *testing.T) {
+	file := map[string]any{
+		"assets": []any{},
+		"pages": []any{map[string]any{
+			"width": 32.0, "height": 32.0,
+			"background": map[string]any{"type": "solid"},
+			"children":   []any{},
+		}},
+	}
+	err := applyBackgroundImage(file, InstantiateImage{
+		Filename:    "room.webp",
+		ContentType: "image/webp",
+		DataBase64:  redWebPB64,
+	})
+	if err != nil {
+		t.Fatalf("applyBackgroundImage: %v", err)
+	}
+	asset := asObj(asArr(file["assets"])[0])
+	url := asStr(asset["url"])
+	if asStr(asset["mime"]) != "image/png" || !strings.HasPrefix(url, "data:image/png;base64,") {
+		t.Fatalf("webp gallery photo must be stored as png: %+v", asset)
 	}
 }
 

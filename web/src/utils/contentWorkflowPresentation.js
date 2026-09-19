@@ -67,6 +67,36 @@ export const formatContentRevisionReason = (reasonCode) =>
 export const formatContentRevisionTarget = (nodeId) =>
   CONTENT_WORKFLOW_NODE_LABELS[nodeId] || '内容生成节点'
 
+export const RECOVERABLE_CONTENT_RUN_STATUSES = [
+  'queued',
+  'running',
+  'waiting_human',
+  'waiting_external',
+  'failed',
+  'cancelled'
+]
+
+export const shouldRecoverContentRun = (task) =>
+  Boolean(task?.latest_run_id) && RECOVERABLE_CONTENT_RUN_STATUSES.includes(task.status)
+
+export const shouldOfferFreshContentGeneration = ({ task, currentRun, interrupt } = {}) =>
+  !currentRun && !interrupt && !task?.latest_run_id
+
+export const CONTENT_RESULT_STATUSES = [
+  'review_required',
+  'reviewed',
+  'review_blocked',
+  'completed'
+]
+
+export const contentHistoryPath = (task) => {
+  if (!task?.id) return '/content/history'
+  if (CONTENT_RESULT_STATUSES.includes(task.status) || task.current_stage === 'review') {
+    return `/content/results/${task.id}`
+  }
+  return `/content/tasks/${task.id}`
+}
+
 const RUNTIME_EVENT_PRESENTATION = {
   'content.model.started': { status: 'running', label: '模型调用' },
   'content.model.progress': { status: 'running', label: '模型正在返回内容' },
@@ -190,7 +220,7 @@ const NODE_PROGRESS_NARRATIVES = {
   deterministic_validate: '正在检查标题长度、正文结构、事实引用和发布规格。',
   semantic_review: '正在复核内容是否准确、有价值，并排查夸大或含糊表达。',
   revise_if_needed: '正在根据审核发现的问题定点修改内容。',
-  human_content_approval: '内容已完成自动审核，正在等待最终确认。',
+  human_content_approval: '内容已完成自动审核，正在保存成稿。',
   plan_visuals: '正在根据最终文案、渠道规格和可用素材规划封面。',
   submit_cover_job: '正在提交已锁定的视觉方案并启动封面生成。',
   wait_cover_job: '封面正在生成，完成后会自动进入视觉审核。',

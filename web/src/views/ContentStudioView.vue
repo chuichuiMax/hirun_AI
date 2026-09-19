@@ -57,7 +57,9 @@ import {
   buildKnowledgeEvidenceGroups,
   buildContentStrategyPresentation,
   buildContentWorkflowGroups,
-  findContentStrategyNarrativeAnchor
+  findContentStrategyNarrativeAnchor,
+  shouldOfferFreshContentGeneration,
+  shouldRecoverContentRun
 } from '@/utils/contentWorkflowPresentation'
 
 const route = useRoute()
@@ -909,6 +911,18 @@ const stageFromTask = (task) => {
   if (['generation', 'strategy'].includes(task.current_stage)) return 2
   return 1
 }
+
+const offerFreshGeneration = computed(() =>
+  shouldOfferFreshContentGeneration({
+    task: store.task,
+    currentRun: store.currentRun,
+    interrupt: store.interrupt
+  })
+)
+
+const restoringExistingRun = computed(
+  () => Boolean(store.task?.latest_run_id) && !store.currentRun && !store.interrupt
+)
 
 const applyFrameAreaTemporaryQuotes = (frameArea) => {
   const presentKeys = new Set(
@@ -1826,6 +1840,7 @@ onMounted(async () => {
   try {
     await store.loadBootstrap(true)
     if (taskId.value) {
+      if (store.task?.id && store.task.id !== taskId.value) store.resetCurrentTask()
       await store.loadTask(taskId.value)
       if (route.query.hycanvasReturn === '1' && route.query.designId && store.artifact?.id) {
         try {
@@ -1851,18 +1866,8 @@ onMounted(async () => {
       await loadInspireSamples()
       if (route.query.resultDetail === '1' && store.artifact) resultDetailOpen.value = true
       if (stage.value === 1 && !isReviewNotes.value) await loadVisualMaterials()
-      if (
-        store.task?.latest_run_id &&
-        [
-          'queued',
-          'running',
-          'waiting_human',
-          'waiting_external',
-          'failed',
-          'cancelled'
-        ].includes(store.task.status)
-      ) {
-        void store.recoverRun(store.task.latest_run_id)
+      if (shouldRecoverContentRun(store.task)) {
+        await store.recoverRun(store.task.latest_run_id)
       } else if (store.task?.latest_run_id) {
         const audit = await store.loadRunAudit(store.task.latest_run_id)
         store.currentRun = {
@@ -2049,6 +2054,10 @@ const compileBrief = async () => {
 
 const startGeneration = async () => {
   try {
+    if (shouldRecoverContentRun(store.task)) {
+      await store.recoverRun(store.task.latest_run_id)
+      return
+    }
     await store.startRun(modelSpec.value)
   } catch (error) {
     message.error(error.message || '启动内容生成失败')
@@ -2147,12 +2156,32 @@ const submitHumanApproval = async (approved) => {
       node_id: store.interrupt?.node_id,
       expected_state_version: store.interrupt?.expected_state_version,
       decision: approved ? 'approved' : 'rejected',
-      note: approvalNote.value.trim() || null
+      note: approvalNote.value.trim() || (approved ? 'PC自动审批' : null)
     })
   } catch (error) {
+    autoContentApprovalKey.value = ''
     message.error(error.message || '提交人工审批失败')
   }
 }
+
+const autoContentApprovalKey = ref('')
+watch(
+  () => [
+    store.interrupt?.interrupt_type,
+    store.interrupt?.run_id,
+    store.interrupt?.expected_state_version,
+    approvalAllowed.value,
+    store.loading.running
+  ],
+  async ([type, runId, version, allowed, running]) => {
+    if (type !== 'content_approval' || !allowed || running || !runId) return
+    const key = `${runId}:${version}`
+    if (autoContentApprovalKey.value === key) return
+    autoContentApprovalKey.value = key
+    await submitHumanApproval(true)
+  },
+  { immediate: true }
+)
 
 const saveArtifact = async () => {
   try {
@@ -2469,7 +2498,7 @@ const openVersions = async () => {
 
     <main v-if="!store.loading.bootstrap" class="studio-main">
       <ContentStudioToolbar
-        v-if="stage !== 2 || (!store.currentRun && !store.interrupt)"
+        v-if="stage !== 2 || offerFreshGeneration"
         :has-task="Boolean(store.task)"
         :is-admin="userStore.isAdmin"
         @recognize-image="ocrModalOpen = true"
@@ -2810,13 +2839,18 @@ const openVersions = async () => {
         class="stage-panel"
         :class="{ 'completion-stage': workflowCompleted }"
       >
-        <div v-if="!store.currentRun && !store.interrupt" class="generation-start">
+        <div v-if="offerFreshGeneration" class="generation-start">
           <Sparkles :size="30" />
           <h3>{{ isReviewNotes ? '正在生成好评笔记' : '事实简报已锁定' }}</h3>
           <p v-if="isReviewNotes">提交后会直接开跑，失败时自动重试，完成后即可查看标题和正文。</p>
           <p v-else>固定工作流会在动态节点调用 Agent，Agent 再使用 Skill、知识库和工具，关键选择会暂停等待人工确认。</p>
           <a-input v-if="!isQuickMode && !isReviewNotes" v-model:value="modelSpec" placeholder="可选：指定模型 spec；留空使用系统默认模型" />
           <a-button v-if="!isReviewNotes" type="primary" size="large" @click="startGeneration"><Play :size="17" />开始生成</a-button>
+        </div>
+        <div v-else-if="restoringExistingRun" class="generation-start">
+          <LoaderCircle class="spin" :size="30" />
+          <h3>正在恢复内容生成</h3>
+          <p>打开的是已有任务，不会重新开始一轮生产。</p>
         </div>
 
         <div
@@ -3069,18 +3103,7 @@ const openVersions = async () => {
           </div>
 
           <div v-else-if="store.interrupt?.interrupt_type === 'content_approval'" class="human-review-card">
-            <div class="human-heading"><ShieldCheck :size="20" /><div><h3>最终人工审批</h3><p>请根据审核结果确认是否允许保存内容资产。</p></div></div>
-            <div v-if="store.interrupt.review_report?.checks?.length" class="approval-checks">
-              <div v-for="check in store.interrupt.review_report.checks" :key="`${check.code}-${check.message}`">
-                <strong>{{ check.message }}</strong>
-                <span v-if="check.suggestion">{{ check.suggestion }}</span>
-              </div>
-            </div>
-            <a-textarea v-model:value="approvalNote" :rows="3" placeholder="可选：填写审批备注" />
-            <div class="approval-actions">
-              <a-button danger @click="submitHumanApproval(false)">驳回</a-button>
-              <a-button type="primary" :disabled="!approvalAllowed" @click="submitHumanApproval(true)">通过并继续</a-button>
-            </div>
+            <div class="human-heading"><ShieldCheck :size="20" /><div><h3>最终审核已通过</h3><p>PC 端无需人工确认，正在保存内容资产。</p></div></div>
           </div>
 
           <div v-else-if="store.interrupt?.interrupt_type === 'content_correction'" class="human-review-card">

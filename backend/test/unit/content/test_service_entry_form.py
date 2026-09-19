@@ -1,7 +1,10 @@
+from random import Random
+
 from yuxi.content.service_entry_form import (
     catalog_select_options,
     configured_business_variable_fields,
     configured_form_fields,
+    lock_house_area_sqm,
     map_service_entry_form_values,
     prioritize_form_fields,
 )
@@ -235,6 +238,7 @@ def test_map_service_entry_form_values_quotation_list_brand_over_price():
     )
     assert "一眼看懂" in mapped["writing_instruction"]
     assert "钱要花在哪" in mapped["writing_instruction"]
+    assert "142㎡旧房翻新" in mapped["writing_instruction"]
     assert "费用数字不是鸿扬核心卖点" in mapped["writing_instruction"]
     assert "forbidden_replacement_map" in mapped["writing_instruction"]
     assert "品牌优势" in mapped["writing_instruction"]
@@ -353,7 +357,8 @@ def test_map_service_entry_form_values_keeps_configured_names():
     assert "不要展开某套房的案例故事" in mapped["writing_instruction"]
     assert "引流点" in mapped["writing_instruction"]
     assert "evidence_cite_index" in mapped["writing_instruction"] or "Evidence ID" in mapped["writing_instruction"] or "paragraph_evidence" in mapped["writing_instruction"]
-    assert "中间值" in mapped["writing_instruction"]
+    assert "锁定的具体㎡" in mapped["writing_instruction"]
+    assert "禁止写130-150㎡这类区间" in mapped["writing_instruction"]
     assert "预算价" in mapped["writing_instruction"]
     assert "泥瓦" in mapped["writing_instruction"]
     assert mapped.get("voice") != "业主第一人称"
@@ -373,3 +378,32 @@ def test_map_service_entry_form_values_review_notes_uses_owner_voice():
     assert "所属店面" in mapped["writing_instruction"]
     assert mapped["audience"] == ["业主"]
     assert mapped["location"] == "长沙市"
+
+
+def test_lock_house_area_sqm_samples_inside_selected_band():
+    for band, low, high in (
+        ("130-150㎡", 130, 150),
+        ("50-70㎡", 50, 70),
+        ("300㎡以上", 301, 400),
+    ):
+        locked = lock_house_area_sqm(band, rng=Random(0))
+        number = int(locked.removesuffix("㎡"))
+        assert low <= number <= high, locked
+        assert lock_house_area_sqm(locked, band) == locked
+    assert lock_house_area_sqm("142㎡", "130-150㎡") == "142㎡"
+    resampled = lock_house_area_sqm("62㎡", "130-150㎡", rng=Random(0))
+    assert 130 <= int(resampled.removesuffix("㎡")) <= 150
+
+
+def test_map_service_entry_form_values_locks_frame_area_to_concrete_sqm():
+    mapped = map_service_entry_form_values(
+        "装修家居",
+        {"楼盘信息": "润府", "外框面积": "130-150㎡", "设计风格": "北欧之光"},
+    )
+    locked = int(str(mapped["house_area"]).removesuffix("㎡"))
+    assert 130 <= locked <= 150
+    assert mapped["area"] == mapped["house_area"] == mapped["外框面积"]
+    assert "130-150" not in mapped["area"]
+    assert "130-150" not in mapped["project_result"]
+    remapped = map_service_entry_form_values("装修家居", mapped)
+    assert remapped["house_area"] == mapped["house_area"]
