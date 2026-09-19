@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import io
@@ -653,6 +654,13 @@ async def create_material_share(
         raise _error(422, "MATERIAL_SHARE_CHILD_GALLERY_REQUIRED", "只能分享二级图库中的图片")
     if any(item_category.id != category.id for _, _, item_category in ordered_rows):
         raise _error(422, "MATERIAL_SHARE_GALLERY_MISMATCH", "请选择同一个二级图库中的图片")
+    if category.industry_slug == DECORATION_GALLERY_INDUSTRY_SLUG:
+        if not (category.design_style or "").strip():
+            raise _error(422, "MATERIAL_DESIGN_STYLE_REQUIRED", "请选择设计风格")
+        if not (category.building_name or "").strip():
+            raise _error(422, "MATERIAL_BUILDING_NAME_REQUIRED", "请输入楼盘名称")
+        if not (category.area or "").strip():
+            raise _error(422, "MATERIAL_AREA_REQUIRED", "请输入面积")
 
     share = ContentMaterialShare(
         id=f"mls_{uuid.uuid4().hex}",
@@ -927,6 +935,7 @@ async def list_material_items(
     page_size: int,
     sort: str,
     scope: Literal["private", "enterprise"] | None = None,
+    include_descendants: bool = False,
     exclude_task_id: str | None = None,
 ) -> dict[str, Any]:
     if material_type not in {"image", "cover_template"}:
@@ -951,10 +960,19 @@ async def list_material_items(
         else None
     )
     repo = MaterialLibraryRepository(db, include_shared=True)
+    category_ids = None
+    if resolved_category is not None and include_descendants:
+        children = await repo.list_child_categories(
+            resolved_category.owner_uid,
+            material_type,
+            resolved_category.id,
+        )
+        category_ids = [resolved_category.id, *(child.id for child in children)]
     rows, total = await repo.list_items(
         _owner_uid(user),
         material_type=material_type,
         category=resolved_category.id if resolved_category else None,
+        category_ids=category_ids,
         status=status,
         query_text=query,
         page=page,

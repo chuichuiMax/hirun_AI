@@ -35,6 +35,7 @@ from yuxi.services.mp_service import (
     get_task,
     list_contents,
     list_cover_templates,
+    list_hycanvas_templates,
     list_mp_galleries,
     list_mp_gallery_items,
     list_mp_works,
@@ -116,10 +117,11 @@ async def mp_update_me(
 @mp.get("/content/form-schema")
 async def mp_form_schema(
     service_entry: str = Query(...),
+    include_hycanvas_templates: bool = Query(True),
     _ctx: MpContext = Depends(get_mp_context),
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_form_schema(db, service_entry)
+    return await get_form_schema(db, service_entry, include_hycanvas_templates=include_hycanvas_templates)
 
 
 @mp.get("/content/pricing")
@@ -146,6 +148,11 @@ async def mp_cover_template_file(
     )
 
 
+@mp.get("/content/hycanvas-templates")
+async def mp_hycanvas_templates(_ctx: MpContext = Depends(get_mp_context)):
+    return await list_hycanvas_templates()
+
+
 @mp.get("/content/hycanvas-templates/{template_id}/preview")
 async def mp_hycanvas_template_preview(
     template_id: str,
@@ -168,10 +175,21 @@ async def mp_galleries(
 async def mp_gallery_items(
     category: str = Query(...),
     scope: Literal["private", "enterprise"] | None = Query(None),
+    include_descendants: bool = Query(False),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=100),
     ctx: MpContext = Depends(get_mp_context),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_mp_gallery_items(db, ctx, category, scope=scope)
+    return await list_mp_gallery_items(
+        db,
+        ctx,
+        category,
+        scope=scope,
+        include_descendants=include_descendants,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @mp.get("/content/gallery-items/{item_id}/file")

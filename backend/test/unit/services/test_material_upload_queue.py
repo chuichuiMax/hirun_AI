@@ -6,37 +6,30 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from yuxi.services.material_upload_queue import (
-    INGEST_PENDING,
-    INGEST_READY,
-    delete_staged_material_bytes,
-    encode_material_thumbnail,
-    ingest_status_of,
-    load_staged_material_bytes,
-    load_staged_material_thumb,
-    material_thumb_object_name,
-    material_upload_redis_key,
-    persist_material_thumbnail,
-    process_material_upload,
-    stage_material_bytes,
-)
-from yuxi.services.run_worker import WorkerSettings
-from yuxi.storage.minio import StorageError
+import yuxi.services.material_upload_queue as material_upload_queue
 
 
+class FakeBinaryRedis:
 class FakeRedis:
     def __init__(self):
+        self.values: dict[str, bytes] = {}
         self.store: dict[str, bytes] = {}
 
+    async def set(self, key: str, value: bytes, *, ex: int):
+        self.values[key] = value
     async def set(self, key, data, ex=None):
         del ex
         self.store[key] = data
 
+    async def get(self, key: str):
+        return self.values.get(key)
     async def get(self, key):
         return self.store.get(key)
 
+    async def delete(self, *keys: str):
     async def delete(self, *keys):
         for key in keys:
+            self.values.pop(key, None)
             self.store.pop(key, None)
 
 
@@ -64,12 +57,16 @@ def _webp(size=(32, 24)) -> bytes:
 
 
 @pytest.mark.asyncio
+async def test_pending_material_reads_the_staged_bytes_before_minio(monkeypatch):
+    redis = FakeBinaryRedis()
 async def test_stage_load_and_delete_material_bytes(monkeypatch):
     redis = FakeRedis()
 
+    async def get_redis():
     async def fake_client():
         return redis
 
+    monkeypatch.setattr(material_upload_queue, "get_binary_redis_client", get_redis)
     monkeypatch.setattr("yuxi.services.material_upload_queue.get_binary_redis_client", fake_client)
     await stage_material_bytes("cca_1", b"RIFF....WEBP")
     assert await load_staged_material_bytes("cca_1") == b"RIFF....WEBP"
@@ -77,6 +74,8 @@ async def test_stage_load_and_delete_material_bytes(monkeypatch):
     await delete_staged_material_bytes("cca_1")
     assert await load_staged_material_bytes("cca_1") is None
 
+    await material_upload_queue.stage_material_bytes("cca_pending", b"original")
+    await material_upload_queue.stage_material_thumb("cca_pending", b"thumbnail")
 
 @pytest.mark.asyncio
 async def test_process_material_upload_moves_redis_bytes_to_storage(monkeypatch):
@@ -87,9 +86,12 @@ async def test_process_material_upload_moves_redis_bytes_to_storage(monkeypatch)
         id="cca_queued",
         deleted_at=None,
         bucket_name="image",
+        metadata_json={
+            "ingest_status": material_upload_queue.INGEST_PENDING,
+            "redis_key": material_upload_queue.material_upload_redis_key("cca_pending"),
+        },
         object_name="material-library/u1/images/cca_queued/image.webp",
         content_type="image/webp",
-        metadata_json={"ingest_status": INGEST_PENDING, "redis_key": "material:upload:cca_queued"},
     )
 
     class FakeSession:
@@ -163,6 +165,9 @@ def test_material_thumb_object_name_sits_beside_original():
         == "material-library/u1/images/cca_1/thumb.webp"
     )
 
+    assert await material_upload_queue.read_material_bytes(asset) == b"original"
+    assert await material_upload_queue.read_staged_material_thumb("cca_pending") == b"thumbnail"
+    assert material_upload_queue.material_thumb_object_name(asset.object_name).endswith(".thumb.webp")
 
 def test_encode_material_thumbnail_is_webp():
     data = encode_material_thumbnail(_webp((64, 48)))

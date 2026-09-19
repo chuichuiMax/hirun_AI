@@ -1187,6 +1187,7 @@ class ContentMaterialCategory(Base):
     visibility = Column(String(20), nullable=False, default="private", server_default="private")
     parent_id = Column(String(64), nullable=True, index=True)
     industry_slug = Column(String(80), nullable=False, default="uncategorized", index=True)
+    image_design_role = Column(String(20), nullable=True)
     design_style = Column(String(32), nullable=True)
     building_name = Column(String(80), nullable=True)
     area = Column(String(32), nullable=True)
@@ -1203,6 +1204,10 @@ class ContentMaterialCategory(Base):
             "material_type IN ('image', 'cover_template')",
             name="ck_content_material_category_type",
         ),
+        CheckConstraint(
+            "image_design_role IS NULL OR image_design_role IN ('reference', 'rough')",
+            name="ck_content_material_category_image_design_role",
+        ),
         Index(
             "uq_content_material_category_owner_type_name_active",
             "owner_uid",
@@ -1218,6 +1223,19 @@ class ContentMaterialCategory(Base):
             "material_type",
             "sort_order",
         ),
+        Index(
+            "uq_content_material_category_image_design_role_active",
+            "image_design_role",
+            unique=True,
+            postgresql_where=text(
+                "deleted_at IS NULL AND visibility = 'enterprise' AND material_type = 'image' "
+                "AND parent_id IS NULL AND image_design_role IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "deleted_at IS NULL AND visibility = 'enterprise' AND material_type = 'image' "
+                "AND parent_id IS NULL AND image_design_role IS NOT NULL"
+            ),
+        ),
     )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1230,6 +1248,7 @@ class ContentMaterialCategory(Base):
             "parent_id": self.parent_id,
             "level": 2 if self.parent_id else 1,
             "industry_slug": self.industry_slug,
+            "image_design_role": self.image_design_role,
             "design_style": self.design_style,
             "building_name": self.building_name,
             "area": self.area,

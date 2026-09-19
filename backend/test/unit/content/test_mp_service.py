@@ -475,12 +475,43 @@ async def test_list_mp_gallery_items_forwards_in_use(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_mp_gallery_items_forwards_descendant_pagination(monkeypatch):
+    captured = {}
+
+    async def fake_list_material_items(*args, **kwargs):
+        captured.update(kwargs)
+        return {"items": [], "total": 254, "page": 3, "page_size": 30}
+
+    monkeypatch.setattr("yuxi.services.mp_service.list_material_items", fake_list_material_items)
+    result = await list_mp_gallery_items(
+        None,
+        type("Ctx", (), {"user": object()})(),
+        "case-root",
+        scope="enterprise",
+        include_descendants=True,
+        page=3,
+        page_size=30,
+    )
+
+    assert captured["include_descendants"] is True
+    assert captured["page"] == 3
+    assert captured["page_size"] == 30
+    assert result == {"items": [], "total": 254, "page": 3, "page_size": 30}
+
+
+@pytest.mark.asyncio
 async def test_list_mp_galleries_includes_enterprise_scope(monkeypatch):
     async def fake_list_image_galleries(db, user):
         return {
             "galleries": [
                 {"id": "mine", "name": "我的图库", "visibility": "private", "cover_item_id": "mli_1"},
-                {"id": "shared", "name": "公共图库", "visibility": "enterprise", "cover_item_id": "mli_2"},
+                {
+                    "id": "shared",
+                    "name": "公共图库",
+                    "visibility": "enterprise",
+                    "image_design_role": "reference",
+                    "cover_item_id": "mli_2",
+                },
             ]
         }
 
@@ -492,6 +523,7 @@ async def test_list_mp_galleries_includes_enterprise_scope(monkeypatch):
     assert all_galleries["galleries"][1]["cover_thumbnail_file_url"].endswith("/mli_2/thumbnail")
     shared = await list_mp_galleries(None, ctx, scope="enterprise")
     assert [item["id"] for item in shared["galleries"]] == ["shared"]
+    assert shared["galleries"][0]["image_design_role"] == "reference"
     private = await list_mp_galleries(None, ctx, scope="private")
     assert [item["id"] for item in private["galleries"]] == ["mine"]
 

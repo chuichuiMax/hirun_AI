@@ -908,7 +908,9 @@ async def _lock_decoration_visual_material(
     return ContentVisualMaterialSelection(image_item_id=item.id, hycanvas_template_id=template_id), item.asset_id
 
 
-async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any]:
+async def get_form_schema(
+    db: AsyncSession, service_entry: str, *, include_hycanvas_templates: bool = True
+) -> dict[str, Any]:
     if service_entry not in SERVICE_ENTRIES:
         raise _mp_error(422, "MP_SERVICE_ENTRY_INVALID", "服务入口不存在")
     await ensure_default_content_types(db)
@@ -951,7 +953,9 @@ async def get_form_schema(db: AsyncSession, service_entry: str) -> dict[str, Any
             select_options=select_options,
         )
     covers = [_cover_template_item(item) for item in await CoverRepository(db).list_enabled()]
-    hycanvas_templates = await _list_mp_hycanvas_templates() if service_entry == "装修家居" else []
+    hycanvas_templates = (
+        await _list_mp_hycanvas_templates() if include_hycanvas_templates and service_entry == "装修家居" else []
+    )
     return {
         "service_entry": service_entry,
         "requires_content_type": requires_content_type,
@@ -990,6 +994,10 @@ async def get_pricing(frame_area: str) -> dict[str, Any]:
 async def list_cover_templates(db: AsyncSession) -> dict[str, Any]:
     covers = [_cover_template_item(item) for item in await CoverRepository(db).list_enabled()]
     return {"cover_templates": covers, "total": len(covers)}
+
+
+async def list_hycanvas_templates() -> dict[str, Any]:
+    return {"hycanvas_templates": await _list_mp_hycanvas_templates()}
 
 
 def _mp_gallery_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -1032,6 +1040,9 @@ async def list_mp_gallery_items(
     ctx: MpContext,
     category: str,
     scope: Literal["private", "enterprise"] | None = None,
+    include_descendants: bool = False,
+    page: int = 1,
+    page_size: int = 100,
 ) -> dict[str, Any]:
     result = await list_material_items(
         db,
@@ -1040,13 +1051,19 @@ async def list_mp_gallery_items(
         category=category,
         status="enabled",
         query=None,
-        page=1,
-        page_size=100,
+        page=page,
+        page_size=page_size,
         sort="newest",
         scope=scope,
+        include_descendants=include_descendants,
     )
     items = [_mp_gallery_item(item) for item in result.get("items") or []]
-    return {"items": items, "total": result.get("total") or 0}
+    return {
+        "items": items,
+        "total": result.get("total") or 0,
+        "page": result.get("page") or page,
+        "page_size": result.get("page_size") or page_size,
+    }
 
 
 async def read_mp_gallery_item_file(db: AsyncSession, ctx: MpContext, item_id: str) -> tuple[bytes, str, str]:

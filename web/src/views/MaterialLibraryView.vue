@@ -111,9 +111,8 @@ const uploadProgressText = computed(() => {
 })
 const deleteTargetOptions = computed(() => categories.value.filter((item) => item.id !== deletingCategory.value?.id && (deletingCategory.value?.visibility !== 'enterprise' || item.visibility === 'enterprise')))
 const decorationGalleryStyles = [
-  '复合写意', '写意木构', '江南印象', '东方古雅', '轻欧简美', '欧美香颂', '欧式田园',
-  '异域风情', '新装饰主义', '北欧之光', '意境东方', '雅致现代', '工业再造', '优雅缤纷',
-  '极简侘寂', '仿生未来', '复古风潮', '艺术室界'
+  '复合写意', '写意木构', '江南印象', '轻欧简美', '欧美香颂', '新装饰主义', '北欧之光',
+  '意境东方', '雅致现代', '优雅缤纷', '极简侘寂', '复古风潮', '艺术室界'
 ]
 const isDecorationGalleryChild = computed(() =>
   ['create', 'edit'].includes(categoryEditorMode.value) &&
