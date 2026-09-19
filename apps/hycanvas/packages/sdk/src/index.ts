@@ -885,6 +885,23 @@ export interface UploadedAsset {
   createdAt: string;
 }
 
+/** One retained face in the Xiaohongshu-zone public font catalogue. */
+export interface PublicFontFace {
+  id: string;
+  zone: "xiaohongshu";
+  family: string;
+  style: string;
+  weight: number;
+  format: "ttf" | "otf";
+  mimeType: string;
+  byteSize: number;
+  sha256: string;
+  variable: boolean;
+  url: string;
+  uploadedBy?: string;
+  createdAt: string;
+}
+
 export interface AssetFolder {
   id: string;
   workspaceId: string;
@@ -2161,6 +2178,9 @@ export class HyCanvasClient {
   }
 
   // --- uploads + asset organization -------------------------------
+  listPublicFonts(zone: "xiaohongshu"): Promise<PublicFontFace[]> {
+    return this.request("GET", `/v1/fonts?zone=${encodeURIComponent(zone)}`);
+  }
   listAssets(workspaceId: string, filter: AssetListFilter = {}): Promise<UploadedAsset[]> {
     const params = new URLSearchParams();
     if (filter.folderId !== undefined) params.set("folderId", filter.folderId ?? "root");

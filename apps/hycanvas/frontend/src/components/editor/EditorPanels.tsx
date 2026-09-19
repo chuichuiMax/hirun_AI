@@ -30,6 +30,7 @@ import { promptText } from "@/lib/promptDialog";
 import { downloadHycFile } from "@/lib/hycFile";
 import { generateAltText } from "@/lib/altText";
 import { fonts } from "@/lib/fontProvider";
+import { addXiaohongshuFont, loadXiaohongshuFonts } from "@/lib/fontLibrary";
 import { locate } from "@hc/editor";
 import {
   critiquePage,
@@ -50,7 +51,7 @@ import {
 import { ApiError, type AiConfigView, type AiProviderPreset, type AiSessionView, type AssetFolder, type MiniAppSummary, type StockAssetSummary, type StockCollectionSummary, type StockFacetValue, type StockFiltersSummary, type StorageUsageView, type TemplateSummary, type UploadedAsset } from "@hc/sdk";
 import { DesignThumb } from "@/components/dashboard/DesignThumb";
 import { checkAppAction, type AppAction } from "@hc/stock";
-import { oc, resolveAssetUrl, stockProxyUrl, uploadAssetWithProgress } from "@/lib/sdk";
+import { oc, resolveAssetUrl, stockProxyUrl, uploadAssetWithProgress, uploadPublicFontWithProgress } from "@/lib/sdk";
 import { attachableAccept, extractAiSources, maxAiSources, type AiSource } from "@/lib/aiAttachments";
 import { mermaidToDiagram, normalizeDiagramSpec, type DiagramSpec } from "@hc/whiteboard";
 import type { BrandVoice, BrandLintViolation } from "@hc/sdk";
@@ -799,12 +800,18 @@ function FontListSentinel({ onMore }: { onMore: () => void }) {
 export function TextPanel() {
   const toast = useToast();
   const addNode = useEditor((s) => s.addNode);
+  const isXiaohongshu = useEditor((s) => s.doc.meta?.templateZone === "xiaohongshu");
   const [query, setQuery] = useState("");
+  const [fontUploadPct, setFontUploadPct] = useState<number | null>(null);
   // Debounce the filter so the catalog search only recomputes after typing stops.
   const debouncedQuery = useDebouncedValue(query);
   const [, force] = useReducer((x: number) => x + 1, 0);
   // Re-render previews as web fonts finish loading.
   useEffect(() => fonts.onChange(() => force()), []);
+  useEffect(() => {
+    if (!isXiaohongshu) return;
+    void loadXiaohongshuFonts().catch((error) => toast.error(userMessage(error, tr("editor.couldnt_load_that_font_file"))));
+  }, [isXiaohongshu, toast]);
   // Pairing preview cards render in their target fonts; eagerly load that small
   // fixed set. The scrollable font list below lazy-loads per row, but the pairing
   // cards sit above it and never enter that observer's range.
@@ -819,26 +826,27 @@ export function TextPanel() {
   const showMoreFonts = useCallback(() => setFontLimit((n) => n + FONT_PAGE), []);
   const fontFileRef = useRef<HTMLInputElement>(null);
 
-  // Upload a custom font (FR-6): read the file, register it into document.fonts
-  // (so the canvas can draw it) and persist it for next session, then apply it.
+  // Xiaohongshu fonts are server-retained public resources. Upload raw bytes so
+  // large CJK faces do not expand as base64 or depend on this browser's cache.
   async function onFontFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (fontFileRef.current) fontFileRef.current.value = "";
-    if (!file) return;
-    const family = file.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() || "Custom font";
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result);
-      void fonts.registerCustomFont(family, dataUrl).then((ok) => {
-        if (ok) {
-          // Embed the font in the design (data URL) so it loads cross-device when
-          // the design is opened elsewhere, not just in this browser's localStorage.
-          useEditor.getState().addDocFont({ id: `font-${crypto.randomUUID()}`, family, url: dataUrl });
-          applyFont(family); force(); toast.success(`Added font “${family}”.`);
-        } else toast.error(tr("editor.couldnt_load_that_font_file"));
-      });
-    };
-    reader.readAsDataURL(file);
+    if (!file || !isXiaohongshu) return;
+    setFontUploadPct(0);
+    try {
+      const face = await uploadPublicFontWithProgress(file, setFontUploadPct);
+      addXiaohongshuFont(face);
+      fonts.ensure(face.family);
+      const ref = fonts.libraryRef(face.family);
+      if (ref) useEditor.getState().addDocFont(ref);
+      applyFont(face.family);
+      force();
+      toast.success(`已添加公共字体“${face.family}”`);
+    } catch (error) {
+      toast.error(userMessage(error, tr("editor.upload_failed")));
+    } finally {
+      setFontUploadPct(null);
+    }
   }
 
   const addText = (text: string, fontSize: number, weight: number, family = "system") => {
@@ -865,6 +873,8 @@ export function TextPanel() {
   // Apply a font to the selected text, or add a new text box in that font.
   const applyFont = (family: string) => {
     fonts.ensure(family);
+    const libraryRef = fonts.libraryRef(family);
+    if (libraryRef) useEditor.getState().addDocFont(libraryRef);
     pushRecentFont(family);
     force();
     const id = selectedTextId();
@@ -890,7 +900,11 @@ export function TextPanel() {
 
   const results = searchFonts(debouncedQuery);
   const recents = recentFonts().map((f) => searchFonts(f).find((e) => e.family === f)).filter(Boolean) as FontCatalogEntry[];
-  const customFams = fonts.customFamilies().filter((f) => !debouncedQuery || f.toLowerCase().includes(debouncedQuery.toLowerCase()));
+  const legacyFams = (useEditor.getState().doc.fonts ?? [])
+    .filter((font) => font.source === "upload" && Boolean(font.url))
+    .map((font) => font.family);
+  const customFams = [...new Set([...(isXiaohongshu ? fonts.libraryFamilies() : []), ...legacyFams])]
+    .filter((family) => !debouncedQuery || family.toLowerCase().includes(debouncedQuery.toLowerCase()));
 
   return (
     <PanelShell title={tr("editor.text")}>
@@ -923,13 +937,17 @@ export function TextPanel() {
               </button>
             )}
           </div>
-          <input ref={fontFileRef} type="file" accept=".ttf,.otf,.woff,.woff2,font/*" hidden onChange={(e) => void onFontFile(e)} />
-          <button onClick={() => fontFileRef.current?.click()} className="flex items-center justify-center gap-1.5 rounded-lg border border-neutral-200 py-2 text-xs font-medium text-neutral-600 hover:border-brand-300 hover:text-brand-ink">
-            <Upload size={13} /> {tr("editor.upload_a_font")}
-          </button>
+          {isXiaohongshu && (
+            <>
+              <input ref={fontFileRef} type="file" accept=".ttf,.otf,font/ttf,font/otf" hidden onChange={(e) => void onFontFile(e)} />
+              <button disabled={fontUploadPct !== null} onClick={() => fontFileRef.current?.click()} className="flex items-center justify-center gap-1.5 rounded-lg border border-neutral-200 py-2 text-xs font-medium text-neutral-600 hover:border-brand-300 hover:text-brand-ink disabled:cursor-wait disabled:opacity-60">
+                <Upload size={13} /> {fontUploadPct === null ? tr("editor.upload_a_font") : `上传中 ${fontUploadPct}%`}
+              </button>
+            </>
+          )}
           {customFams.length > 0 && (
             <div className="flex flex-col gap-1">
-              <span className="px-1 text-[10px] uppercase tracking-wide text-neutral-300">{tr("editor.your_fonts")}</span>
+              <span className="px-1 text-[10px] uppercase tracking-wide text-neutral-300">{isXiaohongshu ? trOr("editor.xiaohongshu_public_fonts", "小红书公共字体") : tr("editor.your_fonts")}</span>
               {customFams.map((f) => (
                 <button key={`c-${f}`} onClick={() => applyFont(f)} style={{ fontFamily: `'${f}', sans-serif` }} className="flex w-full items-center justify-between rounded-lg bg-neutral-50 px-3 py-2 text-start text-[15px] text-neutral-800 hover:bg-brand-50" title={`Use ${f}`}>
                   <span className="truncate">{f}</span>

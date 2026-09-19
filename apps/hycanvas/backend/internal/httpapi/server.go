@@ -31,6 +31,7 @@ import (
 	"hycanvas/backend/internal/comments"
 	"hycanvas/backend/internal/convert"
 	"hycanvas/backend/internal/engagement"
+	"hycanvas/backend/internal/fontlibrary"
 	"hycanvas/backend/internal/home"
 	"hycanvas/backend/internal/jobs"
 	"hycanvas/backend/internal/oidc"
@@ -65,6 +66,7 @@ type Deps struct {
 	AI              *ai.Service
 	AIStudio        *aistudio.Service
 	Uploads         *uploads.Service
+	Fonts           *fontlibrary.Service
 	Realtime        *realtime.Hub
 	Audience        *audience.Service
 	Templates       *templates.Service
@@ -247,6 +249,9 @@ func NewRouter(d Deps) http.Handler {
 		}
 		if d.Accounts != nil && d.Uploads != nil {
 			mountUploads(api, d.Uploads, d.Accounts)
+		}
+		if d.Accounts != nil && d.Fonts != nil {
+			mountFonts(api, d.Fonts, d.Accounts)
 		}
 		if d.Accounts != nil && d.Templates != nil {
 			mountTemplates(api, d.Templates, d.Accounts, d.Uploads)
