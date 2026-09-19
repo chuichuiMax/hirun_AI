@@ -1,0 +1,11 @@
+version: 1.0.0
+rules:
+  - id: BODY-LEN
+    enabled: true
+    text: 正文 200～650 字。
+  - id: BODY-STRUCT
+    enabled: true
+    text: 按锁定正文公式分段，不报幕。
+  - id: BODY-ADV
+    enabled: true
+    text: 我的优势写入 knowledge_base Evidence，至少引用一条。

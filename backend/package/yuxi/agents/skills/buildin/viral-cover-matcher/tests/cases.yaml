@@ -1,0 +1,6 @@
+cases:
+  - id: injects
+    expect_slug: viral-cover-matcher
+    expect_enabled_rules:
+      - VISUAL-COPY
+      - VISUAL-SCENE

@@ -1,0 +1,7 @@
+cases:
+  - id: injects
+    expect_slug: viral-body-author
+    expect_enabled_rules:
+      - BODY-LEN
+      - BODY-STRUCT
+      - BODY-ADV

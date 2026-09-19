@@ -1,0 +1,7 @@
+cases:
+  - id: injects
+    expect_slug: viral-title-author
+    expect_enabled_rules:
+      - TITLE-SLOT
+      - TITLE-LEN
+      - TITLE-ABS

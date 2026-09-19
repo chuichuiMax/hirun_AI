@@ -1,0 +1,6 @@
+cases:
+  - id: injects
+    expect_slug: viral-topic-author
+    expect_enabled_rules:
+      - TOPIC-10
+      - TOPIC-POOL

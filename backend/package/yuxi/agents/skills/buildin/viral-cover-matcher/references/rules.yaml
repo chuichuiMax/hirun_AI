@@ -1,0 +1,8 @@
+version: 1.0.0
+rules:
+  - id: VISUAL-COPY
+    enabled: true
+    text: visual_intent 与 source_asset_ids 必须逐字复制服务端锁定值。
+  - id: VISUAL-SCENE
+    enabled: true
+    text: 场景（局改/工艺）优先于全屋报价。

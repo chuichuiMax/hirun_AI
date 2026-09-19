@@ -1,0 +1,11 @@
+version: 1.0.0
+rules:
+  - id: TITLE-SLOT
+    enabled: true
+    text: 标题只承载一个主卖点，不堆叠价格+工艺+结果。
+  - id: TITLE-LEN
+    enabled: true
+    text: 字数满足 channel_profile.title_constraints（小红书 6～20 字）。
+  - id: TITLE-ABS
+    enabled: true
+    text: 禁止绝对化与问题词。

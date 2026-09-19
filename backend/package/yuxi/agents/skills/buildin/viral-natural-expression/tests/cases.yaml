@@ -1,0 +1,6 @@
+cases:
+  - id: injects
+    expect_slug: viral-natural-expression
+    expect_enabled_rules:
+      - NATURAL-ORAL
+      - NATURAL-GUIDE

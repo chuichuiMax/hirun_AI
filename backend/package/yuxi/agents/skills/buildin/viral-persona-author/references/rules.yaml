@@ -1,0 +1,8 @@
+version: 1.0.0
+rules:
+  - id: PERSONA-TONE
+    enabled: true
+    text: 语气跟随 persona_profile，不改数字与承诺。
+  - id: PERSONA-NO-META
+    enabled: true
+    text: 禁止暴露写作步骤的元话术。

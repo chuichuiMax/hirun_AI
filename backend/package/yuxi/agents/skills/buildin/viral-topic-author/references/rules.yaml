@@ -1,0 +1,8 @@
+version: 1.0.0
+rules:
+  - id: TOPIC-10
+    enabled: true
+    text: topics 正好 10 个。
+  - id: TOPIC-POOL
+    enabled: true
+    text: 每个话题必须来自 content_rule_bundle.topic_candidate_pool。

@@ -1,0 +1,8 @@
+cases:
+  - id: injects
+    expect_slug: viral-author-core
+    expect_enabled_rules:
+      - CORE-ONCE
+      - CORE-EVIDENCE
+      - CORE-VIRAL
+      - CORE-NO-FALLBACK

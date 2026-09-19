@@ -1,0 +1,6 @@
+cases:
+  - id: injects
+    expect_slug: viral-layout-expression
+    expect_enabled_rules:
+      - LAYOUT-NO-MD
+      - LAYOUT-SCAN

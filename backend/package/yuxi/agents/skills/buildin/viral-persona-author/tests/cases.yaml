@@ -1,0 +1,6 @@
+cases:
+  - id: injects
+    expect_slug: viral-persona-author
+    expect_enabled_rules:
+      - PERSONA-TONE
+      - PERSONA-NO-META

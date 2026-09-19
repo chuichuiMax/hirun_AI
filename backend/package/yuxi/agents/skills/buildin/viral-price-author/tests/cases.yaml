@@ -1,0 +1,6 @@
+cases:
+  - id: injects
+    expect_slug: viral-price-author
+    expect_enabled_rules:
+      - PRICE-SOURCE
+      - PRICE-NAME

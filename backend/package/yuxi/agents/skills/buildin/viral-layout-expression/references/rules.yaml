@@ -1,0 +1,8 @@
+version: 1.0.0
+rules:
+  - id: LAYOUT-NO-MD
+    enabled: true
+    text: 禁止 Markdown 标题、列表符、加粗标记。
+  - id: LAYOUT-SCAN
+    enabled: true
+    text: 短段可扫读，不用一段墙字。

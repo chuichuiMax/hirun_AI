@@ -1,0 +1,8 @@
+version: 1.0.0
+rules:
+  - id: REVIEW-CODE
+    enabled: true
+    text: 阻断必须给出 TITLE_/BODY_/PERSONA_/TOPIC_/PRICE_/CTA_/LAYOUT_ 问题码。
+  - id: REVIEW-NO-REWRITE
+    enabled: true
+    text: 审核不直接改稿，只给阻断与建议。

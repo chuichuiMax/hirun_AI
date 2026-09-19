@@ -1,0 +1,6 @@
+cases:
+  - id: injects
+    expect_slug: viral-modular-reviewer
+    expect_enabled_rules:
+      - REVIEW-CODE
+      - REVIEW-NO-REWRITE

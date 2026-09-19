@@ -1,0 +1,8 @@
+version: 1.0.0
+rules:
+  - id: CTA-SOFT
+    enabled: true
+    text: 禁止立即咨询/马上预约/点击下方；只用克制互动。
+  - id: PLATFORM-XHS
+    enabled: true
+    text: 像真人笔记，不像广告脚本。

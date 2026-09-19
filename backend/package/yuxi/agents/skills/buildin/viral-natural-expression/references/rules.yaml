@@ -1,0 +1,8 @@
+version: 1.0.0
+rules:
+  - id: NATURAL-ORAL
+    enabled: true
+    text: 口语短句，禁止模板腔和清单腔。
+  - id: NATURAL-GUIDE
+    enabled: true
+    text: expression_guidance 只学说法，不学事实。

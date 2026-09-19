@@ -1,0 +1,6 @@
+cases:
+  - id: injects
+    expect_slug: viral-platform-expression
+    expect_enabled_rules:
+      - CTA-SOFT
+      - PLATFORM-XHS

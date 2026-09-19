@@ -1,0 +1,8 @@
+version: 1.0.0
+rules:
+  - id: PRICE-SOURCE
+    enabled: true
+    text: 价格必须逐字来自价格 Evidence。
+  - id: PRICE-NAME
+    enabled: true
+    text: 称预算价，不写合同价/最低价。

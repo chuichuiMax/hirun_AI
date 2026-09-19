@@ -1,0 +1,14 @@
+version: 1.0.0
+rules:
+  - id: CORE-ONCE
+    enabled: true
+    text: generate_content 只调用一次 submit_content_node_result，禁止 read_file。
+  - id: CORE-EVIDENCE
+    enabled: true
+    text: 数字、价格、城市、工种、面积只从可写 Evidence 逐字复制。
+  - id: CORE-VIRAL
+    enabled: true
+    text: 只借唯一爆款结构槽位，不抄原文事实。
+  - id: CORE-NO-FALLBACK
+    enabled: true
+    text: 缺证据就删槽或改非事实表述，不得编造。
