@@ -55,16 +55,14 @@ CONTENT_NODE_EXECUTION_LIMITS = {
     "generate_content": (400, 180, "low", 3),
     "select_creation_strategy": (150, 65, "low", 2),
     "reselect_creation_strategy": (150, 65, "low", 2),
-    "plan_visuals": (400, 180, "low", 2),
+    "plan_visuals": (400, 180, "low", 3),
     "visual_review": (300, 120, "low", 2),
 }
 
-# 原创 generate_content 仍注入 content-human-expression，分段/口语/表情同轮落实。
+# 原创 generate_content 同轮挂排版/去机械腔/表情；只卸仿写结构与独立大纲。
 ORIGINAL_GENERATE_CONTENT_DROP_SKILLS = frozenset(
     {
         "viral-structure-rewriter",
-        "humanizer-zh",
-        "viral-layout-formatter",
         "content-outline-builder",
     }
 )
@@ -266,7 +264,7 @@ class AgentDelegationService:
                 request.node_run.node_id == "generate_content"
                 and request.input_payload["runtime_config_snapshot"].get("creation_mode", "original") == "original"
             ):
-                # 原创不需仿写结构、独立大纲和 humanizer-zh；分段、口语与表情由 content-human-expression 同轮落实。
+                # 原创不需仿写结构与独立大纲；排版、去机械腔、表情由 layout/humanizer/expression 同轮落实。
                 context._required_skill_closure = [
                     slug
                     for slug in context._required_skill_closure
@@ -275,9 +273,12 @@ class AgentDelegationService:
             if (
                 request.node_run.node_id == "plan_visuals"
             ):
-                # 封面规划只注入 planner；cover/review 在下游节点各自挂载。
+                # 封面规划只注入 planner；V5 另挂封面匹配。cover/review 在下游节点各自挂载。
+                allowed = {"content-visual-planner"}
+                if "viral-cover-matcher" in request.required_skills:
+                    allowed.add("viral-cover-matcher")
                 context._required_skill_closure = [
-                    slug for slug in context._required_skill_closure if slug == "content-visual-planner"
+                    slug for slug in context._required_skill_closure if slug in allowed
                 ]
             if (
                 request.node_run.node_id in {"select_creation_strategy", "reselect_creation_strategy"}

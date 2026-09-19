@@ -152,7 +152,7 @@ onMounted(load)
         <a-table-column title="目标" data-index="content_goal" key="goal" />
         <a-table-column title="状态" key="status"><template #default="{ record }"><span class="task-status" :class="record.status">{{ statusLabels[record.status] || record.status }}</span></template></a-table-column>
         <a-table-column title="更新时间" data-index="updated_at" key="updated" />
-        <a-table-column title="操作" key="actions" width="150"><template #default="{ record }"><div class="row-actions" @click.stop><a-button type="text" @click="duplicate(record)"><Copy :size="15" /></a-button><a-button type="text" danger @click="remove(record)"><Trash2 :size="15" /></a-button></div></template></a-table-column>
+        <a-table-column title="操作" key="actions" width="150"><template #default="{ record }"><div class="row-actions" @click.stop><a-button v-if="record.runtime_config_snapshot?.creation_mode !== 'original'" type="text" @click="duplicate(record)"><Copy :size="15" /></a-button><a-button type="text" danger @click="remove(record)"><Trash2 :size="15" /></a-button></div></template></a-table-column>
       </a-table>
     </section>
   </div>

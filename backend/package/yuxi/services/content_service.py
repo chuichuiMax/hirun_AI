@@ -94,6 +94,19 @@ def _require_v3_task(task: ContentTask | None) -> None:
         )
 
 
+def _creation_mode(task: ContentTask) -> str:
+    return str((task.runtime_config_snapshot_json or {}).get("creation_mode") or "")
+
+
+def _require_viral_rewrite_writable(task: ContentTask) -> None:
+    if _creation_mode(task) != "viral_rewrite":
+        raise _content_error(
+            422,
+            "CONTENT_ORIGINAL_READONLY",
+            "历史原创任务已只读，不能新建、继续跑、保存简报、回修或复制",
+        )
+
+
 def _require_runnable_v3_task(task: ContentTask | None) -> None:
     _require_v3_task(task)
     if getattr(task, "workflow_version_id", None) in LEGACY_PLATFORM_WORKFLOW_V3_IDS:
@@ -103,6 +116,7 @@ def _require_runnable_v3_task(task: ContentTask | None) -> None:
             "该任务绑定旧版 V3 工作流与 checkpoint，仅保留历史查询；请复制或新建任务后使用新版工作流生产",
             workflow_version_id=task.workflow_version_id,
         )
+    _require_viral_rewrite_writable(task)
 
 
 def _validate_model_spec(model_spec: str | None) -> str | None:
@@ -879,6 +893,7 @@ async def duplicate_content_task(db: AsyncSession, user: User, task_id: str) -> 
     if source is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
     _require_v3_task(source)
+    _require_viral_rewrite_writable(source)
     template = await repo.get_template(source.industry_template_version_id)
     if template is None:
         raise _content_error(409, "CONTENT_TEMPLATE_VERSION_MISSING", "原任务的行业模板版本不存在")
@@ -931,6 +946,7 @@ async def save_content_brief(
     if task is None:
         raise _content_error(404, "CONTENT_TASK_NOT_FOUND", "内容任务不存在")
     _require_v3_task(task)
+    _require_viral_rewrite_writable(task)
     template = await repo.get_template(task.industry_template_version_id)
     if template is None:
         raise _content_error(409, "CONTENT_TEMPLATE_VERSION_MISSING", "任务绑定的行业模板版本不存在")
@@ -1924,6 +1940,7 @@ async def update_content_artifact(
         raise _content_error(404, "CONTENT_ARTIFACT_NOT_FOUND", "内容资产不存在")
     task = await repo.get_task_for_user(artifact.task_id, user, for_update=True)
     _require_v3_task(task)
+    _require_viral_rewrite_writable(task)
     artifact.title = payload.title.strip()
     artifact.body = payload.body.strip()
     artifact.topics = payload.topics

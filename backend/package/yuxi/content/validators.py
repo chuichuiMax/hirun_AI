@@ -244,3 +244,100 @@ def validate_content(
 
     status = "blocked" if any(item["level"] == "error" for item in checks) else "warning" if checks else "passed"
     return {"status": status, "checks": checks}
+
+
+HARD_CTA_TERMS = ("立即咨询", "马上预约", "点击下方", "私信下单")
+MARKDOWN_PATTERN = re.compile(r"(?m)^#{1,6}\s|^\s*[-*]\s|\*\*")
+_TITLE_SELL_GROUPS = (
+    ("number", re.compile(r"\d")),
+    ("price", re.compile(r"报价|预算|万元|元")),
+    ("craft", re.compile(r"工艺|工序|验收")),
+    ("result", re.compile(r"效果|翻新|改造")),
+)
+
+
+def _check(code: str, location: str, message: str, evidence_ids: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "code": code,
+        "level": "error",
+        "location": location,
+        "message": message,
+        "evidence_ids": evidence_ids or [],
+    }
+
+
+def validate_viral_v5_content(
+    *,
+    title: str,
+    body: str,
+    topics: list[str],
+    brief: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+    strategy: dict[str, Any],
+    rule_bundle: dict[str, Any] | None = None,
+    revision_lock: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from yuxi.content.v3.modular_rules import strip_keycap_numbers
+
+    report = validate_content(
+        title=title,
+        body=body,
+        topics=topics,
+        brief=brief,
+        evidence_bundle=evidence_bundle,
+        strategy=strategy,
+    )
+    checks = [item for item in report.get("checks") or [] if item.get("code") != "FACT_NUMBER_WITHOUT_SOURCE"]
+    sell_hits = [name for name, pattern in _TITLE_SELL_GROUPS if pattern.search(title or "")]
+    if len(sell_hits) >= 2:
+        checks.append(_check("TITLE_MULTI_SELLING_POINT", "title", "标题只能有一个主卖点，不要叠加价格、工艺和结果"))
+    combined = f"{title}\n{body}\n{' '.join(topics)}"
+    for term in HARD_CTA_TERMS:
+        if term in combined:
+            checks.append(_check("CTA_HARD_SELL", "body", f"禁止硬推销 CTA「{term}」"))
+    if MARKDOWN_PATTERN.search(body or ""):
+        checks.append(_check("BODY_MARKDOWN_FORBIDDEN", "body", "正文禁止 Markdown 标题、列表或加粗标记"))
+    if any(len(paragraph) > 180 for paragraph in re.split(r"\n+", body or "") if paragraph.strip()):
+        checks.append(_check("BODY_PARAGRAPH_TOO_LONG", "body", "正文存在超过 180 字的长段，请拆成可扫读短段"))
+    normalized_topics = [str(item or "").strip().lstrip("#") for item in topics]
+    if len(normalized_topics) != 10:
+        checks.append(_check("TOPIC_COUNT_INVALID", "topics", "话题必须正好 10 个"))
+    pool = {str(item).strip().lstrip("#") for item in (rule_bundle or {}).get("topic_candidate_pool") or []}
+    if pool:
+        unknown = [item for item in normalized_topics if item and item not in pool]
+        if unknown:
+            checks.append(_check("TOPIC_NOT_IN_POOL", "topics", f"话题不在候选池: {'、'.join(unknown[:5])}"))
+    scanned = strip_keycap_numbers(combined)
+    for number in unsupported_number_tokens(scanned, evidence_bundle):
+        already = any(
+            item.get("code") == "FACT_NUMBER_WITHOUT_SOURCE" and number in item.get("message", "") for item in checks
+        )
+        if already:
+            continue
+        checks.append(_check("FACT_NUMBER_WITHOUT_SOURCE", "content", f"数字“{number}”没有出现在证据包中"))
+    lock = revision_lock or {}
+    if lock.get("title") and title != lock["title"]:
+        checks.append(_check("TITLE_LOCKED_TEXT_CHANGED", "title", "回修不得改动已锁定标题"))
+    for paragraph in lock.get("locked_paragraphs") or []:
+        if paragraph and paragraph not in (body or ""):
+            checks.append(_check("BODY_LOCKED_TEXT_CHANGED", "body", "回修不得改动已锁定段落"))
+    city = None
+    job = None
+    for item in evidence_bundle.get("items") or []:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if metadata.get("material_type") != "price":
+            continue
+        value = item.get("value") if isinstance(item.get("value"), dict) else {}
+        city = city or metadata.get("city") or value.get("city")
+        job = job or metadata.get("job") or metadata.get("trade") or value.get("job")
+    if isinstance(city, str) and city and city not in combined:
+        price_ids = [
+            str(item.get("id") or "")
+            for item in evidence_bundle.get("items") or []
+            if (item.get("metadata") or {}).get("material_type") == "price"
+        ]
+        checks.append(_check("PRICE_CITY_MISMATCH", "body", "正文城市必须与报价证据同源", price_ids))
+    if isinstance(job, str) and job and job not in combined:
+        checks.append(_check("PRICE_TRADE_MISMATCH", "body", "正文工种必须与报价证据同源"))
+    status = "blocked" if any(item["level"] == "error" for item in checks) else "warning" if checks else "passed"
+    return {"status": status, "checks": checks}

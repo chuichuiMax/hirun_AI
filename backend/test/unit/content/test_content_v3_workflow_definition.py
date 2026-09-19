@@ -217,6 +217,8 @@ def test_strategy_is_deterministic_and_generation_remains_one_agent_call():
     assert generation["required_skills"] == [
         "content-title-generator",
         "content-body-generator",
+        "viral-layout-formatter",
+        "humanizer-zh",
         "content-human-expression",
     ]
     assert generation["token_budget"] == 8000

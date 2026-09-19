@@ -12,8 +12,12 @@ from yuxi.content.control.evidence import EvidenceApplicationService
 from yuxi.content.control.strategy.recommend_v3 import StrategyPreviewActor
 from yuxi.content.infrastructure.postgres.decision_snapshot_repository import PostgresDecisionSnapshotRepository
 from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
-from yuxi.content.model.contracts import StrategySnapshotV1, knowledge_body_evidence_ids
-from yuxi.content.model.contracts import ContractDomainContext, StrategySnapshotV1, validate_content_node_result
+from yuxi.content.model.contracts import (
+    ContractDomainContext,
+    StrategySnapshotV1,
+    knowledge_body_evidence_ids,
+    validate_content_node_result,
+)
 from yuxi.content.model.evidence import (
     EvidenceBundleV1,
     EvidenceGovernanceError,
@@ -34,7 +38,7 @@ from yuxi.content.service_entry_form import (
     filter_title_formulas_for_content_direction,
 )
 from yuxi.content.validation import ComplianceEngine, validate_numeric_evidence_coverage
-from yuxi.content.validators import validate_content
+from yuxi.content.validators import validate_content, validate_viral_v5_content
 from yuxi.content.control.workflow.external_wait import skip_formula_lexicon_pipeline
 from yuxi.content.control.workflow.generation_input import compact_evidence_items_for_bundle
 from yuxi.content.v3.body_calling import SOURCE_METADATA as BODY_CALLING_SOURCE
@@ -249,6 +253,8 @@ class V3DeterministicNodeHandler:
             "match_combination_group": self._match_combination_group,
             "resolve_formula_requirements": self._resolve_formula_requirements,
             "freeze_evidence_bundle": self._freeze_evidence_bundle,
+            "freeze_rule_bundle": self._freeze_rule_bundle,
+            "retrieve_expression_kbs": self._retrieve_expression_kbs,
             "prepare_formula_selection": self._prepare_formula_selection,
             "resolve_product_material_requirements": self._resolve_product_material_requirements,
             "freeze_product_evidence_bundle": self._freeze_product_evidence_bundle,
@@ -987,6 +993,145 @@ class V3DeterministicNodeHandler:
         return {"evidence_bundle": bundle.model_dump(mode="json")}
 
     @staticmethod
+    async def _freeze_rule_bundle(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
+        del db, node_run_id
+        from yuxi.content.v3.modular_rules import compile_content_rule_bundle, has_price_signal, resolve_visual_intent
+
+        brief = state.get("content_brief") or {}
+        strategy = state.get("strategy_snapshot") or {}
+        evidence = state.get("evidence_bundle") or {}
+        viral = state.get("viral_reference_selection") or {}
+        bundle = compile_content_rule_bundle(
+            brief=brief,
+            strategy_snapshot=strategy,
+            extra_topics=viral.get("topic_candidates") or [],
+        )
+        visual_material = (state.get("runtime_config_snapshot") or {}).get("visual_material") or {}
+        required_assets = [visual_material["image_asset_id"]] if visual_material.get("image_asset_id") else []
+        allowed_visual = [
+            str(item["id"])
+            for item in evidence.get("items") or []
+            if isinstance(item, dict) and item.get("id") and "visual" in (item.get("allowed_usage") or [])
+        ]
+        return {
+            "content_rule_bundle": bundle,
+            "required_visual_intent": resolve_visual_intent(
+                brief=brief,
+                evidence_bundle=evidence,
+                has_price=has_price_signal(evidence_bundle=evidence, strategy_snapshot=strategy, brief=brief),
+            ),
+            "required_source_asset_ids": required_assets,
+            "allowed_visual_evidence_ids": allowed_visual,
+        }
+
+    @staticmethod
+    async def _retrieve_named_expression_chunks(db: AsyncSession, name: str, query: str) -> tuple[str, list[str]]:
+        import inspect
+
+        from yuxi.content.control.errors import ContentApplicationError
+        from yuxi.content.v3.modular_rules import EXPRESSION_MAX_CHARS, EXPRESSION_MAX_CHUNKS
+
+        rows = list((await db.execute(select(KnowledgeBase).where(KnowledgeBase.name == name))).scalars().all())
+        if not rows:
+            raise ContentApplicationError("expression_kb_missing", f"缺少全局表达知识库「{name}」", "invalid")
+        if len(rows) > 1:
+            raise ContentApplicationError("expression_kb_conflict", f"表达知识库「{name}」存在同名冲突", "invalid")
+        kb_id = str(rows[0].kb_id)
+        from yuxi import knowledge_base as kb_runtime
+
+        target = (kb_runtime.get_retrievers() or {}).get(kb_id) or {}
+        retriever = target.get("retriever")
+        if not callable(retriever):
+            raise ContentApplicationError("expression_kb_unavailable", f"表达知识库「{name}」检索器不可用", "invalid")
+        result = retriever(query)
+        if inspect.isawaitable(result):
+            result = await result
+        excerpts: list[str] = []
+        for item in (result.get("results") if isinstance(result, dict) else []) or []:
+            content = item.get("content") if isinstance(item, dict) else None
+            if isinstance(content, str) and content.strip():
+                excerpts.append(content.strip()[:EXPRESSION_MAX_CHARS])
+            if len(excerpts) >= EXPRESSION_MAX_CHUNKS:
+                break
+        if not excerpts:
+            raise ContentApplicationError("expression_kb_empty", f"表达知识库「{name}」无召回", "invalid")
+        return kb_id, excerpts
+
+    async def _retrieve_expression_kbs(
+        self, *, db: AsyncSession, state: dict[str, Any], node_run_id: str
+    ) -> dict[str, Any]:
+        import asyncio
+        import hashlib
+
+        from yuxi.content.control.errors import ContentApplicationError
+        from yuxi.content.v3.modular_rules import (
+            ADVANTAGE_KB_NAME,
+            EXPRESSION_KB_NAMES,
+            freeze_expression_snapshot,
+            sanitize_expression_chunks,
+        )
+
+        del node_run_id
+        brief = state.get("content_brief") or {}
+        form_values = brief.get("form_values") if isinstance(brief.get("form_values"), dict) else {}
+        query = " ".join(
+            str(form_values.get(key) or "").strip()
+            for key in ("topic", "process_type", "project_stage", "pain", "content_goal")
+        ).strip() or "装修表达"
+        retrieved = await asyncio.gather(
+            *(self._retrieve_named_expression_chunks(db, name, query) for name in EXPRESSION_KB_NAMES)
+        )
+        by_name = {name: chunks for name, (_kb_id, chunks) in zip(EXPRESSION_KB_NAMES, retrieved)}
+        advantage_kb_id, advantage_chunks = retrieved[0]
+        tone = sanitize_expression_chunks(by_name["表达语气库"])
+        concrete = sanitize_expression_chunks(by_name["具象表达"])
+        if not tone or not concrete:
+            raise ContentApplicationError("expression_kb_empty", "表达语气库或具象表达清洗后无可用召回", "invalid")
+        snapshot = freeze_expression_snapshot(
+            libraries={"表达语气库": tone, "具象表达": concrete},
+            advantage_chunks=advantage_chunks,
+        )
+        current = EvidenceBundleV1.model_validate(state["evidence_bundle"])
+        additions = []
+        for index, chunk in enumerate(advantage_chunks):
+            digest = hashlib.sha256(f"{state['task_id']}:advantage:{index}:{chunk}".encode()).hexdigest()
+            additions.append(
+                EvidenceItemV1.model_validate(
+                    {
+                        "id": f"ev_{digest[:16]}",
+                        "variable_codes": ("advantage",),
+                        "value": chunk,
+                        "source_type": "knowledge_base",
+                        "source_id": f"kb:{advantage_kb_id}",
+                        "source_version": "expression-v5",
+                        "verified_status": "retrieved",
+                        "allowed_usage": ["body"],
+                        "metadata": {
+                            "knowledge_base_name": ADVANTAGE_KB_NAME,
+                            "material_type": "knowledge_base",
+                            "expression_snapshot_hash": snapshot["snapshot_hash"],
+                        },
+                        "source_hash": hashlib.sha256(chunk.encode("utf-8")).hexdigest(),
+                    }
+                )
+            )
+        bundle = next_evidence_bundle_version(current, additions=additions, citations=list(current.citations))
+        await EvidenceApplicationService(db).persist_frozen_bundle(
+            bundle,
+            run_id=state["run_id"],
+            thread_id=state["task_id"],
+            added_evidence_ids=tuple(item.id for item in additions),
+        )
+        return {
+            "evidence_bundle": bundle.model_dump(mode="json"),
+            "expression_guidance": {
+                **snapshot["expression_guidance"],
+                "snapshot_hash": snapshot["snapshot_hash"],
+            },
+            "expression_snapshot": snapshot,
+        }
+
+    @staticmethod
     async def _merge_research_evidence(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
         del db, node_run_id
         collections = [
@@ -1422,18 +1567,33 @@ class V3DeterministicNodeHandler:
         del db, node_run_id
         draft = state.get("content_draft") or {}
         body = draft.get("body", "")
-        report = validate_content(
-            title=(state.get("selected_title") or {}).get("text", ""),
-            body=body,
-            topics=draft.get("topics") or [],
-            brief=state["content_brief"],
-            evidence_bundle=state["evidence_bundle"],
-            strategy={
-                "methods": (state.get("strategy_snapshot") or {}).get("creation_methods"),
-                "title_formula_code": ((state.get("strategy_snapshot") or {}).get("title_formula") or {}).get("code"),
-                "body_formula_code": ((state.get("strategy_snapshot") or {}).get("body_formula") or {}).get("code"),
-            },
-        )
+        title = (state.get("selected_title") or {}).get("text", "")
+        topics = draft.get("topics") or []
+        strategy = {
+            "methods": (state.get("strategy_snapshot") or {}).get("creation_methods"),
+            "title_formula_code": ((state.get("strategy_snapshot") or {}).get("title_formula") or {}).get("code"),
+            "body_formula_code": ((state.get("strategy_snapshot") or {}).get("body_formula") or {}).get("code"),
+        }
+        if state.get("content_rule_bundle"):
+            report = validate_viral_v5_content(
+                title=title,
+                body=body,
+                topics=topics,
+                brief=state["content_brief"],
+                evidence_bundle=state["evidence_bundle"],
+                strategy=strategy,
+                rule_bundle=state.get("content_rule_bundle"),
+                revision_lock=state.get("revision_lock"),
+            )
+        else:
+            report = validate_content(
+                title=title,
+                body=body,
+                topics=topics,
+                brief=state["content_brief"],
+                evidence_bundle=state["evidence_bundle"],
+                strategy=strategy,
+            )
         if not 200 <= len(body) <= 650:
             report["checks"].append(
                 {
@@ -1541,7 +1701,23 @@ class V3DeterministicNodeHandler:
             if item.get("level") == "error":
                 report["checks"].append(item)
                 report["status"] = "blocked"
-        return {"validation_report": report}
+        result = {"validation_report": report}
+        if state.get("content_rule_bundle") and report.get("status") == "blocked":
+            codes = [str(item.get("code") or "") for item in report.get("checks") or [] if item.get("level") == "error"]
+            lock = dict(state.get("revision_lock") or {})
+            title_only = any(code.startswith("TITLE_") for code in codes) and not any(
+                code.startswith("BODY_") for code in codes
+            )
+            body_only = any(code.startswith("BODY_") for code in codes) and not any(
+                code.startswith("TITLE_") for code in codes
+            )
+            if title_only:
+                lock["body"] = body
+                lock["locked_paragraphs"] = [part for part in re.split(r"\n+", body) if part.strip()]
+            if body_only:
+                lock["title"] = title
+            result["revision_lock"] = lock
+        return result
 
     @staticmethod
     async def _package_for_distribution(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:

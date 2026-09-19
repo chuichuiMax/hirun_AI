@@ -29,6 +29,7 @@ class EmployeeCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     login_account: str = Field(min_length=1, max_length=64)
     gender: Gender
+    age: int | None = Field(default=None, ge=1, le=120)
     login_port: list[LoginPort] = Field(min_length=1)
     role: str = Field(min_length=1, max_length=64)
     enabled: bool = True
@@ -39,6 +40,7 @@ class EmployeeUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     login_account: str | None = Field(default=None, min_length=1, max_length=64)
     gender: Gender | None = None
+    age: int | None = Field(default=None, ge=1, le=120)
     login_port: list[LoginPort] | None = Field(default=None, min_length=1)
     role: str | None = Field(default=None, min_length=1, max_length=64)
     enabled: bool | None = None
@@ -152,6 +154,7 @@ def _user_row(user: User) -> dict[str, Any]:
         "name": user.username,
         "login_account": user.phone_number or user.uid,
         "gender": "",
+        "age": None,
         "login_port": ["pc"],
         "role": SYSTEM_ROLE_LABELS.get(user.role, user.role),
         "enabled": True,
@@ -208,6 +211,7 @@ async def create_employee(db: AsyncSession, user: User, payload: EmployeeCreate)
                 "name": _normalize_text(payload.name, field="姓名"),
                 "login_account": login_account,
                 "gender": payload.gender,
+                "age": payload.age,
                 "login_port": _normalize_login_ports(payload.login_port),
                 "role": role,
                 "enabled": payload.enabled,

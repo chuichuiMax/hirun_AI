@@ -42,7 +42,7 @@ async def load_strategy_profiles(repo, locked_versions: dict) -> tuple[dict, dic
 def project_strategy_input(payload: dict, *, channel_profile: dict, persona_profile: dict) -> dict:
     # 完整输入先由 JointStrategyInputV1/ReevaluateJointStrategyInputV1 校验并保留。
     view = deepcopy(payload)
-    mode = view["runtime_config_snapshot"].get("creation_mode", "original")
+    mode = view["runtime_config_snapshot"].get("creation_mode", "viral_rewrite")
     view["runtime_config_snapshot"] = {"creation_mode": mode}
     view["channel_profile"] = deepcopy(channel_profile)
     view["persona_profile"] = deepcopy(persona_profile)

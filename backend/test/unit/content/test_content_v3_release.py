@@ -64,7 +64,7 @@ async def test_v34_brief_compiles_without_visual_material(monkeypatch):
         current_stage="brief",
         selected_image_item_id=None,
         selected_poster_template_id=None,
-        runtime_config_snapshot_json={"schema_version": 3},
+        runtime_config_snapshot_json={"schema_version": 3, "creation_mode": "viral_rewrite"},
         strategy_json={},
         to_dict=lambda: {
             "id": "task-v34",
@@ -122,7 +122,7 @@ async def test_pc_review_notes_compile_ignores_photos(monkeypatch):
         mode="quick",
         selected_image_item_id=None,
         selected_poster_template_id=None,
-        runtime_config_snapshot_json={"schema_version": 3},
+        runtime_config_snapshot_json={"schema_version": 3, "creation_mode": "viral_rewrite"},
         strategy_json={},
         to_dict=lambda: {"id": "task-review-notes"},
     )
@@ -200,7 +200,7 @@ async def test_save_brief_rejects_image_selected_by_another_task(monkeypatch):
         selected_image_item_id=None,
         selected_poster_template_id=None,
         brief_json={},
-        runtime_config_snapshot_json={"schema_version": 3},
+        runtime_config_snapshot_json={"schema_version": 3, "creation_mode": "viral_rewrite"},
         to_dict=lambda: {"id": "task-v3-in-use"},
     )
 
@@ -263,7 +263,7 @@ async def test_v37_brief_rejects_hycanvas_template_without_image(monkeypatch):
         current_stage="brief",
         selected_image_item_id=None,
         selected_poster_template_id=None,
-        runtime_config_snapshot_json={"schema_version": 3},
+        runtime_config_snapshot_json={"schema_version": 3, "creation_mode": "viral_rewrite"},
         strategy_json={},
         brief_json={},
         to_dict=lambda: {
@@ -320,7 +320,7 @@ async def test_v3_run_starts_from_brief_without_legacy_strategy(monkeypatch):
         workflow_version_id=PLATFORM_WORKFLOW_V3_ID,
         brief_json={"form_values": {"brand_name": "测试品牌"}},
         strategy_json={},
-        runtime_config_snapshot_json={"schema_version": 3},
+        runtime_config_snapshot_json={"schema_version": 3, "creation_mode": "viral_rewrite"},
     )
 
     class FakeRepo:
@@ -381,7 +381,7 @@ async def test_previous_v3_checkpoint_is_read_only_after_new_contract_release(mo
         id="task-old-v3",
         workflow_version_id=LEGACY_PLATFORM_WORKFLOW_V3_ID,
         brief_json={"form_values": {"brand_name": "历史品牌"}},
-        runtime_config_snapshot_json={"schema_version": 3},
+        runtime_config_snapshot_json={"schema_version": 3, "creation_mode": "viral_rewrite"},
     )
 
     class FakeRepo:
@@ -451,6 +451,7 @@ async def test_new_tasks_only_lock_v3_rule_pack_and_workflow(monkeypatch):
                 status="published",
                 version=3,
                 schema_version=3,
+                source_metadata={},
             )
 
         async def create_task(self, **kwargs):
@@ -479,7 +480,7 @@ async def test_new_tasks_only_lock_v3_rule_pack_and_workflow(monkeypatch):
     )
 
     assert result["task"]["runtime_config_snapshot"]["schema_version"] == 3
-    assert result["task"]["runtime_config_snapshot"]["creation_mode"] == "original"
+    assert result["task"]["runtime_config_snapshot"]["creation_mode"] == "viral_rewrite"
     assert created[0]["rule_version_id"] == "rules-v3"
     assert created[0]["workflow_version"].id == "workflow-v3"
     assert created[0]["industry_pack_version_id"] == "industry-pack-decoration-v3"

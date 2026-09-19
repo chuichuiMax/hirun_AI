@@ -7,7 +7,9 @@ def test_content_human_expression_skill_preserves_facts_and_persona_boundaries()
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "content-human-expression")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "2.1.1"
+    assert spec.version == "2.1.3"
+    assert "装修家居收尾" in skill_text
+    assert "📍〔城市或同城〕" in skill_text
     assert "自然语气" in skill_text
     assert "情绪推进" in skill_text
     assert "稳定人设" in skill_text
@@ -47,7 +49,7 @@ def test_body_generator_preserves_channel_expression_in_original_lists():
     spec = next(item for item in BUILTIN_SKILLS if item.slug == "content-body-generator")
     skill_text = (Path(spec.source_dir) / "SKILL.md").read_text(encoding="utf-8")
 
-    assert spec.version == "2.10.2"
+    assert spec.version == "2.10.4"
     assert "E01" in skill_text
     assert "style_excerpts" in skill_text
     assert "submit_content_node_result" in skill_text
@@ -60,4 +62,8 @@ def test_body_generator_preserves_channel_expression_in_original_lists():
     assert "定制化家装" in skill_text
     assert "口径" in skill_text
     assert "content-human-expression" in skill_text
-    assert "真实换行分段落" in skill_text
+    assert "viral-layout-formatter" in skill_text
+    assert "humanizer-zh" in skill_text
+    assert "真实换行" in skill_text
+    assert "📍常德｜准备装修的朋友" in skill_text
+    assert "欢迎在评论区聊聊" in skill_text

@@ -1280,10 +1280,11 @@ def list_builtin_skill_specs() -> list[dict[str, Any]]:
         if parsed_slug != slug:
             raise ValueError(f"内置 skill frontmatter.slug 必须等于 slug: {slug}")
 
+        display_name = str(getattr(raw_spec, "display_name", "") or "").strip()
         specs.append(
             {
                 "slug": slug,
-                "name": parsed_name,
+                "name": display_name or parsed_name,
                 "description": configured_description or parsed_desc,
                 "version": version,
                 "tool_dependencies": configured_tools or normalize_string_list(meta.get("tool_dependencies")),

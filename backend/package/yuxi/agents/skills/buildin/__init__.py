@@ -10,6 +10,7 @@ class BuiltinSkillSpec:
     source_dir: Path
     description: str = ""
     version: str = "1.0.0"
+    display_name: str = ""
     tool_dependencies: tuple[str, ...] = ()
     mcp_dependencies: tuple[str, ...] = ()
     skill_dependencies: tuple[str, ...] = ()
@@ -132,14 +133,14 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="content-body-generator",
         source_dir=_SKILLS_ROOT / "content-body-generator",
         description="使用人工锁定标题、正文公式和同源证据生成正文与话题。",
-        version="2.10.2",
+        version="2.10.4",
         tool_dependencies=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
     ),
     BuiltinSkillSpec(
         slug="content-human-expression",
         source_dir=_SKILLS_ROOT / "content-human-expression",
         description="在不改变事实、公式和证据的前提下，落实人设语气、情绪与数据事项的 Emoji 功能覆盖和封禁词替换。",
-        version="2.1.1",
+        version="2.1.3",
     ),
     BuiltinSkillSpec(
         slug="viral-structure-rewriter",
@@ -169,10 +170,92 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         version="1.1.0",
     ),
     BuiltinSkillSpec(
+        slug="viral-author-core",
+        source_dir=_SKILLS_ROOT / "viral-author-core",
+        display_name="爆款创作核心",
+        description="冻结规则下一次提交标题与正文；只写可追溯事实。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-title-author",
+        source_dir=_SKILLS_ROOT / "viral-title-author",
+        display_name="爆款标题",
+        description="按锁定公式写单主卖点标题。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-body-author",
+        source_dir=_SKILLS_ROOT / "viral-body-author",
+        display_name="爆款正文",
+        description="按锁定结构写 200～650 字正文。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-persona-author",
+        source_dir=_SKILLS_ROOT / "viral-persona-author",
+        display_name="爆款人设",
+        description="按人设语气写，不改事实。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-natural-expression",
+        source_dir=_SKILLS_ROOT / "viral-natural-expression",
+        display_name="自然表达",
+        description="去掉机械腔，用口语短句。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-layout-expression",
+        source_dir=_SKILLS_ROOT / "viral-layout-expression",
+        display_name="排版表达",
+        description="可扫读分段，不用 Markdown。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-platform-expression",
+        source_dir=_SKILLS_ROOT / "viral-platform-expression",
+        display_name="平台表达",
+        description="克制 CTA 与平台语气。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-price-author",
+        source_dir=_SKILLS_ROOT / "viral-price-author",
+        display_name="报价表达",
+        description="有报价证据时才写预算价，必须同源。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-topic-author",
+        source_dir=_SKILLS_ROOT / "viral-topic-author",
+        display_name="话题表达",
+        description="正好输出 10 个候选池话题。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
+        slug="viral-modular-reviewer",
+        source_dir=_SKILLS_ROOT / "viral-modular-reviewer",
+        display_name="模块审核",
+        description="按问题码审核，不改写正文。",
+        version="1.0.0",
+        tool_dependencies=(
+            "query_kb",
+            "open_kb_document",
+            "find_kb_document",
+        ),
+    ),
+    BuiltinSkillSpec(
+        slug="viral-cover-matcher",
+        source_dir=_SKILLS_ROOT / "viral-cover-matcher",
+        display_name="封面匹配",
+        description="逐字复制服务端视觉锁定值。",
+        version="1.0.0",
+    ),
+    BuiltinSkillSpec(
         slug="content-reviewer",
         source_dir=_SKILLS_ROOT / "content-reviewer",
         description="审核公式执行、事实一致性、人设语气和内容风险。",
-        version="1.10.7",
+        version="1.10.8",
         tool_dependencies=(
             "query_kb",
             "open_kb_document",

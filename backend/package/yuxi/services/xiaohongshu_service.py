@@ -722,6 +722,8 @@ async def create_distribution(
     artifact = await content_repo.get_artifact(artifact_id)
     if artifact is None or artifact.created_by != owner_uid:
         raise _error(404, "CONTENT_ARTIFACT_NOT_FOUND", "内容作品不存在")
+    if (artifact.runtime_config_snapshot or {}).get("creation_mode") != "viral_rewrite":
+        raise _error(422, "CONTENT_ORIGINAL_READONLY", "历史原创任务已只读，不能分发")
     review_status = (artifact.review_snapshot or {}).get("status")
     if review_status not in {"passed", "warning"}:
         raise _error(409, "CONTENT_REVIEW_BLOCKED", "内容需通过审核后才能分发")

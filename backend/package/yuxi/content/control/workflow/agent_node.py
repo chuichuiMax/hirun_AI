@@ -82,6 +82,7 @@ DECORATION_GENERATE_PROHIBITED_ACTIONS = (
     "正文不写单户改造故事；须含已有小区/面积/风格与鸿扬家装、品牌优势与引流；写定制化家装禁整装；真实换行分段，口语自然，按人味 Skill 放语义表情",
     "CT02 标题可读（面积+翻新+钱花哪），不以低价主卖；CT05 讲工艺禁风格/案例；预算价禁合同价/口径；泥木写泥瓦",
     "成品禁 forbidden_replacement_map 问题词（含报价/私信）；有知识证据须挂一条",
+    "收尾用📍城市｜朋友＋设问＋▫️列表＋💬评论区分行，禁止城市小区面积揉成一句墙字",
 )
 
 
@@ -235,10 +236,13 @@ class AgentNodeResultMapper:
                 report = _review_report_without_decoration_formulas(result)
             return {"review_report": report}
         if node_id == "plan_visuals":
-            canonical = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            payload = dict(result)
+            if payload.get("visual_intent") is None:
+                payload.pop("visual_intent", None)
+            canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             return {
                 "visual_plan": {
-                    **result,
+                    **payload,
                     "plan_hash": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
                 }
             }
@@ -429,6 +433,8 @@ class AgentNodeHandler:
                 *cover_asset_ids,
             ],
             "required_source_asset_ids": required_source_asset_ids,
+            "required_visual_intent": state.get("required_visual_intent"),
+            "allowed_visual_evidence_ids": list(state.get("allowed_visual_evidence_ids") or []),
             "visual_plan_hash": (state.get("visual_plan") or {}).get("plan_hash"),
             "state_version": int(state.get("state_version") or 0),
         }
@@ -505,7 +511,29 @@ class AgentNodeHandler:
             domain_context = replace(domain_context, joint_strategy_input=assembly.payload)
             required_skills = (*required_skills, state["strategy_candidates"]["selection_skill"])
         creation_mode = (state.get("runtime_config_snapshot") or {}).get("creation_mode", "original")
-        if node["id"] == "generate_content" and creation_mode == "viral_rewrite":
+        from yuxi.content.v3.joint_workflow import PLATFORM_WORKFLOW_V5_ID
+        from yuxi.content.v3.modular_rules import assemble_required_skills, has_price_signal
+
+        is_v5 = (state.get("runtime_config_snapshot") or {}).get("workflow_version_id") == PLATFORM_WORKFLOW_V5_ID
+        if is_v5 and node["id"] in {"generate_content", "semantic_review", "plan_visuals"}:
+            block_codes = [
+                str(item.get("code") or "")
+                for report in (state.get("validation_report"), state.get("review_report"))
+                for item in (report or {}).get("checks") or []
+                if item.get("level") == "error" or item.get("status") == "blocked"
+            ]
+            required_skills = tuple(
+                assemble_required_skills(
+                    node_id=node["id"],
+                    block_codes=block_codes,
+                    has_price=has_price_signal(
+                        evidence_bundle=state.get("evidence_bundle") or {},
+                        strategy_snapshot=state.get("strategy_snapshot") or {},
+                        brief=state.get("content_brief") or {},
+                    ),
+                )
+            )
+        elif node["id"] == "generate_content" and creation_mode == "viral_rewrite":
             required_skills = (
                 *required_skills,
                 "viral-structure-rewriter",

@@ -50,8 +50,11 @@ const auditSummary = computed(() => runAudit.value?.event_summary || {})
 const skillEvents = computed(() =>
   (runAudit.value?.events || []).filter((item) => item.event_type === 'content.skill.activated')
 )
+const isHistoricalOriginal = computed(
+  () => task.value?.runtime_config_snapshot?.creation_mode === 'original'
+)
 const canDistribute = computed(
-  () => artifact.value && ['passed', 'warning'].includes(reviewStatus.value)
+  () => !isHistoricalOriginal.value && artifact.value && ['passed', 'warning'].includes(reviewStatus.value)
 )
 
 const taskStatusLabels = {
@@ -146,10 +149,11 @@ onBeforeUnmount(() => {
           <a-button @click="router.push('/content/accounts')">
             <UserRoundCog :size="16" />账号管理
           </a-button>
-          <a-button @click="router.push(`/content/tasks/${task.id}`)">
+          <a-button v-if="!isHistoricalOriginal" @click="router.push(`/content/tasks/${task.id}`)">
             <FilePenLine :size="16" />继续编辑
           </a-button>
-          <a-tooltip v-if="!canDistribute" title="内容审核未通过，修订并重新审核后才能分发">
+          <span v-else class="readonly-hint">历史原创任务只读，不能编辑或分发。</span>
+          <a-tooltip v-if="!canDistribute && !isHistoricalOriginal" title="内容审核未通过，修订并重新审核后才能分发">
             <a-button type="primary" disabled><Send :size="16" />分发到小红书</a-button>
           </a-tooltip>
           <a-button v-else type="primary" @click="distributionOpen = true">

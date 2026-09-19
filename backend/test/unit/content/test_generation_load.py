@@ -80,8 +80,8 @@ def test_plan_visuals_allows_forced_submit_retry():
     assert context.reasoning_effort == "low"
     assert context.model_call_timeout_seconds == 180
     assert context.model_retry_times == 2
-    assert context._content_max_model_calls == 2
-    assert CONTENT_NODE_EXECUTION_LIMITS["plan_visuals"] == (400, 180, "low", 2)
+    assert context._content_max_model_calls == 3
+    assert CONTENT_NODE_EXECUTION_LIMITS["plan_visuals"] == (400, 180, "low", 3)
     idle = CONTENT_NODE_EXECUTION_LIMITS["plan_visuals"][1]
     assert CONTENT_NODE_EXECUTION_LIMITS["plan_visuals"][0] >= 2 * idle + 3 + 15
 
@@ -154,7 +154,7 @@ async def test_generate_content_caps_max_tokens_at_1200():
     assert captured == [1200]
 
 
-def test_original_generate_content_keeps_human_expression_skill():
+def test_original_generate_content_keeps_layout_humanizer_and_expression():
     from yuxi.services.agent_delegation_service import ORIGINAL_GENERATE_CONTENT_DROP_SKILLS
 
     request = SimpleNamespace(
@@ -184,9 +184,10 @@ def test_original_generate_content_keeps_human_expression_skill():
         context._required_skill_closure = [
             slug for slug in context._required_skill_closure if slug not in ORIGINAL_GENERATE_CONTENT_DROP_SKILLS
         ]
-    assert "viral-layout-formatter" not in context._required_skill_closure
+    assert "viral-structure-rewriter" not in context._required_skill_closure
     assert "content-outline-builder" not in context._required_skill_closure
-    assert "humanizer-zh" not in context._required_skill_closure
+    assert "viral-layout-formatter" in context._required_skill_closure
+    assert "humanizer-zh" in context._required_skill_closure
     assert "content-human-expression" in context._required_skill_closure
     assert "content-body-generator" in context._required_skill_closure
     assert "content-title-generator" in context._required_skill_closure

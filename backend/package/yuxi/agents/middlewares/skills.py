@@ -439,13 +439,15 @@ class SkillsMiddleware(AgentMiddleware):
             if slug in emitted:
                 continue
             snapshot = snapshots.get(slug) or {}
+            applied = (getattr(runtime_context, "_content_applied_skill_instructions", {}) or {}).get(slug) or {}
             await append_content_runtime_event(
                 runtime_context,
                 "content.skill.activated",
                 {
                     "skill_slug": slug,
-                    "skill_version": snapshot.get("version") or "unversioned",
-                    "content_hash": snapshot.get("content_hash") or "",
+                    "skill_version": snapshot.get("version") or applied.get("version") or "unversioned",
+                    "content_hash": snapshot.get("content_hash") or applied.get("content_hash") or "",
+                    "instruction_hash": applied.get("applied_hash") or "",
                 },
             )
             emitted.add(slug)
@@ -515,7 +517,7 @@ class SkillsMiddleware(AgentMiddleware):
                     .get("runtime_config_snapshot", {})
                     .get(
                         "creation_mode",
-                        "original",
+                        "viral_rewrite",
                     )
                 )
                 if slug == "viral-layout-formatter":
@@ -534,15 +536,16 @@ class SkillsMiddleware(AgentMiddleware):
                         if mode == "original"
                         else instructions[:original_start] + instructions[rewrite_start:]
                     )
-                applied = getattr(runtime_context, "_content_applied_skill_instructions", {})
-                applied[slug] = {
-                    "mode": mode,
-                    "version": item.get("version"),
-                    "content_hash": item.get("content_hash"),
-                    "instruction_chars": len(instructions),
-                    "applied_hash": hashlib.sha256(instructions.encode()).hexdigest(),
-                }
-                runtime_context._content_applied_skill_instructions = applied
+            applied = getattr(runtime_context, "_content_applied_skill_instructions", {})
+            if not isinstance(applied, dict):
+                applied = {}
+            applied[slug] = {
+                "version": item.get("version"),
+                "content_hash": item.get("content_hash"),
+                "instruction_chars": len(instructions),
+                "applied_hash": hashlib.sha256(instructions.encode()).hexdigest(),
+            }
+            runtime_context._content_applied_skill_instructions = applied
             sections.append(f'\n<required-skill slug="{slug}">\n{instructions}\n</required-skill>')
         return "\n".join(sections)
 

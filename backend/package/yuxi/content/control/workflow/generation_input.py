@@ -444,7 +444,7 @@ def project_generation_input(payload: dict) -> dict:
     # 调用方必须先完成 GenerateContentInputV1 校验（包括冻结策略 hash）。
     projected = deepcopy(payload)
     review_notes = is_review_notes_generation(projected)
-    creation_mode = payload["runtime_config_snapshot"].get("creation_mode", "original")
+    creation_mode = payload["runtime_config_snapshot"].get("creation_mode", "viral_rewrite")
     strategy = projected["strategy_snapshot"]
     strategy.pop("decision", None)
     strategy["source_snapshot_hash"] = strategy.pop("snapshot_hash")
@@ -452,6 +452,19 @@ def project_generation_input(payload: dict) -> dict:
     projected["runtime_config_snapshot"] = {
         "creation_mode": creation_mode,
     }
+    projected.pop("content_rule_bundle", None)
+    guidance = projected.get("expression_guidance")
+    if isinstance(guidance, dict):
+        projected["expression_guidance"] = {
+            key: guidance.get(key)
+            for key in ("tone", "concrete", "snapshot_hash")
+            if key in guidance
+        }
+    lock = projected.get("revision_lock")
+    if isinstance(lock, dict):
+        projected["revision_lock"] = {
+            key: lock.get(key) for key in ("title", "body", "locked_paragraphs") if key in lock
+        }
     _slim_content_brief(projected["content_brief"])
     evidence_items = projected["evidence_bundle"].get("items", [])
     for item in evidence_items:

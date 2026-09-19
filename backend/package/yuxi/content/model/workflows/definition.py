@@ -109,8 +109,20 @@ class WorkflowDefinitionPolicy:
 
         cls._validate_dag(ids, edges)
         joint = definition.get("selection_policy") in {"agent_skill_v1", "blueprint_first_v1"}
-        cls._validate_v3_nodes(node_by_id, catalog, joint=joint, price_recovery=bool(definition.get("price_recovery")))
-        cls._validate_v3_control_flow(edges, joint=joint, price_recovery=bool(definition.get("price_recovery")))
+        viral_modular = bool(definition.get("viral_modular"))
+        cls._validate_v3_nodes(
+            node_by_id,
+            catalog,
+            joint=joint,
+            price_recovery=bool(definition.get("price_recovery")),
+            viral_modular=viral_modular,
+        )
+        cls._validate_v3_control_flow(
+            edges,
+            joint=joint,
+            price_recovery=bool(definition.get("price_recovery")),
+            viral_modular=viral_modular,
+        )
         cls._validate_revision_routes(definition.get("revision_routes") or [], node_by_id)
         cls._validate_runtime_limits(definition)
 
@@ -138,9 +150,9 @@ class WorkflowDefinitionPolicy:
     @classmethod
     def _validate_v3_nodes(
         cls, node_by_id: dict[str, dict[str, Any]], catalog: WorkflowCatalog | None,
-        *, joint: bool = False, price_recovery: bool = False,
+        *, joint: bool = False, price_recovery: bool = False, viral_modular: bool = False,
     ) -> None:
-        expected = 29 if joint and price_recovery else 25 if joint else 26
+        expected = 31 if viral_modular else 29 if joint and price_recovery else 25 if joint else 26
         if len(node_by_id) != expected:
             raise ValueError(f"内容与封面工作流必须声明 {expected} 个节点")
         if joint:
@@ -183,7 +195,9 @@ class WorkflowDefinitionPolicy:
                 raise ValueError("只有 revise_if_needed 可以使用 revision_router 类型")
 
     @staticmethod
-    def _validate_v3_control_flow(edges: list[Any], *, joint: bool = False, price_recovery: bool = False) -> None:
+    def _validate_v3_control_flow(
+        edges: list[Any], *, joint: bool = False, price_recovery: bool = False, viral_modular: bool = False
+    ) -> None:
         edge_set = {tuple(edge) for edge in edges}
         required = {
             ("deterministic_validate", "revise_if_needed"),
@@ -220,6 +234,15 @@ class WorkflowDefinitionPolicy:
             chain = ["select_creation_strategy", "research_strategy_prices", "confirm_strategy_prices",
                      "merge_strategy_prices", "reselect_creation_strategy", "lock_creation_strategy"]
             required.update(zip(chain, chain[1:]))
+        if viral_modular:
+            required.discard(("freeze_evidence_bundle", "generate_content"))
+            required.update(
+                {
+                    ("freeze_evidence_bundle", "freeze_rule_bundle"),
+                    ("freeze_rule_bundle", "retrieve_expression_kbs"),
+                    ("retrieve_expression_kbs", "generate_content"),
+                }
+            )
         if not required <= edge_set:
             raise ValueError("V3.7 工作流缺少策略锁定、并发调研汇总、爆款选择或固定回修链路")
         forbidden = {

@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 
+from yuxi.content.v3.modular_rules import GENERATE_ALL_SKILLS
 from yuxi.content.v3.workflow import WORKFLOW_V3, _agent, _fixed, _human
 
 PLATFORM_WORKFLOW_JOINT_ID = "content-workflow-agent-skill-v1"
@@ -55,7 +56,14 @@ WORKFLOW_BLUEPRINT_FIRST["selection_policy"] = "blueprint_first_v1"
 
 # 独立发布，历史任务仍使用原定义；最多检索和复评各一次。
 PLATFORM_WORKFLOW_PRICE_RECOVERY_ID = "content-workflow-blueprint-first-v2"
-BLUEPRINT_FIRST_WORKFLOW_IDS = frozenset({PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID, PLATFORM_WORKFLOW_PRICE_RECOVERY_ID})
+PLATFORM_WORKFLOW_V5_ID = "content-workflow-blueprint-first-v5"
+BLUEPRINT_FIRST_WORKFLOW_IDS = frozenset(
+    {
+        PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID,
+        PLATFORM_WORKFLOW_PRICE_RECOVERY_ID,
+        PLATFORM_WORKFLOW_V5_ID,
+    }
+)
 WORKFLOW_PRICE_RECOVERY = deepcopy(WORKFLOW_BLUEPRINT_FIRST)
 WORKFLOW_PRICE_RECOVERY["price_recovery"] = True
 selection = next(n for n in WORKFLOW_PRICE_RECOVERY["nodes"] if n["id"] == "select_creation_strategy")
@@ -81,3 +89,52 @@ WORKFLOW_PRICE_RECOVERY["nodes"][position:position] = recovery_nodes
 WORKFLOW_PRICE_RECOVERY["edges"].remove(["select_creation_strategy", "lock_creation_strategy"])
 chain = ["select_creation_strategy", *(n["id"] for n in recovery_nodes), "lock_creation_strategy"]
 WORKFLOW_PRICE_RECOVERY["edges"].extend([a, b] for a, b in zip(chain, chain[1:]))
+
+WORKFLOW_VIRAL_V5 = deepcopy(WORKFLOW_PRICE_RECOVERY)
+WORKFLOW_VIRAL_V5["viral_modular"] = True
+v5_nodes = WORKFLOW_VIRAL_V5["nodes"]
+freeze_index = next(index for index, node in enumerate(v5_nodes) if node["id"] == "freeze_evidence_bundle")
+v5_nodes[freeze_index + 1 : freeze_index + 1] = [
+    _fixed("freeze_rule_bundle"),
+    _fixed("retrieve_expression_kbs"),
+]
+generate = next(node for node in v5_nodes if node["id"] == "generate_content")
+generate["agent_slug"] = "content-viral-generation-agent"
+generate["required_skills"] = list(GENERATE_ALL_SKILLS)
+generate["optional_state_inputs"] = list(
+    dict.fromkeys(
+        [
+            *(generate.get("optional_state_inputs") or []),
+            "expression_guidance",
+            "content_rule_bundle",
+            "revision_lock",
+        ]
+    )
+)
+review = next(node for node in v5_nodes if node["id"] == "semantic_review")
+review["agent_slug"] = "content-viral-review-agent"
+review["required_skills"] = ["viral-modular-reviewer"]
+review["optional_state_inputs"] = list(
+    dict.fromkeys([*(review.get("optional_state_inputs") or []), "expression_guidance", "content_rule_bundle"])
+)
+visual = next(node for node in v5_nodes if node["id"] == "plan_visuals")
+visual["required_skills"] = ["content-visual-planner", "viral-cover-matcher"]
+visual["max_execution_steps"] = 16
+visual["state_inputs"] = list(
+    dict.fromkeys(
+        [
+            *visual["state_inputs"],
+            "required_visual_intent",
+            "required_source_asset_ids",
+            "allowed_visual_evidence_ids",
+        ]
+    )
+)
+WORKFLOW_VIRAL_V5["edges"].remove(["freeze_evidence_bundle", "generate_content"])
+WORKFLOW_VIRAL_V5["edges"].extend(
+    [
+        ["freeze_evidence_bundle", "freeze_rule_bundle"],
+        ["freeze_rule_bundle", "retrieve_expression_kbs"],
+        ["retrieve_expression_kbs", "generate_content"],
+    ]
+)

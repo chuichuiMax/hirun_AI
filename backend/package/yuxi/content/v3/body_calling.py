@@ -55,7 +55,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "persona_cta",
                 "name": "品牌优势+引流收尾",
-                "instruction": "用充足篇幅写鸿扬家居/鸿扬家装品牌优势（定制化家装、透明施工、规范工艺、售后与靠谱交付；禁止写成整装或标准化整装），再给明确引流点（同城咨询、看工艺、留言要参考清单）；费用数字不是收尾卖点，禁止写「私信」「报价」",
+                "instruction": "先短写鸿扬定制化家装优势（禁整装）；收尾必须📍城市｜朋友＋设问＋▫️列表＋💬评论区分行，禁止城市小区面积揉成一句；费用不是收尾卖点，禁「私信」「报价」",
                 "fill_rule": "使用服务反差/人设词库输出品牌与交付优势，并用结尾引导词库做轻咨询转化；词条含封禁问题词时改写成同城咨询/留言/评论区，禁止把低价写成转化理由",
                 "lexicon_calls": ["persona.service_contrast", "ending.quotation_cta"],
                 "fact_source": "lexicon_and_evidence",
@@ -128,7 +128,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "delivery_cta",
                 "name": "细节+人设收尾",
-                "instruction": "写明鸿扬家居/鸿扬家装品牌优势（定制化家装，禁止整装/标准化整装）与落地背书，并用明确引流点收尾（同城看工艺、咨询、留言）",
+                "instruction": "短写鸿扬定制化家装背书（禁整装）；收尾📍城市｜朋友＋设问＋▫️列表＋💬评论区分行，禁止「在某地朋友，如果也在为某盘某㎡」一句墙字",
                 "fill_rule": "使用落地背书词库作短背书，并用案例引导词库收尾；禁止长篇案例叙事",
                 "lexicon_calls": ["persona.delivery_endorsement", "ending.case_cta"],
                 "fact_source": "lexicon_and_evidence",
@@ -176,7 +176,7 @@ DECORATION_BODY_CALLING: dict[str, dict[str, Any]] = {
             {
                 "id": "craftsman_advice",
                 "name": "匠人忠告收尾",
-                "instruction": "输出真诚工艺价值观与避坑理念，可补鸿扬品牌优势与同城咨询/留言引流；不要写成案例分享收尾",
+                "instruction": "短写工艺避坑理念后，收尾📍城市｜朋友＋设问＋▫️列表＋💬评论区分行；不要写成案例分享，也不要把小区面积揉进一句墙字",
                 "fill_rule": "使用匠人忠告词库沉淀人设，不写无法证明的资历；禁用平台封禁词",
                 "lexicon_calls": ["persona.craftsman_advice"],
                 "fact_source": "lexicon_and_evidence",

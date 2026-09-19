@@ -72,7 +72,7 @@ const creation = reactive({
   industry_template_id: '',
   service_entry: '装修家居',
   mode: 'pro',
-  creation_mode: 'original',
+  creation_mode: 'viral_rewrite',
   content_goal: '',
   content_type_code: undefined,
   name: ''
@@ -100,7 +100,6 @@ const inspireDetailOpen = ref(false)
 const inspireReferenceSaving = ref(false)
 const inspireBrowserOpen = ref(false)
 const selectedInspireSnapshotId = ref('')
-const inspireAutoRefreshKey = ref('')
 const resultPreviewTab = ref('cover')
 const viralReferenceLoading = ref(false)
 const viralReference = ref(null)
@@ -447,6 +446,9 @@ const studioEntries = computed(() => {
 })
 const selectedTemplate = computed(() =>
   store.templates.find((item) => item.id === creation.industry_template_id)
+)
+const isHistoricalOriginal = computed(
+  () => store.task?.runtime_config_snapshot?.creation_mode === 'original'
 )
 const studioEntryTitle = computed(() => {
   const key = store.task?.brief?.form_values?.mp_service_entry || creation.service_entry
@@ -1909,6 +1911,7 @@ const createTask = async () => {
     const payload = {
       industry_template_id: creation.industry_template_id,
       mode: creation.mode,
+      creation_mode: 'viral_rewrite',
       content_goal: creation.content_goal,
       name: creation.name
     }
@@ -2316,14 +2319,11 @@ const loadInspireSamples = async ({ refresh = false } = {}) => {
             status = (await contentApi.getInspireCrawlRun(run.id)).status
           }
           if (status === 'login_required') {
-            inspireBrowserOpen.value = true
-            throw new Error('请在已打开的“聚光采集浏览器”远程画面内登录；普通浏览器登录不会共享')
+            throw new Error('请先打开聚光采集浏览器并在远程画面内完成登录')
           }
           if (status === 'failed' || status === 'rate_limited' || status === 'schema_changed') throw new Error('聚光样本采集失败，请查看管理员任务状态')
         }
       } catch (error) {
-        const code = error.response?.data?.detail?.error?.code
-        if (code === 'INSPIRE_LOGIN_REQUIRED') inspireBrowserOpen.value = true
         refreshError = error
       }
     }
@@ -2331,13 +2331,6 @@ const loadInspireSamples = async ({ refresh = false } = {}) => {
     inspireSamples.value = response.items || []
     await loadInspireCoverUrls(inspireSamples.value)
     selectedInspireSnapshotId.value = store.task.runtime_config_snapshot?.selected_inspire_snapshot_id || ''
-    if (!refresh && !inspireSamples.value.length) {
-      const key = `${store.task.id}:${selectedIndustrySlug.value}`
-      if (inspireAutoRefreshKey.value !== key) {
-        inspireAutoRefreshKey.value = key
-        await loadInspireSamples({ refresh: true })
-      }
-    }
     if (refreshError) message.warning(`刷新未完成，已保留现有样本：${getInspireErrorMessage(refreshError, '请稍后重试')}`)
   } catch (error) {
     if (!refresh) {
@@ -2514,23 +2507,12 @@ const openVersions = async () => {
             <div class="field-block">
               <span id="creation-mode-label">创作模式</span>
               <div class="creation-mode-options" role="radiogroup" aria-labelledby="creation-mode-label">
-                <label
-                  v-for="option in [
-                    { label: '原创模式', value: 'original' },
-                    { label: '爆款仿写', value: 'viral_rewrite' }
-                  ]"
-                  :key="option.value"
-                  class="creation-mode-card"
-                  :class="{ selected: creation.creation_mode === option.value }"
-                >
-                  <input v-model="creation.creation_mode" type="radio" name="creation-mode" :value="option.value" />
-                  <span>{{ option.label }}</span>
+                <label class="creation-mode-card selected">
+                  <input v-model="creation.creation_mode" type="radio" name="creation-mode" value="viral_rewrite" />
+                  <span>爆款仿写</span>
                 </label>
               </div>
-              <small v-if="creation.creation_mode === 'viral_rewrite'">
-                系统比较已准备的完整文章参考，复用选中结构，业务事实来自本次真实资料。
-              </small>
-              <small v-else>根据锁定公式原创内容，并使用真实知识库补充业务事实。</small>
+              <small>系统比较已准备的完整文章参考，复用选中结构，业务事实来自本次真实资料。新任务不再提供原创模式。</small>
             </div>
             <label class="field-block">
               <span>使用模式</span>
@@ -2583,7 +2565,7 @@ const openVersions = async () => {
                 <span class="mode-badge">{{ isQuickMode ? '简化版' : '专业版' }}</span>
                 <span>{{ studioEntryTitle }}</span>
                 <span class="mode-badge">
-                  {{ store.task?.runtime_config_snapshot?.creation_mode === 'viral_rewrite' ? '爆款仿写' : '原创模式' }}
+                  {{ isHistoricalOriginal ? '历史原创（只读）' : '爆款仿写' }}
                 </span>
                 <span>{{ store.template?.name }}</span>
                 <small v-if="saveStatusLabel" :class="{ 'save-error': store.saveStatus === 'error' }">{{ saveStatusLabel }}</small>
@@ -2978,7 +2960,8 @@ const openVersions = async () => {
                 <div class="completion-result-actions">
                   <template v-if="item.isCurrent">
                     <a-button @click="resultDetailOpen = true">查看详情</a-button>
-                    <a-button type="primary" @click="publishModalOpen = true">发布</a-button>
+                    <a-button v-if="!isHistoricalOriginal" type="primary" @click="publishModalOpen = true">发布</a-button>
+                    <small v-else>历史原创任务只读，不能编辑或分发。</small>
                   </template>
                   <a-button v-else class="completion-version-button" @click="openVersions">版本记录</a-button>
                 </div>

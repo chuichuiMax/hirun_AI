@@ -1259,7 +1259,7 @@ def test_review_notes_generate_content_requires_review_notes_knowledge_base():
 
 
 def test_formal_content_agent_catalog_and_conflict_policy():
-    assert len(CONTENT_AGENT_SPECS) == 14
+    assert len(CONTENT_AGENT_SPECS) == 16
     assert {item.slug for item in CONTENT_AGENT_SPECS} == {
         "content-strategy-agent",
         "content-research-agent",
@@ -1274,6 +1274,8 @@ def test_formal_content_agent_catalog_and_conflict_policy():
         "content-body-agent",
         "content-generation-agent",
         "content-review-agent",
+        "content-viral-generation-agent",
+        "content-viral-review-agent",
         "content-visual-agent",
     }
     title_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-title-agent")
@@ -1319,13 +1321,22 @@ def test_formal_content_agent_catalog_and_conflict_policy():
     assert generation_spec.skills == (
         "content-title-generator",
         "content-body-generator",
+        "viral-layout-formatter",
+        "humanizer-zh",
         "content-human-expression",
         "viral-structure-rewriter",
-        "viral-layout-formatter",
     )
-    assert generation_spec.config_version == 10
+    assert generation_spec.config_version == 11
     assert generation_spec.skill_tools == ("query_kb", "open_kb_document", "find_kb_document", "list_kbs")
     assert generation_spec.reasoning_effort == "low"
+    viral_generation = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-viral-generation-agent")
+    assert "viral-author-core" in viral_generation.skills
+    assert "viral-price-author" in viral_generation.skills
+    viral_review = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-viral-review-agent")
+    assert viral_review.skills == ("viral-modular-reviewer",)
+    visual_spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-visual-agent")
+    assert "viral-cover-matcher" in visual_spec.skills
+    assert visual_spec.config_version == 5
     spec = CONTENT_AGENT_SPECS[0]
     existing = Agent(
         slug=spec.slug,
@@ -1502,7 +1513,7 @@ def test_generation_agent_additive_migration_installs_viral_skills():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 10
+    assert existing.config_version == 11
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(spec.skills).issubset(existing.config_json["context"]["skills"])
@@ -1536,7 +1547,7 @@ def test_generation_agent_additive_migration_installs_viral_layout_formatter():
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 10
+    assert existing.config_version == 11
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(spec.skills).issubset(existing.config_json["context"]["skills"])
@@ -1572,11 +1583,44 @@ def test_generation_agent_additive_migration_installs_humanizer_for_original_con
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 10
+    assert existing.config_version == 11
     assert existing.updated_by == "user-1"
     assert existing.config_json["context"]["model"] == "provider:user-model"
     assert set(spec.skills).issubset(existing.config_json["context"]["skills"])
     assert "user-extra-skill" in existing.config_json["context"]["skills"]
+
+
+def test_generation_agent_additive_migration_v10_installs_humanizer():
+    spec = next(item for item in CONTENT_AGENT_SPECS if item.slug == "content-generation-agent")
+    existing = Agent(
+        slug=spec.slug,
+        backend_id="ChatbotAgent",
+        name=spec.name,
+        config_json={
+            "context": {
+                "skills": [
+                    "content-title-generator",
+                    "content-body-generator",
+                    "content-human-expression",
+                    "viral-structure-rewriter",
+                    "viral-layout-formatter",
+                ],
+                "skill_tool_allowlist": list(spec.skill_tools),
+                "model": "provider:user-model",
+            }
+        },
+        enabled=True,
+        config_version=10,
+        is_subagent=False,
+        created_by="system",
+        updated_by="user-1",
+    )
+
+    assert migrate_system_content_agent(existing, spec) is True
+    assert existing.config_version == 11
+    assert "humanizer-zh" in existing.config_json["context"]["skills"]
+    assert existing.config_json["context"]["model"] == "provider:user-model"
+    validate_existing_content_agent(existing, spec)
 
 
 def test_generation_agent_additive_migration_enables_review_notes_knowledge_tools():
@@ -1600,7 +1644,7 @@ def test_generation_agent_additive_migration_enables_review_notes_knowledge_tool
     )
 
     assert migrate_system_content_agent(existing, spec) is True
-    assert existing.config_version == 10
+    assert existing.config_version == 11
     assert existing.config_json["context"]["skill_tool_allowlist"] == [
         "query_kb",
         "open_kb_document",

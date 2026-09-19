@@ -17,6 +17,7 @@ from yuxi.content.catalog import (
 from yuxi.content.model.workflows.definition import workflow_definition_hash
 from yuxi.content.rules import BODY_FORMULAS, INDUSTRIES, METHODS, TITLE_FORMULAS
 from yuxi.content.v3.fixtures import load_decoration_matrix
+from yuxi.content.v3.joint_workflow import PLATFORM_WORKFLOW_V5_ID
 from yuxi.content.v3.workflow import PLATFORM_WORKFLOW_V3_ID, WORKFLOW_V3
 from yuxi.storage.postgres.models_content import (
     ContentCombinationRule,
@@ -203,7 +204,17 @@ async def _ensure_workflow_v3(db: AsyncSession) -> None:
         PLATFORM_WORKFLOW_JOINT_ID, WORKFLOW_JOINT,
         PLATFORM_WORKFLOW_BLUEPRINT_FIRST_ID, WORKFLOW_BLUEPRINT_FIRST,
         PLATFORM_WORKFLOW_PRICE_RECOVERY_ID, WORKFLOW_PRICE_RECOVERY,
+        PLATFORM_WORKFLOW_V5_ID, WORKFLOW_VIRAL_V5,
     )
+
+    if await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_V5_ID) is None:
+        db.add(ContentWorkflowVersion(
+            id=PLATFORM_WORKFLOW_V5_ID, slug="enterprise-content", tenant_id=None, version=19,
+            schema_version=3, status="draft", definition_json=deepcopy(WORKFLOW_VIRAL_V5),
+            definition_hash=workflow_definition_hash(WORKFLOW_VIRAL_V5),
+            input_schema={"type": "ContentBrief", "version": 3},
+            output_schema={"type": "ContentArtifact", "version": 3}, created_by="system",
+        ))
 
     if await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_PRICE_RECOVERY_ID) is None:
         db.add(ContentWorkflowVersion(
@@ -490,7 +501,8 @@ async def _activate_v3_seed_data(db: AsyncSession) -> None:
     now = utc_now_naive()
     rules = await db.get(ContentRuleVersion, PLATFORM_RULE_V3_ID)
     workflow = await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_V3_ID)
-    if rules is None or workflow is None:
+    viral_v5 = await db.get(ContentWorkflowVersion, PLATFORM_WORKFLOW_V5_ID)
+    if rules is None or workflow is None or viral_v5 is None:
         raise RuntimeError("V3 平台规则或工作流缺失")
     if rules.status == "draft":
         rules.status = "published"
@@ -499,6 +511,10 @@ async def _activate_v3_seed_data(db: AsyncSession) -> None:
         workflow.status = "published"
     workflow.schema_version = 3
     workflow.published_at = workflow.published_at or now
+    if viral_v5.status == "draft":
+        viral_v5.status = "published"
+    viral_v5.schema_version = 3
+    viral_v5.published_at = viral_v5.published_at or now
 
     packs = list(
         (
@@ -536,9 +552,7 @@ async def _activate_v3_seed_data(db: AsyncSession) -> None:
                 "channel_profile_version_id": XHS_CHANNEL_VERSION_ID,
             },
             "default_knowledge_scope": [],
-            "default_workflow_version_id": (
-                template.default_workflow_version_id if template else PLATFORM_WORKFLOW_V3_ID
-            ),
+            "default_workflow_version_id": PLATFORM_WORKFLOW_V5_ID,
             "review_policy": {
                 "require_sources_for_numbers": True,
                 "block_unsupported_effect_claims": True,
@@ -582,5 +596,6 @@ __all__ = [
     "DECORATION_INDUSTRY_PACK_V3_ID",
     "PLATFORM_RULE_V3_ID",
     "PLATFORM_WORKFLOW_V3_ID",
+    "PLATFORM_WORKFLOW_V5_ID",
     "ensure_content_v3_seed_data",
 ]

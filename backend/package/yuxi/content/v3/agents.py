@@ -163,12 +163,13 @@ CONTENT_AGENT_SPECS = (
         skills=(
             "content-title-generator",
             "content-body-generator",
+            "viral-layout-formatter",
+            "humanizer-zh",
             "content-human-expression",
             "viral-structure-rewriter",
-            "viral-layout-formatter",
         ),
         skill_tools=("query_kb", "open_kb_document", "find_kb_document", "list_kbs"),
-        config_version=10,
+        config_version=11,
     ),
     ContentAgentSpec(
         slug="content-review-agent",
@@ -179,13 +180,42 @@ CONTENT_AGENT_SPECS = (
         config_version=3,
     ),
     ContentAgentSpec(
+        slug="content-viral-generation-agent",
+        name="爆款仿写创作 Agent",
+        description="按冻结模块规则一次生成爆款仿写标题与正文。",
+        reasoning_effort="low",
+        model_call_timeout_seconds=120,
+        model_retry_times=1,
+        skills=(
+            "viral-author-core",
+            "viral-title-author",
+            "viral-body-author",
+            "viral-persona-author",
+            "viral-natural-expression",
+            "viral-layout-expression",
+            "viral-platform-expression",
+            "viral-price-author",
+            "viral-topic-author",
+        ),
+        skill_tools=(),
+        config_version=1,
+    ),
+    ContentAgentSpec(
+        slug="content-viral-review-agent",
+        name="爆款仿写审核 Agent",
+        description="按模块问题码审核爆款仿写成品，不改写正文。",
+        skills=("viral-modular-reviewer",),
+        skill_tools=("query_kb", "open_kb_document", "find_kb_document"),
+        config_version=1,
+    ),
+    ContentAgentSpec(
         slug="content-visual-agent",
         name="内容视觉 Agent",
         description="制定视觉方案、提交封面任务并审核返回资产。",
-        skills=("content-visual-planner", "content-cover-generator", "content-visual-reviewer"),
+        skills=("content-visual-planner", "content-cover-generator", "content-visual-reviewer", "viral-cover-matcher"),
         skill_tools=("create_content_cover_job",),
         reasoning_effort="low",
-        config_version=4,
+        config_version=5,
     ),
 )
 
@@ -237,6 +267,13 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
     context = (agent.config_json or {}).get("context")
     if agent.created_by == "system" and agent.updated_by != "system":
         additive_migrations = {
+            "content-visual-agent": {
+                4: (
+                    ("viral-cover-matcher",),
+                    {"content-visual-planner", "content-cover-generator", "content-visual-reviewer"},
+                    {},
+                ),
+            },
             "content-price-research-agent": {
                 5: (
                     (),
@@ -333,7 +370,7 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
                     },
                 ),
                 8: (
-                    ("content-human-expression",),
+                    ("content-human-expression", "humanizer-zh"),
                     {
                         "content-title-generator",
                         "content-body-generator",
@@ -347,10 +384,21 @@ def migrate_system_content_agent(agent: Agent, spec: ContentAgentSpec, *, now=No
                     },
                 ),
                 9: (
-                    ("content-human-expression",),
+                    ("content-human-expression", "humanizer-zh"),
                     {
                         "content-title-generator",
                         "content-body-generator",
+                        "viral-structure-rewriter",
+                        "viral-layout-formatter",
+                    },
+                    {},
+                ),
+                10: (
+                    ("humanizer-zh",),
+                    {
+                        "content-title-generator",
+                        "content-body-generator",
+                        "content-human-expression",
                         "viral-structure-rewriter",
                         "viral-layout-formatter",
                     },

@@ -68,11 +68,12 @@ async def test_employee_crud_search_and_toggle(test_client, admin_headers):
         updated = await test_client.patch(
             f"/api/employees/{employee_pk}",
             headers=admin_headers,
-            json={"role": "网销", "login_port": ["app"]},
+            json={"role": "网销", "login_port": ["app"], "age": 32},
         )
         assert updated.status_code == 200, updated.text
         assert updated.json()["employee"]["role"] == "网销"
         assert updated.json()["employee"]["login_port"] == ["app"]
+        assert updated.json()["employee"]["age"] == 32
     finally:
         deleted = await test_client.delete(f"/api/employees/{employee_pk}", headers=admin_headers)
         assert deleted.status_code == 200, deleted.text

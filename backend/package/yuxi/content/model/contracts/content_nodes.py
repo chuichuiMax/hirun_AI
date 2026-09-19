@@ -107,6 +107,8 @@ class GenerateContentPromptV1(StrictContract):
     content_outline: dict[str, Any] | None = None
     content_draft: dict[str, Any] | None = None
     evidence_cite_index: list[dict[str, Any]] | None = None
+    expression_guidance: dict[str, Any] | None = None
+    revision_lock: dict[str, Any] | None = None
 
 
 class PlanVisualsPromptV1(StrictContract):
@@ -120,6 +122,9 @@ class PlanVisualsPromptV1(StrictContract):
     artifact_version: dict[str, Any]
     channel_profile: dict[str, Any]
     runtime_config_snapshot: dict[str, Any]
+    required_visual_intent: str | None = None
+    required_source_asset_ids: list[str] = Field(default_factory=list)
+    allowed_visual_evidence_ids: list[str] = Field(default_factory=list)
 
 
 class AnalyzeContentValueInputV1(StrictContract):
@@ -386,6 +391,9 @@ class GenerateContentInputV1(StrictContract):
     selected_title: dict[str, Any] | None = None
     content_outline: dict[str, Any] | None = None
     content_draft: dict[str, Any] | None = None
+    expression_guidance: dict[str, Any] | None = None
+    content_rule_bundle: dict[str, Any] | None = None
+    revision_lock: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def verify_formula_lexicon_bundle(self) -> GenerateContentInputV1:
@@ -436,6 +444,8 @@ class SemanticReviewInputV1(StrictContract):
     channel_result: dict[str, Any] = Field(min_length=1)
     persona_diff: dict[str, Any] | None = None
     evidence_bundle: dict[str, Any] = Field(min_length=1)
+    expression_guidance: dict[str, Any] | None = None
+    content_rule_bundle: dict[str, Any] | None = None
 
 
 class PlanVisualsInputV1(StrictContract):
@@ -447,6 +457,9 @@ class PlanVisualsInputV1(StrictContract):
     artifact_version: dict[str, Any] = Field(min_length=1)
     channel_profile: dict[str, Any]
     runtime_config_snapshot: dict[str, Any] = Field(default_factory=dict)
+    required_visual_intent: str | None = None
+    required_source_asset_ids: list[str] = Field(default_factory=list)
+    allowed_visual_evidence_ids: list[str] = Field(default_factory=list)
 
     @field_validator("media_evidence_items")
     @classmethod
@@ -804,6 +817,7 @@ class VisualPlanResultV1(StrictContract):
     risks: list[str]
     artifact_version_id: str
     evidence_ids: list[str]
+    visual_intent: str | None = None
 
 
 class CoverJobSubmissionResultV1(StrictContract):
@@ -939,6 +953,8 @@ class ContractDomainContext:
     evidence_cite_aliases: dict[str, str] = field(default_factory=dict)
     allowed_asset_ids: frozenset[str] = frozenset()
     required_source_asset_ids: tuple[str, ...] = ()
+    required_visual_intent: str | None = None
+    allowed_visual_evidence_ids: frozenset[str] = frozenset()
     locked_title: str | None = None
     artifact_version_id: str | None = None
     visual_plan_hash: str | None = None
@@ -1073,6 +1089,8 @@ class ContractDomainContext:
             evidence_cite_aliases=build_evidence_cite_aliases(evidence_bundle.get("items") or []),
             allowed_asset_ids=frozenset(locks.get("source_asset_ids") or []),
             required_source_asset_ids=tuple(locks.get("required_source_asset_ids") or []),
+            required_visual_intent=locks.get("required_visual_intent"),
+            allowed_visual_evidence_ids=frozenset(locks.get("allowed_visual_evidence_ids") or []),
             locked_title=locks.get("selected_title"),
             artifact_version_id=versions.artifact_version_id,
             visual_plan_hash=locks.get("visual_plan_hash"),
@@ -1894,8 +1912,22 @@ def validate_content_node_result(
                 "source_asset_ids",
                 "视觉方案必须且只能使用任务已锁定的图库图片",
             )
+        if context.required_visual_intent and result.visual_intent != context.required_visual_intent:
+            raise ContractDomainValidationError(
+                "visual_intent_locked",
+                "visual_intent",
+                "视觉意图必须逐字复制服务端锁定值",
+            )
         for index, asset_id in enumerate(result.source_asset_ids):
             _require_member(asset_id, context.allowed_asset_ids, f"source_asset_ids.{index}")
+        if context.allowed_visual_evidence_ids:
+            unknown_visual = sorted(set(result.evidence_ids) - set(context.allowed_visual_evidence_ids))
+            if unknown_visual:
+                raise ContractDomainValidationError(
+                    "visual_evidence_locked",
+                    "evidence_ids",
+                    f"视觉证据必须来自锁定白名单: {', '.join(unknown_visual)}",
+                )
         _validate_evidence_ids(result.evidence_ids, "visual", context, "evidence_ids")
         from yuxi.content.control.visual_template_fields import (
             clamp_visual_text,

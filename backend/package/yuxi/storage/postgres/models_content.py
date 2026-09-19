@@ -1961,6 +1961,7 @@ class ContentEmployee(Base):
     name = Column(String(80), nullable=False)
     login_account = Column(String(64), nullable=False, unique=True, index=True)
     gender = Column(String(16), nullable=False)
+    age = Column(Integer, nullable=True)
     login_port = Column(JSON, nullable=False, default=list)
     role = Column(String(64), nullable=False)
     enabled = Column(Boolean, nullable=False, default=True, index=True)
@@ -1978,6 +1979,7 @@ class ContentEmployee(Base):
             "name": self.name,
             "login_account": self.login_account,
             "gender": self.gender,
+            "age": self.age,
             "login_port": list(self.login_port or []),
             "role": self.role,
             "enabled": bool(self.enabled),

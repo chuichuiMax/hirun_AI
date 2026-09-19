@@ -139,6 +139,16 @@ def resolve_revision_reason(
         "CHANNEL_BODY_LONG": "BODY_STRUCTURE_FAILED",
         "CHANNEL_BODY_SHORT": "BODY_STRUCTURE_FAILED",
         "CHANNEL_TOPIC_COUNT": "BODY_STRUCTURE_FAILED",
+        "TITLE_MULTI_SELLING_POINT": "TITLE_VALIDATION_FAILED",
+        "TITLE_LOCKED_TEXT_CHANGED": "TITLE_VALIDATION_FAILED",
+        "CTA_HARD_SELL": "BODY_STRUCTURE_FAILED",
+        "BODY_MARKDOWN_FORBIDDEN": "BODY_STRUCTURE_FAILED",
+        "BODY_PARAGRAPH_TOO_LONG": "BODY_STRUCTURE_FAILED",
+        "BODY_LOCKED_TEXT_CHANGED": "BODY_STRUCTURE_FAILED",
+        "TOPIC_COUNT_INVALID": "BODY_STRUCTURE_FAILED",
+        "TOPIC_NOT_IN_POOL": "BODY_STRUCTURE_FAILED",
+        "PRICE_CITY_MISMATCH": "BODY_EVIDENCE_FAILED",
+        "PRICE_TRADE_MISMATCH": "BODY_EVIDENCE_FAILED",
     }
     reasons = {reason_by_code[code] for code in blocked_codes if code in reason_by_code}
     if len(reasons) == 1 and len(blocked_codes) == sum(code in reason_by_code for code in blocked_codes):

@@ -22,6 +22,7 @@ const emptyForm = () => ({
   name: '',
   login_account: '',
   gender: 'male',
+  age: null,
   login_port: ['pc', 'app'],
   role: '',
   enabled: true
@@ -123,7 +124,12 @@ const handleTableChange = (pagination) => {
 
 const resetForm = (employee) => {
   const next = employee
-    ? { ...emptyForm(), ...employee, login_port: normalizeLoginPorts(employee.login_port) }
+    ? {
+        ...emptyForm(),
+        ...employee,
+        age: employee.age ?? null,
+        login_port: normalizeLoginPorts(employee.login_port)
+      }
     : emptyForm()
   Object.assign(form, next)
 }
@@ -150,6 +156,7 @@ const saveEmployee = async () => {
     name: form.name.trim(),
     login_account: form.login_account.trim(),
     gender: form.gender,
+    age: form.age == null || form.age === '' ? null : Number(form.age),
     login_port: form.login_port,
     role: form.role,
     enabled: form.enabled
@@ -164,6 +171,10 @@ const saveEmployee = async () => {
   }
   if (!payload.login_account) {
     message.warning('请输入登录账号')
+    return
+  }
+  if (payload.age != null && (!Number.isInteger(payload.age) || payload.age < 1 || payload.age > 120)) {
+    message.warning('年龄请填写 1–120 的整数')
     return
   }
   if (!payload.login_port.length) {
@@ -292,6 +303,9 @@ onMounted(async () => {
         <a-table-column title="性别" key="gender" :width="80">
           <template #default="{ record }">{{ optionLabel(GENDER_OPTIONS, record.gender) }}</template>
         </a-table-column>
+        <a-table-column title="年龄" key="age" :width="80">
+          <template #default="{ record }">{{ record.age ?? '-' }}</template>
+        </a-table-column>
         <a-table-column title="登录端口" key="login_port" :width="110">
           <template #default="{ record }">{{ loginPortLabel(record.login_port) }}</template>
         </a-table-column>
@@ -359,6 +373,16 @@ onMounted(async () => {
               {{ option.label }}
             </a-radio>
           </a-radio-group>
+        </a-form-item>
+        <a-form-item label="年龄">
+          <a-input-number
+            v-model:value="form.age"
+            :min="1"
+            :max="120"
+            :precision="0"
+            placeholder="请输入年龄"
+            style="width: 100%"
+          />
         </a-form-item>
         <a-form-item label="登录端口" required>
           <a-checkbox-group v-model:value="form.login_port">

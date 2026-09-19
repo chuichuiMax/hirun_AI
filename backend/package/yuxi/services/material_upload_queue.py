@@ -1,7 +1,5 @@
 """Stage material uploads in Redis until the ARQ worker persists them to MinIO."""
 
-"""素材图片先入 Redis，再由队列落到 OSS/MinIO。"""
-
 from __future__ import annotations
 
 import io
@@ -14,31 +12,23 @@ from yuxi.repositories.content_cover_repository import ContentCoverRepository
 from yuxi.services.run_queue_service import get_arq_pool, get_binary_redis_client
 from yuxi.storage.minio import StorageError, get_minio_client
 from yuxi.storage.postgres.manager import pg_manager
-from yuxi.storage.postgres.models_content import ContentCoverAsset
 from yuxi.utils.logging_config import logger
 
-MATERIAL_UPLOAD_REDIS_TTL_SECONDS = 3600
-MATERIAL_THUMB_REDIS_TTL_SECONDS = 7 * 24 * 3600
-MATERIAL_THUMBNAIL_SIZE = (720, 720)
 INGEST_PENDING = "pending"
-INGEST_READY = "ready"
 INGEST_COMPLETED = "completed"
 MATERIAL_UPLOAD_STAGING_TTL_SECONDS = int(os.getenv("MATERIAL_UPLOAD_STAGING_TTL_SECONDS", "3600"))
 MATERIAL_THUMBNAIL_SIZE = (720, 480)
 
 
 def material_upload_redis_key(asset_id: str) -> str:
-    return f"material:upload:{asset_id}"
+    return f"material-upload:{asset_id}"
 
 
-def material_thumb_redis_key(asset_id: str) -> str:
-    return f"material:thumb:{asset_id}"
 def _material_thumb_redis_key(asset_id: str) -> str:
     return f"{material_upload_redis_key(asset_id)}:thumb"
 
 
 def material_thumb_object_name(object_name: str) -> str:
-    prefix, sep, _name = object_name.rpartition("/")
     return f"{object_name}.thumb.webp"
 
 
@@ -140,9 +130,6 @@ async def process_material_upload(_ctx: Any, asset_id: str) -> None:
         metadata.pop("redis_key", None)
         await repository.update_asset_metadata(asset, metadata)
         await db.commit()
-        await persist_material_thumbnail(asset, original=data, force_oss=True)
-    await delete_staged_material_bytes(asset_id)
-    return "uploaded"
 
     await delete_material_display_cache(asset_id)
     logger.info("material upload persisted: asset=%s", asset_id)

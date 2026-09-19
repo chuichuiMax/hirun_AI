@@ -47,5 +47,31 @@ def test_employee_update_schema_allows_partial_enabled():
     assert payload.model_dump(exclude_unset=True) == {"enabled": False}
 
 
+def test_employee_create_schema_accepts_age():
+    payload = EmployeeCreate(
+        employee_code="H04596",
+        name="张三",
+        login_account="13510874227",
+        gender="male",
+        age=28,
+        login_port=["pc", "app"],
+        role="运营",
+    )
+    assert payload.age == 28
+
+
+def test_employee_create_schema_rejects_invalid_age():
+    with pytest.raises(ValidationError):
+        EmployeeCreate(
+            employee_code="H04596",
+            name="张三",
+            login_account="13510874227",
+            gender="male",
+            age=0,
+            login_port=["pc", "app"],
+            role="运营",
+        )
+
+
 def test_default_employee_password_is_fixed():
     assert DEFAULT_EMPLOYEE_PASSWORD == "123456"
