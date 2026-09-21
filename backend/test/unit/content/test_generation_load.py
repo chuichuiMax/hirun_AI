@@ -445,6 +445,60 @@ def test_generation_projection_hides_real_evidence_ids_behind_cite_aliases():
     }
 
 
+def test_generation_projection_pins_advantage_knowledge_before_brief_facts():
+    brief = [
+        {
+            "id": f"ev_brief_{index:02d}",
+            "value": f"简报{index}",
+            "source_type": "manual_input",
+            "allowed_usage": ["title", "body"],
+            "verified_status": "user_confirmed",
+        }
+        for index in range(12)
+    ]
+    advantage_text = "靠口碑转介绍，重视长期信任与交付"
+    payload = {
+        "strategy_snapshot": {"snapshot_hash": "s" * 64, "body_formula": {"code": "C03"}},
+        "content_brief": {"business_variables": {}},
+        "evidence_bundle": {
+            "bundle_hash": "frozen",
+            "items": [
+                *brief,
+                {
+                    "id": "ev_adv_aa",
+                    "value": advantage_text * 6,
+                    "source_type": "knowledge_base",
+                    "allowed_usage": ["body"],
+                    "verified_status": "retrieved",
+                    "metadata": {"material_type": "knowledge_base", "knowledge_base_name": "我的优势"},
+                },
+                {
+                    "id": "ev_adv_bb",
+                    "value": "鸿扬专注交付",
+                    "source_type": "knowledge_base",
+                    "allowed_usage": ["body"],
+                    "verified_status": "retrieved",
+                    "metadata": {"material_type": "knowledge_base", "knowledge_base_name": "我的优势"},
+                },
+            ],
+        },
+        "runtime_config_snapshot": {"creation_mode": "viral_rewrite"},
+        "formula_lexicon_bundle": {},
+        "channel_profile": {},
+        "persona_profile": {},
+        "expression_guidance": {"tone": ["口语"], "concrete": ["泥瓦"], "snapshot_hash": "snap"},
+    }
+    result = project_generation_input(payload)
+    ids = [item["id"] for item in result["evidence_bundle"]["items"]]
+    assert ids[:2] == ["E13", "E14"]
+    assert "E13" in ids and "E14" in ids
+    assert result["expression_guidance"]["advantage_evidence_ids"] == ["E13", "E14"]
+    adv = next(item for item in result["evidence_bundle"]["items"] if item["id"] == "E13")
+    assert adv["metadata"]["knowledge_base_name"] == "我的优势"
+    assert len(adv["value"]) > 36
+    assert len(adv["value"]) <= 160
+
+
 def test_ambiguous_or_unrelated_evidence_ids_stay_forbidden():
     from yuxi.content.model.contracts import (
         ContractDomainContext,
@@ -936,7 +990,14 @@ def test_visual_plan_projection_drops_duplicate_evidence_and_heavy_runtime():
                             "paragraphs": [{"style": {"huge": "x" * 400}, "runs": [{"style": {}}]}],
                             "box": {"x": 0, "y": 0, "width": 1080},
                         },
-                    }
+                    },
+                    {
+                        "key": "project",
+                        "label": "项目名称",
+                        "semanticRole": "project_name",
+                        "kind": "text",
+                        "constraints": {"maxChars": 12},
+                    },
                 ],
                 "unused_blob": "x" * 500,
             },
@@ -965,6 +1026,7 @@ def test_visual_plan_projection_drops_duplicate_evidence_and_heavy_runtime():
     assert "unused_blob" not in visual
     assert "kind" not in visual["hycanvas_fillable_fields"][0]
     assert "typography" not in visual["hycanvas_fillable_fields"][0]
+    assert all(field["semanticRole"] == "title" for field in visual["hycanvas_fillable_fields"])
     assert result["runtime_config_snapshot"]["canvas"] == {
         "width": 1080,
         "height": 1440,
@@ -1092,6 +1154,40 @@ async def test_idle_timeout_does_not_consume_correction_budget_and_preserves_can
     with pytest.raises(asyncio.CancelledError):
         await middleware.awrap_model_call(request, cancelled)
     assert context._content_model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_includes_last_submit_error():
+    from langchain.agents.middleware import ModelResponse
+    from langchain_core.messages import AIMessage
+
+    context = SimpleNamespace(
+        _content_max_model_calls=1,
+        _content_node_token_budget=8000,
+        _content_node_id="generate_content",
+        _content_last_result_error="标题必须使用锁定公式对应的全部必选词库",
+    )
+
+    class Request(SimpleNamespace):
+        def override(self, **kwargs):
+            return Request(**{**vars(self), **kwargs})
+
+    request = Request(
+        runtime=SimpleNamespace(context=context),
+        model_settings={},
+        messages=[],
+        tools=[],
+        model=SimpleNamespace(reasoning_effort="low"),
+    )
+    middleware = ModelCallTimeoutMiddleware(1)
+
+    async def good(req):
+        return ModelResponse(result=[AIMessage(content="ok")])
+
+    await middleware.awrap_model_call(request, good)
+    with pytest.raises(ModelExecutionBudgetExceeded, match="标题必须使用锁定公式对应的全部必选词库") as error:
+        await middleware.awrap_model_call(request, good)
+    assert "正文生成已用完 1 次模型调用额度" in str(error.value)
 
 
 @pytest.mark.asyncio

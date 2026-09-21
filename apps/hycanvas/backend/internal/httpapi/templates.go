@@ -27,7 +27,7 @@ func mountTemplates(api chi.Router, tm *templates.Service, acct *accounts.Servic
 		r.Post("/templates/collections", templatesCreateCollectionHandler(tm))
 		r.Delete("/templates/collections/{id}", templatesDeleteCollectionHandler(tm))
 		r.Get("/templates/{id}", templatesGetHandler(tm))
-		r.Patch("/templates/{id}", templatesRenameHandler(tm))
+		r.Patch("/templates/{id}", templatesPatchHandler(tm))
 		r.Delete("/templates/{id}", templatesDeleteHandler(tm))
 		r.Get("/templates/{id}/file", templatesFileHandler(tm))
 		r.Get("/templates/{id}/render.png", templatesRenderHandler(tm, up))
@@ -148,17 +148,32 @@ func templatesDeleteHandler(tm *templates.Service) http.HandlerFunc {
 	}
 }
 
-func templatesRenameHandler(tm *templates.Service) http.HandlerFunc {
+func templatesPatchHandler(tm *templates.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u := userFrom(r.Context())
 		var body struct {
-			Title string `json:"title"`
+			Title          string         `json:"title"`
+			File           map[string]any `json:"file"`
+			Thumbnail      string         `json:"thumbnail"`
+			FillableFields []any          `json:"fillableFields"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			problemWithCode(w, r, http.StatusBadRequest, "Bad Request", "invalid body", "invalid_body")
 			return
 		}
-		t, err := tm.Rename(r.Context(), u.ID, chi.URLParam(r, "id"), body.Title)
+		id := chi.URLParam(r, "id")
+		if body.File != nil {
+			t, err := tm.Update(r.Context(), u.ID, id, templates.SaveInput{
+				File: body.File, Title: body.Title, Thumbnail: body.Thumbnail, FillableFields: body.FillableFields,
+			})
+			if err != nil {
+				templatesProblem(w, r, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, t)
+			return
+		}
+		t, err := tm.Rename(r.Context(), u.ID, id, body.Title)
 		if err != nil {
 			templatesProblem(w, r, err)
 			return

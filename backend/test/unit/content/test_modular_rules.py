@@ -9,9 +9,11 @@ from yuxi.content.v3.modular_rules import (
     VIRAL_TITLE_AUTHOR,
     assemble_required_skills,
     expression_guidance_forbidden,
+    filter_advantage_chunks_for_stage,
     sanitize_expression_chunks,
     compile_content_rule_bundle,
     has_price_signal,
+    lock_visual_planning,
     resolve_visual_intent,
     revision_skill_slugs,
 )
@@ -86,6 +88,65 @@ def test_visual_intent_scene_first():
     assert resolve_visual_intent(brief={"form_values": {"process_type": "泥瓦工艺"}}, has_price=False) == "craft_detail"
 
 
+def test_lock_visual_planning_fills_plan_visuals_required_state():
+    from yuxi.agents.buildin.content_workflow.state import ContentWorkflowState
+    from yuxi.content.control.errors import ContentApplicationError
+    from yuxi.content.control.workflow.content_node_input import ContentNodeInputAssembler
+
+    state = {
+        "content_brief": {"form_values": {"process_type": "泥瓦工艺"}},
+        "strategy_snapshot": {},
+        "evidence_bundle": {
+            "items": [
+                {"id": "ev_vis", "allowed_usage": ["title", "body", "visual"], "value": "洋湖"},
+                {"id": "ev_body", "allowed_usage": ["body"], "value": "口碑"},
+            ]
+        },
+        "runtime_config_snapshot": {"visual_material": {"image_asset_id": "asset-1"}},
+    }
+    lock = lock_visual_planning(state)
+    assert lock["required_visual_intent"] == "craft_detail"
+    assert lock["required_source_asset_ids"] == ["asset-1"]
+    assert lock["allowed_visual_evidence_ids"] == ["ev_vis"]
+    for key in (
+        "content_rule_bundle",
+        "expression_guidance",
+        "required_visual_intent",
+        "required_source_asset_ids",
+        "allowed_visual_evidence_ids",
+    ):
+        assert key in ContentWorkflowState.__annotations__
+    visual = next(node for node in WORKFLOW_VIRAL_V5["nodes"] if node["id"] == "plan_visuals")
+    required = ["required_visual_intent", "required_source_asset_ids", "allowed_visual_evidence_ids"]
+    assert set(required) <= set(visual["state_inputs"])
+    missing_node = {**visual, "state_inputs": required, "optional_state_inputs": []}
+    with pytest.raises(ContentApplicationError, match="缺少上游状态"):
+        ContentNodeInputAssembler.build(node=missing_node, state=state)
+    with pytest.raises(ContentApplicationError, match="输入不符合"):
+        ContentNodeInputAssembler.build(node=missing_node, state={**state, **lock})
+
+
+@pytest.mark.asyncio
+async def test_freeze_rule_bundle_writes_visual_lock():
+    from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
+
+    result = await V3DeterministicNodeHandler._freeze_rule_bundle(
+        db=None,
+        state={
+            "content_brief": {"form_values": {"process_type": "泥瓦工艺"}},
+            "strategy_snapshot": {},
+            "evidence_bundle": {"items": [{"id": "ev_vis", "allowed_usage": ["visual"]}]},
+            "runtime_config_snapshot": {"visual_material": {"image_asset_id": "asset-1"}},
+            "viral_reference_selection": {},
+        },
+        node_run_id="nr-1",
+    )
+    assert result["required_visual_intent"] == "craft_detail"
+    assert result["required_source_asset_ids"] == ["asset-1"]
+    assert result["allowed_visual_evidence_ids"] == ["ev_vis"]
+    assert result["content_rule_bundle"]["bundle_hash"]
+
+
 def test_has_price_signal_from_evidence():
     assert has_price_signal(evidence_bundle={"items": [{"metadata": {"material_type": "price"}}]})
     assert not has_price_signal(evidence_bundle={"items": [{"value": "只谈工艺"}]}, brief={"form_values": {}})
@@ -111,6 +172,29 @@ def test_viral_v5_validator_topics_cta_and_keycap():
     codes = {item["code"] for item in report["checks"]}
     assert "CTA_HARD_SELL" in codes
     assert "TOPIC_COUNT_INVALID" in codes or "TOPIC_NOT_IN_POOL" in codes
+    assert next(item["level"] for item in report["checks"] if item["code"] == "TOPIC_NOT_IN_POOL") == "warning"
+    area = validate_viral_v5_content(
+        title="139㎡旧房翻新，钱要花在哪？",
+        body="这是一段正常说明，不含推销。\n" * 6,
+        topics=["旧房翻新"] * 10,
+        brief={},
+        evidence_bundle={"items": [{"value": "139㎡"}]},
+        strategy={"methods": ["rewrite"], "title_formula_code": "T01", "body_formula_code": "C01"},
+        rule_bundle={"topic_candidate_pool": ["旧房翻新"]},
+    )
+    assert not any(
+        item["code"] == "TITLE_MULTI_SELLING_POINT" and item["level"] == "error" for item in area["checks"]
+    )
+    stacked = validate_viral_v5_content(
+        title="18万预算工艺验收看效果",
+        body="这是一段正常说明，不含推销。\n" * 6,
+        topics=["旧房翻新"] * 10,
+        brief={},
+        evidence_bundle={"items": [{"value": "18万"}]},
+        strategy={"methods": ["rewrite"], "title_formula_code": "T01", "body_formula_code": "C01"},
+        rule_bundle={"topic_candidate_pool": ["旧房翻新"]},
+    )
+    assert any(item["code"] == "TITLE_MULTI_SELLING_POINT" for item in stacked["checks"])
     keycap = validate_viral_v5_content(
         title="第一次刷到",
         body="1️⃣ 只是序号不是造价\n" + "这是一段正常说明，不含业务数字。\n" * 6,
@@ -229,6 +313,83 @@ async def test_expression_kb_lookup_uses_one_session_query(monkeypatch):
     assert persist.await_count == 1
     assert result["expression_guidance"]["tone"]
     assert result["expression_guidance"]["concrete"]
+
+
+_HYDRO_CONSTRUCTION = "| 关于鸿扬施工 | 鸿扬拥有自有项目经理和自建产业工人团队，工程全程公司直管，杜绝转包。"
+_HYDRO_MATERIAL = (
+    "材料是鸿扬家装在装修项目中使用的各类建材和辅材，涵盖水电、泥木、油漆等多个领域。"
+    "1.品牌合作与品质保障 鸿扬与科勒、圣象、西门子等国际品牌建立战略合作，"
+    "所有材料通过“品牌方直供+鸿扬质检”双重把关。"
+)
+_HYDRO_BRAND = "| 关于品牌 | 鸿扬家居定位为定制化家装品牌，强调交付与口碑。"
+_HYDRO_TRUST = "| 关于信任 | 靠口碑转介绍，重视长期信任。"
+
+
+def test_hydropower_stage_drops_advantage_material_and_brand_chunks():
+    chunks = [_HYDRO_CONSTRUCTION, _HYDRO_MATERIAL, _HYDRO_BRAND, _HYDRO_TRUST]
+    kept = filter_advantage_chunks_for_stage(chunks, {"项目阶段": "水电阶段"})
+    assert kept == [_HYDRO_CONSTRUCTION, _HYDRO_TRUST]
+    assert filter_advantage_chunks_for_stage(chunks, {"项目阶段": "竣工交付"}) == chunks
+    assert filter_advantage_chunks_for_stage(chunks, {"topic": "旧房翻新"}) == chunks
+
+
+@pytest.mark.asyncio
+async def test_hydropower_retrieve_does_not_persist_material_or_brand_advantage(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
+    from yuxi.content.model.evidence import freeze_evidence_bundle
+    from yuxi.content.v3.modular_rules import EXPRESSION_KB_NAMES
+
+    async def execute(_stmt):
+        rows = [SimpleNamespace(name=name, kb_id=f"kb_{index}") for index, name in enumerate(EXPRESSION_KB_NAMES)]
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows))
+
+    async def fake_retrieve(_kb_id, name, _query):
+        if name == "我的优势":
+            return [_HYDRO_CONSTRUCTION, _HYDRO_MATERIAL, _HYDRO_BRAND, _HYDRO_TRUST]
+        return [f"{name}先写感受再写做法"]
+
+    persist = AsyncMock()
+    monkeypatch.setattr(
+        V3DeterministicNodeHandler,
+        "_retrieve_named_expression_chunks",
+        staticmethod(fake_retrieve),
+    )
+    monkeypatch.setattr(
+        "yuxi.content.control.workflow.deterministic_node.EvidenceApplicationService",
+        lambda db: SimpleNamespace(persist_frozen_bundle=persist),
+    )
+    state = {
+        "task_id": "task-hydro",
+        "run_id": "run-hydro",
+        "content_brief": {
+            "form_values": {
+                "项目阶段": "水电阶段",
+                "pain": "业主关心水电施工与隐蔽验收是否规范",
+            }
+        },
+        "evidence_bundle": freeze_evidence_bundle(task_id="task-hydro", version=1, items=[]).model_dump(
+            mode="json"
+        ),
+    }
+    result = await V3DeterministicNodeHandler()._retrieve_expression_kbs(
+        db=SimpleNamespace(execute=execute),
+        state=state,
+        node_run_id="node-hydro",
+    )
+    values = [
+        item["value"]
+        for item in result["evidence_bundle"]["items"]
+        if (item.get("metadata") or {}).get("knowledge_base_name") == "我的优势"
+    ]
+    assert _HYDRO_CONSTRUCTION in values
+    assert _HYDRO_TRUST in values
+    assert _HYDRO_MATERIAL not in values
+    assert _HYDRO_BRAND not in values
+    assert all("西门子" not in str(value) for value in values)
+    assert all("关于品牌" not in str(value) for value in values)
 
 
 @pytest.mark.asyncio

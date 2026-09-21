@@ -23,6 +23,22 @@ _EXPRESSION_CITY_RE = re.compile(
     r"[\u4e00-\u9fff]{2,8}区(?!域|别|分)"
 )
 ADVANTAGE_KB_NAME = "我的优势"
+HYDROPOWER_PROJECT_STAGE = "水电阶段"
+_HYDROPOWER_SKIP_ADVANTAGE_MARKERS = (
+    "关于鸿扬材料",
+    "关于材料",
+    "关于品牌",
+    "鸿扬材料",
+    "材料是鸿扬",
+    "建材和辅材",
+    "品牌合作",
+    "品牌直供",
+    "品牌方直供",
+    "战略合作",
+    "西门子",
+    "科勒",
+    "圣象",
+)
 
 VIRAL_AUTHOR_CORE = "viral-author-core"
 VIRAL_TITLE_AUTHOR = "viral-title-author"
@@ -304,6 +320,28 @@ def resolve_visual_intent(
     return "scene_general"
 
 
+def lock_visual_planning(state: dict[str, Any]) -> dict[str, Any]:
+    brief = state.get("content_brief") or {}
+    strategy = state.get("strategy_snapshot") or {}
+    evidence = state.get("evidence_bundle") or {}
+    visual_material = (state.get("runtime_config_snapshot") or {}).get("visual_material") or {}
+    required_assets = [visual_material["image_asset_id"]] if visual_material.get("image_asset_id") else []
+    allowed_visual = [
+        str(item["id"])
+        for item in evidence.get("items") or []
+        if isinstance(item, dict) and item.get("id") and "visual" in (item.get("allowed_usage") or [])
+    ]
+    return {
+        "required_visual_intent": resolve_visual_intent(
+            brief=brief,
+            evidence_bundle=evidence,
+            has_price=has_price_signal(evidence_bundle=evidence, strategy_snapshot=strategy, brief=brief),
+        ),
+        "required_source_asset_ids": required_assets,
+        "allowed_visual_evidence_ids": allowed_visual,
+    }
+
+
 def expression_guidance_forbidden(text: str) -> list[str]:
     hits: list[str] = []
     if re.search(r"[\u4e00-\u9fff]{2,4}(?:师傅|设计师|经理)", text):
@@ -349,6 +387,28 @@ def sanitize_expression_chunks(chunks: list[str]) -> list[str]:
     return cleaned
 
 
+def selected_hydropower_stage(form_values: dict[str, Any] | None) -> bool:
+    if not isinstance(form_values, dict):
+        return False
+    stage = str(form_values.get("项目阶段") or form_values.get("project_stage") or "").strip()
+    return stage == HYDROPOWER_PROJECT_STAGE
+
+
+def _advantage_chunk_is_material_or_brand(text: str) -> bool:
+    return any(marker in text for marker in _HYDROPOWER_SKIP_ADVANTAGE_MARKERS)
+
+
+def filter_advantage_chunks_for_stage(
+    chunks: list[str],
+    form_values: dict[str, Any] | None,
+) -> list[str]:
+    """水电阶段不把「我的优势」里的材料/品牌段写入正文证据。"""
+    kept = [str(chunk) for chunk in chunks if str(chunk or "").strip()]
+    if not selected_hydropower_stage(form_values):
+        return kept
+    return [chunk for chunk in kept if not _advantage_chunk_is_material_or_brand(chunk)]
+
+
 def freeze_expression_snapshot(
     *,
     libraries: dict[str, list[str]],
@@ -373,6 +433,7 @@ def freeze_expression_snapshot(
 __all__ = [
     "ADVANTAGE_KB_NAME",
     "BUNDLE_VERSION",
+    "HYDROPOWER_PROJECT_STAGE",
     "COVER_SKILLS",
     "EXPRESSION_KB_NAMES",
     "EXPRESSION_MAX_CHARS",
@@ -386,8 +447,11 @@ __all__ = [
     "assemble_required_skills",
     "compile_content_rule_bundle",
     "expression_guidance_forbidden",
+    "filter_advantage_chunks_for_stage",
     "freeze_expression_snapshot",
+    "selected_hydropower_stage",
     "has_price_signal",
+    "lock_visual_planning",
     "resolve_visual_intent",
     "revision_skill_slugs",
     "sanitize_expression_chunks",

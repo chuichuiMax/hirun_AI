@@ -10,6 +10,7 @@ VISUAL_TEXT_MAX_CHAR_FLOORS: dict[str, int] = {
     "subtitle": 16,
     "body_excerpt": 24,
 }
+NARRATIVE_VISUAL_ROLES = frozenset({"title", "subtitle", "body_excerpt"})
 _VISUAL_UNSUPPORTED_CLAIM_TERMS = ("免费", "保证", "保价", "最低", "第一", "省钱", "零风险")
 
 
@@ -123,6 +124,11 @@ def is_ordinal_badge_template_field(field: dict[str, Any]) -> bool:
     return False
 
 
+def is_narrative_visual_field(field: dict[str, Any]) -> bool:
+    role = str(field.get("semanticRole") or "").strip()
+    return role in NARRATIVE_VISUAL_ROLES and not is_ordinal_badge_template_field(field)
+
+
 def ordinal_badge_fill_value(field: dict[str, Any]) -> str:
     """给序号角标填一个不超过 maxChars 的装饰值，满足 HyCanvas required，又不挤占叙事标题。
 
@@ -226,9 +232,11 @@ def missing_required_template_fields(
 
 __all__ = [
     "VISUAL_TEXT_MAX_CHAR_FLOORS",
+    "NARRATIVE_VISUAL_ROLES",
     "apply_visual_text_max_char_floor",
     "resolved_visual_text_max_chars",
     "is_decorative_cover_label",
+    "is_narrative_visual_field",
     "is_ordinal_badge_template_field",
     "missing_required_template_fields",
     "resolve_visual_cover_title",

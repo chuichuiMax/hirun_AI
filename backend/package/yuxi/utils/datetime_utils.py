@@ -120,10 +120,13 @@ def format_utc_datetime(value: dt.datetime | None) -> str | None:
     Format a datetime to UTC ISO 8601 string, handling naive datetimes.
 
     Returns None for None input.
-    Naive datetimes are assumed to be in UTC.
+    Naive datetimes are assumed to be in UTC (DB columns use utc_now_naive).
+    This must not go through ensure_utc, which treats naive values as Shanghai.
     """
     if value is None:
         return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
     return utc_isoformat(value)
 
 

@@ -1887,10 +1887,13 @@ def validate_content_node_result(
         if context.body_knowledge_evidence_ids and not used_body_evidence.intersection(
             context.body_knowledge_evidence_ids
         ):
+            alias_by_real = {real: alias for alias, real in context.evidence_cite_aliases.items()}
+            labels = [alias_by_real.get(eid, eid) for eid in sorted(context.body_knowledge_evidence_ids)]
             raise ContractDomainValidationError(
                 "knowledge_evidence_unused",
                 "draft.paragraph_evidence",
-                "已取得可用于正文的业务知识证据，必须在 paragraph_evidence 中引用至少一条",
+                "已取得可用于正文的业务知识证据，必须在 paragraph_evidence 中引用至少一条："
+                + ", ".join(labels),
             )
         _validate_numbers("\n".join([result.draft.body, *result.draft.topics]), context, "draft.body", "body")
     elif isinstance(result, PersonaPolishResultV1):
@@ -1936,13 +1939,16 @@ def validate_content_node_result(
             uniquify_visual_template_fields,
         )
 
-        if context.decorative_visual_template_fields:
+        allowed_template_fields = {
+            **context.allowed_visual_template_fields,
+            **context.required_visual_template_fields,
+        }
+        authorized_keys = set(allowed_template_fields)
+        if set(result.template_fields) - authorized_keys:
             result = result.model_copy(
                 update={
                     "template_fields": {
-                        key: value
-                        for key, value in result.template_fields.items()
-                        if key not in context.decorative_visual_template_fields
+                        key: value for key, value in result.template_fields.items() if key in authorized_keys
                     }
                 }
             )
@@ -1971,25 +1977,14 @@ def validate_content_node_result(
                 "template_fields",
                 "封面叙事字段不能只有序号角标，请至少提供一条可读主标题",
             )
-        allowed_template_fields = {
-            **context.allowed_visual_template_fields,
-            **context.required_visual_template_fields,
-        }
-        unexpected_template_fields = set(result.template_fields) - set(allowed_template_fields)
-        if unexpected_template_fields:
-            label = sorted(unexpected_template_fields)[0]
-            raise ContractDomainValidationError(
-                "visual_template_field_not_authorized",
-                f"template_fields.{label}",
-                "视觉方案只能填写服务端授权的叙事字段或缺失必填字段，不得改动其他模板文字",
-            )
         missing_narrative_fields = set(context.allowed_visual_template_fields) - set(result.template_fields)
         if missing_narrative_fields:
             label = sorted(missing_narrative_fields)[0]
+            allowed = "、".join(sorted(authorized_keys)) or "无"
             raise ContractDomainValidationError(
                 "visual_template_field_missing",
                 f"template_fields.{label}",
-                f"封面叙事字段“{label}”必须单独生成文案，不能复用其他字段的文字",
+                f"封面叙事字段“{label}”必须单独生成文案；允许的键：{allowed}",
             )
         for label, constraints in allowed_template_fields.items():
             value = result.template_fields.get(label, "").strip()
@@ -2208,6 +2203,8 @@ class ContentNodeResultCollector:
                         "message": str(exc),
                     }
                 )
+            if self.runtime_context is not None:
+                self.runtime_context._content_last_result_error = str(exc)
             await append_content_runtime_event(
                 self.runtime_context,
                 "content.tool.failed",
@@ -2240,7 +2237,10 @@ def build_content_result_tool(collector: ContentNodeResultCollector) -> Structur
         first = exc.errors()[0] if exc.errors() else {}
         field_path = ".".join(str(item) for item in first.get("loc") or [])
         message = str(first.get("msg") or "结果结构不符合契约")
-        return f"结果未通过结构校验，请修正后重新提交：{field_path} {message}".strip()
+        detail = f"结果未通过结构校验，请修正后重新提交：{field_path} {message}".strip()
+        if collector.runtime_context is not None:
+            collector.runtime_context._content_last_result_error = detail
+        return detail
 
     return StructuredTool.from_function(
         coroutine=submit_content_node_result,

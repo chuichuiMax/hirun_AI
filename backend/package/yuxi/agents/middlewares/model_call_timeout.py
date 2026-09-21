@@ -104,8 +104,10 @@ class ModelCallTimeoutMiddleware(AgentMiddleware):
         timeout = self.timeout_seconds
         if controlled:
             if call_number > context._content_max_model_calls:
+                last = str(getattr(context, "_content_last_result_error", "") or "").strip()
+                detail = f"：{last}" if last else "，请检查失败明细"
                 raise ModelExecutionBudgetExceeded(
-                    f"{node_label}已用完 {context._content_max_model_calls} 次模型调用额度（连接重试与结果纠错共用），请检查失败明细"
+                    f"{node_label}已用完 {context._content_max_model_calls} 次模型调用额度（连接重试与结果纠错共用）{detail}"
                 )
             output_limit = min(
                 context._content_node_token_budget // context._content_max_model_calls,

@@ -204,11 +204,10 @@ def normalize_candidate_assessments(
         if not expected:
             continue
         known = {key: item.dimensions[key] for key in expected if key in item.dimensions}
-        if known:
-            completed = {key: known.get(key, 0) for key in expected}
-            if item.dimensions != completed:
-                item.dimensions = completed
-                item.total = None
+        completed = {key: known.get(key, 0) for key in expected}
+        if item.dimensions != completed:
+            item.dimensions = completed
+            item.total = None
 
 
 def resolve_input_path(inputs: dict[str, Any], path: str) -> Any:
@@ -338,12 +337,8 @@ def validate_strategy_decision(
         ),
     )
     if result.creation_method_codes[0] != primary.candidate_id:
-        raise ValueError(
-            "主手法必须为兼容候选中评分最高项，并遵守同分规则；"
-            f"按本次提交评分计算，creation_method_codes[0] 应为 {primary.candidate_id}（{primary.total:g} 分）。"
-            f"总分降序后依次比较 {', '.join(method_scale['tie_break'])} 维度降序，最后按 candidate_id 升序。"
-            "保留基于事实的评分，修正选择顺序，不得为了保留原选择而改分。"
-        )
+        rest = [code for code in result.creation_method_codes if code != primary.candidate_id]
+        result.creation_method_codes = [primary.candidate_id, *rest]
     if result.strategy_mode == "scored":
         weights = candidates["formula_pair_weights"]
         tie_break = candidates["scoring"]["formula"]["tie_break"]

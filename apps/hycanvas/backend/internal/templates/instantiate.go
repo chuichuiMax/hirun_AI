@@ -102,7 +102,31 @@ func (s *Service) Instantiate(ctx context.Context, userID, templateID string, in
 	if title == "" {
 		title = template.Title
 	}
+	markGeneratedCover(applied)
 	return s.persist.CreateDesign(ctx, in.WorkspaceID, title, applied, &userID)
+}
+
+const generatedCoverOrigin = "contentswarm-cover"
+
+// markGeneratedCover keeps content-production instantiations off the Xiaohongshu
+// template library. The cover remains editable via its design id.
+func markGeneratedCover(file map[string]any) {
+	meta := asObj(file["meta"])
+	if meta == nil {
+		meta = map[string]any{}
+		file["meta"] = meta
+	}
+	meta["origin"] = generatedCoverOrigin
+	meta["templateZone"] = generatedCoverOrigin
+}
+
+func isGeneratedCoverFile(file json.RawMessage) bool {
+	s := string(file)
+	return strings.Contains(s, "contentswarm-background") ||
+		strings.Contains(s, "contentswarm-material-library") ||
+		strings.Contains(s, `"origin":"`+generatedCoverOrigin+`"`) ||
+		strings.Contains(s, `"origin": "`+generatedCoverOrigin+`"`) ||
+		strings.Contains(s, `"templateZone":"`+generatedCoverOrigin+`"`)
 }
 
 // applyBackgroundImage installs the caller-selected material as the immutable

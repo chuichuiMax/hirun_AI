@@ -226,6 +226,9 @@ func (s *Service) List(ctx context.Context, userID string, q TemplateQuery, work
 	trueVis := map[string]string{}
 	trueWorkspace := map[string]*string{}
 	for _, r := range rows {
+		if isGeneratedCoverFile(r.File) {
+			continue
+		}
 		t := rowToTemplate(r)
 		trueVis[t.ID] = t.Visibility
 		trueWorkspace[t.ID] = t.WorkspaceID
@@ -681,6 +684,79 @@ func (s *Service) Rename(ctx context.Context, userID, templateID, title string) 
 		return Template{}, err
 	}
 	return rowToTemplate(updated), nil
+}
+
+// Update replaces a mutable custom template's file in place. This is the
+// Xiaohongshu library "save" path: edit the original template, do not copy it.
+func (s *Service) Update(ctx context.Context, userID, templateID string, in SaveInput) (Template, error) {
+	if _, ok := findSeed(templateID); ok {
+		return Template{}, ErrForbidden
+	}
+	row, err := s.getRow(ctx, templateID)
+	if err != nil {
+		return Template{}, err
+	}
+	if err := s.assertMutableTemplate(ctx, userID, row); err != nil {
+		return Template{}, err
+	}
+	file := in.File
+	if file == nil && in.DesignID != "" {
+		dws, err := s.persist.GetWorkspaceID(ctx, in.DesignID)
+		if err != nil {
+			return Template{}, ErrNotFound
+		}
+		loaded, err := s.persist.LoadDesignFile(ctx, in.DesignID, dws)
+		if err != nil {
+			return Template{}, ErrNotFound
+		}
+		file = loaded
+	}
+	if file == nil {
+		return Template{}, ErrBadRequest
+	}
+	if in.FillableFields != nil {
+		if err := normalizeTemplateTypography(file, in.FillableFields); err != nil {
+			return Template{}, err
+		}
+		meta := asObj(file["meta"])
+		meta["brandEditableFields"] = in.FillableFields
+		file["meta"] = meta
+	}
+	persistence.CompactOversizedFonts(persistence.DesignFile(file))
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = row.Title
+	}
+	style, _ := json.Marshal(extractStyle(file))
+	fileRaw, _ := json.Marshal(file)
+	var thumbnail *string
+	if in.Thumbnail != "" {
+		thumbnail = &in.Thumbnail
+	}
+	updated, err := s.replaceRow(ctx, templateID, title, fileRaw, thumbnail, style)
+	if err != nil {
+		return Template{}, err
+	}
+	return rowToTemplate(updated), nil
+}
+
+func (s *Service) assertMutableTemplate(ctx context.Context, userID string, row TemplateRow) error {
+	switch row.Visibility {
+	case "private":
+		if row.OwnerID != userID {
+			return ErrForbidden
+		}
+	case "workspace":
+		if row.WorkspaceID == nil {
+			return ErrBadRequest
+		}
+		if err := s.access.AssertMember(ctx, userID, *row.WorkspaceID, "member"); err != nil {
+			return ErrForbidden
+		}
+	default:
+		return ErrForbidden
+	}
+	return nil
 }
 
 // Delete permanently removes a mutable custom template. Built-in seed

@@ -163,6 +163,14 @@ func (s *Service) renameRow(ctx context.Context, id, title string) (TemplateRow,
 	return t, err
 }
 
+func (s *Service) replaceRow(ctx context.Context, id, title string, file json.RawMessage, thumbnail *string, style json.RawMessage) (TemplateRow, error) {
+	t, err := scanTemplate(s.db.QueryRow(ctx, `UPDATE "templates" SET title = $2, file = $3, thumbnail = COALESCE($4, thumbnail), style = $5, "updated_at" = now() WHERE id = $1 RETURNING `+tmplCols, id, title, file, thumbnail, style))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TemplateRow{}, ErrNotFound
+	}
+	return t, err
+}
+
 func (s *Service) deleteRow(ctx context.Context, id string) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM "templates" WHERE id = $1`, id)
 	return err

@@ -32,6 +32,19 @@ def skip_formula_lexicon_pipeline(state: dict[str, Any]) -> bool:
     return _brief_service_entry(state) == REVIEW_NOTES_SERVICE_ENTRY
 
 
+def skip_formula_lexicon_for_node(state: dict[str, Any], node_id: str) -> bool:
+    if skip_formula_lexicon_pipeline(state):
+        return True
+    if node_id != "generate_content":
+        return False
+    snapshot = state.get("runtime_config_snapshot")
+    if not isinstance(snapshot, dict):
+        return False
+    from yuxi.content.v3.joint_workflow import PLATFORM_WORKFLOW_V5_ID
+
+    return snapshot.get("workflow_version_id") == PLATFORM_WORKFLOW_V5_ID
+
+
 def skip_research_pipeline(state: dict[str, Any]) -> bool:
     return skip_formula_lexicon_pipeline(state)
 

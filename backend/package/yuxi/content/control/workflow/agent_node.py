@@ -13,6 +13,7 @@ from yuxi.content.control.workflow.external_wait import (
     RESEARCH_SKIP_REASON,
     cover_skip_reason,
     skip_cover_pipeline,
+    skip_formula_lexicon_for_node,
     skip_formula_lexicon_pipeline,
     skip_research_pipeline,
 )
@@ -424,7 +425,14 @@ class AgentNodeHandler:
         media = state.get("media_evidence_items") or []
         cover_asset_ids = list((state.get("cover_job") or {}).get("asset_ids") or [])
         visual_material = (state.get("runtime_config_snapshot") or {}).get("visual_material") or {}
-        required_source_asset_ids = [visual_material["image_asset_id"]] if visual_material.get("image_asset_id") else []
+        visual_lock = {}
+        if node["id"] in {"plan_visuals", "submit_cover_job"}:
+            from yuxi.content.v3.modular_rules import lock_visual_planning
+
+            visual_lock = lock_visual_planning(state)
+        required_source_asset_ids = visual_lock.get("required_source_asset_ids") or (
+            [visual_material["image_asset_id"]] if visual_material.get("image_asset_id") else []
+        )
         locked_values = {
             "creation_mode": (state.get("runtime_config_snapshot") or {}).get("creation_mode", "original"),
             "selected_title": (state.get("selected_title") or {}).get("text"),
@@ -433,14 +441,17 @@ class AgentNodeHandler:
                 *cover_asset_ids,
             ],
             "required_source_asset_ids": required_source_asset_ids,
-            "required_visual_intent": state.get("required_visual_intent"),
-            "allowed_visual_evidence_ids": list(state.get("allowed_visual_evidence_ids") or []),
+            "required_visual_intent": visual_lock.get("required_visual_intent") or state.get("required_visual_intent"),
+            "allowed_visual_evidence_ids": list(
+                visual_lock.get("allowed_visual_evidence_ids") or state.get("allowed_visual_evidence_ids") or []
+            ),
             "visual_plan_hash": (state.get("visual_plan") or {}).get("plan_hash"),
             "state_version": int(state.get("state_version") or 0),
         }
-        assembly_state = state
+        assembly_state = {**state, **visual_lock} if visual_lock else state
         if node["id"] == "plan_visuals":
             from yuxi.content.control.visual_template_fields import (
+                is_narrative_visual_field,
                 is_ordinal_badge_template_field,
                 missing_required_template_fields,
                 resolved_visual_text_max_chars,
@@ -482,7 +493,7 @@ class AgentNodeHandler:
             narrative_fields = [
                 field
                 for field in (visual_material.get("hycanvas_fillable_fields") or [])
-                if isinstance(field, dict) and not is_ordinal_badge_template_field(field)
+                if isinstance(field, dict) and is_narrative_visual_field(field)
             ]
             runtime_snapshot["visual_material"] = {
                 **visual_material,
@@ -490,7 +501,7 @@ class AgentNodeHandler:
                 "required_template_field_repairs": required_template_fields,
                 "decorative_template_field_keys": decorative_template_fields,
             }
-            assembly_state = {**state, "runtime_config_snapshot": runtime_snapshot}
+            assembly_state = {**assembly_state, "runtime_config_snapshot": runtime_snapshot}
         if node["id"] == "submit_cover_job":
             locked_values["visual_plan"] = state.get("visual_plan") or {}
         assembly = ContentNodeInputAssembler.build(node=node, state=assembly_state)
@@ -503,7 +514,7 @@ class AgentNodeHandler:
             product_material_requirements=state.get("product_material_requirements") or {},
             strategy_snapshot=state.get("strategy_snapshot") or {},
             viral_candidate_collection=state.get("viral_candidate_collection") or {},
-            skip_formula_lexicon_usage=skip_formula_lexicon_pipeline(state),
+            skip_formula_lexicon_usage=skip_formula_lexicon_for_node(state, node["id"]),
             channel_profile=state.get("channel_profile") or {},
         )
         required_skills = tuple(node["required_skills"])

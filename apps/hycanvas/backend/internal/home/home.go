@@ -70,6 +70,10 @@ func designToItem(d persistence.DesignRecord, starred bool) HomeItem {
 	}
 }
 
+func isGeneratedCoverDesign(d persistence.DesignRecord) bool {
+	return d.TemplateZone != nil && *d.TemplateZone == "contentswarm-cover"
+}
+
 func (s *Service) favoriteIDs(ctx context.Context, userID string) (map[string]bool, error) {
 	rows, err := s.db.Query(ctx, `SELECT "design_id" FROM "favorites" WHERE "user_id" = $1`, userID)
 	if err != nil {
@@ -106,6 +110,9 @@ func (s *Service) Section(ctx context.Context, userID, workspaceID, section stri
 	}
 	items := make([]HomeItem, 0, len(designs))
 	for _, d := range designs {
+		if isGeneratedCoverDesign(d) {
+			continue
+		}
 		if section == "favorites" && !starred[d.ID] {
 			continue
 		}
@@ -129,6 +136,9 @@ func (s *Service) Search(ctx context.Context, userID, workspaceID, q string, typ
 	}
 	items := make([]HomeItem, 0, len(designs))
 	for _, d := range designs {
+		if isGeneratedCoverDesign(d) {
+			continue
+		}
 		items = append(items, designToItem(d, starred[d.ID]))
 	}
 	return searchHome(items, q, types), nil

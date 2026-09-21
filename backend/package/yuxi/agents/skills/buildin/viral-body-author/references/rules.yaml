@@ -8,4 +8,4 @@ rules:
     text: 按锁定正文公式分段，不报幕。
   - id: BODY-ADV
     enabled: true
-    text: 我的优势写入 knowledge_base Evidence，至少引用一条。
+    text: 我的优势写入 knowledge_base Evidence，paragraph_evidence 至少引用一条 advantage_evidence_ids。

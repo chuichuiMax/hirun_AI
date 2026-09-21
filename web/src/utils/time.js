@@ -13,6 +13,7 @@ const DEFAULT_TZ = 'Asia/Shanghai'
 dayjs.tz.setDefault(DEFAULT_TZ)
 
 const NUMERIC_REGEX = /^-?\d+(?:\.\d+)?$/
+const TZ_DESIGNATOR_REGEX = /(?:Z|[+-]\d{2}:?\d{2})$/i
 
 const coerceDayjs = (value) => {
   if (value === null || value === undefined) {
@@ -41,14 +42,15 @@ const coerceDayjs = (value) => {
     return dayjs(numeric).tz(DEFAULT_TZ)
   }
 
-  // 解析 ISO 字符串（dayjs 会自动识别时区信息，如 Z 后缀表示 UTC）
-  // 需要先转换为 UTC 再设置时区，否则 .tz() 只会改变显示而不会正确转换
-  const parsed = dayjs(stringValue)
+  // setDefault(Asia/Shanghai) 后，dayjs('...Z') 会把 UTC 墙钟当成上海时间。
+  // 带 Z / 偏移的字符串必须按 UTC 解析，再转到北京时间。
+  const parsed = TZ_DESIGNATOR_REGEX.test(stringValue)
+    ? dayjs.utc(stringValue)
+    : dayjs.tz(stringValue, DEFAULT_TZ)
   if (!parsed.isValid()) {
     return null
   }
-  // 先转换为 UTC（保留原始时间值），再转换到上海时区
-  return parsed.utc().tz(DEFAULT_TZ)
+  return parsed.tz(DEFAULT_TZ)
 }
 
 export const parseToShanghai = (value) => coerceDayjs(value)

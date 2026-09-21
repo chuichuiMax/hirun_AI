@@ -249,17 +249,23 @@ def validate_content(
 HARD_CTA_TERMS = ("立即咨询", "马上预约", "点击下方", "私信下单")
 MARKDOWN_PATTERN = re.compile(r"(?m)^#{1,6}\s|^\s*[-*]\s|\*\*")
 _TITLE_SELL_GROUPS = (
-    ("number", re.compile(r"\d")),
     ("price", re.compile(r"报价|预算|万元|元")),
     ("craft", re.compile(r"工艺|工序|验收")),
     ("result", re.compile(r"效果|翻新|改造")),
 )
 
 
-def _check(code: str, location: str, message: str, evidence_ids: list[str] | None = None) -> dict[str, Any]:
+def _check(
+    code: str,
+    location: str,
+    message: str,
+    evidence_ids: list[str] | None = None,
+    *,
+    level: str = "error",
+) -> dict[str, Any]:
     return {
         "code": code,
-        "level": "error",
+        "level": level,
         "location": location,
         "message": message,
         "evidence_ids": evidence_ids or [],
@@ -306,7 +312,14 @@ def validate_viral_v5_content(
     if pool:
         unknown = [item for item in normalized_topics if item and item not in pool]
         if unknown:
-            checks.append(_check("TOPIC_NOT_IN_POOL", "topics", f"话题不在候选池: {'、'.join(unknown[:5])}"))
+            checks.append(
+                _check(
+                    "TOPIC_NOT_IN_POOL",
+                    "topics",
+                    f"话题不在候选池: {'、'.join(unknown[:5])}",
+                    level="warning",
+                )
+            )
     scanned = strip_keycap_numbers(combined)
     for number in unsupported_number_tokens(scanned, evidence_bundle):
         already = any(

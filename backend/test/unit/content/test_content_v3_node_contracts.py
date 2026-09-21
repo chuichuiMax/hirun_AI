@@ -498,6 +498,28 @@ def test_visual_plan_strips_ordinal_badge_fields_before_validation():
     assert result.template_fields["field_1"] == "洋湖天旭工艺避坑"
 
 
+def test_visual_plan_strips_unauthorized_system_fields_without_retry():
+    context = replace(
+        DOMAIN_CONTEXT,
+        allowed_visual_template_fields={"field_1": {"maxChars": 22}},
+        required_visual_template_fields={"免费量尺规划": {"maxChars": 6}},
+    )
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["text"] = ["洋湖天旭工艺避坑"]
+    payload["template_fields"] = {
+        "field_1": "洋湖天旭工艺避坑",
+        "项目名称": "洋湖天旭",
+        "field_2": "01",
+        "免费量尺规划": "空间规划",
+    }
+
+    result = validate_content_node_result("VisualPlanResultV1", payload, context)
+    assert result.template_fields == {
+        "field_1": "洋湖天旭工艺避坑",
+        "免费量尺规划": "空间规划",
+    }
+
+
 def test_visual_plan_requires_copy_for_each_authorized_narrative_field():
     context = replace(
         DOMAIN_CONTEXT,
@@ -783,6 +805,7 @@ async def test_result_collector_requires_activation_exactly_one_submission_and_n
     with pytest.raises(ContractDomainValidationError, match="未激活"):
         await collector.submit(**VALID_PAYLOADS["ContentReviewResultV1"])
     assert collector.submission_count == 0
+    assert "未激活全部必需 Skills" in runtime._content_last_result_error
 
     runtime._activated_required_skills = ["content-reviewer"]
     invalid = _make_unknown("ContentReviewResultV1", VALID_PAYLOADS["ContentReviewResultV1"])

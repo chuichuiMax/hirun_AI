@@ -1744,6 +1744,14 @@ export class HyCanvasClient {
   getTemplateFile(id: string, signal?: AbortSignal): Promise<DesignFile> {
     return this.request("GET", `/v1/templates/${id}/file`, undefined, { signal });
   }
+  getTemplate(id: string): Promise<TemplateSummary> {
+    return this.request("GET", `/v1/templates/${id}`);
+  }
+  updateTemplate(id: string, input: { title?: string; file?: DesignFile; thumbnail?: string; fillableFields?: FillableFieldSummary[] }): Promise<TemplateSummary> {
+    return this.request("PATCH", `/v1/templates/${id}`, input.file
+      ? { ...input, file: compactOversizedFontPayloads(input.file) }
+      : input);
+  }
   /** A template's declared fillable fields, for the bulk-create mapping UI. */
   templateFillableFields(id: string): Promise<FillableFieldSummary[]> {
     return this.request("GET", `/v1/templates/${id}/fillable-fields`);

@@ -995,33 +995,19 @@ class V3DeterministicNodeHandler:
     @staticmethod
     async def _freeze_rule_bundle(*, db: AsyncSession, state: dict[str, Any], node_run_id: str) -> dict[str, Any]:
         del db, node_run_id
-        from yuxi.content.v3.modular_rules import compile_content_rule_bundle, has_price_signal, resolve_visual_intent
+        from yuxi.content.v3.modular_rules import compile_content_rule_bundle, lock_visual_planning
 
         brief = state.get("content_brief") or {}
         strategy = state.get("strategy_snapshot") or {}
-        evidence = state.get("evidence_bundle") or {}
         viral = state.get("viral_reference_selection") or {}
         bundle = compile_content_rule_bundle(
             brief=brief,
             strategy_snapshot=strategy,
             extra_topics=viral.get("topic_candidates") or [],
         )
-        visual_material = (state.get("runtime_config_snapshot") or {}).get("visual_material") or {}
-        required_assets = [visual_material["image_asset_id"]] if visual_material.get("image_asset_id") else []
-        allowed_visual = [
-            str(item["id"])
-            for item in evidence.get("items") or []
-            if isinstance(item, dict) and item.get("id") and "visual" in (item.get("allowed_usage") or [])
-        ]
         return {
             "content_rule_bundle": bundle,
-            "required_visual_intent": resolve_visual_intent(
-                brief=brief,
-                evidence_bundle=evidence,
-                has_price=has_price_signal(evidence_bundle=evidence, strategy_snapshot=strategy, brief=brief),
-            ),
-            "required_source_asset_ids": required_assets,
-            "allowed_visual_evidence_ids": allowed_visual,
+            **lock_visual_planning(state),
         }
 
     @staticmethod
@@ -1084,6 +1070,7 @@ class V3DeterministicNodeHandler:
         from yuxi.content.v3.modular_rules import (
             ADVANTAGE_KB_NAME,
             EXPRESSION_KB_NAMES,
+            filter_advantage_chunks_for_stage,
             freeze_expression_snapshot,
             sanitize_expression_chunks,
             summarize_expression_sanitize,
@@ -1102,7 +1089,7 @@ class V3DeterministicNodeHandler:
         )
         by_name = dict(zip(EXPRESSION_KB_NAMES, retrieved, strict=True))
         advantage_kb_id = kb_ids[ADVANTAGE_KB_NAME]
-        advantage_chunks = by_name[ADVANTAGE_KB_NAME]
+        advantage_chunks = filter_advantage_chunks_for_stage(by_name[ADVANTAGE_KB_NAME], form_values)
         tone = sanitize_expression_chunks(by_name["表达语气库"])
         concrete = sanitize_expression_chunks(by_name["具象表达"])
         empty = [

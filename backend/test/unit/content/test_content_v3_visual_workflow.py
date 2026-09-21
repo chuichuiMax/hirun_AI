@@ -21,6 +21,7 @@ from yuxi.content.control.workflow.external_wait import (
     skip_content_correction_interrupt,
     skip_cover_pipeline,
     skip_cover_selection_interrupt,
+    skip_formula_lexicon_for_node,
     skip_formula_lexicon_pipeline,
 )
 from yuxi.repositories.content_cover_repository import ContentCoverRepository
@@ -687,6 +688,21 @@ def test_skip_formula_lexicon_pipeline_only_for_review_notes():
     assert not skip_formula_lexicon_pipeline({"content_brief": {"form_values": {"mp_service_entry": "装修家居"}}})
     assert not skip_formula_lexicon_pipeline({"content_brief": {}})
     assert not skip_formula_lexicon_pipeline({})
+
+
+def test_v5_generate_skips_formula_lexicon_and_body_calling():
+    from yuxi.content.v3.joint_workflow import PLATFORM_WORKFLOW_V5_ID
+
+    v5 = {"runtime_config_snapshot": {"workflow_version_id": PLATFORM_WORKFLOW_V5_ID}}
+    assert skip_formula_lexicon_for_node(v5, "generate_content")
+    assert not skip_formula_lexicon_for_node(v5, "semantic_review")
+    assert not skip_formula_lexicon_for_node(
+        {"runtime_config_snapshot": {"workflow_version_id": "content-workflow-v3.7"}},
+        "generate_content",
+    )
+    review_notes = {"content_brief": {"form_values": {"mp_service_entry": "好评笔记"}}}
+    assert skip_formula_lexicon_for_node(review_notes, "generate_content")
+    assert skip_formula_lexicon_for_node(review_notes, "semantic_review")
 
 
 @pytest.mark.asyncio

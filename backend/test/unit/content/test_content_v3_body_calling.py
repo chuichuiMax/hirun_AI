@@ -97,6 +97,42 @@ def test_formula_without_variants_rejects_extra_variant() -> None:
         )
 
 
+def test_v5_generate_accepts_blueprint_section_ids_when_lexicon_skipped() -> None:
+    calling = get_decoration_body_calling("C04")
+    context = ContractDomainContext(
+        locked_title_formula_code="T01",
+        locked_body_formula_code="C04",
+        locked_body_calling_section_ids=tuple(section["id"] for section in calling["sections"]),
+        required_title_lexicon_codes=frozenset({"title.audience"}),
+        skip_formula_lexicon_usage=True,
+        allowed_evidence_by_usage={"title": frozenset(), "body": frozenset()},
+        creation_mode="viral_rewrite",
+        selected_viral_reference_ids=("vav_locked",),
+    )
+    payload = {
+        "title": {"text": "老房改造先看这三处", "formula_code": "T01", "evidence_ids": []},
+        "outline": {
+            "body_formula_code": "C04",
+            "sections": [{"section_id": "hook", "goal": "钩子", "evidence_ids": []}],
+        },
+        "draft": {"body": "正文", "topics": [], "paragraph_evidence": [], "body_formula_code": "C04"},
+    }
+    result = validate_content_node_result("GeneratedContentResultV1", payload, context)
+    assert result.outline.sections[0].section_id == "hook"
+
+    blocked = ContractDomainContext(
+        locked_title_formula_code="T01",
+        locked_body_formula_code="C04",
+        locked_body_calling_section_ids=tuple(section["id"] for section in calling["sections"]),
+        skip_formula_lexicon_usage=False,
+        allowed_evidence_by_usage={"title": frozenset(), "body": frozenset()},
+        creation_mode="viral_rewrite",
+        selected_viral_reference_ids=("vav_locked",),
+    )
+    with pytest.raises(ContractDomainValidationError, match="正文大纲必须按锁定调用规则"):
+        validate_content_node_result("GeneratedContentResultV1", payload, blocked)
+
+
 def test_review_notes_skip_body_calling_section_order() -> None:
     calling = get_decoration_body_calling("C04")
     context = ContractDomainContext(
@@ -199,6 +235,17 @@ def test_generated_content_must_cite_body_knowledge_evidence() -> None:
     }
     with pytest.raises(ContractDomainValidationError, match="必须在 paragraph_evidence 中引用"):
         validate_content_node_result("GeneratedContentResultV1", payload, context)
+
+    aliased = ContractDomainContext(
+        locked_title_formula_code="T01",
+        locked_body_formula_code="C02",
+        skip_formula_lexicon_usage=True,
+        allowed_evidence_by_usage={"title": frozenset(), "body": frozenset({"ev-kb"})},
+        body_knowledge_evidence_ids=frozenset({"ev-kb"}),
+        evidence_cite_aliases={"E04": "ev-kb"},
+    )
+    with pytest.raises(ContractDomainValidationError, match="E04"):
+        validate_content_node_result("GeneratedContentResultV1", payload, aliased)
 
     payload["draft"]["paragraph_evidence"] = [{"paragraph_id": "p1", "evidence_ids": ["ev-kb"]}]
     result = validate_content_node_result("GeneratedContentResultV1", payload, context)

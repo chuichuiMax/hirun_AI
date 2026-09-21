@@ -204,13 +204,28 @@ def test_method_shape_normalizes_ineligible_scores_and_partial_dimensions():
     assert selected.dimensions == {"goal": 4, "material": 4, "audience_scene": 0, "channel": 0, "persona": 0}
 
 
-def test_eligible_method_without_any_score_keys_still_fails():
+def test_eligible_method_without_any_score_keys_fills_zero_and_keeps_only_eligible():
     candidates, result = example()
+    for item in result["method_assessments"]:
+        if item["candidate_id"] != "M2":
+            item.update(eligible=False, dimensions={}, total=None, input_paths=[])
     winner = next(item for item in result["method_assessments"] if item["candidate_id"] == "M2")
     winner.update(dimensions={}, total=None)
-    with pytest.raises(ValueError, match="合格候选 M2 维度不完整") as exc:
-        validate(candidates, result)
-    assert "goal, material, audience_scene, channel, persona" in str(exc.value)
+    decision = validate(candidates, result)
+    selected = next(item for item in decision.method_assessments if item.candidate_id == "M2")
+    assert selected.dimensions == dict.fromkeys(candidates["scoring"]["method"]["weights"], 0)
+    assert decision.creation_method_codes[0] == "M2"
+
+
+def test_all_eligible_methods_without_dimensions_use_tie_break_primary():
+    candidates, result = example()
+    for item in result["method_assessments"]:
+        item.update(dimensions={}, total=None)
+    result["creation_method_codes"] = ["M2"]
+    decision = validate(candidates, result)
+    zeros = dict.fromkeys(candidates["scoring"]["method"]["weights"], 0)
+    assert all(item.dimensions == zeros for item in decision.method_assessments if item.eligible)
+    assert decision.creation_method_codes[0] == "M1"
 
 
 def test_rejected_candidate_cannot_be_selected():
@@ -255,20 +270,18 @@ def test_new_contract_accepts_non_decoration_direction_identifiers():
 def test_primary_method_must_use_score_not_configuration_position():
     candidates, result = example()
     result["creation_method_codes"] = ["M1"]
-    with pytest.raises(ValueError, match="主手法"):
-        validate(candidates, result)
+    decision = validate(candidates, result)
+    assert decision.creation_method_codes[0] == "M2"
 
 
-def test_tied_methods_report_exact_correction_without_changing_scores():
+def test_tied_methods_reorder_primary_without_changing_scores():
     candidates, result = example()
     for item in result["method_assessments"]:
         item["dimensions"] = dict.fromkeys(item["dimensions"], 3)
         item["total"] = 75
     scores = deepcopy(result["method_assessments"])
-    with pytest.raises(ValueError, match=r"creation_method_codes\[0\] 应为 M1（75 分）"):
-        validate(candidates, result)
-    result["creation_method_codes"] = ["M1"]
-    assert validate(candidates, result).creation_method_codes == ["M1"]
+    decision = validate(candidates, result)
+    assert decision.creation_method_codes[0] == "M1"
     assert result["method_assessments"] == scores
 
 

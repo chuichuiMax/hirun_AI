@@ -8,12 +8,15 @@ from yuxi.content.model.contracts.content_nodes import (
     GenerateContentPromptV1,
     PlanVisualsPromptV1,
     build_evidence_cite_aliases,
+    knowledge_body_evidence_ids,
 )
+from yuxi.content.control.visual_template_fields import is_narrative_visual_field
 from yuxi.content.model.viral_assets import BLUEPRINT_FIELDS
 
 _MAX_LEXICON_CHUNKS = 1
 _MAX_LEXICON_CHUNK_CHARS = 48
 _MAX_EVIDENCE_VALUE_CHARS = 36
+_MAX_KNOWLEDGE_BODY_VALUE_CHARS = 160
 _MAX_FORBIDDEN_MAP_ROWS = 10
 _MAX_FORBIDDEN_ALTERNATIVES = 1
 _MAX_METHOD_PATTERNS = 1
@@ -64,6 +67,7 @@ _EVIDENCE_ITEM_DROP_FIELDS = (
 _EVIDENCE_METADATA_KEEP = frozenset(
     {
         "material_type",
+        "knowledge_base_name",
         "rule_kind",
         "selected_reference",
         "reference_blueprint",
@@ -377,7 +381,11 @@ def _slim_evidence_item(item: dict[str, Any], *, creation_mode: str) -> None:
         item["metadata"] = _slim_evidence_metadata(metadata)
         return
     if "value" in item:
-        item["value"] = _trim_text(item.get("value"), _MAX_EVIDENCE_VALUE_CHARS)
+        knowledge_body = item.get("source_type") == "knowledge_base" and "body" in set(
+            item.get("allowed_usage") or []
+        )
+        limit = _MAX_KNOWLEDGE_BODY_VALUE_CHARS if knowledge_body else _MAX_EVIDENCE_VALUE_CHARS
+        item["value"] = _trim_text(item.get("value"), limit)
     if metadata:
         item["metadata"] = _slim_evidence_metadata(metadata)
     else:
@@ -385,14 +393,25 @@ def _slim_evidence_item(item: dict[str, Any], *, creation_mode: str) -> None:
 
 
 def _filter_evidence_for_generation(items: list, *, creation_mode: str) -> list[dict[str, Any]]:
-    """模型视图只留写作需要的证据；原创丢掉未选中的爆款原文。"""
-    kept: list[dict[str, Any]] = []
-    deferred: list[dict[str, Any]] = []
+    """模型视图只留写作需要的证据；业务知识证据置顶，避免 10 条上限丢掉必引优势库。"""
+    required_ids = knowledge_body_evidence_ids({"items": items})
+    pinned: list[dict[str, Any]] = []
+    rest: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for item in items:
         if not isinstance(item, dict) or not item.get("id"):
             continue
         if item.get("verified_status") == "rejected":
             continue
+        eid = str(item["id"])
+        if eid in required_ids and eid not in seen:
+            pinned.append(item)
+            seen.add(eid)
+        else:
+            rest.append(item)
+    kept: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    for item in rest:
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         material_type = str(metadata.get("material_type") or "")
         if (
@@ -409,10 +428,8 @@ def _filter_evidence_for_generation(items: list, *, creation_mode: str) -> list[
             kept.append(item)
         else:
             deferred.append(item)
-    remaining = max(0, _MAX_EVIDENCE_ITEMS - len(kept))
-    if remaining:
-        kept.extend(deferred[:remaining])
-    return kept[:_MAX_EVIDENCE_ITEMS]
+    ordered = [*pinned, *kept, *deferred]
+    return ordered[:_MAX_EVIDENCE_ITEMS]
 
 
 def compact_evidence_items_for_bundle(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -471,6 +488,17 @@ def project_generation_input(payload: dict) -> dict:
         if alias:
             item["id"] = alias
     projected["evidence_bundle"]["items"] = evidence_items
+    advantage_ids = [
+        str(item["id"])
+        for item in evidence_items
+        if isinstance(item, dict)
+        and item.get("id")
+        and (item.get("metadata") or {}).get("knowledge_base_name") == "我的优势"
+    ]
+    if advantage_ids:
+        guidance = dict(projected.get("expression_guidance") or {})
+        guidance["advantage_evidence_ids"] = advantage_ids
+        projected["expression_guidance"] = guidance
     # 模型只见 E01 短码；真实 ev_ id 由服务端提交时回写。不再附带重复 cite 索引。
     projected["evidence_cite_index"] = None
     lexicon = projected.get("formula_lexicon_bundle") or {}
@@ -619,7 +647,15 @@ def _fit_generation_prompt(
     floor = 3 if max_chars <= _MAX_REVIEW_NOTES_GENERATION_PROMPT_CHARS else 5
     while _prompt_chars(projected) > max_chars and len(items) > floor:
         drop_at = next(
-            (index for index in range(len(items) - 1, -1, -1) if not _is_forbidden_replacement_map(items[index])),
+            (
+                index
+                for index in range(len(items) - 1, -1, -1)
+                if not _is_forbidden_replacement_map(items[index])
+                and not (
+                    items[index].get("source_type") == "knowledge_base"
+                    and "body" in set(items[index].get("allowed_usage") or [])
+                )
+            ),
             None,
         )
         if drop_at is None:
@@ -804,7 +840,9 @@ def project_visual_plan_input(payload: dict) -> dict:
     visual = dict(runtime.get("visual_material") or {})
     format_ = visual.get("format") if isinstance(visual.get("format"), dict) else {}
     fillable = [
-        _slim_fillable_field(field) for field in visual.get("hycanvas_fillable_fields") or [] if isinstance(field, dict)
+        _slim_fillable_field(field)
+        for field in visual.get("hycanvas_fillable_fields") or []
+        if isinstance(field, dict) and is_narrative_visual_field(field)
     ]
     visual_material: dict[str, Any] = {
         key: visual.get(key) for key in ("image_asset_id", "template_id") if key in visual

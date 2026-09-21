@@ -102,7 +102,7 @@ import { stageAiSources } from "@/lib/aiRequests";
 import { tr, trOr } from "@/lib/i18n";
 import { apiCodeMessage, userMessage } from "@/lib/errors";
 import { isContentSwarmManaged } from "@/lib/managedAuth";
-import { isDesignInZone, isTemplateInZone, templateZoneForFormat, type TemplateZone } from "@/lib/templateZones";
+import { isTemplateInZone, templateZoneForFormat, type TemplateZone } from "@/lib/templateZones";
 
 // Time-aware greeting for the dashboard hero band.
 function greetByHour(): string {
@@ -436,12 +436,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
     ? templates.filter((t) => isTemplateInZone(t, templateZone))
     : templates;
   const filteredTemplates = zoneTemplates;
-  const zoneDesigns = templateZone
-    ? items.filter((item) => isDesignInZone(item, templateZone)).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-    : [];
-  // Collections classify templates, not ordinary designs. Once a collection is
-  // selected, keep the result area scoped to templates in that collection.
-  const visibleZoneDesigns = tplCollection ? [] : zoneDesigns;
+  const visibleZoneDesigns: typeof items = [];
   // Recents sort (client-side): last edited or name. Shared by Home + Favorites.
   const bySort = (a: HomeItem, b: HomeItem) =>
     sortBy === "name" ? a.title.localeCompare(b.title) : new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
@@ -471,6 +466,8 @@ export function DashboardApp({ view }: { view: DashboardView }) {
 
   const open = (id: string, brief?: string) =>
     router.push({ pathname: "/editor", query: brief ? { id, ai: brief } : { id } });
+  const editTemplate = (id: string) =>
+    router.push({ pathname: "/editor", query: { templateId: id } });
 
   // Star/unstar a design; optimistically flip the flag in the open lists, then
   // reconcile from the server response (and drop it from Favorites when unstarred).
@@ -1232,7 +1229,7 @@ export function DashboardApp({ view }: { view: DashboardView }) {
                 <div className="mb-4 flex items-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-ink">
                   <LayoutTemplate size={16} />
                   <span className="font-semibold">{tr("dashboard.xiaohongshu_template_zone")}</span>
-                  <span className="text-brand-700">{tr("dashboard.designs")} {visibleZoneDesigns.length} · {tr("dashboard.templates")} {filteredTemplates.length}</span>
+                  <span className="text-brand-700">{tr("dashboard.templates")} {filteredTemplates.length}</span>
                   <span className="flex-1" />
                   <button
                     onClick={() => void router.push(dashboardPath("templates"))}
@@ -1277,9 +1274,9 @@ export function DashboardApp({ view }: { view: DashboardView }) {
                   {filteredTemplates.map((t) => (
                     <li key={t.id} className="group relative rounded-2xl border border-neutral-200 bg-surface shadow-sm transition hover:shadow-md">
                       <button
-                        onClick={() => void applyTemplate(t)}
+                        onClick={() => canManageTemplate(t) ? void editTemplate(t.id) : void applyTemplate(t)}
                         disabled={busy}
-                        title={tr("dashboard.use_this_template")}
+                        title={canManageTemplate(t) ? "编辑模板" : tr("dashboard.use_this_template")}
                         className="block w-full text-start disabled:opacity-60"
                       >
                         <div className="aspect-[4/3] overflow-hidden rounded-t-2xl bg-neutral-100"><DesignThumb templateId={t.id} previewUrl={t.previewUrls[0]} /></div>

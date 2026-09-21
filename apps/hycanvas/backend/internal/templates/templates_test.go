@@ -31,6 +31,21 @@ func stripSchema(dsn string) string {
 	return dsn
 }
 
+func TestIsGeneratedCoverFile(t *testing.T) {
+	if !isGeneratedCoverFile([]byte(`{"meta":{"origin":"contentswarm-cover"}}`)) {
+		t.Fatal("origin marker should hide a generated cover")
+	}
+	if !isGeneratedCoverFile([]byte(`{"pages":[{"children":[{"id":"contentswarm-background-0"}]}]}`)) {
+		t.Fatal("material background should hide a generated cover")
+	}
+	if !isGeneratedCoverFile([]byte(`{"data":{"source":"contentswarm-material-library"}}`)) {
+		t.Fatal("material-library source should hide a generated cover")
+	}
+	if isGeneratedCoverFile([]byte(`{"meta":{"templateZone":"xiaohongshu"},"title":"中古风"}`)) {
+		t.Fatal("library templates must remain listed")
+	}
+}
+
 func TestSeedLoads(t *testing.T) {
 	// The built-in catalog is intentionally empty by default. If seed templates
 	// are present, they must be well-formed and findable by id.
@@ -752,6 +767,34 @@ func TestTemplates_DB(t *testing.T) {
 	instantiatedAssets := asArr(instantiated.File["assets"])
 	if backgroundAssetID == "" || len(instantiatedAssets) == 0 || asStr(asObj(instantiatedAssets[len(instantiatedAssets)-1])["id"]) != backgroundAssetID || asStr(asObj(instantiatedAssets[len(instantiatedAssets)-1])["url"]) != "data:image/png;base64,cG5n" {
 		t.Fatalf("selected material asset missing: background=%+v assets=%+v", instantiatedChildren[0], instantiatedAssets)
+	}
+	instRec, err := persist.GetRecord(ctx, instantiatedID)
+	if err != nil || instRec.TemplateZone == nil || *instRec.TemplateZone != generatedCoverOrigin {
+		t.Fatalf("instantiated cover must stay off the template library: %+v err=%v", instRec, err)
+	}
+	coverCopy, err := svc.SaveAsTemplate(ctx, owner.ID, SaveInput{WorkspaceID: ws.ID, File: map[string]any(instantiated.File), Title: "装修避坑指南", Visibility: "workspace"})
+	if err != nil {
+		t.Fatalf("save generated cover as template: %v", err)
+	}
+	listed, err := svc.List(ctx, owner.ID, TemplateQuery{}, ws.ID, "")
+	if err != nil {
+		t.Fatalf("list templates: %v", err)
+	}
+	for _, item := range listed {
+		if item.ID == coverCopy.ID {
+			t.Fatalf("generated cover must not appear in the template library: %+v", item)
+		}
+	}
+	updatedTitle := "Updated In Place"
+	page := asObj(asArr(loaded.File["pages"])[0])
+	page["name"] = updatedTitle
+	inPlace, err := svc.Update(ctx, owner.ID, saved.ID, SaveInput{File: map[string]any(loaded.File), Title: updatedTitle})
+	if err != nil || inPlace.Title != updatedTitle {
+		t.Fatalf("update template in place: %+v err=%v", inPlace, err)
+	}
+	updatedFile, err := svc.GetFile(ctx, owner.ID, saved.ID)
+	if err != nil || asStr(asObj(asArr(updatedFile["pages"])[0])["name"]) != updatedTitle {
+		t.Fatalf("in-place save must replace the original template file: %+v err=%v", updatedFile, err)
 	}
 	got, err := svc.Get(ctx, owner.ID, saved.ID)
 	if err != nil || got.ID != saved.ID {

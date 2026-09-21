@@ -46,7 +46,6 @@ import { InsightsPanel } from "./InsightsPanel";
 import { ApprovalBanner } from "./ApprovalBanner";
 import { NotificationsBell } from "@/components/notifications/NotificationsBell";
 import { PromptHost } from "@/components/ui/PromptHost";
-import { isContentSwarmManaged } from "@/lib/managedAuth";
 import { useRealtime, getDesignDoc, resyncFromLiveDoc } from "@/lib/useRealtime";
 import { useAutoSnapshot, checkpointMaxBytes } from "@/lib/useAutoSnapshot";
 import { createDesignThumbnail } from "@/lib/designThumbnail";
@@ -356,6 +355,7 @@ export function EditorApp() {
   // The design id the caller was denied; drives the "Request access" screen.
   const [forbiddenId, setForbiddenId] = useState<string | null>(null);
   const [designId, setDesignId] = useState<string | null>(null);
+  const [templateId, setTemplateId] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -580,6 +580,7 @@ export function EditorApp() {
     // The design id arrives either path-style (/editor/<id>/, served by the Go
     // rewrite on hard loads) or as the legacy ?id= query (client-side navs and
     // old links). The query form is canonicalized to the path form below.
+    const templateQueryId = typeof router.query.templateId === "string" ? router.query.templateId : null;
     const pathMatch = typeof window !== "undefined" ? /^\/editor\/([^/?#]+)\/?$/.exec(window.location.pathname) : null;
     const id = typeof router.query.id === "string" ? router.query.id : pathMatch ? decodeURIComponent(pathMatch[1]) : null;
     if (id && typeof window !== "undefined" && !pathMatch) {
@@ -593,8 +594,28 @@ export function EditorApp() {
     }
     let cancelled = false;
     void (async () => {
-      if (!id) {
+      if (!id && !templateQueryId) {
         if (!cancelled) setStatus("ready");
+        return;
+      }
+      if (templateQueryId && !id) {
+        try {
+          const [file, rec] = await Promise.all([oc.getTemplateFile(templateQueryId), oc.getTemplate(templateQueryId)]);
+          if (cancelled) return;
+          loadDoc(file);
+          setTemplateId(templateQueryId);
+          setDesignId(null);
+          setWorkspaceId(rec.workspaceId);
+          setAccessMode("edit");
+          setStatus("ready");
+        } catch (e) {
+          if (cancelled) return;
+          if (e instanceof ApiError && e.status === 404) setStatus("notfound");
+          else if (e instanceof ApiError && e.status === 403) {
+            setForbiddenId(templateQueryId);
+            setStatus("forbidden");
+          } else setStatus("error");
+        }
         return;
       }
       try {
@@ -650,7 +671,7 @@ export function EditorApp() {
     return () => {
       cancelled = true;
     };
-  }, [router.isReady, router.query.id, loadDoc]);
+  }, [router.isReady, router.query.id, router.query.templateId, loadDoc]);
 
   // Hand the brief to the assistant once the design is open, then strip it
   // from the URL: it is a one-shot intent, not part of the design's address,
@@ -876,7 +897,7 @@ export function EditorApp() {
   }
 
   const save = useCallback(async (showSuccess = true) => {
-    if (!designId) return false;
+    if (!designId && !templateId) return false;
     // Never checkpoint a history preview: without realtime the store doc IS
     // the previewed historical file, and saving it would silently move the
     // design's current version back in time. Restore is the explicit path.
@@ -887,6 +908,20 @@ export function EditorApp() {
     setSaving(true);
     useEditor.getState().setManualSaving(true); // auto-snapshot yields while this runs
     try {
+      if (templateId && !designId) {
+        const file = useEditor.getState().doc;
+        if (!Array.isArray(file.pages) || file.pages.length === 0) {
+          toast.error("The design is still loading; try again in a moment.");
+          return false;
+        }
+        await oc.updateTemplate(templateId, { file, title: file.title, thumbnail: createDesignThumbnail(file) });
+        if (!mounted.current) return;
+        useEditor.getState().markClean();
+        setSavedAt(new Date().toLocaleTimeString());
+        if (showSuccess) toast.success(tr("editor.saved"));
+        return true;
+      }
+      if (!designId) return false;
       // On an in-CRDT BRANCH (FR-10) a design-level snapshot would rotate the
       // design's CURRENT file to branch state. The branch's journal is already
       // durable; Save uploads a branch-scoped checkpoint (bounding its log) so
@@ -946,24 +981,27 @@ export function EditorApp() {
       useEditor.getState().setManualSaving(false); // always clear, even if unmounted
       if (mounted.current) setSaving(false);
     }
-  }, [designId, toast]);
+  }, [designId, templateId, toast]);
 
   const saveAndReturn = useCallback(async () => {
     if (!integrationReturnUrl) return;
     if (await save()) returnToIntegration();
   }, [integrationReturnUrl, returnToIntegration, save]);
 
-  const saveAndConfigureTemplate = useCallback(async () => {
-    if (!(await save(false))) return;
-    if (!isContentSwarmManaged) return;
-    setTemplateOpen(true);
-  }, [save]);
-
   async function commitTitle() {
     const value = titleRef.current?.value.trim();
     if (!value || value === title) return;
     const prev = title;
     setDocTitle(value);
+    if (templateId && !designId) {
+      try {
+        await oc.renameTemplate(templateId, value);
+      } catch {
+        setDocTitle(prev);
+        toast.error(tr("editor.rename_failed"));
+      }
+      return;
+    }
     if (designId) {
       try {
         await oc.renameDesign(designId, value);
@@ -1181,7 +1219,7 @@ export function EditorApp() {
               <Share2 size={16} /> {tr("editor.share")}
             </Button>
           )}
-          <Button size="sm" onClick={() => void saveAndConfigureTemplate()} disabled={!designId || saving || accessMode !== "edit"} title={accessMode !== "edit" ? tr("editor.you_do_not_have_edit_access") : designId ? "保存设计并确认模板字段" : tr("editor.open_from_the_dashboard_to_save")}>
+          <Button size="sm" onClick={() => void save()} disabled={(!designId && !templateId) || saving || accessMode !== "edit"} title={accessMode !== "edit" ? tr("editor.you_do_not_have_edit_access") : designId || templateId ? tr("editor.save") : tr("editor.open_from_the_dashboard_to_save")}>
             {saving ? tr("editor.saving") : tr("editor.save")}
           </Button>
           {integrationReturnUrl && (

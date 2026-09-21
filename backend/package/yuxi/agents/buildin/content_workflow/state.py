@@ -76,6 +76,12 @@ class ContentWorkflowState(TypedDict, total=False):
     visual_review: dict[str, Any]
     selected_cover: dict[str, Any]
     artifact_version: dict[str, Any]
+    content_rule_bundle: dict[str, Any]
+    expression_guidance: dict[str, Any]
+    expression_snapshot: dict[str, Any]
+    required_visual_intent: str
+    required_source_asset_ids: list[str]
+    allowed_visual_evidence_ids: list[str]
     formula_candidate_pool: dict[str, Any]
     revision_reason_code: str | None
     revision_target: str
