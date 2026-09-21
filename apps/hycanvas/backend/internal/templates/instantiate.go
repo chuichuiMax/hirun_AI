@@ -123,7 +123,9 @@ func markGeneratedCover(file map[string]any) {
 func isGeneratedCoverFile(file json.RawMessage) bool {
 	s := string(file)
 	return strings.Contains(s, "contentswarm-background") ||
-		strings.Contains(s, "contentswarm-material-library") ||
+		strings.Contains(s, "contentswarm-material") ||
+		strings.Contains(s, "contentswarm-inline-") ||
+		strings.Contains(s, "contentswarm-composition-") ||
 		strings.Contains(s, `"origin":"`+generatedCoverOrigin+`"`) ||
 		strings.Contains(s, `"origin": "`+generatedCoverOrigin+`"`) ||
 		strings.Contains(s, `"templateZone":"`+generatedCoverOrigin+`"`)

@@ -41,6 +41,9 @@ func TestIsGeneratedCoverFile(t *testing.T) {
 	if !isGeneratedCoverFile([]byte(`{"data":{"source":"contentswarm-material-library"}}`)) {
 		t.Fatal("material-library source should hide a generated cover")
 	}
+	if !isGeneratedCoverFile([]byte(`{"assets":{"contentswarm-inline-abc":{}}}`)) {
+		t.Fatal("inline instantiate assets should hide a generated cover")
+	}
 	if isGeneratedCoverFile([]byte(`{"meta":{"templateZone":"xiaohongshu"},"title":"中古风"}`)) {
 		t.Fatal("library templates must remain listed")
 	}
