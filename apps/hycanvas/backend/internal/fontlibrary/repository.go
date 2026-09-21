@@ -73,6 +73,14 @@ func (s *Service) get(ctx context.Context, id string) (fontRow, error) {
 	return font, err
 }
 
+func (s *Service) getBySHA256(ctx context.Context, zone, digest string) (fontRow, error) {
+	font, err := scanFont(s.db.QueryRow(ctx, `SELECT `+fontCols+` FROM "public_fonts" WHERE zone = $1 AND sha256 = $2`, zone, digest))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fontRow{}, ErrNotFound
+	}
+	return font, err
+}
+
 func (s *Service) list(ctx context.Context, zone string) ([]fontRow, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+fontCols+` FROM "public_fonts" WHERE zone = $1 ORDER BY lower(family), weight, lower(style), "created_at"`, zone)
 	if err != nil {

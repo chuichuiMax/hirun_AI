@@ -45,6 +45,7 @@ import (
 	"hycanvas/backend/internal/persistence"
 	"hycanvas/backend/internal/platform/config"
 	"hycanvas/backend/internal/platform/db"
+	"hycanvas/backend/internal/presetfonts"
 	"hycanvas/backend/internal/push"
 	"hycanvas/backend/internal/realtime"
 	"hycanvas/backend/internal/render"
@@ -178,6 +179,11 @@ func main() {
 		logger.Info("fonts registered for export", "count", n, "families", render.RegisteredFamilies(), "dir", dir)
 	}
 	fontLibrarySvc := fontlibrary.NewService(pool, store, render.RegisterFont)
+	presetImported, presetSkipped, presetErrors := presetfonts.Import(context.Background(), fontLibrarySvc)
+	for _, presetErr := range presetErrors {
+		logger.Warn("preset font: could not initialize", "err", presetErr)
+	}
+	logger.Info("preset fonts initialized", "imported", presetImported, "skipped", presetSkipped, "zone", fontlibrary.ZoneXiaohongshu)
 	fontCount, fontErrors := fontLibrarySvc.LoadRegistered(context.Background())
 	for _, loadErr := range fontErrors {
 		logger.Warn("font library: could not restore retained font", "err", loadErr)

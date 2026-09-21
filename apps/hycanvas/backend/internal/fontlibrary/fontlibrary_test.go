@@ -45,3 +45,10 @@ func TestStyleWeight(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsurePresetRejectsEmptyBytes(t *testing.T) {
+	var service Service
+	if _, _, err := service.EnsurePreset(nil, nil); err == nil {
+		t.Fatal("empty preset bytes were accepted")
+	}
+}

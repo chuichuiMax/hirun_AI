@@ -135,6 +135,28 @@ func (s *Service) Upload(ctx context.Context, userID, zone string, data []byte) 
 	return toFont(row), nil
 }
 
+// EnsurePreset stores one bundled font only when its content is not already
+// present and its retained object is still readable. This makes startup
+// initialization safe to repeat while repairing a deleted local/S3 object.
+func (s *Service) EnsurePreset(ctx context.Context, data []byte) (Font, bool, error) {
+	if len(data) == 0 || len(data) > MaxFontBytes {
+		return Font{}, false, ErrBadRequest
+	}
+	sum := sha256.Sum256(data)
+	digest := hex.EncodeToString(sum[:])
+	row, err := s.getBySHA256(ctx, ZoneXiaohongshu, digest)
+	if err == nil {
+		stored, getErr := s.storage.Get(row.StorageKey)
+		if getErr == nil && len(stored) > 0 {
+			return toFont(row), false, nil
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return Font{}, false, err
+	}
+	font, uploadErr := s.Upload(ctx, "", ZoneXiaohongshu, data)
+	return font, true, uploadErr
+}
+
 // Content returns persisted bytes and metadata for the public content route.
 func (s *Service) Content(ctx context.Context, id string) ([]byte, Font, error) {
 	row, err := s.get(ctx, id)
