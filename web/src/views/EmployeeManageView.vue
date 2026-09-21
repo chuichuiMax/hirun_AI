@@ -86,9 +86,10 @@ const normalizeLoginPorts = (ports) => {
   return ['pc', 'app']
 }
 
-const loadRoles = async () => {
+const loadRoles = async ({ force = false } = {}) => {
+  if (!force && roleOptions.value.length) return
   try {
-    const response = await roleApi.listRoles({ enabled: true })
+    const response = await roleApi.listRoles({ enabled: true, include_member_counts: false })
     roleOptions.value = (response.roles || []).map((item) => item.name)
   } catch (error) {
     message.error(error.message || '加载角色失败')
@@ -238,8 +239,17 @@ watch([displayedEmployees, pageSize], () => {
 })
 
 onMounted(async () => {
-  await loadRoles()
-  await loadEmployees()
+  loading.value = true
+  try {
+    await Promise.all([loadRoles({ force: true }), (async () => {
+      const response = await employeeApi.listEmployees({ keyword: keyword.value })
+      employees.value = response.employees || []
+    })()])
+  } catch (error) {
+    message.error(error.message || '加载员工失败')
+  } finally {
+    loading.value = false
+  }
 })
 </script>
 

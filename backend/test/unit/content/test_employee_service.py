@@ -73,5 +73,13 @@ def test_employee_create_schema_rejects_invalid_age():
         )
 
 
+def test_list_roles_signature_supports_skipping_member_counts():
+    import inspect
+
+    from yuxi.services.role_service import list_roles
+
+    assert "include_member_counts" in inspect.signature(list_roles).parameters
+
+
 def test_default_employee_password_is_fixed():
     assert DEFAULT_EMPLOYEE_PASSWORD == "123456"

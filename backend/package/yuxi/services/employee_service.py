@@ -171,7 +171,8 @@ def _user_row(user: User) -> dict[str, Any]:
 async def list_employees(db: AsyncSession, keyword: str | None = None) -> dict[str, Any]:
     keyword = keyword.strip() if keyword else None
     employees = await EmployeeRepository(db).list_employees(keyword=keyword)
-    query = select(User).where(User.is_deleted == 0)
+    # 员工开通的平台账号 uid 以 mp_ 开头，列表里已有对应员工行，避免重复加载。
+    query = select(User).where(User.is_deleted == 0, ~User.uid.startswith("mp_"))
     if keyword:
         escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         pattern = f"%{escaped}%"
@@ -184,10 +185,7 @@ async def list_employees(db: AsyncSession, keyword: str | None = None) -> dict[s
         )
     users = list((await db.execute(query)).scalars().all())
     rows: list[tuple[Any, dict[str, Any]]] = [(item.created_at, _employee_row(item)) for item in employees]
-    for user in users:
-        if user.uid.startswith("mp_"):
-            continue
-        rows.append((user.created_at, _user_row(user)))
+    rows.extend((user.created_at, _user_row(user)) for user in users)
     rows.sort(key=lambda item: item[0] or utc_now_naive(), reverse=True)
     items = [row for _, row in rows]
     return {"employees": items, "total": len(items)}
