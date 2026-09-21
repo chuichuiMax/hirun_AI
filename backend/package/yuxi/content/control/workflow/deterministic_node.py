@@ -1025,37 +1025,54 @@ class V3DeterministicNodeHandler:
         }
 
     @staticmethod
-    async def _retrieve_named_expression_chunks(db: AsyncSession, name: str, query: str) -> tuple[str, list[str]]:
-        import inspect
-
+    async def _resolve_expression_kb_ids(db: AsyncSession, names: tuple[str, ...]) -> dict[str, str]:
         from yuxi.content.control.errors import ContentApplicationError
-        from yuxi.content.v3.modular_rules import EXPRESSION_MAX_CHARS, EXPRESSION_MAX_CHUNKS
 
-        rows = list((await db.execute(select(KnowledgeBase).where(KnowledgeBase.name == name))).scalars().all())
-        if not rows:
-            raise ContentApplicationError("expression_kb_missing", f"缺少全局表达知识库「{name}」", "invalid")
-        if len(rows) > 1:
-            raise ContentApplicationError("expression_kb_conflict", f"表达知识库「{name}」存在同名冲突", "invalid")
-        kb_id = str(rows[0].kb_id)
+        rows = list((await db.execute(select(KnowledgeBase).where(KnowledgeBase.name.in_(names)))).scalars().all())
+        grouped: dict[str, list[KnowledgeBase]] = {}
+        for row in rows:
+            grouped.setdefault(str(row.name), []).append(row)
+        missing = [name for name in names if name not in grouped]
+        if missing:
+            raise ContentApplicationError(
+                "expression_kb_missing",
+                f"缺少全局表达知识库「{'、'.join(missing)}」",
+                "invalid",
+            )
+        conflicts = [name for name, items in grouped.items() if len(items) > 1]
+        if conflicts:
+            raise ContentApplicationError(
+                "expression_kb_conflict",
+                f"表达知识库「{'、'.join(conflicts)}」存在同名冲突",
+                "invalid",
+            )
+        return {name: str(grouped[name][0].kb_id) for name in names}
+
+    @staticmethod
+    async def _retrieve_named_expression_chunks(kb_id: str, name: str, query: str) -> list[str]:
         from yuxi import knowledge_base as kb_runtime
+        from yuxi.content.control.errors import ContentApplicationError
+        from yuxi.knowledge.base import KnowledgeBase
+        from yuxi.content.v3.modular_rules import EXPRESSION_MAX_CHARS, EXPRESSION_RETRIEVE_CANDIDATES
 
-        target = (kb_runtime.get_retrievers() or {}).get(kb_id) or {}
-        retriever = target.get("retriever")
-        if not callable(retriever):
-            raise ContentApplicationError("expression_kb_unavailable", f"表达知识库「{name}」检索器不可用", "invalid")
-        result = retriever(query)
-        if inspect.isawaitable(result):
-            result = await result
+        kb = await kb_runtime.aget_kb(kb_id)
+        if kb_id not in kb.databases_meta:
+            raise ContentApplicationError(
+                "expression_kb_unavailable",
+                f"表达知识库「{name}」元数据未加载",
+                "invalid",
+            )
+        payload = KnowledgeBase.build_search_output(kb_id, await kb.aquery(query, kb_id, agent_call=True))
         excerpts: list[str] = []
-        for item in (result.get("results") if isinstance(result, dict) else []) or []:
+        for item in (payload.get("results") if isinstance(payload, dict) else []) or []:
             content = item.get("content") if isinstance(item, dict) else None
             if isinstance(content, str) and content.strip():
                 excerpts.append(content.strip()[:EXPRESSION_MAX_CHARS])
-            if len(excerpts) >= EXPRESSION_MAX_CHUNKS:
+            if len(excerpts) >= EXPRESSION_RETRIEVE_CANDIDATES:
                 break
         if not excerpts:
             raise ContentApplicationError("expression_kb_empty", f"表达知识库「{name}」无召回", "invalid")
-        return kb_id, excerpts
+        return excerpts
 
     async def _retrieve_expression_kbs(
         self, *, db: AsyncSession, state: dict[str, Any], node_run_id: str
@@ -1069,6 +1086,7 @@ class V3DeterministicNodeHandler:
             EXPRESSION_KB_NAMES,
             freeze_expression_snapshot,
             sanitize_expression_chunks,
+            summarize_expression_sanitize,
         )
 
         del node_run_id
@@ -1078,15 +1096,30 @@ class V3DeterministicNodeHandler:
             str(form_values.get(key) or "").strip()
             for key in ("topic", "process_type", "project_stage", "pain", "content_goal")
         ).strip() or "装修表达"
+        kb_ids = await self._resolve_expression_kb_ids(db, EXPRESSION_KB_NAMES)
         retrieved = await asyncio.gather(
-            *(self._retrieve_named_expression_chunks(db, name, query) for name in EXPRESSION_KB_NAMES)
+            *(self._retrieve_named_expression_chunks(kb_ids[name], name, query) for name in EXPRESSION_KB_NAMES)
         )
-        by_name = {name: chunks for name, (_kb_id, chunks) in zip(EXPRESSION_KB_NAMES, retrieved)}
-        advantage_kb_id, advantage_chunks = retrieved[0]
+        by_name = dict(zip(EXPRESSION_KB_NAMES, retrieved, strict=True))
+        advantage_kb_id = kb_ids[ADVANTAGE_KB_NAME]
+        advantage_chunks = by_name[ADVANTAGE_KB_NAME]
         tone = sanitize_expression_chunks(by_name["表达语气库"])
         concrete = sanitize_expression_chunks(by_name["具象表达"])
-        if not tone or not concrete:
-            raise ContentApplicationError("expression_kb_empty", "表达语气库或具象表达清洗后无可用召回", "invalid")
+        empty = [
+            name
+            for name, kept, source in (
+                ("表达语气库", tone, by_name["表达语气库"]),
+                ("具象表达", concrete, by_name["具象表达"]),
+            )
+            if not kept
+        ]
+        if empty:
+            details = []
+            for name in empty:
+                reasons = summarize_expression_sanitize(by_name[name])
+                reason_text = "、".join(f"{key}×{count}" for key, count in reasons.items()) or "无可用句子"
+                details.append(f"「{name}」{reason_text}")
+            raise ContentApplicationError("expression_kb_empty", f"表达库清洗后无可用召回：{'；'.join(details)}", "invalid")
         snapshot = freeze_expression_snapshot(
             libraries={"表达语气库": tone, "具象表达": concrete},
             advantage_chunks=advantage_chunks,

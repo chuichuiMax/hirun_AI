@@ -137,7 +137,10 @@ class KnowledgeBaseManager:
         if not KnowledgeBaseFactory.is_type_supported(kb_type):
             raise KBNotFoundError(f"Unsupported knowledge base type: {kb_type}")
 
-        return self._get_or_create_kb_instance(kb_type)
+        kb_instance = self._get_or_create_kb_instance(kb_type)
+        if kb.kb_id not in kb_instance.databases_meta:
+            await kb_instance._load_metadata()
+        return kb_instance
 
     # =============================================================================
     # 统一的外部接口

@@ -524,6 +524,13 @@ async def _worker_startup(ctx):
         from yuxi.content import ensure_content_seed_data
 
         await ensure_content_seed_data(session)
+        from yuxi.models.providers.cache import model_cache
+        from yuxi.models.providers.service import get_all_model_providers
+
+        model_cache.rebuild(await get_all_model_providers(session))
+    from yuxi import knowledge_base as kb_runtime
+
+    await kb_runtime.initialize()
 
 
 async def _worker_shutdown(ctx):

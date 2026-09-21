@@ -53,8 +53,8 @@ from yuxi.storage.postgres.models_content import ContentNodeRun
 CONTENT_NODE_EXECUTION_LIMITS = {
     # 额度含：强制 submit + 结果纠错；空等/连接失败不占额度。节点总时限需容下 2×空闲 + 间隔。
     "generate_content": (400, 180, "low", 3),
-    "select_creation_strategy": (150, 65, "low", 2),
-    "reselect_creation_strategy": (150, 65, "low", 2),
+    "select_creation_strategy": (150, 65, "low", 3),
+    "reselect_creation_strategy": (150, 65, "low", 3),
     "plan_visuals": (400, 180, "low", 3),
     "visual_review": (300, 120, "low", 2),
 }

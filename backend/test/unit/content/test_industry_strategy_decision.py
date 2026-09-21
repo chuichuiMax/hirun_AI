@@ -93,22 +93,17 @@ def test_decoration_rejects_formula_scores():
 @pytest.mark.parametrize(
     "change",
     [
-        "missing_dimension",
         "wrong_total",
         "out_of_range",
         "float",
         "missing_path",
-        "empty_path",
-        "duplicate",
         "missing_candidate",
     ],
 )
 def test_scored_mode_rejects_unverifiable_scores(change):
     candidates, result = example("education")
     score = result["title_assessments"][0]
-    if change == "missing_dimension":
-        del score["dimensions"]["goal"]
-    elif change == "wrong_total":
+    if change == "wrong_total":
         score["total"] = 99
     elif change == "out_of_range":
         score["dimensions"]["goal"] = 5
@@ -116,14 +111,106 @@ def test_scored_mode_rejects_unverifiable_scores(change):
         score["dimensions"]["goal"] = 3.5
     elif change == "missing_path":
         score["input_paths"] = ["content_brief.fake"]
-    elif change == "empty_path":
-        score["input_paths"] = []
-    elif change == "duplicate":
-        result["title_assessments"].append(deepcopy(score))
     elif change == "missing_candidate":
         result["title_assessments"] = []
     with pytest.raises(ValueError):
         validate(candidates, result)
+
+
+def test_auto_direction_drops_other_direction_title_assessments():
+    candidates, result = example()
+    code = result["direction_code"]
+    candidates.update(
+        auto_direction=True,
+        direction_code=None,
+        direction_options=[
+            {
+                "code": code,
+                "title_formula_codes": [item["code"] for item in candidates["title_formulas"]],
+                "body_formula_codes": [item["code"] for item in candidates["content_formulas"]],
+                "valid_formula_pairs": candidates["valid_formula_pairs"],
+            }
+        ],
+    )
+    other = deepcopy(result["title_assessments"][0])
+    other["candidate_id"] = "T3"
+    result["title_assessments"].append(other)
+    decision = validate(candidates, result)
+    assert decision.direction_code == code
+    assert [item.candidate_id for item in decision.title_assessments] == [
+        item["code"] for item in candidates["title_formulas"]
+    ]
+
+
+def test_title_assessments_drop_duplicates_and_out_of_pool_ids():
+    candidates, result = example()
+    extra = deepcopy(result["title_assessments"][0])
+    extra["candidate_id"] = "TX"
+    result["title_assessments"].extend([deepcopy(result["title_assessments"][0]), extra])
+    decision = validate(candidates, result)
+    assert [item.candidate_id for item in decision.title_assessments] == [
+        item["code"] for item in candidates["title_formulas"]
+    ]
+
+
+def test_title_missing_pool_ids_are_listed():
+    candidates, result = example()
+    kept = result["title_assessments"][0]
+    result["title_assessments"] = [kept]
+    missing = [item["code"] for item in candidates["title_formulas"] if item["code"] != kept["candidate_id"]]
+    with pytest.raises(ValueError, match="必须比较当前候选池全部候选") as exc:
+        validate(candidates, result)
+    text = str(exc.value)
+    assert f"缺少 {'、'.join(sorted(missing))}" in text
+    assert "当前池：" in text
+
+
+def test_eligible_omitted_paths_use_available_inputs():
+    candidates, result = example("education")
+    candidates["available_input_paths"] = ["content_brief.form_values.pain", "evidence_bundle.items.0.value"]
+    result["title_assessments"][0]["input_paths"] = []
+    decision = validate(candidates, result)
+    assert decision.title_assessments[0].input_paths == ["content_brief.form_values.pain"]
+
+
+def test_eligible_without_any_resolvable_input_still_fails():
+    candidates, result = example("education")
+    candidates["available_input_paths"] = []
+    for section in ("title_assessments", "body_assessments", "method_assessments"):
+        for item in result[section]:
+            item["input_paths"] = []
+    with pytest.raises(ValueError, match="缺少 input_paths") as exc:
+        validate_strategy_decision(result, candidates, content_brief={}, evidence_bundle={"items": []})
+    assert result["title_assessments"][0]["candidate_id"] in str(exc.value)
+
+
+def test_method_shape_normalizes_ineligible_scores_and_partial_dimensions():
+    candidates, result = example()
+    method_keys = list(candidates["scoring"]["method"]["weights"])
+    assert candidates["scoring"]["method"]["required_dimension_keys"] == method_keys
+    for item in result["method_assessments"]:
+        if item["candidate_id"] != "M2":
+            item.update(eligible=False, total=40)
+    scored_out = next(item for item in result["method_assessments"] if item["candidate_id"] != "M2")
+    winner = next(item for item in result["method_assessments"] if item["candidate_id"] == "M2")
+    winner["dimensions"] = {"goal": 4, "material": 4, "strategy": 3}
+    winner["input_paths"] = []
+    candidates["available_input_paths"] = ["content_brief.form_values.pain"]
+    decision = validate(candidates, result)
+    rejected = next(item for item in decision.method_assessments if item.candidate_id == scored_out["candidate_id"])
+    selected = next(item for item in decision.method_assessments if item.candidate_id == "M2")
+    assert rejected.dimensions == {} and rejected.total is None and rejected.input_paths == []
+    assert selected.input_paths == ["content_brief.form_values.pain"]
+    assert selected.dimensions == {"goal": 4, "material": 4, "audience_scene": 0, "channel": 0, "persona": 0}
+
+
+def test_eligible_method_without_any_score_keys_still_fails():
+    candidates, result = example()
+    winner = next(item for item in result["method_assessments"] if item["candidate_id"] == "M2")
+    winner.update(dimensions={}, total=None)
+    with pytest.raises(ValueError, match="合格候选 M2 维度不完整") as exc:
+        validate(candidates, result)
+    assert "goal, material, audience_scene, channel, persona" in str(exc.value)
 
 
 def test_rejected_candidate_cannot_be_selected():

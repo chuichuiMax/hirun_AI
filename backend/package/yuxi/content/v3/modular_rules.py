@@ -14,7 +14,14 @@ import yaml
 BUNDLE_VERSION = "content-rule-bundle-v5.0"
 EXPRESSION_KB_NAMES = ("我的优势", "表达语气库", "具象表达")
 EXPRESSION_MAX_CHUNKS = 2
+EXPRESSION_RETRIEVE_CANDIDATES = 8
 EXPRESSION_MAX_CHARS = 1200
+_EXPRESSION_PART_SPLIT = re.compile(r"(?<=[。！？；\n|])")
+_EXPRESSION_CITY_RE = re.compile(
+    r"北京|上海|广州|深圳|杭州|成都|武汉|南京|苏州|重庆|西安|"
+    r"[\u4e00-\u9fff]{2,8}(?:市|县|镇)|"
+    r"[\u4e00-\u9fff]{2,8}区(?!域|别|分)"
+)
 ADVANTAGE_KB_NAME = "我的优势"
 
 VIRAL_AUTHOR_CORE = "viral-author-core"
@@ -301,7 +308,7 @@ def expression_guidance_forbidden(text: str) -> list[str]:
     hits: list[str] = []
     if re.search(r"[\u4e00-\u9fff]{2,4}(?:师傅|设计师|经理)", text):
         hits.append("person")
-    if re.search(r"(北京|上海|广州|深圳|杭州|成都|武汉|南京|苏州|重庆|西安)|市|区", text):
+    if _EXPRESSION_CITY_RE.search(text):
         hits.append("city")
     if re.search(r"\d+(?:\.\d+)?", strip_keycap_numbers(text)):
         hits.append("number")
@@ -312,15 +319,31 @@ def expression_guidance_forbidden(text: str) -> list[str]:
     return hits
 
 
+def _expression_parts(text: str) -> list[str]:
+    return [part.strip(" |") for part in _EXPRESSION_PART_SPLIT.split(text) if part.strip(" |")]
+
+
+def summarize_expression_sanitize(chunks: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for chunk in chunks:
+        for part in _expression_parts(str(chunk or "")):
+            for hit in expression_guidance_forbidden(part):
+                counts[hit] = counts.get(hit, 0) + 1
+    return counts
+
+
 def sanitize_expression_chunks(chunks: list[str]) -> list[str]:
     cleaned: list[str] = []
     for chunk in chunks:
-        text = str(chunk or "").strip()
-        if not text:
+        kept = [
+            part
+            for part in _expression_parts(str(chunk or ""))
+            if part and not expression_guidance_forbidden(part)
+        ]
+        if not kept:
             continue
-        if expression_guidance_forbidden(text):
-            continue
-        cleaned.append(text[:EXPRESSION_MAX_CHARS])
+        joined = "".join(part if part.endswith(("。", "！", "？", "；")) else f"{part}。" for part in kept)
+        cleaned.append(joined[:EXPRESSION_MAX_CHARS])
         if len(cleaned) >= EXPRESSION_MAX_CHUNKS:
             break
     return cleaned
@@ -354,6 +377,7 @@ __all__ = [
     "EXPRESSION_KB_NAMES",
     "EXPRESSION_MAX_CHARS",
     "EXPRESSION_MAX_CHUNKS",
+    "EXPRESSION_RETRIEVE_CANDIDATES",
     "GENERATE_ALL_SKILLS",
     "GENERATE_ALWAYS_SKILLS",
     "MODULE_SPECS",
@@ -367,6 +391,7 @@ __all__ = [
     "resolve_visual_intent",
     "revision_skill_slugs",
     "sanitize_expression_chunks",
+    "summarize_expression_sanitize",
     "strip_keycap_numbers",
     "topic_candidate_pool",
 ]

@@ -69,10 +69,13 @@ def test_missing_material_is_a_rejection_reason_not_an_evidence_path(section):
         reason="未提供情绪素材，淘汰该候选",
         input_paths=["content_brief.business_variables.emotion"],
     )
-    with pytest.raises(ValueError, match="评分引用了不存在的输入字段"):
-        validate_joint_strategy(result, inputs)
-    assessment["input_paths"] = []
     validated = validate_joint_strategy(result, inputs)
+    cleared = (
+        next(item for item in validated.strategy.method_assessments if item.candidate_id == assessment["candidate_id"])
+        if section == "strategy"
+        else next(item for item in validated.reference.assessments if item.candidate_id == assessment["candidate_id"])
+    )
+    assert cleared.input_paths == []
     assert validated.strategy.status == "selected"
     assert validated.reference.status == "selected"
 
@@ -125,8 +128,36 @@ def test_joint_decision_rejects_invalid_reference(problem):
         ref["assessments"].pop(0)
     elif problem == "unexpected_blueprint":
         ref["reference_blueprint"] = {"title_pattern": "伪造"}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as exc:
         validate_joint_strategy(result, inputs)
+    if problem == "missing_slot":
+        assert "缺少必要槽位：pain" in str(exc.value)
+        assert "选中卡必要槽位：pain" in str(exc.value)
+
+
+def test_reference_shape_normalizes_ineligible_scores_and_partial_dimensions():
+    inputs, result = joint_example()
+    scale = inputs["strategy_candidates"]["scoring"]["reference"]
+    rejected, selected = result["reference"]["assessments"]
+    rejected.update(eligible=False, dimensions={"goal": 1}, total=10)
+    selected.update(dimensions={"goal": 4, "persona": 4}, input_paths=[])
+    validated = validate_joint_strategy(result, inputs)
+    cleared = next(item for item in validated.reference.assessments if item.candidate_id == rejected["candidate_id"])
+    filled = next(item for item in validated.reference.assessments if item.candidate_id == selected["candidate_id"])
+    assert cleared.dimensions == {} and cleared.total is None
+    assert "content_brief.form_values.pain" in filled.input_paths
+    assert filled.dimensions == {key: (4 if key == "goal" else 0) for key in scale["weights"]}
+
+
+def test_slot_mapping_must_use_selected_card_names():
+    inputs, result = joint_example()
+    result["reference"]["slot_mapping"] = {
+        "痛点": ["content_brief.form_values.pain"],
+        "品牌": ["content_brief.form_values.pain"],
+    }
+    with pytest.raises(ValueError, match="提交了卡上不存在的槽位：品牌、痛点") as exc:
+        validate_joint_strategy(result, inputs)
+    assert "缺少必要槽位：pain" in str(exc.value)
 
 
 def test_no_card_is_explicit_and_original_needs_no_reference():
@@ -196,3 +227,33 @@ async def test_locked_prepared_reference_passes_existing_evidence_contract(monke
     assert reference["metadata"]["selection_basis"]["prepared_reference_decision"]["selected_asset_id"] == "b"
     assert reference["metadata"]["reference_blueprint"] == asset.prepared_json["reference_blueprint"]
     assert source().body not in str(merged)
+
+
+def test_compact_keeps_viral_governance_metadata():
+    from yuxi.content.control.workflow.generation_input import compact_evidence_items_for_bundle
+    from yuxi.content.model.viral_assets import BLUEPRINT_FIELDS
+
+    blueprint = {name: "结构" for name in BLUEPRINT_FIELDS}
+    blueprint["title_slot_sequence"] = ["主题", "问题"]
+    blueprint["content_block_sequence"] = ["习惯", "动线"]
+    blueprint["list_pattern"] = {"type": "none"}
+    compacted = compact_evidence_items_for_bundle(
+        [
+            {
+                "id": "ev_viral_1",
+                "value": "结构摘录",
+                "allowed_usage": ["style_reference"],
+                "metadata": {
+                    "material_type": "viral_example",
+                    "usage_mode": "structure_reference_only",
+                    "selected_reference": True,
+                    "selection_basis": {"prepared_reference_decision": {"selected_asset_id": "b"}},
+                    "reference_blueprint": blueprint,
+                },
+            }
+        ]
+    )
+    metadata = compacted[0]["metadata"]
+    assert metadata["usage_mode"] == "structure_reference_only"
+    assert metadata["selection_basis"]["prepared_reference_decision"]["selected_asset_id"] == "b"
+    assert metadata["reference_blueprint"] == blueprint

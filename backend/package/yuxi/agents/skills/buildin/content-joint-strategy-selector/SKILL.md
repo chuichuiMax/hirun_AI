@@ -9,14 +9,14 @@ description: 从精简事实与完整候选中选择行业公式、独立手法�
 
 ## 共同决策规则
 
-1. auto_direction=true 时，在一次调用内根据真实资料（仿写还需结合选中参考）从 direction_options 选择方向；只比较该方向 title_formula_codes、body_formula_codes 和 valid_formula_pairs，不评价其他方向公式。不启用自动方向时保持锁定方向。非装修行业不套用装修方向，direction_code 保持 null。
-2. direction_scoped 按装修方向 Skill 选择公式，公式不打数值分；scored 按行业评分 Skill 逐项评分全部公式。所有模式都按 scoring.method 逐项评价手法。method_assessments 必须覆盖 methods 中每一个 code（包括 S01）；不兼容的手法也要提交 eligible=false 的淘汰评价，不能省略。
-3. 先做事实资格检查再评分。总预算不等于成交或结算价，计划不等于已发生结果；不能从示例复制事实。合格候选填真实输入路径、0—4 整数维度分和一句决定性理由；未知偏好得 0 分。total 可省略，由代码计算。淘汰项只说明缺口，dimensions={}、total=null，缺失资料不能写成证据路径。
+1. auto_direction=true 时，在一次调用内根据真实资料（仿写还需结合选中参考）从 direction_options 选择方向；只比较该方向 title_formula_codes、body_formula_codes 和 valid_formula_pairs，不评价其他方向公式。若误评了其他方向或重复 ID，运行时只保留当前方向候选池内首次出现的评价。不启用自动方向时保持锁定方向。非装修行业不套用装修方向，direction_code 保持 null。
+2. direction_scoped 按装修方向 Skill 选择公式，公式不打数值分（title/body 的 dimensions={}、total=null）；scored 按行业评分 Skill 逐项评分全部公式。所有模式都按 scoring.method 逐项评价手法，装修也不能把公式的空 dimensions 套到手法上。method_assessments 必须覆盖 methods 中每一个 code（包括 S01）；不兼容的手法也要提交 eligible=false 的淘汰评价，不能省略。
+3. 先做事实资格检查再评分。总预算不等于成交或结算价，计划不等于已发生结果；不能从示例复制事实。合格项的 `input_paths` 可留空，运行时写入本次可解析的 `available_input_paths`。合格手法按 `scoring.method.required_dimension_keys`（goal、material、audience_scene、channel、persona）打 0—4 分，合格参考按 `scoring.reference.required_dimension_keys`（含 strategy，不含 persona）；缺的已知维记 0，不要写中文键。total 可省略，由代码计算。淘汰项只说明缺口，eligible=false；若仍带分数，运行时会清空。缺失资料不能写成证据路径。
 4. 标准单价与项目总预算可独立表达，无需工程量、小计或加总匹配，必须保留来源、地区、单位、包含范围和标准参考口径；不能据此证明真实成交、结算或实际节省。
 5. 非装修选择最高分兼容公式配对。标题与正文 compatible_methods 取交集，主手法和辅助项都必须在交集中；不自动加入 S01。主手法按总分降序、scoring.method.tie_break 各维度依次降序、candidate_id 升序确定；M01/M03 全维度同分时选 M01。无需辅助项时只选主手法。
 6. candidate_id 使用候选 code（如 M03），不使用数据库 ID。input_paths 优先复制 available_input_paths 或证据条目 input_path，路径相对于 payload；数组下标保持原始数字，source_id 不是下标。不引用 channel_profile/persona_profile 作为项目事实，不把公式变量名写成不存在的输入路径。brief 中同源副本可能已移除，应使用仍在视图中的真实路径。
 7. 无合格候选时返回 needs_input/no_candidate 和具体缺口，不能强选首项或补造得分。输出只含必要评分、最少支持路径和简短理由，不复述候选、不生成正文或蓝图。按本次工具参数契约提交一次结果。
-8. 收到校验反馈时一次处理全部问题，保留有事实依据的评分，修正选择顺序，不为了维持原选项改分。首轮、网络重试与纠正共用最多两次模型调用。
+8. 收到校验反馈时一次处理全部问题，保留有事实依据的评分，修正选择顺序，不为了维持原选项改分。校验仍列出缺少 input_paths 时，说明本次没有可解析输入，这些项必须改为 eligible=false。校验列出缺少/多余槽名时，按选中卡原名补全或删除，不要改写槽名。首轮、网络重试与纠正共用最多三次模型调用。
 
 ## 原创模式
 
@@ -24,7 +24,7 @@ description: 从精简事实与完整候选中选择行业公式、独立手法�
 
 ## 仿写模式
 
-先根据当前资料检查所有 reference_candidates 的 reference_card、structure_preview 及必要槽位，按“已准备参考选择” Skill 评分选中唯一合格最高分项，再匹配方向、公式与手法。可跨同一行业主题借鉴结构，不以旧 content_type_code 限定参考。只返回参考 ID、source_hash、评分与必要槽位到真实事实路径的映射，不阅读全文、不提取或返回蓝图；代码按锁定资产版本读取蓝图。无合格参考时保留资料缺口，不降级原创，不用原文补事实。
+先根据当前资料检查所有 reference_candidates 的 reference_card、structure_preview 及必要槽位，按“已准备参考选择” Skill 评分选中唯一合格最高分项，再匹配方向、公式与手法。可跨同一行业主题借鉴结构，不以旧 content_type_code 限定参考。只返回参考 ID、source_hash、评分，以及按选中卡 `required_slot_names` 原名填写的 `slot_mapping`；不阅读全文、不提取或返回蓝图；代码按锁定资产版本读取蓝图。无合格参考时保留资料缺口，不降级原创，不用原文补事实。
 
 ## 报价补证版决策（仅输出契约 JointStrategyDecisionV2）
 

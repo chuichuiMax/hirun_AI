@@ -9,6 +9,7 @@ from yuxi.content.model.contracts.content_nodes import (
     PlanVisualsPromptV1,
     build_evidence_cite_aliases,
 )
+from yuxi.content.model.viral_assets import BLUEPRINT_FIELDS
 
 _MAX_LEXICON_CHUNKS = 1
 _MAX_LEXICON_CHUNK_CHARS = 48
@@ -68,6 +69,11 @@ _EVIDENCE_METADATA_KEEP = frozenset(
         "reference_blueprint",
         "price_basis",
         "scope",
+        "usage_mode",
+        "selection_basis",
+        "selection_reason",
+        "asset_id",
+        "provider",
     }
 )
 _BRIEF_DROP_KEYS = {
@@ -350,19 +356,7 @@ def _slim_evidence_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     slim = {key: metadata[key] for key in _EVIDENCE_METADATA_KEEP if key in metadata}
     blueprint = slim.get("reference_blueprint")
     if isinstance(blueprint, dict):
-        slim["reference_blueprint"] = {
-            key: blueprint.get(key)
-            for key in (
-                "title_pattern",
-                "opening_hook",
-                "content_block_sequence",
-                "paragraph_rhythm",
-                "list_pattern",
-                "emoji_pattern",
-                "interaction_style",
-            )
-            if key in blueprint
-        }
+        slim["reference_blueprint"] = {key: blueprint[key] for key in BLUEPRINT_FIELDS if key in blueprint}
     return slim
 
 
@@ -428,14 +422,11 @@ def compact_evidence_items_for_bundle(items: list[dict[str, Any]]) -> list[dict[
         if not isinstance(raw, dict):
             continue
         item = deepcopy(raw)
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         if _is_forbidden_replacement_map(item):
             item["value"] = _compact_forbidden_replacement_value(item.get("value"))
         elif isinstance(item.get("value"), str) and len(item["value"]) > 500:
             # 冻结包保留比模型视图更长的摘录，但仍截断异常长知识片段。
             item["value"] = _trim_text(item["value"], 500)
-        if metadata:
-            item["metadata"] = _slim_evidence_metadata(metadata)
         compacted.append(item)
     return compacted
 

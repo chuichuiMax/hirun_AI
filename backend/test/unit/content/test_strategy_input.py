@@ -57,6 +57,8 @@ def test_projection_preserves_facts_candidates_and_original_contract(mode):
         assert "source_hash" not in projected
     for path in view["strategy_candidates"]["available_input_paths"]:
         assert resolve_input_path(view, path) == resolve_input_path(payload, path)
+    method_scale = view["strategy_candidates"]["scoring"]["method"]
+    assert method_scale["required_dimension_keys"] == list(method_scale["weights"])
     for section in ("title_formulas", "content_formulas", "methods", "valid_formula_pairs"):
         assert view["strategy_candidates"][section] == payload["strategy_candidates"][section]
     if mode == "original":
@@ -66,6 +68,7 @@ def test_projection_preserves_facts_candidates_and_original_contract(mode):
     else:
         assert len(view["reference_candidates"]) == 2
         assert view["reference_candidates"][0]["structure_preview"] == {"blocks": ["事实"]}
+        assert view["reference_candidates"][0]["required_slot_names"] == ["pain"]
         assert "full_text" not in view["reference_candidates"][0]
         for assessment in decision["reference"]["assessments"]:
             assessment["input_paths"] = ["evidence_bundle.items.0.value"]

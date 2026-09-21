@@ -16,7 +16,7 @@ from yuxi.agents.middlewares.model_call_timeout import (
 
 
 @pytest.mark.parametrize("node_id", ["select_creation_strategy", "reselect_creation_strategy"])
-def test_strategy_has_time_for_two_calls_and_preserves_explicit_reasoning(node_id):
+def test_strategy_allows_forced_submit_retry(node_id):
     from yuxi.services.agent_delegation_service import AgentDelegationService, CONTENT_NODE_EXECUTION_LIMITS
 
     request = SimpleNamespace(node_run=SimpleNamespace(node_id=node_id), knowledge_policy="frozen_evidence_only")
@@ -25,11 +25,10 @@ def test_strategy_has_time_for_two_calls_and_preserves_explicit_reasoning(node_i
     assert context.reasoning_effort == "low"
     assert context.model_call_timeout_seconds == 65
     assert context.model_retry_times == 2
-    assert context._content_max_model_calls == 2
-    assert (
-        CONTENT_NODE_EXECUTION_LIMITS[node_id][0]
-        >= context._content_max_model_calls * context.model_call_timeout_seconds + 3 + 15
-    )
+    assert context._content_max_model_calls == 3
+    idle = CONTENT_NODE_EXECUTION_LIMITS[node_id][1]
+    assert CONTENT_NODE_EXECUTION_LIMITS[node_id] == (150, 65, "low", 3)
+    assert CONTENT_NODE_EXECUTION_LIMITS[node_id][0] >= 2 * idle + 3 + 15
     context.reasoning_effort = "medium"
     AgentDelegationService._apply_node_constraints(context, request)
     assert context.reasoning_effort == "low"

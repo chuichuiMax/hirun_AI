@@ -8,6 +8,8 @@ from yuxi.content.v3.modular_rules import (
     VIRAL_PRICE_AUTHOR,
     VIRAL_TITLE_AUTHOR,
     assemble_required_skills,
+    expression_guidance_forbidden,
+    sanitize_expression_chunks,
     compile_content_rule_bundle,
     has_price_signal,
     resolve_visual_intent,
@@ -177,3 +179,129 @@ def test_v5_workflow_is_immutable_fork_and_valid():
     assert generate["required_skills"] == list(GENERATE_ALL_SKILLS)
     visual = next(node for node in WORKFLOW_VIRAL_V5["nodes"] if node["id"] == "plan_visuals")
     assert visual["max_execution_steps"] == 16
+
+
+@pytest.mark.asyncio
+async def test_expression_kb_lookup_uses_one_session_query(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
+    from yuxi.content.model.evidence import freeze_evidence_bundle
+    from yuxi.content.v3.modular_rules import EXPRESSION_KB_NAMES
+
+    execute_calls: list[object] = []
+
+    async def execute(stmt):
+        execute_calls.append(stmt)
+        rows = [SimpleNamespace(name=name, kb_id=f"kb_{index}") for index, name in enumerate(EXPRESSION_KB_NAMES)]
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows))
+
+    retrieved: list[str] = []
+
+    async def fake_retrieve(kb_id, name, query):
+        retrieved.append(name)
+        return [f"{name}先写感受再写做法"]
+
+    persist = AsyncMock()
+    monkeypatch.setattr(
+        V3DeterministicNodeHandler,
+        "_retrieve_named_expression_chunks",
+        staticmethod(fake_retrieve),
+    )
+    monkeypatch.setattr(
+        "yuxi.content.control.workflow.deterministic_node.EvidenceApplicationService",
+        lambda db: SimpleNamespace(persist_frozen_bundle=persist),
+    )
+    state = {
+        "task_id": "task-1",
+        "run_id": "run-1",
+        "content_brief": {"form_values": {"topic": "旧房翻新", "pain": "动线乱"}},
+        "evidence_bundle": freeze_evidence_bundle(task_id="task-1", version=1, items=[]).model_dump(mode="json"),
+    }
+    result = await V3DeterministicNodeHandler()._retrieve_expression_kbs(
+        db=SimpleNamespace(execute=execute),
+        state=state,
+        node_run_id="node-1",
+    )
+    assert len(execute_calls) == 1
+    assert retrieved == list(EXPRESSION_KB_NAMES)
+    assert persist.await_count == 1
+    assert result["expression_guidance"]["tone"]
+    assert result["expression_guidance"]["concrete"]
+
+
+@pytest.mark.asyncio
+async def test_expression_kb_conflict_fails_before_retrieve():
+    from types import SimpleNamespace
+
+    from yuxi.content.control.errors import ContentApplicationError
+    from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
+
+    rows = [
+        SimpleNamespace(name="我的优势", kb_id="kb_a"),
+        SimpleNamespace(name="我的优势", kb_id="kb_b"),
+        SimpleNamespace(name="表达语气库", kb_id="kb_c"),
+        SimpleNamespace(name="具象表达", kb_id="kb_d"),
+    ]
+
+    async def execute(_stmt):
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows))
+
+    with pytest.raises(ContentApplicationError, match="同名冲突"):
+        await V3DeterministicNodeHandler._resolve_expression_kb_ids(
+            SimpleNamespace(execute=execute),
+            ("我的优势", "表达语气库", "具象表达"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_expression_retrieve_queries_kb_without_cached_retriever(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yuxi import knowledge_base as kb_runtime
+    from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
+
+    kb = SimpleNamespace(
+        databases_meta={"kb_adv": {"name": "我的优势"}},
+        aquery=AsyncMock(return_value=[{"content": "先写感受再写做法"}]),
+    )
+    monkeypatch.setattr(kb_runtime, "aget_kb", AsyncMock(return_value=kb))
+    monkeypatch.setattr(kb_runtime, "get_retrievers", lambda: {})
+    excerpts = await V3DeterministicNodeHandler._retrieve_named_expression_chunks("kb_adv", "我的优势", "装修表达")
+    assert excerpts == ["先写感受再写做法"]
+    kb.aquery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_expression_retrieve_fails_when_metadata_missing_after_load(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yuxi import knowledge_base as kb_runtime
+    from yuxi.content.control.errors import ContentApplicationError
+    from yuxi.content.control.workflow.deterministic_node import V3DeterministicNodeHandler
+
+    kb = SimpleNamespace(databases_meta={}, aquery=AsyncMock())
+    monkeypatch.setattr(kb_runtime, "aget_kb", AsyncMock(return_value=kb))
+    with pytest.raises(ContentApplicationError, match="元数据未加载"):
+        await V3DeterministicNodeHandler._retrieve_named_expression_chunks("kb_adv", "我的优势", "装修表达")
+    kb.aquery.assert_not_awaited()
+
+
+def test_sanitize_keeps_clean_sentences_in_mixed_chunk():
+    kept = sanitize_expression_chunks(["先共情再给方案。深耕北京工地多年。把项目写清楚，不藏着掖着。"])
+    assert kept
+    assert "先共情再给方案" in kept[0]
+    assert "把项目写清楚" in kept[0]
+    assert "北京" not in kept[0]
+
+
+def test_sanitize_does_not_treat_region_words_as_city():
+    assert expression_guidance_forbidden("先讲区域差异，再讲施工顺序。") == []
+    assert expression_guidance_forbidden("小区停车和动线要分开说。") == []
+
+
+def test_sanitize_still_drops_fact_only_chunk():
+    assert sanitize_expression_chunks(["深耕北京工地多年，全屋拆除报价6800。"]) == []

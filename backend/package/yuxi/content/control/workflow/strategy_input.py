@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 from yuxi.content.model.contracts.content_nodes import JointStrategyPromptV1
+from yuxi.content.model.contracts.strategy import attach_required_dimension_keys
 
 
 async def load_strategy_profiles(repo, locked_versions: dict) -> tuple[dict, dict]:
@@ -90,6 +91,7 @@ def project_strategy_input(payload: dict, *, channel_profile: dict, persona_prof
     )
     candidates = view["strategy_candidates"]
     candidates["available_input_paths"] = paths
+    attach_required_dimension_keys(candidates.get("scoring") or {})
     candidates.pop("reference_candidate_limit", None)
     candidates.pop("selection_skill", None)
     if candidates.get("industry_slug") == "decoration":
@@ -104,17 +106,24 @@ def project_strategy_input(payload: dict, *, channel_profile: dict, persona_prof
     else:
         view["reference_candidates"] = [
             {
-                key: value
-                for key, value in item.items()
-                if key
-                in {
-                    "id",
-                    "title",
-                    "industry_slug",
-                    "source_hash",
-                    "reference_card",
-                    "structure_preview",
-                }
+                **{
+                    key: value
+                    for key, value in item.items()
+                    if key
+                    in {
+                        "id",
+                        "title",
+                        "industry_slug",
+                        "source_hash",
+                        "reference_card",
+                        "structure_preview",
+                    }
+                },
+                "required_slot_names": [
+                    slot["name"]
+                    for slot in (item.get("reference_card") or {}).get("required_slots") or []
+                    if slot.get("required") and slot.get("name")
+                ],
             }
             for item in view["reference_candidates"]
         ]

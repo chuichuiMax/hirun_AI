@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from yuxi.content.industry_matrix import resolve_industry_formula
+from yuxi.content.model.contracts.strategy import attach_required_dimension_keys
 
 
 def load_selection_policy() -> dict[str, Any]:
@@ -109,6 +110,7 @@ def build_strategy_candidates(
     scoring = deepcopy(policy["scoring"])
     if mode == "direction_scoped":
         del scoring["formula"]
+    attach_required_dimension_keys(scoring)
     direction_options = []
     if auto_direction and mode == "direction_scoped":
         for item in bundle.get("content_types", []):

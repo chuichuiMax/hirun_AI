@@ -14,6 +14,9 @@ from .strategy import (
     SelectStrategyInputV2,
     StrategyContract,
     StrategyDecisionV2,
+    assessment_shape_errors,
+    collect_resolvable_input_paths,
+    normalize_candidate_assessments,
     resolve_input_path,
     validate_strategy_decision,
 )
@@ -109,16 +112,30 @@ def validate_joint_strategy(payload, inputs: dict[str, Any]) -> JointStrategyDec
     if reference.status == "selected" and set(ids) != set(pool):
         raise ValueError("必须比较本次提供的全部参考卡")
     scale = candidates["scoring"]["reference"]
-    eligible = []
+    normalize_candidate_assessments(
+        reference.assessments,
+        weights=scale["weights"],
+        input_paths=collect_resolvable_input_paths(
+            candidates, inputs["content_brief"], inputs["evidence_bundle"]
+        ),
+    )
     for item in reference.assessments:
         for path in item.input_paths:
             validate_fact_path(inputs, path)
-        if not item.eligible:
-            if item.dimensions or item.total is not None:
-                raise ValueError("硬性淘汰参考不能评分")
+    problems = assessment_shape_errors(
+        "参考",
+        reference.assessments,
+        weights=scale["weights"],
+        candidates=candidates,
+    )
+    if problems:
+        raise ValueError("；".join(problems))
+    eligible = []
+    for item in reference.assessments:
+        if not item.eligible or not item.input_paths:
             continue
-        if not item.input_paths or set(item.dimensions) != set(scale["weights"]):
-            raise ValueError("参考评分需要完整维度及本次输入依据")
+        if set(item.dimensions) != set(scale["weights"]):
+            continue
         if any(score < 0 or score > 4 for score in item.dimensions.values()):
             raise ValueError("参考得分必须为 0—4 整数")
         total = sum(item.dimensions[key] / 4 * weight for key, weight in scale["weights"].items())
@@ -140,8 +157,17 @@ def validate_joint_strategy(payload, inputs: dict[str, Any]) -> JointStrategyDec
         raise ValueError("参考原文版本不一致")
     slots = {slot["name"]: slot for slot in selected["reference_card"]["required_slots"]}
     required = {name for name, slot in slots.items() if slot["required"]}
-    if not required.issubset(reference.slot_mapping) or not set(reference.slot_mapping).issubset(slots):
-        raise ValueError("必要事实槽位未完整映射或提交了不存在的槽位")
+    submitted = set(reference.slot_mapping)
+    missing = sorted(required - submitted)
+    unknown = sorted(submitted - set(slots))
+    if missing or unknown:
+        parts = ["slot_mapping 的键必须逐字复制选中参考卡 required_slots[].name"]
+        if missing:
+            parts.append("缺少必要槽位：" + "、".join(missing))
+        if unknown:
+            parts.append("提交了卡上不存在的槽位：" + "、".join(unknown))
+        parts.append("选中卡必要槽位：" + "、".join(sorted(required)))
+        raise ValueError("；".join(parts))
     for paths in reference.slot_mapping.values():
         if not paths:
             raise ValueError("事实槽位映射不能为空")

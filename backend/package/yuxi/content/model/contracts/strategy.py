@@ -29,9 +29,9 @@ class CandidateAssessment(StrategyContract):
     input_paths: list[str] = Field(
         default_factory=list,
         description=(
-            "仅填写本次 payload 中真实存在且非空的证据路径，如 content_brief.form_values.pain。"
-            "缺失字段只在 reason 中说明，不能作为路径；因资料缺失淘汰时可填 []。"
-            "允许 payload. 包装前缀并统一移除。"
+            "可选。合格项若留空，运行时写入本次可解析的 available_input_paths。"
+            "自行填写时必须是 payload 中真实存在且非空的路径，如 content_brief.form_values.pain。"
+            "淘汰项保持 []。允许 payload. 包装前缀并统一移除。"
         ),
     )
     reason: str = Field(min_length=1)
@@ -83,6 +83,134 @@ class StrategyDecisionV2(StrategyContract):
         return self
 
 
+def available_input_path_hint(candidates: dict[str, Any]) -> str:
+    available = [str(path) for path in (candidates.get("available_input_paths") or []) if path]
+    if not available:
+        return "本次 available_input_paths 为空，这些项必须改为 eligible=false"
+    sample = "、".join(available[:8])
+    more = f" 等共{len(available)}条" if len(available) > 8 else ""
+    return f"从 strategy_candidates.available_input_paths 复制至少一条，例如 {sample}{more}"
+
+
+def attach_required_dimension_keys(scoring: dict[str, Any]) -> dict[str, Any]:
+    for scale in scoring.values():
+        if isinstance(scale, dict) and isinstance(scale.get("weights"), dict):
+            scale["required_dimension_keys"] = list(scale["weights"])
+    return scoring
+
+
+def assessment_shape_errors(
+    label: str,
+    assessments: list[CandidateAssessment],
+    *,
+    weights: dict[str, int] | None,
+    candidates: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    scored_out = [
+        item.candidate_id for item in assessments if not item.eligible and (item.dimensions or item.total is not None)
+    ]
+    if scored_out:
+        errors.append(
+            f"{label} 硬性淘汰候选不得评分：{'、'.join(scored_out)}。"
+            "这些项必须 eligible=false、dimensions={}、total=null、input_paths=[]。"
+        )
+    missing_paths = [item.candidate_id for item in assessments if item.eligible and not item.input_paths]
+    if missing_paths:
+        errors.append(
+            f"{label} 合格候选缺少 input_paths：{'、'.join(missing_paths)}。"
+            f"{available_input_path_hint(candidates)}"
+        )
+    if not weights:
+        return errors
+    expected = list(weights)
+    for item in assessments:
+        if not item.eligible or not item.input_paths or set(item.dimensions) == set(weights):
+            continue
+        missing = [key for key in expected if key not in item.dimensions]
+        extra = [key for key in item.dimensions if key not in weights]
+        detail = []
+        if missing:
+            detail.append(f"缺少 {', '.join(missing)}")
+        if extra:
+            detail.append(f"多余 {', '.join(extra)}，请删除")
+        errors.append(
+            f"{label} 合格候选 {item.candidate_id} 维度不完整或包含未定义维度"
+            f"（{'；'.join(detail)}）。dimensions 键必须恰好为 {', '.join(expected)}。"
+        )
+    return errors
+
+
+def collect_resolvable_input_paths(
+    candidates: dict[str, Any],
+    content_brief: dict[str, Any],
+    evidence_bundle: dict[str, Any],
+) -> list[str]:
+    inputs = {"content_brief": content_brief, "evidence_bundle": evidence_bundle}
+    listed = [str(path).removeprefix("payload.") for path in (candidates.get("available_input_paths") or []) if path]
+    if not listed:
+        for index, item in enumerate(evidence_bundle.get("items") or []):
+            if (
+                item.get("value") not in (None, "", [], {})
+                and item.get("evidence_type", item.get("type")) != "style_reference"
+                and (item.get("metadata") or {}).get("material_type") != "viral_example"
+            ):
+                listed.append(f"evidence_bundle.items.{index}.value")
+        for section in ("form_values", "business_variables"):
+            for key, value in (content_brief.get(section) or {}).items():
+                if value not in (None, "", [], {}):
+                    listed.append(f"content_brief.{section}.{key}")
+    usable: list[str] = []
+    for path in listed:
+        if not path.startswith(("content_brief.", "evidence_bundle.")):
+            continue
+        try:
+            resolve_input_path(inputs, path)
+        except ValueError:
+            continue
+        if path not in usable:
+            usable.append(path)
+    return usable
+
+
+def keep_pool_assessments(
+    assessments: list[CandidateAssessment], allowed: set[str]
+) -> list[CandidateAssessment]:
+    kept: list[CandidateAssessment] = []
+    seen: set[str] = set()
+    for item in assessments:
+        if item.candidate_id not in allowed or item.candidate_id in seen:
+            continue
+        seen.add(item.candidate_id)
+        kept.append(item)
+    return kept
+
+
+def normalize_candidate_assessments(
+    assessments: list[CandidateAssessment],
+    *,
+    weights: dict[str, int] | None,
+    input_paths: list[str],
+) -> None:
+    expected = list(weights) if weights else []
+    for item in assessments:
+        if not item.eligible:
+            item.dimensions = {}
+            item.total = None
+            item.input_paths = []
+            continue
+        if not item.input_paths and input_paths:
+            item.input_paths = list(input_paths)
+        if not expected:
+            continue
+        known = {key: item.dimensions[key] for key in expected if key in item.dimensions}
+        if known:
+            completed = {key: known.get(key, 0) for key in expected}
+            if item.dimensions != completed:
+                item.dimensions = completed
+                item.total = None
+
+
 def resolve_input_path(inputs: dict[str, Any], path: str) -> Any:
     value: Any = inputs
     for part in path.split("."):
@@ -126,35 +254,41 @@ def validate_strategy_decision(
         if getattr(result, key) != candidates[key]:
             raise ValueError(f"Agent 不得修改锁定策略字段: {key}")
     inputs = {"content_brief": content_brief, "evidence_bundle": evidence_bundle}
+    default_paths = collect_resolvable_input_paths(candidates, content_brief, evidence_bundle)
     ranked: dict[str, dict[str, CandidateAssessment]] = {}
-    for label, section, assessments, scale_key in (
-        ("title", "title_formulas", result.title_assessments, "formula"),
-        ("body", "content_formulas", result.body_assessments, "formula"),
-        ("method", "methods", result.method_assessments, "method"),
+    problems: list[str] = []
+    for label, section, field, scale_key in (
+        ("title", "title_formulas", "title_assessments", "formula"),
+        ("body", "content_formulas", "body_assessments", "formula"),
+        ("method", "methods", "method_assessments", "method"),
     ):
         allowed = {item["code"] for item in candidates[section]}
+        assessments = keep_pool_assessments(getattr(result, field), allowed)
+        setattr(result, field, assessments)
         assessed = {item.candidate_id for item in assessments}
-        if len(assessed) != len(assessments) or not assessed.issubset(allowed):
-            raise ValueError(f"{label} 评分包含重复或候选池外 ID")
         if result.status == "selected" and assessed != allowed:
-            raise ValueError(f"{label} 必须比较当前候选池全部候选")
+            missing = [code for code in sorted(allowed) if code not in assessed]
+            raise ValueError(
+                f"{label} 必须比较当前候选池全部候选：缺少 {'、'.join(missing)}。"
+                f"当前池：{'、'.join(sorted(allowed))}"
+            )
         scale = candidates["scoring"].get(scale_key)
-        ranked[label] = {}
+        weights = scale["weights"] if scale else None
+        normalize_candidate_assessments(assessments, weights=weights, input_paths=default_paths)
         for item in assessments:
             for path in item.input_paths:
                 if not path.startswith(("content_brief.", "evidence_bundle.")):
                     raise ValueError("评分证据必须引用本次输入或当前证据")
                 resolve_input_path(inputs, path)
-            if not item.eligible:
-                if item.dimensions or item.total is not None:
-                    raise ValueError("硬性淘汰的候选不得参与评分")
+        problems.extend(assessment_shape_errors(label, assessments, weights=weights, candidates=candidates))
+        ranked[label] = {}
+        for item in assessments:
+            if not item.eligible or not item.input_paths:
                 continue
-            if not item.input_paths:
-                raise ValueError("合格候选必须提供输入证据路径")
             if scale:
                 weights = scale["weights"]
                 if set(item.dimensions) != set(weights):
-                    raise ValueError(f"{label} 评分维度不完整或包含未定义维度")
+                    continue
                 if any(value < 0 or value > 4 for value in item.dimensions.values()):
                     raise ValueError("评分必须为 0—4 整数")
                 total = sum(item.dimensions[key] / 4 * weight for key, weight in weights.items())
@@ -162,6 +296,8 @@ def validate_strategy_decision(
                     raise ValueError("评分总分与锁定权重不一致")
                 item.total = total
             ranked[label][item.candidate_id] = item
+    if problems:
+        raise ValueError("；".join(problems))
     if result.status != "selected":
         return result
     for label, codes in (
