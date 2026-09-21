@@ -1,7 +1,7 @@
 // Shared HyCanvas API client for the web app. Uses httpOnly cookie auth
 // (credentials: "include"), so the SPA never handles tokens directly.
 
-import { HyCanvasClient, type UploadedAsset } from "@hc/sdk";
+import { HyCanvasClient, type PublicFontFace, type UploadedAsset } from "@hc/sdk";
 import { CodedError } from "./errors";
 
 const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "/api";
@@ -64,6 +64,56 @@ export function uploadAssetWithProgress(
     };
     xhr.onerror = () => reject(new CodedError("errors.upload_network_error", "Network error during upload."));
     xhr.send(JSON.stringify(input));
+  });
+}
+
+/** Upload a Xiaohongshu-zone public font as raw multipart bytes. This avoids
+ * base64 expansion and never puts the binary in localStorage or design JSON. */
+export function uploadPublicFontWithProgress(
+  file: File,
+  onProgress?: (pct: number) => void,
+  retried = false,
+): Promise<PublicFontFace> {
+  return new Promise<PublicFontFace>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${baseUrl}/v1/fonts`);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          if (onProgress) onProgress(100);
+          resolve(JSON.parse(xhr.responseText) as PublicFontFace);
+        } catch {
+          reject(new CodedError("errors.upload_response_unreadable", "Upload succeeded but the response was unreadable."));
+        }
+        return;
+      }
+      if (xhr.status === 401 && !retried) {
+        void oc.refresh().then(({ ok }) => {
+          if (ok) uploadPublicFontWithProgress(file, onProgress, true).then(resolve, reject);
+          else reject(new CodedError("errors.api_unauthorized", "Please sign in again."));
+        });
+        return;
+      }
+      let detail = `Font upload failed (${xhr.status}).`;
+      let code = "font_upload_failed";
+      try {
+        const body = JSON.parse(xhr.responseText) as { detail?: string; code?: string };
+        detail = body.detail || detail;
+        code = body.code || code;
+      } catch {
+        /* non-JSON error body */
+      }
+      reject(new CodedError(`errors.api_${code}`, detail, { status: xhr.status }));
+    };
+    xhr.onerror = () => reject(new CodedError("errors.upload_network_error", "Network error during font upload."));
+    const body = new FormData();
+    body.set("zone", "xiaohongshu");
+    body.set("file", file, file.name);
+    xhr.send(body);
   });
 }
 

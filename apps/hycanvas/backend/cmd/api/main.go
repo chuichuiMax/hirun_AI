@@ -36,6 +36,7 @@ import (
 	"hycanvas/backend/internal/convert"
 	"hycanvas/backend/internal/daemon"
 	"hycanvas/backend/internal/engagement"
+	"hycanvas/backend/internal/fontlibrary"
 	"hycanvas/backend/internal/home"
 	"hycanvas/backend/internal/httpapi"
 	"hycanvas/backend/internal/jobs"
@@ -176,6 +177,12 @@ func main() {
 		}
 		logger.Info("fonts registered for export", "count", n, "families", render.RegisteredFamilies(), "dir", dir)
 	}
+	fontLibrarySvc := fontlibrary.NewService(pool, store, render.RegisterFont)
+	fontCount, fontErrors := fontLibrarySvc.LoadRegistered(context.Background())
+	for _, loadErr := range fontErrors {
+		logger.Warn("font library: could not restore retained font", "err", loadErr)
+	}
+	logger.Info("font library restored", "count", fontCount, "zone", fontlibrary.ZoneXiaohongshu)
 	// Say it once per script when a glyph cannot be drawn at all: a design that
 	// exports blank text is otherwise almost undiagnosable from the outside.
 	render.SetMissingGlyphReporter(func(r rune) {
@@ -387,6 +394,7 @@ func main() {
 			AI:              aiSvc,
 			AIStudio:        aiStudioSvc,
 			Uploads:         uploadsSvc,
+			Fonts:           fontLibrarySvc,
 			Realtime:        rtHub,
 			Audience:        audienceSvc,
 			Templates:       templatesSvc,

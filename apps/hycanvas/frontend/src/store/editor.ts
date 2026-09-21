@@ -969,9 +969,8 @@ interface EditorState {
   /** Set (or clear, with undefined) a node's rotation pivot, normalized 0..1
    *  within its box; the gizmo rotates about it. */
   setRotationOrigin(id: string, origin: { x: number; y: number } | undefined): void;
-  /** Record an uploaded font in the design (cross-device): a FontRef with the
-   *  asset URL so the font loads when the design opens on another device. */
-  addDocFont(ref: { id: string; family: string; url: string }): void;
+  /** Record a small uploaded/library font reference in the design. */
+  addDocFont(ref: FontRef): void;
   /** Curve a text node's baseline along an arc ; 0 clears it. */
   setCurve(id: string, curvature: number): void;
   /** Replace all occurrences of `find` with `replace` across every text node in
@@ -7467,10 +7466,10 @@ export const useEditor = create<EditorState>((set, get) => {
     addDocFont: (ref) => {
       const doc = get().doc;
       ensureDocArrays(doc);
-      const fonts = (doc as unknown as { fonts: { id: string; family: string; source: string; url: string }[] }).fonts;
+      const fonts = (doc as unknown as { fonts: FontRef[] }).fonts;
       if (fonts.some((f) => f.family.toLowerCase() === ref.family.toLowerCase())) return;
       // Not an undo-worthy content edit; record it and mark the doc dirty.
-      fonts.push({ id: ref.id, family: ref.family, source: "upload", url: ref.url });
+      fonts.push(ref);
       set((s) => ({ rev: s.rev + 1, savedRev: -1 }));
     },
 

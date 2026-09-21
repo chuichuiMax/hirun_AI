@@ -30,6 +30,7 @@ import {
   AlignLeft, AlignCenter, AlignRight, AlignJustify, ImagePlus,
 } from "lucide-react";
 import { fonts } from "@/lib/fontProvider";
+import { loadXiaohongshuFonts } from "@/lib/fontLibrary";
 import { promptText, alertText } from "@/lib/promptDialog";
 import { filterPresets, resolvePresetOps, autoEnhanceOps, alphaMaskFromCutout, removeBackground, rasterizeToPng, type AdjOp } from "@/lib/imageFilters";
 import { AddEffectRow, EffectStack } from "./EffectStack";
@@ -625,6 +626,13 @@ export function PropertiesPanel({ workspaceId }: { workspaceId?: string | null }
   const selfClientId = usePresence((s) => s.self?.clientId ?? null);
   const connected = usePresence((s) => s.connection) === "connected";
   const doc = useEditor.getState().doc;
+  const isXiaohongshu = doc.meta?.templateZone === "xiaohongshu";
+  const [, refreshFonts] = useState(0);
+  useEffect(() => fonts.onChange(() => refreshFonts((value) => value + 1)), []);
+  useEffect(() => {
+    if (isXiaohongshu) void loadXiaohongshuFonts().catch(() => undefined);
+  }, [isXiaohongshu]);
+  const libraryFontFamilies = isXiaohongshu ? fonts.libraryFamilies() : [];
 
   // Brand lock state: when the active kit locks colors/fonts
   // and the caller is NOT a brand admin, the pickers below offer only the kit's
@@ -1430,10 +1438,21 @@ export function PropertiesPanel({ workspaceId }: { workspaceId?: string | null }
             ) : (
               <select aria-label={tr("editor.font_family")}
                 value={cs?.fontFamily ?? "system"}
-                onChange={(e) => { fonts.ensure(e.target.value); setChar({ fontFamily: e.target.value }); }}
+                onChange={(e) => {
+                  const family = e.target.value;
+                  fonts.ensure(family);
+                  const ref = fonts.libraryRef(family);
+                  if (ref) useEditor.getState().addDocFont(ref);
+                  setChar({ fontFamily: family });
+                }}
                 className={selectCls}
               >
                 <option value="system">{tr("editor.system_default")}</option>
+                {libraryFontFamilies.length > 0 && (
+                  <optgroup label="小红书公共字体">
+                    {libraryFontFamilies.map((family) => <option key={`library-${family}`} value={family}>{family}</option>)}
+                  </optgroup>
+                )}
                 {FONT_FAMILY_OPTIONS}
               </select>
             )}

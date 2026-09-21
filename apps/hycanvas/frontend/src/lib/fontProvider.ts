@@ -4,7 +4,8 @@
 // provider pattern. System fonts need no loading. Uploaded/brand fonts (FR-6)
 // will register here too once font upload lands.
 
-import type { DesignFile, Node } from "@hc/schema";
+import type { DesignFile, FontRef, Node } from "@hc/schema";
+import type { PublicFontFace } from "@hc/sdk";
 import { getFontEntry, fontCssUrl, isSystemFont } from "@hc/text";
 
 const CUSTOM_FONTS_KEY = "oc-custom-fonts";
@@ -31,6 +32,11 @@ class FontProvider {
   private subs = new Set<() => void>();
   // Uploaded fonts (FR-6): key (lowercased family) -> { family, src (data URL) }.
   private custom = new Map<string, { family: string; src: string }>();
+  // Server-retained faces shared by every user of the Xiaohongshu zone. Only
+  // metadata is kept here; bytes are fetched lazily when a family is used.
+  private library = new Map<string, PublicFontFace[]>();
+  private loadedLibraryFaces = new Set<string>();
+  private loadingLibraryFaces = new Set<string>();
 
   constructor() {
     if (typeof window === "undefined") return;
@@ -48,6 +54,47 @@ class FontProvider {
   /** Family names of all uploaded custom fonts (for the picker). */
   customFamilies(): string[] {
     return [...this.custom.values()].map((f) => f.family);
+  }
+
+  setLibraryFonts(faces: PublicFontFace[]): void {
+    const next = new Map<string, PublicFontFace[]>();
+    for (const face of faces) {
+      const key = face.family.toLowerCase();
+      const family = next.get(key) ?? [];
+      if (!family.some((item) => item.id === face.id)) family.push(face);
+      next.set(key, family);
+    }
+    this.library = next;
+    this.notify();
+  }
+
+  addLibraryFont(face: PublicFontFace): void {
+    const key = face.family.toLowerCase();
+    const family = this.library.get(key) ?? [];
+    if (!family.some((item) => item.id === face.id)) family.push(face);
+    this.library.set(key, family);
+    this.notify();
+  }
+
+  libraryFamilies(): string[] {
+    return [...this.library.values()].map((faces) => faces[0]?.family).filter((family): family is string => Boolean(family));
+  }
+
+  libraryRef(family: string): FontRef | null {
+    const faces = this.library.get(family.toLowerCase());
+    if (!faces?.length) return null;
+    return {
+      id: `library-${faces[0].id}`,
+      family: faces[0].family,
+      source: "library",
+      url: faces[0].url,
+      files: faces.map((face) => ({
+        style: face.style,
+        url: face.url,
+        format: face.format,
+        variable: face.variable || undefined,
+      })),
+    };
   }
 
   /** Load an uploaded font (data URL) into document.fonts so the canvas can draw
@@ -70,6 +117,27 @@ class FontProvider {
     }
   }
 
+  private ensureLibrary(family: string): void {
+    if (typeof document === "undefined" || typeof FontFace === "undefined") return;
+    const faces = this.library.get(family.toLowerCase()) ?? [];
+    for (const item of faces) {
+      if (this.loadedLibraryFaces.has(item.id) || this.loadingLibraryFaces.has(item.id)) continue;
+      this.loadingLibraryFaces.add(item.id);
+      const style = /italic|oblique/i.test(item.style) ? "italic" : "normal";
+      const weight = item.variable ? "1 1000" : String(item.weight);
+      const face = new FontFace(item.family, `url("${item.url}")`, { style, weight });
+      void face.load().then((loadedFace) => {
+        (document as unknown as { fonts: { add: (f: FontFace) => void } }).fonts.add(loadedFace);
+        this.loadingLibraryFaces.delete(item.id);
+        this.loadedLibraryFaces.add(item.id);
+        this.loaded.add(item.family.toLowerCase());
+        this.notify();
+      }).catch(() => {
+        this.loadingLibraryFaces.delete(item.id);
+      });
+    }
+  }
+
   private persistCustom(): void {
     if (typeof window === "undefined") return;
     try { window.localStorage.setItem(CUSTOM_FONTS_KEY, JSON.stringify([...this.custom.values()])); } catch { /* quota: skip persistence */ }
@@ -79,6 +147,10 @@ class FontProvider {
   ensure(family: string | undefined): void {
     if (isSystemFont(family) || typeof document === "undefined") return;
     const key = family!.toLowerCase();
+    if (this.library.has(key)) {
+      this.ensureLibrary(family!);
+      return;
+    }
     if (this.loaded.has(key) || this.loading.has(key)) return;
     const entry = getFontEntry(family!);
     if (!entry) return;
