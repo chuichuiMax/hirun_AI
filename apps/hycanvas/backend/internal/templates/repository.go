@@ -176,6 +176,28 @@ func (s *Service) deleteRow(ctx context.Context, id string) error {
 	return err
 }
 
+func (s *Service) hideSeed(ctx context.Context, templateID, userID string) error {
+	_, err := s.db.Exec(ctx, `INSERT INTO "hidden_seed_templates" ("template_id","hidden_by") VALUES ($1,$2) ON CONFLICT ("template_id") DO NOTHING`, templateID, userID)
+	return err
+}
+
+func (s *Service) hiddenSeedIDs(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.db.Query(ctx, `SELECT "template_id" FROM "hidden_seed_templates"`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
 // --- collections ---------------------------------------------------------
 
 type collectionRow struct {

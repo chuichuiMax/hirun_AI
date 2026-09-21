@@ -839,8 +839,21 @@ func TestTemplates_DB(t *testing.T) {
 		t.Fatalf("deleted template should no longer exist, got %v", err)
 	}
 	if len(seedEntries) > 0 {
-		if err := svc.Delete(ctx, owner.ID, seedEntries[0].toTemplate().ID); err != ErrForbidden {
-			t.Fatalf("built-in template should not be deletable, got %v", err)
+		seedID := seedEntries[0].toTemplate().ID
+		if err := svc.Delete(ctx, owner.ID, seedID); err != nil {
+			t.Fatalf("workspace member should hide a built-in template: %v", err)
+		}
+		afterHide, err := svc.List(ctx, owner.ID, TemplateQuery{}, ws.ID, "")
+		if err != nil {
+			t.Fatalf("list after hiding seed: %v", err)
+		}
+		for _, item := range afterHide {
+			if item.ID == seedID {
+				t.Fatalf("hidden built-in template still listed: %+v", item)
+			}
+		}
+		if _, err := svc.Get(ctx, owner.ID, seedID); err != nil {
+			t.Fatalf("hidden built-in template must remain instantiable: %v", err)
 		}
 	}
 
@@ -902,6 +915,9 @@ func TestTemplates_DB(t *testing.T) {
 	if err != nil || len(inCol) != 2 {
 		t.Fatalf("public template missing from workspace collection: %+v err=%v", inCol, err)
 	}
+	if err := svc.Delete(ctx, other.ID, publicTmpl.ID); err != ErrForbidden {
+		t.Fatalf("non-member should not delete a public template, got %v", err)
+	}
 	// Older public templates cleared workspace_id. Their collection still owns
 	// the workspace, so they must remain visible in the selected category.
 	if _, err := tx.Exec(ctx, `UPDATE "templates" SET "workspace_id" = NULL WHERE id = $1`, publicTmpl.ID); err != nil {
@@ -910,6 +926,12 @@ func TestTemplates_DB(t *testing.T) {
 	inCol, err = svc.List(ctx, owner.ID, TemplateQuery{}, ws.ID, col.ID)
 	if err != nil || len(inCol) != 2 {
 		t.Fatalf("historical public template missing from workspace collection: %+v err=%v", inCol, err)
+	}
+	if err := svc.Delete(ctx, owner.ID, publicTmpl.ID); err != nil {
+		t.Fatalf("workspace member should delete a public template: %v", err)
+	}
+	if _, err := svc.Get(ctx, owner.ID, publicTmpl.ID); err != ErrNotFound {
+		t.Fatalf("deleted public template should no longer exist, got %v", err)
 	}
 	if err := svc.DeleteCollection(ctx, owner.ID, col.ID); err != nil {
 		t.Fatalf("DeleteCollection: %v", err)

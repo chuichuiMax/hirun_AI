@@ -708,6 +708,10 @@ export function DashboardApp({ view }: { view: DashboardView }) {
     const role = workspaces.find((workspace) => workspace.id === template.workspaceId)?.role;
     return role === "member" || role === "admin" || role === "owner";
   };
+  const canDeleteTemplate = (template: TemplateSummary) => {
+    if (template.visibility === "personal") return template.ownerId === user?.id;
+    return Boolean(user?.id);
+  };
 
   async function confirmDelete() {
     if (!deleteTarget) return;
@@ -1298,17 +1302,17 @@ export function DashboardApp({ view }: { view: DashboardView }) {
                           <div className="absolute end-0 z-30 mt-1 w-36 overflow-hidden rounded-xl border border-neutral-200 bg-surface py-1 text-sm shadow-lg" onClick={(event) => event.stopPropagation()}>
                             <MenuRow icon={FileDown} onClick={() => { setMenuFor(null); void downloadTemplateHyc(t); }}>{tr("dashboard.download_as_hyc_file")}</MenuRow>
                             {canManageTemplate(t) && (
-                              <>
-                                <MenuRow icon={Pencil} onClick={() => {
-                                  setMenuFor(null);
-                                  setTemplateRenameTarget(t);
-                                  setTemplateRenameValue(t.title);
-                                }}>{tr("dashboard.rename")}</MenuRow>
-                                <MenuRow icon={Trash2} danger onClick={() => {
-                                  setMenuFor(null);
-                                  setTemplateDeleteTarget(t);
-                                }}>{tr("dashboard.delete")}</MenuRow>
-                              </>
+                              <MenuRow icon={Pencil} onClick={() => {
+                                setMenuFor(null);
+                                setTemplateRenameTarget(t);
+                                setTemplateRenameValue(t.title);
+                              }}>{tr("dashboard.rename")}</MenuRow>
+                            )}
+                            {canDeleteTemplate(t) && (
+                              <MenuRow icon={Trash2} danger onClick={() => {
+                                setMenuFor(null);
+                                setTemplateDeleteTarget(t);
+                              }}>{tr("dashboard.delete")}</MenuRow>
                             )}
                           </div>
                         )}

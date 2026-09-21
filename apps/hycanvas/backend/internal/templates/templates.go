@@ -237,8 +237,16 @@ func (s *Service) List(ctx context.Context, userID string, q TemplateQuery, work
 		pool = append(pool, t)
 	}
 	if collectionID == "" {
+		hidden, err := s.hiddenSeedIDs(ctx)
+		if err != nil {
+			return nil, err
+		}
 		for _, e := range seedEntries {
-			pool = append(pool, e.toTemplate())
+			t := e.toTemplate()
+			if _, skip := hidden[t.ID]; skip {
+				continue
+			}
+			pool = append(pool, t)
 		}
 	}
 	q.Scope = "public"
@@ -759,11 +767,26 @@ func (s *Service) assertMutableTemplate(ctx context.Context, userID string, row 
 	return nil
 }
 
-// Delete permanently removes a mutable custom template. Built-in seed
-// templates are immutable and cannot be deleted.
+func (s *Service) assertSignedInWorkspace(ctx context.Context, userID string) error {
+	ids, err := s.access.MemberWorkspaceIDs(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return ErrForbidden
+	}
+	return nil
+}
+
+// Delete removes a cover template from the library. Custom rows are deleted.
+// Built-in seed templates are hidden from List so content-production can still
+// instantiate them by id.
 func (s *Service) Delete(ctx context.Context, userID, templateID string) error {
 	if _, ok := findSeed(templateID); ok {
-		return ErrForbidden
+		if err := s.assertSignedInWorkspace(ctx, userID); err != nil {
+			return err
+		}
+		return s.hideSeed(ctx, templateID, userID)
 	}
 	row, err := s.getRow(ctx, templateID)
 	if err != nil {
@@ -780,6 +803,14 @@ func (s *Service) Delete(ctx context.Context, userID, templateID string) error {
 		}
 		if err := s.access.AssertMember(ctx, userID, *row.WorkspaceID, "member"); err != nil {
 			return ErrForbidden
+		}
+	case "public":
+		if row.WorkspaceID != nil {
+			if err := s.access.AssertMember(ctx, userID, *row.WorkspaceID, "member"); err != nil {
+				return ErrForbidden
+			}
+		} else if err := s.assertSignedInWorkspace(ctx, userID); err != nil {
+			return err
 		}
 	default:
 		return ErrForbidden

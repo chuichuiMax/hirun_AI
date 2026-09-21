@@ -57,6 +57,7 @@ import { usePresence } from "@/store/presence";
 import { useBoardFocus, enterBoardFocus, exitBoardFocus } from "@/store/boardFocus";
 import { designSurfaceDir, mirrorInRtl, documentDirection } from "@/lib/locale";
 import { tr } from "@/lib/i18n";
+import { isContentSwarmManaged } from "@/lib/managedAuth";
 
 type Status = "loading" | "ready" | "error" | "forbidden" | "notfound";
 
@@ -988,6 +989,15 @@ export function EditorApp() {
     if (await save()) returnToIntegration();
   }, [integrationReturnUrl, returnToIntegration, save]);
 
+  const saveAndConfigureTemplate = useCallback(async () => {
+    if (templateId && !designId) {
+      await save();
+      return;
+    }
+    if (!(await save(false))) return;
+    setTemplateOpen(true);
+  }, [save, templateId, designId]);
+
   async function commitTitle() {
     const value = titleRef.current?.value.trim();
     if (!value || value === title) return;
@@ -1219,7 +1229,7 @@ export function EditorApp() {
               <Share2 size={16} /> {tr("editor.share")}
             </Button>
           )}
-          <Button size="sm" onClick={() => void save()} disabled={(!designId && !templateId) || saving || accessMode !== "edit"} title={accessMode !== "edit" ? tr("editor.you_do_not_have_edit_access") : designId || templateId ? tr("editor.save") : tr("editor.open_from_the_dashboard_to_save")}>
+          <Button size="sm" onClick={() => void (isContentSwarmManaged ? saveAndConfigureTemplate() : save())} disabled={(!designId && !templateId) || saving || accessMode !== "edit"} title={accessMode !== "edit" ? tr("editor.you_do_not_have_edit_access") : designId || templateId ? tr("editor.save") : tr("editor.open_from_the_dashboard_to_save")}>
             {saving ? tr("editor.saving") : tr("editor.save")}
           </Button>
           {integrationReturnUrl && (
