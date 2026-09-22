@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -35,6 +36,7 @@ from .analysis import (
     run_visual_analysis,
 )
 from .prompt_compiler import apply_edited_prompt, build_prompt_plan, compile_prompt, validate_plan_coverage
+from .save_targets import resolve_writable_save_target
 from .schemas import (
     ANALYSIS_SCHEMA_VERSION,
     ASPECT_SIZES,
@@ -110,12 +112,31 @@ def _serialize_refinement(row: ImageDesignRefinement) -> dict[str, Any]:
 async def _get_material_item_and_asset(db: AsyncSession, owner_uid: str, material_id: str):
     repo = MaterialLibraryRepository(db, include_shared=True)
     item = await repo.get_item_for_user(material_id, owner_uid)
-    if item is None or item.material_type != "image" or item.status != "enabled":
+    if item is None:
+        # Dedicated uploads/references are private to their owner, even when
+        # their original material is shared. Recheck that source's live access.
+        from .mp_service import get_library_item_and_asset
+
+        return await get_library_item_and_asset(db, User(uid=owner_uid), material_id)
+    if item.material_type != "image" or item.status != "enabled":
         raise _error("IMAGE_DESIGN_MATERIAL_NOT_FOUND", "素材不存在、已下架或当前用户无权使用", 404)
     asset = await repo.get_asset(item.asset_id, item.owner_uid)
     if asset is None:
         raise _error("IMAGE_DESIGN_MATERIAL_FILE_MISSING", "素材文件不存在", 404)
     return item, asset
+
+
+@dataclass(frozen=True)
+class ImageDesignInput:
+    input_id: str
+    asset: ContentCoverAsset
+    asset_sha256: str
+
+
+async def resolve_image_input(db: AsyncSession, owner_uid: str, input_id: str) -> ImageDesignInput:
+    _, asset = await _get_material_item_and_asset(db, owner_uid, input_id)
+    sha256 = asset.sha256 or hashlib.sha256(await read_material_bytes(asset)).hexdigest()
+    return ImageDesignInput(input_id, asset, sha256)
 
 
 async def list_clients(db: AsyncSession, user: User) -> dict[str, Any]:
@@ -488,12 +509,10 @@ async def create_generate_job(db: AsyncSession, user: User, payload: ImageDesign
         raise _error("IMAGE_DESIGN_REFINEMENT_INVALID", "请先完成有效的 AI 深度优化", 409)
     material_snapshots = list((refinement.request_json or {}).get("materials") or [])
     current_materials: list[dict[str, str]] = []
+    input_snapshots: list[dict[str, str]] = []
     for snapshot in material_snapshots:
-        _, asset = await _get_material_item_and_asset(db, owner_uid, snapshot["material_id"])
-        current_sha = asset.sha256
-        if not current_sha:
-            data = await read_material_bytes(asset)
-            current_sha = hashlib.sha256(data).hexdigest()
+        image = await resolve_image_input(db, owner_uid, snapshot["material_id"])
+        current_sha = image.asset_sha256
         if current_sha != snapshot["asset_sha256"]:
             raise _error("IMAGE_DESIGN_REFINEMENT_STALE", "输入图片已变化，请重新进行 AI 深度优化", 409)
         current_materials.append(
@@ -503,11 +522,22 @@ async def create_generate_job(db: AsyncSession, user: User, payload: ImageDesign
                 "asset_sha256": current_sha,
             }
         )
+        input_snapshots.append(
+            {
+                "role": snapshot["role"],
+                "input_id": image.input_id,
+                "asset_id": image.asset.id,
+                "asset_sha256": image.asset_sha256,
+            }
+        )
     validated_plan = validate_refinement_integrity(refinement, current_materials)
+    if payload.save_target is not None:
+        await resolve_writable_save_target(db, user, payload.save_target)
     compiled_prompt = compile_prompt(validated_plan, payload.aspect_ratio)
     material_ids = [item["material_id"] for item in validated_plan.image_roles]
     request = {
-        **payload.model_dump(mode="json"),
+        **payload.model_dump(mode="json", exclude={"save_target"}),
+        "requested_save_target": payload.save_target.model_dump(mode="json") if payload.save_target else None,
         "workflow": refinement.workflow,
         "prompt_contract_version": 2,
         "plan_version": validated_plan.plan_version,
@@ -516,6 +546,7 @@ async def create_generate_job(db: AsyncSession, user: User, payload: ImageDesign
         "size": ASPECT_SIZES[payload.aspect_ratio][payload.clarity],
         "material_ids": material_ids,
         "image_roles": validated_plan.image_roles,
+        "input_snapshots": input_snapshots,
         "analysis_ids": refinement.analysis_ids_json or [],
         "reference_material_id": material_ids[0],
         "raw_room_material_id": material_ids[1] if refinement.workflow == "room_adapt" else None,

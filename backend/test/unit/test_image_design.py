@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from yuxi.content_cover.image2_client import Image2Error
 from yuxi.content_cover.schemas import Image2Input
 from yuxi.image_design.schemas import ImageDesignGenerateCreate
-from yuxi.image_design.worker import _build_image2_request, _build_prompt, _normalize_output
 
 
 def test_generate_schema_accepts_supported_render_options() -> None:
@@ -22,6 +21,16 @@ def test_generate_schema_accepts_supported_render_options() -> None:
 
     assert payload.refinement_id == "idr_verified"
     assert payload.gen_count == 4
+
+
+@pytest.mark.parametrize("scope", ["private", "enterprise"])
+def test_generate_schema_accepts_scope_root(scope) -> None:
+    payload = ImageDesignGenerateCreate(refinement_id="idr_verified", save_target={"scope": scope})
+    assert payload.save_target.model_dump(mode="json") == {"scope": scope, "gallery_id": None}
+
+
+def test_generate_schema_preserves_legacy_pc_default() -> None:
+    assert ImageDesignGenerateCreate(refinement_id="idr_verified").save_target is None
 
 
 def test_generate_schema_rejects_unknown_size_options() -> None:
@@ -51,6 +60,8 @@ def test_generate_schema_rejects_browser_refined_boolean() -> None:
 
 
 def test_build_prompt_returns_server_compiled_prompt_unchanged() -> None:
+    from yuxi.image_design.worker import _build_prompt
+
     prompt = _build_prompt(
         {
             "workflow": "cross_space",
@@ -63,11 +74,15 @@ def test_build_prompt_returns_server_compiled_prompt_unchanged() -> None:
 
 
 def test_build_prompt_rejects_missing_compiled_prompt_for_verified_contract() -> None:
+    from yuxi.image_design.worker import _build_prompt
+
     with pytest.raises(Image2Error, match="缺少编译后提示词"):
         _build_prompt({"workflow": "cross_space", "prompt_contract_version": 2})
 
 
 def test_build_image2_request_omits_png_compression() -> None:
+    from yuxi.image_design.worker import _build_image2_request
+
     source = Image2Input(data=b"image", content_type="image/png", file_name="room.png")
 
     request = _build_image2_request({"prompt": "现代客厅", "size": "1152x1536"}, [source])
@@ -78,6 +93,8 @@ def test_build_image2_request_omits_png_compression() -> None:
 
 
 def test_normalize_output_returns_png_at_requested_size() -> None:
+    from yuxi.image_design.worker import _normalize_output
+
     source = io.BytesIO()
     Image.new("RGB", (1024, 1024), (20, 30, 40)).save(source, format="JPEG")
 
@@ -90,6 +107,8 @@ def test_normalize_output_returns_png_at_requested_size() -> None:
 
 
 def test_normalize_output_resizes_same_aspect_ratio() -> None:
+    from yuxi.image_design.worker import _normalize_output
+
     source = io.BytesIO()
     Image.new("RGB", (1086, 1448), (20, 30, 40)).save(source, format="PNG")
 
@@ -101,6 +120,8 @@ def test_normalize_output_resizes_same_aspect_ratio() -> None:
 
 
 def test_normalize_output_rejects_wrong_aspect_ratio() -> None:
+    from yuxi.image_design.worker import _normalize_output
+
     source = io.BytesIO()
     Image.new("RGB", (1024, 768), (20, 30, 40)).save(source, format="PNG")
 

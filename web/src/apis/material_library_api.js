@@ -10,7 +10,8 @@ const encodeQuery = (params = {}) => {
 }
 
 export const materialLibraryApi = {
-  listItems: (params) => apiGet(`/api/material-library/items${encodeQuery(params)}`),
+  listItems: ({ scope, root_only, ...params } = {}) =>
+    apiGet(`/api/material-library/items${encodeQuery({ ...params, scope, root_only })}`),
   listCategories: (materialType) => apiGet(`/api/material-library/categories?material_type=${materialType}`),
   createCategory: (payload) => apiPost('/api/material-library/categories', payload),
   updateCategory: (materialType, categoryId, payload) =>

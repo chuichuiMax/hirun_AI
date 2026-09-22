@@ -211,6 +211,7 @@ async def material_items(
     page_size: int = Query(24, ge=1, le=100),
     sort: str = Query("newest"),
     scope: Literal["private", "enterprise"] | None = Query(None),
+    root_only: bool = Query(False),
     exclude_task_id: str | None = Query(None),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
@@ -226,6 +227,7 @@ async def material_items(
         page_size=page_size,
         sort=sort,
         scope=scope,
+        root_only=root_only,
         exclude_task_id=exclude_task_id,
     )
 

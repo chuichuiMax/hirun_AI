@@ -105,6 +105,29 @@ class MaterialLibraryRepository:
             query = query.with_for_update().execution_options(populate_existing=True)
         return (await self.db.execute(query)).scalar_one_or_none()
 
+    async def get_category_exact(
+        self,
+        *,
+        requester_uid: str,
+        material_type: str,
+        category_id: str,
+        category_owner_uid: str | None = None,
+        visibility: str | None = None,
+    ) -> ContentMaterialCategory | None:
+        """Load one visible category without losing its owner when IDs overlap."""
+
+        filters = [
+            self.category_access(requester_uid),
+            ContentMaterialCategory.material_type == material_type,
+            ContentMaterialCategory.id == category_id,
+            ContentMaterialCategory.deleted_at.is_(None),
+        ]
+        if category_owner_uid is not None:
+            filters.append(ContentMaterialCategory.owner_uid == category_owner_uid)
+        if visibility is not None:
+            filters.append(ContentMaterialCategory.visibility == visibility)
+        return (await self.db.execute(select(ContentMaterialCategory).where(*filters))).scalar_one_or_none()
+
     async def list_child_categories(
         self,
         owner_uid: str,
@@ -262,6 +285,7 @@ class MaterialLibraryRepository:
         page_size: int,
         sort: str = "newest",
         scope: str | None = None,
+        category_owner_uid: str | None = None,
     ) -> tuple[list[tuple[ContentMaterialLibraryItem, ContentCoverAsset, ContentMaterialCategory]], int]:
         filters = [
             self.item_access(owner_uid),
@@ -275,6 +299,14 @@ class MaterialLibraryRepository:
             filters.append(ContentMaterialLibraryItem.category.in_(category_ids))
         elif category:
             filters.append(ContentMaterialLibraryItem.category == category)
+        if category_owner_uid is not None:
+            filters.append(
+                func.coalesce(
+                    ContentMaterialLibraryItem.category_owner_uid,
+                    ContentMaterialLibraryItem.owner_uid,
+                )
+                == category_owner_uid
+            )
         if status:
             filters.append(ContentMaterialLibraryItem.status == status)
         if query_text:
