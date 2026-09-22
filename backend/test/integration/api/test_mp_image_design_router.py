@@ -158,16 +158,21 @@ async def test_mp_results_and_task_files_remain_authenticated(test_client, mp_ac
     assert retry.status_code == 404, retry.text
 
 
-async def test_save_targets_offer_both_roots_and_reject_pc_token(test_client, admin_headers, mp_accounts):
+async def test_save_targets_offer_fixed_destinations_and_reject_pc_token(test_client, admin_headers, mp_accounts):
     pc = await test_client.get("/api/mp/image-design/save-targets", headers=admin_headers)
     assert pc.status_code == 401, pc.text
     response = await test_client.get("/api/mp/image-design/save-targets", headers=mp_accounts[0]["headers"])
     assert response.status_code == 200, response.text
     scopes = response.json()["scopes"]
     assert [item["scope"] for item in scopes] == ["private", "enterprise"]
-    assert all(item["can_write_root"] for item in scopes)
+    assert scopes[0]["can_write_root"] is True and scopes[0]["folders"] == []
+    assert scopes[1]["can_write_root"] is False
     assert all(
-        folder["id"] not in {"uncategorized", "enterprise-root"} for item in scopes for folder in item["folders"]
+        folder["name"] == "生图图库" and folder["parent_id"] is None for folder in scopes[1]["folders"]
+    )
+    assert all(
+        folder["id"] not in {"private-root", "uncategorized", "enterprise-root"}
+        for item in scopes for folder in item["folders"]
     )
 
 

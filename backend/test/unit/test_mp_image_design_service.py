@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from yuxi.image_design.mp_schemas import MpLibraryCreate
 
 from yuxi.storage.postgres.models_content import (
     ContentCoverAsset,
@@ -14,6 +15,7 @@ from yuxi.storage.postgres.models_content import (
     ContentMaterialLibraryItem,
     ImageDesignLibraryItem,
     ImageDesignMpDraft,
+    ImageDesignAnalysis,
 )
 
 
@@ -27,6 +29,7 @@ async def db():
             ContentMaterialLibraryItem,
             ImageDesignLibraryItem,
             ImageDesignMpDraft,
+            ImageDesignAnalysis,
         ):
             await connection.run_sync(model.__table__.create)
     async with async_sessionmaker(engine, expire_on_commit=False)() as session:
@@ -148,8 +151,8 @@ async def test_generated_material_entry_is_visible_in_image_design_library(db):
     category = ContentMaterialCategory(
         owner_uid="employee",
         material_type="image",
-        id="uncategorized",
-        name="未分类",
+        id="private-root",
+        name="我的素材（根目录）",
         visibility="private",
         is_system=True,
     )
@@ -193,6 +196,110 @@ async def test_generated_material_entry_is_visible_in_image_design_library(db):
     assert [(item["id"], item["source_role"], item["source_item_id"]) for item in items] == [
         (entry.id, "generated", material.id)
     ]
+
+
+async def test_hiding_library_reference_preserves_pc_asset_and_task_input_and_can_be_readded(db):
+    from yuxi.image_design.mp_service import (
+        add_library_item, remove_library_item, list_library, get_library_item_and_asset,
+    )
+    _, asset, material = await seed_material(db)
+    payload = MpLibraryCreate(source_library_item_id=material.id, source_role="reference")
+    entry = (await add_library_item(db, user(), payload))["item"]
+    with pytest.raises(HTTPException):
+        await remove_library_item(db, user("someone-else"), entry["id"])
+    await remove_library_item(db, user(), entry["id"])
+    await remove_library_item(db, user(), entry["id"])
+    assert (await list_library(db, user(), page=1, page_size=30))["total"] == 0
+    assert (await get_library_item_and_asset(db, user(), entry["id"]))[1].id == asset.id
+    assert material.deleted_at is None and asset.deleted_at is None
+    assert (await add_library_item(db, user(), payload))["item"]["id"] == entry["id"]
+    assert (await list_library(db, user(), page=1, page_size=30))["total"] == 1
+
+
+async def test_library_http_flow_preserves_pc_material_and_enforces_account_boundary(db):
+    import httpx
+    from fastapi import FastAPI
+    from server.routers.mp_image_design_router import mp_image_design
+    from server.utils.auth_middleware import get_db, get_mp_context
+
+    _, asset, material = await seed_material(db)
+    current = user()
+    app = FastAPI()
+    app.include_router(mp_image_design, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_mp_context] = lambda: SimpleNamespace(user=current)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        payload = {"source_library_item_id": material.id, "source_role": "reference"}
+        added = await client.post("/api/mp/image-design/library", json=payload)
+        assert added.status_code == 200, added.text
+        item_id = added.json()["item"]["id"]
+        listed = await client.get("/api/mp/image-design/library?page=1&page_size=1")
+        assert listed.status_code == 200 and listed.json()["total"] == 1
+        assert listed.json()["items"][0]["recognized_roles"] == []
+        current = user("someone-else")
+        assert (await client.delete(f"/api/mp/image-design/library/{item_id}")).status_code == 404
+        current = user()
+        assert (await client.delete(f"/api/mp/image-design/library/{item_id}")).status_code == 200
+        assert (await client.get("/api/mp/image-design/library")).json()["total"] == 0
+        assert material.deleted_at is None and asset.deleted_at is None
+        assert (await client.post("/api/mp/image-design/library", json=payload)).json()["item"]["id"] == item_id
+
+
+async def test_library_recognition_uses_current_owner_hash_schema_and_completed_role(db):
+    from yuxi.image_design.mp_service import add_library_item, list_library
+    from yuxi.image_design.schemas import ANALYSIS_SCHEMA_VERSION
+    _, asset, material = await seed_material(db)
+    await add_library_item(db, user(), MpLibraryCreate(source_library_item_id=material.id, source_role="reference"))
+    for number, (owner, sha, version, status, role) in enumerate([
+        ("employee", asset.sha256, ANALYSIS_SCHEMA_VERSION, "completed", "style_reference"),
+        ("other", asset.sha256, ANALYSIS_SCHEMA_VERSION, "completed", "structure_source"),
+        ("employee", "wrong-hash", ANALYSIS_SCHEMA_VERSION, "completed", "structure_source"),
+        ("employee", asset.sha256, 0, "completed", "structure_source"),
+        ("employee", asset.sha256, ANALYSIS_SCHEMA_VERSION, "failed", "structure_source"),
+    ]):
+        db.add(ImageDesignAnalysis(id=f"a{number}", owner_uid=owner, material_item_id=material.id,
+            asset_sha256=sha, schema_version=version, status=status, analysis_role=role,
+            model_spec="test-model", cache_key=f"key-{number}"))
+    await db.commit()
+    items = (await list_library(db, user(), page=1, page_size=30))["items"]
+    assert items[0]["recognized_roles"] == ["style_reference"]
+
+
+async def test_private_root_migration_preserves_normal_uncategorized_images(db):
+    from yuxi.repositories.material_library_repository import MaterialLibraryRepository
+    category, asset, ordinary = await seed_material(db, visibility="private")
+    category.owner_uid = "employee"
+    category.id = "uncategorized"
+    ordinary.owner_uid = "employee"
+    ordinary.category_owner_uid = "employee"
+    ordinary.category = "uncategorized"
+    extra_assets = [ContentCoverAsset(id=f"asset-{key}", owner_uid="employee", role="output",
+        original_file_name=f"{key}.png", content_type="image/png", file_size=10, image_width=32,
+        image_height=32, sha256=key * 64, bucket_name="test", object_name=f"{key}.png") for key in ['c', 'd']]
+    db.add_all(extra_assets)
+    await db.flush()
+    generated = ContentMaterialLibraryItem(id="old-root", owner_uid="employee", asset_id=extra_assets[0].id,
+        material_type="image", category="uncategorized", category_owner_uid="employee", display_name="Generated",
+        metadata_json={"source": "image_design", "resolved_save_target": {"scope": "private", "gallery_id": None}})
+    explicit_folder = ContentMaterialLibraryItem(
+        id="explicit-folder", owner_uid="employee", asset_id=extra_assets[1].id,
+        material_type="image", category="uncategorized", category_owner_uid="employee", display_name="Explicit",
+        metadata_json={"source": "image_design", "resolved_save_target": {
+            "scope": "private", "gallery_id": "uncategorized"}})
+    entry = ImageDesignLibraryItem(id="old-library", owner_uid="employee", asset_id=extra_assets[0].id,
+        source_material_item_id=generated.id, source_gallery_id="uncategorized", source_role="generated")
+    db.add_all([generated, explicit_folder, entry])
+    await db.commit()
+    repo = MaterialLibraryRepository(db)
+    await repo.migrate_generated_private_root("employee", "private-root")
+    await repo.migrate_generated_private_root("employee", "private-root")
+    assert generated.category == "private-root" and entry.source_gallery_id == "private-root"
+    assert ordinary.category == explicit_folder.category == "uncategorized"
+    generated.category = "uncategorized"  # A later explicit move must not be migrated again.
+    explicit_folder.metadata_json = {"source": "image_design", "resolved_save_target": {"scope": "private"}}
+    await db.flush()
+    await repo.migrate_generated_private_root("employee", "private-root")
+    assert generated.category == explicit_folder.category == "uncategorized"
 
 
 @pytest.mark.parametrize(("visibility", "status"), [("private", "enabled"), ("enterprise", "disabled")])

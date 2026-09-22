@@ -7,7 +7,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.image_design import mp_service
 from yuxi.image_design.mp_schemas import MpDraftsUpdate, MpLibraryCreate, MpPolishCreate, MpTaskCreate
-from yuxi.image_design.save_targets import list_writable_save_targets
+from yuxi.image_design.save_targets import list_mp_save_targets
 from yuxi.services.mp_service import MpContext
 
 from server.utils.auth_middleware import get_db, get_mp_context
@@ -31,7 +31,7 @@ async def save_drafts(
 
 @mp_image_design.get("/save-targets")
 async def save_targets(ctx: MpContext = Depends(get_mp_context), db: AsyncSession = Depends(get_db)):
-    result = await list_writable_save_targets(db, ctx.user)
+    result = await list_mp_save_targets(db, ctx.user)
     await db.commit()
     return result
 
@@ -63,6 +63,15 @@ async def upload_image(
     db: AsyncSession = Depends(get_db),
 ):
     return await mp_service.upload_image(db, ctx.user, file, role=role)
+
+
+@mp_image_design.delete("/library/{item_id}")
+async def remove_library_item(
+    item_id: str,
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await mp_service.remove_library_item(db, ctx.user, item_id)
 
 
 @mp_image_design.get("/library/{item_id}/file")

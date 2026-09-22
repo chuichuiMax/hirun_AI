@@ -11,7 +11,7 @@ from yuxi.repositories.material_library_repository import MaterialLibraryReposit
 from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import ContentMaterialCategory
 
-PRIVATE_ROOT_CATEGORY_ID = "uncategorized"
+PRIVATE_ROOT_CATEGORY_ID = "private-root"
 ENTERPRISE_ROOT_CATEGORY_ID = "enterprise-root"
 ENTERPRISE_ROOT_OWNER_UID = "system:material-library"
 
@@ -63,7 +63,7 @@ async def ensure_scope_root(
         category_id = PRIVATE_ROOT_CATEGORY_ID
         visibility = "private"
         tenant_id = str(user.department_id) if user.department_id is not None else None
-        name = "未分类"
+        name = "我的素材（根目录）"
         description = "图片设计生成结果的个人根目录"
     else:
         owner_uid = ENTERPRISE_ROOT_OWNER_UID
@@ -100,6 +100,8 @@ async def ensure_scope_root(
     )
     if category is None or not is_storage_root(category) or not can_contribute_to_category(user, category):
         raise _save_target_error("IMAGE_DESIGN_SAVE_TARGET_INVALID", "保存根目录不可用")
+    if scope == "private":
+        await repo.migrate_generated_private_root(requester_uid, category.id)
     return category
 
 
@@ -196,3 +198,47 @@ async def list_writable_save_targets(db, user: User) -> dict[str, list[dict[str,
             }
         )
     return {"scopes": scopes}
+
+
+async def list_mp_save_targets(db, user: User) -> dict:
+    """Two fixed destinations; never infer a shared root from a missing gallery."""
+    await ensure_scope_root(db, user, "private")
+    categories = await MaterialLibraryRepository(db, include_shared=True).list_categories(str(user.uid), "image")
+    galleries = [
+        category
+        for category in categories
+        if category.visibility == "enterprise"
+        and category.parent_id is None
+        and category.name == "生图图库"
+        and can_contribute_to_category(user, category)
+    ]
+    gallery = galleries[0] if len(galleries) == 1 else None
+    error = "" if gallery else ("存在多个企业生图图库，请联系管理员确认" if galleries else "企业生图图库不存在或不可用")
+    return {
+        "scopes": [
+            {"scope": "private", "label": "我的素材", "can_write_root": True, "folders": []},
+            {
+                "scope": "enterprise",
+                "label": "企业共享",
+                "can_write_root": False,
+                "error": error,
+                "folders": [{"id": gallery.id, "name": "生图图库", "path": "生图图库", "parent_id": None}]
+                if gallery
+                else [],
+            },
+        ]
+    }
+
+
+async def validate_mp_save_target(db, user: User, target: ImageDesignSaveTarget) -> None:
+    if target.scope == "private" and target.gallery_id is None:
+        await ensure_scope_root(db, user, "private")
+        return
+    scopes = (await list_mp_save_targets(db, user))["scopes"]
+    enterprise = scopes[1]
+    if target.scope == "enterprise" and any(folder["id"] == target.gallery_id for folder in enterprise["folders"]):
+        return
+    raise _save_target_error(
+        "IMAGE_DESIGN_SAVE_TARGET_INVALID",
+        enterprise["error"] or "请选择我的素材或企业共享 / 生图图库",
+    )

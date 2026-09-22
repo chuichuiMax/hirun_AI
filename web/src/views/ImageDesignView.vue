@@ -35,6 +35,8 @@ const resultDetail = ref(null)
 const detailReferenceUrl = ref('')
 const detailRawRoomUrl = ref('')
 const loadingGallery = ref(false)
+const privateRootCategoryId = 'private-root'
+const privateRootGallery = { id: privateRootCategoryId, name: '我的素材', visibility: 'private', parent_id: null }
 const refinedPromptDraft = ref('')
 const refinedPromptDirty = ref(false)
 const polling = new Map()
@@ -253,7 +255,7 @@ async function retryAnalysis(material, role) {
 
 async function loadGalleries() {
   const response = await materialLibraryApi.listGalleries()
-  galleries.value = response.galleries || []
+  galleries.value = [privateRootGallery, ...(response.galleries || [])]
   activeGallery.value = galleries.value.find((item) => (item.count || item.direct_count || 0) > 0)?.id || galleries.value[0]?.id || ''
   await refreshGallery()
 }
@@ -264,7 +266,16 @@ async function refreshGallery() {
   if (!activeGallery.value) return
   loadingGallery.value = true
   try {
-    const response = await materialLibraryApi.listItems({ material_type: 'image', category: activeGallery.value, status: 'enabled', page: 1, page_size: 24, sort: 'newest' })
+    const response = await materialLibraryApi.listItems({
+      material_type: 'image',
+      ...(activeGallery.value === privateRootCategoryId
+        ? { scope: 'private', root_only: true }
+        : { category: activeGallery.value }),
+      status: 'enabled',
+      page: 1,
+      page_size: 24,
+      sort: 'newest'
+    })
     galleryItems.value = response.items || []
     const urls = {}
     await Promise.all(galleryItems.value.map(async (item) => {

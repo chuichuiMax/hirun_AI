@@ -93,6 +93,15 @@ const previewUrls = new Map()
 let previewGeneration = 0
 const maxUploadBytes = 100 * 1024 * 1024
 const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const privateRootCategoryId = 'private-root'
+const privateRootOption = {
+  id: privateRootCategoryId,
+  code: privateRootCategoryId,
+  name: '我的素材',
+  description: '直接保存在我的素材一级',
+  visibility: 'private',
+  parent_id: null
+}
 
 const categoryMap = computed(() => Object.fromEntries(categories.value.map((item) => [item.code, item])))
 const currentGallery = computed(() => categoryMap.value[activeGallery.value])
@@ -103,12 +112,19 @@ const orderedCategories = computed(() => {
   const roots = categories.value.filter((item) => !item.parent_id)
   return roots.flatMap((root) => [root, ...categories.value.filter((item) => item.parent_id === root.id)])
 })
-const uploadCategories = computed(() => orderedCategories.value.filter((item) => (item.visibility || 'private') === (currentGallery.value?.visibility || materialScope.value)))
+const scopedCategories = computed(() => orderedCategories.value.filter(
+  (item) => (item.visibility || 'private') === (currentGallery.value?.visibility || materialScope.value)
+))
+const uploadCategories = computed(() => (
+  materialType.value === 'image' && (currentGallery.value?.visibility || materialScope.value) === 'private'
+    ? [privateRootOption, ...scopedCategories.value]
+    : scopedCategories.value
+))
 const editLocationOptions = computed(() => {
   const scope = currentGallery.value?.visibility || materialScope.value
   return [
     { target: { scope, gallery_id: null }, label: scope === 'enterprise' ? '企业共享' : '我的素材' },
-    ...uploadCategories.value.map((folder) => ({
+    ...scopedCategories.value.map((folder) => ({
       target: { scope, gallery_id: folder.id }, label: categoryOptionLabel(folder)
     }))
   ]
@@ -122,7 +138,15 @@ const uploadProgressText = computed(() => {
   }
   return ''
 })
-const deleteTargetOptions = computed(() => categories.value.filter((item) => item.id !== deletingCategory.value?.id && (deletingCategory.value?.visibility !== 'enterprise' || item.visibility === 'enterprise')))
+const deleteTargetOptions = computed(() => {
+  const options = categories.value.filter(
+    (item) => item.id !== deletingCategory.value?.id
+      && (deletingCategory.value?.visibility !== 'enterprise' || item.visibility === 'enterprise')
+  )
+  return materialType.value === 'image' && deletingCategory.value?.visibility === 'private'
+    ? [privateRootOption, ...options]
+    : options
+})
 const decorationGalleryStyles = [
   '复合写意', '写意木构', '江南印象', '轻欧简美', '欧美香颂', '新装饰主义', '北欧之光',
   '意境东方', '雅致现代', '优雅缤纷', '极简侘寂', '复古风潮', '艺术室界'
@@ -296,7 +320,10 @@ function askDeleteCategory(category) {
     return message.warning('该一级图库仍有二级图库，请先移动或删除二级图库')
   }
   deletingCategory.value = category
-  deleteTargetCategory.value = category.parent_id || categories.value.find((item) => item.is_system)?.id || ''
+  deleteTargetCategory.value = category.parent_id
+    || (materialType.value === 'image' && category.visibility === 'private'
+      ? privateRootCategoryId
+      : categories.value.find((item) => item.is_system)?.id || '')
   deleteCategoryOpen.value = true
 }
 
@@ -702,8 +729,8 @@ async function uploadFiles() {
     const uploadedTo = response?.items?.[0]?.category || uploadCategory.value
     resetUpload()
     page.value = 1
-    if (materialType.value === 'image' && activeGallery.value !== uploadedTo) {
-      activeGallery.value = uploadedTo
+    if (materialType.value === 'image') {
+      activeGallery.value = uploadedTo === privateRootCategoryId ? '' : uploadedTo
     }
     await loadItems()
     if (materialType.value === 'cover_template' && pendingReviewTemplates.value.length) {
@@ -1003,7 +1030,7 @@ onBeforeUnmount(releasePreviews)
         </div>
 
         <div v-if="isGalleryRoot || items.length || isTopLevelGallery" class="material-section current-gallery-section">
-          <h3 v-if="isGalleryRoot">直接保存在{{ materialScope === 'enterprise' ? '企业共享' : '我的素材' }}中的图片</h3>
+          <h3 v-if="isGalleryRoot">{{ materialScope === 'enterprise' ? '企业共享中的图片' : '我的素材图片' }}</h3>
           <h3 v-else-if="isTopLevelGallery">当前图库图片</h3>
           <div :class="materialType === 'image' ? 'image-grid' : 'poster-wall'">
           <article v-for="item in (isGalleryRoot ? rootItems : items)" :key="item.id" class="material-card" :class="{ poster: materialType === 'cover_template', 'is-share-selected': selectedShareOrder(item.id) }">
@@ -1091,7 +1118,7 @@ onBeforeUnmount(releasePreviews)
           <a-progress :percent="uploadProgress.percent" status="active" :show-info="true" />
           <small>{{ uploadProgressText }}</small>
         </div>
-        <label><span>分类 <b>*</b></span><a-select v-model:value="uploadCategory" placeholder="请选择一个明确分类" :disabled="uploading">
+        <label><span>{{ materialType === 'image' ? '保存位置' : '分类' }} <b>*</b></span><a-select v-model:value="uploadCategory" :placeholder="materialType === 'image' ? '请选择保存位置' : '请选择一个明确分类'" :disabled="uploading">
           <a-select-option v-for="item in uploadCategories" :key="item.code" :value="item.code"><strong>{{ categoryOptionLabel(item) }}</strong> — {{ item.description }}</a-select-option>
         </a-select></label>
         <label v-if="isDecorationUpload"><span>设计风格 <b>*</b></span>

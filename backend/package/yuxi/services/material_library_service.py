@@ -28,6 +28,7 @@ from yuxi.image_design.save_targets import (
 )
 from yuxi.image_design.schemas import ImageDesignSaveTarget
 from yuxi.services.material_library_categories import (
+    DEFAULT_IMAGE_CATEGORY_IDS,
     list_material_categories,
     resolve_legacy_category,
 )
@@ -460,24 +461,22 @@ async def ensure_material_categories(
     material_type: Literal["image", "cover_template"],
 ) -> list[ContentMaterialCategory]:
     repo = MaterialLibraryRepository(db)
+    await repo.ensure_default_categories(
+        [
+            {
+                "owner_uid": owner_uid,
+                "id": definition["code"],
+                "tenant_id": tenant_id,
+                "material_type": material_type,
+                "name": definition["name"],
+                "description": definition["description"],
+                "sort_order": index * 10,
+                "is_system": definition["code"] == "uncategorized",
+            }
+            for index, definition in enumerate(list_material_categories(material_type))
+        ]
+    )
     categories = await repo.list_categories(owner_uid, material_type)
-    if not categories:
-        await repo.ensure_default_categories(
-            [
-                {
-                    "owner_uid": owner_uid,
-                    "id": definition["code"],
-                    "tenant_id": tenant_id,
-                    "material_type": material_type,
-                    "name": definition["name"],
-                    "description": definition["description"],
-                    "sort_order": index * 10,
-                    "is_system": definition["code"] == "uncategorized",
-                }
-                for index, definition in enumerate(list_material_categories(material_type))
-            ]
-        )
-        categories = await repo.list_categories(owner_uid, material_type)
     fallback = next(
         category
         for category in categories
@@ -999,6 +998,10 @@ async def list_material_items(
     root = await ensure_scope_root(db, user, scope) if root_only else None
     repo = MaterialLibraryRepository(db, include_shared=True)
     category_ids = None
+    if root is not None:
+        category_ids = [root.id]
+        if scope == "private":
+            category_ids.extend(sorted(DEFAULT_IMAGE_CATEGORY_IDS))
     if resolved_category is not None and include_descendants:
         children = await repo.list_child_categories(
             resolved_category.owner_uid,
@@ -1009,7 +1012,7 @@ async def list_material_items(
     rows, total = await repo.list_items(
         _owner_uid(user),
         material_type=material_type,
-        category=root.id if root else (resolved_category.id if resolved_category else None),
+        category=resolved_category.id if resolved_category and category_ids is None else None,
         category_ids=category_ids,
         category_owner_uid=root.owner_uid if root else None,
         status=status,
@@ -1110,6 +1113,9 @@ async def update_material_item(
             material_type=item.material_type,
             category_id=item.category,
         )
+    if ("location" in changes or "category" in changes) and (item.metadata_json or {}).get("source") == "image_design":
+        # Explicit moves must not be undone by the legacy private-root migration.
+        item.metadata_json = {**item.metadata_json, "save_target_version": 2}
     if "status" in changes:
         item.status = changes["status"]
     item.updated_at = utc_now_naive()
@@ -1129,7 +1135,13 @@ async def update_material_item(
     return {"item": {**serialize_item(item, asset, item_category, poster), "can_manage": True}}
 
 
-async def get_material_categories(db: AsyncSession, user: User, material_type: str) -> dict[str, Any]:
+async def get_material_categories(
+    db: AsyncSession,
+    user: User,
+    material_type: str,
+    *,
+    include_private_defaults: bool = True,
+) -> dict[str, Any]:
     if material_type not in {"image", "cover_template"}:
         raise _error(422, "MATERIAL_TYPE_INVALID", "素材类型不存在")
     repo = MaterialLibraryRepository(db, include_shared=True)
@@ -1143,6 +1155,13 @@ async def get_material_categories(db: AsyncSession, user: User, material_type: s
         category
         for category in await repo.list_categories(_owner_uid(user), material_type)
         if not is_storage_root(category)
+        and (
+            include_private_defaults
+            or material_type != "image"
+            or category.visibility != "private"
+            or category.owner_uid != _owner_uid(user)
+            or category.id not in DEFAULT_IMAGE_CATEGORY_IDS
+        )
     ]
     industry_catalog = await _industry_catalog(db)
     parents = {category.id: category for category in categories if category.parent_id is None}
@@ -1391,7 +1410,11 @@ async def delete_material_category(
     children = await repo.list_child_categories(_owner_uid(user), material_type, category.id)
     if children:
         raise _error(409, "MATERIAL_CATEGORY_HAS_CHILDREN", "一级图库仍有二级图库，请先移动或删除二级图库")
-    fallback = next(item for item in categories if item.is_system)
+    fallback = (
+        await ensure_scope_root(db, user, "private")
+        if material_type == "image" and category.visibility == "private"
+        else next(item for item in categories if item.is_system)
+    )
     target_id = payload.target_category_id or fallback.id
     if target_id == category.id:
         raise _error(422, "MATERIAL_CATEGORY_TARGET_INVALID", "迁移目标不能是当前图库或分类")
@@ -1412,7 +1435,13 @@ async def delete_material_category(
     return {"success": True, "id": category.id, "moved": moved, "target_category_id": target.id}
 
 
-async def list_image_galleries(db: AsyncSession, user: User, industry_slug: str | None = None) -> dict[str, Any]:
+async def list_image_galleries(
+    db: AsyncSession,
+    user: User,
+    industry_slug: str | None = None,
+    *,
+    include_private_defaults: bool = True,
+) -> dict[str, Any]:
     categories = await ensure_material_categories(
         db,
         owner_uid=_owner_uid(user),
@@ -1421,7 +1450,15 @@ async def list_image_galleries(db: AsyncSession, user: User, industry_slug: str 
     )
     repo = MaterialLibraryRepository(db, include_shared=True)
     categories = [
-        category for category in await repo.list_categories(_owner_uid(user), "image") if not is_storage_root(category)
+        category
+        for category in await repo.list_categories(_owner_uid(user), "image")
+        if not is_storage_root(category)
+        and (
+            include_private_defaults
+            or category.visibility != "private"
+            or category.owner_uid != _owner_uid(user)
+            or category.id not in DEFAULT_IMAGE_CATEGORY_IDS
+        )
     ]
     raw = await repo.category_summaries(_owner_uid(user), material_type="image")
     industry_catalog = await _industry_catalog(db)

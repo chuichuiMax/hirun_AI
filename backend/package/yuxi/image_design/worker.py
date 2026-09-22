@@ -15,7 +15,7 @@ from sqlalchemy import select
 from yuxi.content_cover.image2_client import Image2Client, Image2Error
 from yuxi.content_cover.image2_settings import resolve_image2_config
 from yuxi.content_cover.schemas import Image2Input, Image2Request, Image2Submission
-from yuxi.image_design.save_targets import ResolvedSaveTarget, resolve_writable_save_target
+from yuxi.image_design.save_targets import ResolvedSaveTarget, resolve_writable_save_target, validate_mp_save_target
 from yuxi.image_design.schemas import ImageDesignSaveTarget
 from yuxi.image_design.service import resolve_image_input
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
@@ -168,7 +168,7 @@ async def _ensure_generated_library_item(db, *, user, asset, material_item):
     return entry
 
 
-async def attach_generated_asset(db, *, user, asset, requested, job_id, workflow):
+async def attach_generated_asset(db, *, user, asset, requested, job_id, workflow, mp_fixed_target=False):
     """Attach in the caller's transaction, retaining a completed attachment on retry."""
     existing = await MaterialLibraryRepository(db, include_shared=True).get_item_by_asset(asset.id)
     if existing is not None:
@@ -199,9 +199,14 @@ async def attach_generated_asset(db, *, user, asset, requested, job_id, workflow
         allow_fallback = category is None
     else:
         allow_fallback = False
-    resolved = await resolve_writable_save_target(db, user, requested, fallback_invalid_folder=allow_fallback)
+    if mp_fixed_target:
+        await validate_mp_save_target(db, user, requested)
+    resolved = await resolve_writable_save_target(
+        db, user, requested, fallback_invalid_folder=allow_fallback and not mp_fixed_target,
+    )
     metadata = {
         "source": "image_design",
+        "save_target_version": 2,
         "image_design_job_id": job_id,
         "workflow": workflow,
         "requested_save_target": requested.model_dump(mode="json"),
@@ -254,6 +259,8 @@ async def process_image_design_job(ctx: dict[str, Any], job_id: str) -> None:
                 )
                 if user is None:
                     raise Image2Error("IMAGE_DESIGN_OWNER_NOT_FOUND", "图片设计任务所属用户不存在")
+                if request.get("mp_fixed_target"):
+                    await validate_mp_save_target(db, user, requested)
             material_ids = list(request.get("material_ids") or [])
             inputs = [await _load_material_input(db, job.owner_uid, material_id) for material_id in material_ids]
             image2_config = await resolve_image2_config(db, owner_uid=job.owner_uid)
@@ -357,6 +364,7 @@ async def process_image_design_job(ctx: dict[str, Any], job_id: str) -> None:
                             requested=requested,
                             job_id=job_id,
                             workflow=job.workflow,
+                            mp_fixed_target=request.get("mp_fixed_target", False),
                         )
                         asset_ids.append(asset.id)
                         library_item_ids.append(item.id)
