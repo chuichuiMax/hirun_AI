@@ -12,6 +12,11 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from yuxi.storage.postgres.models_business import Department, OperationLog, User
+from yuxi.storage.postgres.models_content import (
+    ContentCoverAsset,
+    ContentMaterialCategory,
+    ContentMaterialLibraryItem,
+)
 from yuxi.utils.auth_utils import AuthUtils
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
@@ -74,7 +79,13 @@ async def material_users(test_client):
         assert login.status_code == 200, login.text
         headers.append({"Authorization": f"Bearer {login.json()['access_token']}"})
     try:
-        yield {"owner": headers[0], "other": headers[1]}
+        yield {
+            "owner": headers[0],
+            "other": headers[1],
+            "owner_uid": credentials[0],
+            "other_uid": credentials[1],
+            "department_id": str(department_id),
+        }
     finally:
         async with session_factory() as db:
             from yuxi.storage.postgres.models_content import ContentMaterialCategory, ContentMaterialShare
@@ -84,6 +95,230 @@ async def material_users(test_client):
             await db.execute(delete(OperationLog).where(OperationLog.user_id.in_(user_ids)))
             await db.execute(delete(User).where(User.id.in_(user_ids)))
             await db.execute(delete(Department).where(Department.id == department_id))
+            await db.commit()
+        await engine.dispose()
+
+
+async def _seed_image_library_item(
+    db,
+    *,
+    owner_uid: str,
+    tenant_id: str,
+    category_owner_uid: str,
+    category_id: str,
+    visibility: str,
+    is_system: bool = False,
+    use_legacy_category_owner: bool = False,
+) -> ContentMaterialLibraryItem:
+    category = await db.get(ContentMaterialCategory, (category_owner_uid, "image", category_id))
+    if category is None:
+        db.add(
+            ContentMaterialCategory(
+                owner_uid=category_owner_uid,
+                material_type="image",
+                id=category_id,
+                tenant_id=tenant_id if visibility == "private" else None,
+                visibility=visibility,
+                industry_slug="uncategorized",
+                name=f"pytest-{category_id}",
+                description="",
+                is_system=is_system,
+            )
+        )
+    asset_id = f"pytest-root-asset-{uuid.uuid4().hex}"
+    item = ContentMaterialLibraryItem(
+        id=f"pytest-root-item-{uuid.uuid4().hex}",
+        owner_uid=owner_uid,
+        tenant_id=tenant_id,
+        asset_id=asset_id,
+        material_type="image",
+        display_name=f"pytest-root-{uuid.uuid4().hex}",
+        category_owner_uid=None if use_legacy_category_owner else category_owner_uid,
+        category=category_id,
+        tags_json=[],
+        status="enabled",
+        metadata_json={},
+    )
+    db.add(
+        ContentCoverAsset(
+            id=asset_id,
+            owner_uid=owner_uid,
+            tenant_id=tenant_id,
+            role="material_image",
+            original_file_name=f"{asset_id}.png",
+            content_type="image/png",
+            file_size=1,
+            image_width=1,
+            image_height=1,
+            sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+            bucket_name="image",
+            object_name=f"pytest/{asset_id}.png",
+            metadata_json={},
+        )
+    )
+    db.add(item)
+    await db.flush()
+    return item
+
+
+async def test_root_only_lists_only_scope_roots_and_hides_them_from_galleries(test_client, material_users):
+    engine = create_async_engine(os.environ["POSTGRES_URL"])
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as db:
+        private = await _seed_image_library_item(
+            db,
+            owner_uid=material_users["owner_uid"],
+            tenant_id=material_users["department_id"],
+            category_owner_uid=material_users["owner_uid"],
+            category_id="uncategorized",
+            visibility="private",
+            is_system=True,
+        )
+        private_gallery = await _seed_image_library_item(
+            db,
+            owner_uid=material_users["owner_uid"],
+            tenant_id=material_users["department_id"],
+            category_owner_uid=material_users["owner_uid"],
+            category_id=f"pytest-private-gallery-{uuid.uuid4().hex}",
+            visibility="private",
+        )
+        legacy_private_root = await _seed_image_library_item(
+            db,
+            owner_uid=material_users["owner_uid"],
+            tenant_id=material_users["department_id"],
+            category_owner_uid=material_users["owner_uid"],
+            category_id="uncategorized",
+            visibility="private",
+            is_system=True,
+            use_legacy_category_owner=True,
+        )
+        enterprise = await _seed_image_library_item(
+            db,
+            owner_uid=material_users["owner_uid"],
+            tenant_id=material_users["department_id"],
+            category_owner_uid="system:material-library",
+            category_id="enterprise-root",
+            visibility="enterprise",
+            is_system=True,
+        )
+        enterprise_gallery = await _seed_image_library_item(
+            db,
+            owner_uid=material_users["owner_uid"],
+            tenant_id=material_users["department_id"],
+            category_owner_uid="system:material-library",
+            category_id=f"pytest-enterprise-gallery-{uuid.uuid4().hex}",
+            visibility="enterprise",
+        )
+        await db.commit()
+
+    try:
+        missing_scope = await test_client.get(
+            "/api/material-library/items?material_type=image&root_only=true",
+            headers=material_users["owner"],
+        )
+        assert missing_scope.status_code == 422, missing_scope.text
+
+        non_image = await test_client.get(
+            "/api/material-library/items?material_type=cover_template&scope=private&root_only=true",
+            headers=material_users["owner"],
+        )
+        assert non_image.status_code == 422, non_image.text
+
+        private_response = await test_client.get(
+            "/api/material-library/items?material_type=image&scope=private&root_only=true",
+            headers=material_users["owner"],
+        )
+        assert private_response.status_code == 200, private_response.text
+        assert {item["id"] for item in private_response.json()["items"]} == {private.id, legacy_private_root.id}
+
+        enterprise_response = await test_client.get(
+            "/api/material-library/items?material_type=image&scope=enterprise&root_only=true",
+            headers=material_users["other"],
+        )
+        assert enterprise_response.status_code == 200, enterprise_response.text
+        assert [item["id"] for item in enterprise_response.json()["items"]] == [enterprise.id]
+
+        galleries = await test_client.get("/api/material-library/galleries", headers=material_users["owner"])
+        assert galleries.status_code == 200, galleries.text
+        gallery_ids = {item["id"] for item in galleries.json()["galleries"]}
+        assert {private_gallery.category, enterprise_gallery.category} <= gallery_ids
+        assert {"uncategorized", "enterprise-root"}.isdisjoint(gallery_ids)
+    finally:
+        async with session_factory() as db:
+            item_ids = [private.id, private_gallery.id, legacy_private_root.id, enterprise.id, enterprise_gallery.id]
+            asset_ids = [
+                private.asset_id,
+                private_gallery.asset_id,
+                legacy_private_root.asset_id,
+                enterprise.asset_id,
+                enterprise_gallery.asset_id,
+            ]
+            await db.execute(delete(ContentMaterialLibraryItem).where(ContentMaterialLibraryItem.id.in_(item_ids)))
+            await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.id.in_(asset_ids)))
+            await db.execute(
+                delete(ContentMaterialCategory).where(
+                    ContentMaterialCategory.owner_uid == material_users["owner_uid"],
+                    ContentMaterialCategory.id == private_gallery.category,
+                )
+            )
+            await db.execute(
+                delete(ContentMaterialCategory).where(
+                    ContentMaterialCategory.owner_uid == "system:material-library",
+                    ContentMaterialCategory.id == enterprise_gallery.category,
+                )
+            )
+            await db.commit()
+        await engine.dispose()
+
+
+async def test_item_location_moves_to_root_and_rejects_legacy_category_ambiguity(test_client, material_users):
+    engine = create_async_engine(os.environ["POSTGRES_URL"])
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as db:
+        item = await _seed_image_library_item(
+            db,
+            owner_uid=material_users["owner_uid"],
+            tenant_id=material_users["department_id"],
+            category_owner_uid=material_users["owner_uid"],
+            category_id=f"pytest-move-gallery-{uuid.uuid4().hex}",
+            visibility="private",
+        )
+        await db.commit()
+
+    try:
+        ambiguous = await test_client.patch(
+            f"/api/material-library/items/{item.id}",
+            headers=material_users["owner"],
+            json={
+                "category": "product",
+                "location": {"scope": "private", "gallery_id": None},
+            },
+        )
+        assert ambiguous.status_code == 422, ambiguous.text
+
+        moved = await test_client.patch(
+            f"/api/material-library/items/{item.id}",
+            headers=material_users["owner"],
+            json={"location": {"scope": "private", "gallery_id": None}},
+        )
+        assert moved.status_code == 200, moved.text
+
+        roots = await test_client.get(
+            "/api/material-library/items?material_type=image&scope=private&root_only=true",
+            headers=material_users["owner"],
+        )
+        assert roots.status_code == 200, roots.text
+        assert item.id in {entry["id"] for entry in roots.json()["items"]}
+    finally:
+        async with session_factory() as db:
+            await db.execute(delete(ContentMaterialLibraryItem).where(ContentMaterialLibraryItem.id == item.id))
+            await db.execute(delete(ContentCoverAsset).where(ContentCoverAsset.id == item.asset_id))
+            await db.execute(
+                delete(ContentMaterialCategory).where(
+                    ContentMaterialCategory.owner_uid == material_users["owner_uid"],
+                    ContentMaterialCategory.id == item.category,
+                )
+            )
             await db.commit()
         await engine.dispose()
 
@@ -348,7 +583,8 @@ async def test_image_gallery_supports_exactly_one_nested_level(test_client, mate
         )
         assert decoration_response.status_code == 200, decoration_response.text
         decoration_ids = {entry["id"] for entry in decoration_response.json()["galleries"]}
-        assert {parent["id"], child["id"], "uncategorized"} <= decoration_ids
+        assert {parent["id"], child["id"]} <= decoration_ids
+        assert "uncategorized" not in decoration_ids  # Root images have their own root_only listing.
 
         changed = await test_client.patch(
             f"/api/material-library/categories/{parent['id']}?material_type=image",

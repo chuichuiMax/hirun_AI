@@ -1441,6 +1441,34 @@ class ContentReviewRecord(Base):
     created_at = Column(DateTime, default=utc_now_naive)
 
 
+class ImageDesignMpDraft(Base):
+    __tablename__ = "image_design_mp_drafts"
+
+    owner_uid = Column(String(255), primary_key=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    drafts_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+
+class ImageDesignLibraryItem(Base):
+    __tablename__ = "image_design_library_items"
+
+    id = Column(String(64), primary_key=True)
+    owner_uid = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=True, index=True)
+    asset_id = Column(String(64), ForeignKey("content_cover_assets.id", ondelete="CASCADE"), nullable=False)
+    source_material_item_id = Column(String(64), nullable=True, index=True)
+    source_gallery_id = Column(String(64), nullable=True)
+    source_role = Column(String(32), nullable=False)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False, index=True)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("owner_uid", "asset_id", name="uq_image_design_library_owner_asset"),
+    )
+
+
 class ImageDesignClient(Base):
     """图片设计客户档案；输入图片仍归属素材库，任务和结果按客户归档。"""
 

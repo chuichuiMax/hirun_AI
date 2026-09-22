@@ -43,6 +43,9 @@ const activeGallery = ref('')
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
+const rootItems = ref([])
+const rootTotal = ref(0)
+const rootPage = ref(1)
 const queryInput = ref('')
 const query = ref('')
 const designStyleFilter = ref('')
@@ -62,7 +65,7 @@ const ocrReviewItem = ref(null)
 const pendingReviewTemplates = ref([])
 const editOpen = ref(false)
 const editingItem = ref(null)
-const editForm = reactive({ name: '', category: '' })
+const editForm = reactive({ name: '', category: '', location: null })
 const categoryEditorOpen = ref(false)
 const categorySaving = ref(false)
 const categoryEditorMode = ref('create')
@@ -87,6 +90,7 @@ const shareOpen = ref(false)
 const shareCreating = ref(false)
 const shareUrlForManualCopy = ref('')
 const previewUrls = new Map()
+let previewGeneration = 0
 const maxUploadBytes = 100 * 1024 * 1024
 const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp'])
 
@@ -100,6 +104,15 @@ const orderedCategories = computed(() => {
   return roots.flatMap((root) => [root, ...categories.value.filter((item) => item.parent_id === root.id)])
 })
 const uploadCategories = computed(() => orderedCategories.value.filter((item) => (item.visibility || 'private') === (currentGallery.value?.visibility || materialScope.value)))
+const editLocationOptions = computed(() => {
+  const scope = currentGallery.value?.visibility || materialScope.value
+  return [
+    { target: { scope, gallery_id: null }, label: scope === 'enterprise' ? '企业共享' : '我的素材' },
+    ...uploadCategories.value.map((folder) => ({
+      target: { scope, gallery_id: folder.id }, label: categoryOptionLabel(folder)
+    }))
+  ]
+})
 const uploadFileLimit = computed(() => materialType.value === 'image' ? 50 : 100)
 const selectedFilesTotalBytes = computed(() => selectedFiles.value.reduce((sum, file) => sum + file.size, 0))
 const uploadProgressText = computed(() => {
@@ -169,13 +182,16 @@ const createCategoryTitle = computed(() => {
 })
 
 function releasePreviews() {
+  previewGeneration += 1
   previewUrls.forEach((url) => URL.revokeObjectURL(url))
   previewUrls.clear()
 }
 
-async function blobPreview(id, key = id) {
+async function blobPreview(id, key = id, generation = previewGeneration) {
   const response = await materialLibraryApi.getItemThumbnail(id)
-  const url = URL.createObjectURL(await response.blob())
+  const blob = await response.blob()
+  if (generation !== previewGeneration) return ''
+  const url = URL.createObjectURL(blob)
   previewUrls.set(key, url)
   return url
 }
@@ -267,7 +283,7 @@ async function saveCategory() {
     }
     categoryEditorOpen.value = false
     await loadCategories()
-    if (materialType.value === 'image') await loadGalleries()
+    if (materialType.value === 'image') await loadItems()
   } catch (error) {
     message.error(error.message || '保存失败，请稍后重试')
   } finally {
@@ -309,52 +325,101 @@ async function confirmDeleteCategory() {
 }
 
 async function loadGalleries() {
-  loading.value = true
+  const generation = previewGeneration
   try {
     const response = await materialLibraryApi.listGalleries()
-    releasePreviews()
-    industries.value = response.industries || []
-    galleries.value = await Promise.all((response.galleries || []).map(async (gallery) => ({
+    if (generation !== previewGeneration) return
+    const next = await Promise.all((response.galleries || []).map(async (gallery) => ({
       ...gallery,
-      coverUrl: gallery.cover_item_id ? await blobPreview(gallery.cover_item_id, `gallery-${gallery.code}`) : ''
+      coverUrl: gallery.cover_item_id ? await blobPreview(gallery.cover_item_id, `gallery-${gallery.code}`, generation) : ''
     })))
+    if (generation !== previewGeneration) return
+    industries.value = response.industries || []
+    galleries.value = next
   } catch (error) {
-    message.error(error.message || '图库加载失败')
+    if (generation === previewGeneration) message.error(error.message || '图库加载失败')
+  }
+}
+
+async function withPreviews(next, generation = previewGeneration) {
+  return Promise.all(next.map(async (item) => ({
+    ...item,
+    previewUrl: await blobPreview(item.id, item.id, generation)
+  })))
+}
+
+async function loadRootItems() {
+  const generation = previewGeneration
+  try {
+    const response = await materialLibraryApi.listItems({
+      material_type: 'image',
+      scope: materialScope.value,
+      root_only: true,
+      query: query.value,
+      sort: sort.value,
+      page: rootPage.value,
+      page_size: 24
+    })
+    if (generation !== previewGeneration) return
+    rootTotal.value = response.total || 0
+    const lastPage = Math.max(1, Math.ceil(rootTotal.value / 24))
+    if (rootPage.value > lastPage) {
+      rootPage.value = lastPage
+      return loadRootItems()
+    }
+    const next = await withPreviews(response.items || [], generation)
+    if (generation === previewGeneration) rootItems.value = next
+  } catch (error) {
+    if (generation === previewGeneration) message.error(error.message || '根目录图片加载失败')
+  }
+}
+
+async function loadRoot() {
+  releasePreviews()
+  const generation = previewGeneration
+  galleries.value = []
+  rootItems.value = []
+  rootTotal.value = 0
+  loading.value = true
+  try {
+    await Promise.all([loadGalleries(), loadRootItems()])
   } finally {
-    loading.value = false
+    if (generation === previewGeneration) loading.value = false
   }
 }
 
 async function loadItems() {
-  if (isGalleryRoot.value) return loadGalleries()
+  if (isGalleryRoot.value) return loadRoot()
+  releasePreviews()
+  const generation = previewGeneration
+  items.value = []
+  galleries.value = []
   loading.value = true
   try {
-    const response = await materialLibraryApi.listItems({
+    const [response] = await Promise.all([materialLibraryApi.listItems({
       material_type: materialType.value,
       category: materialType.value === 'image' ? activeGallery.value : categoryFilter.value,
       query: query.value,
       sort: sort.value,
       page: page.value,
       page_size: 24
-    })
-    const next = response.items || []
-    releasePreviews()
-    items.value = await Promise.all(next.map(async (item) => ({
-      ...item,
-      previewUrl: await blobPreview(item.id)
-    })))
+    }), isTopLevelGallery.value ? loadGalleries() : Promise.resolve()])
+    if (generation !== previewGeneration) return
+    const next = await withPreviews(response.items || [], generation)
+    if (generation !== previewGeneration) return
+    items.value = next
     total.value = response.total || 0
   } catch (error) {
-    message.error(error.message || '素材加载失败')
+    if (generation === previewGeneration) message.error(error.message || '素材加载失败')
   } finally {
-    loading.value = false
+    if (generation === previewGeneration) loading.value = false
   }
 }
 
 function search() {
-  if (isGalleryRoot.value) return
   query.value = queryInput.value.trim()
   page.value = 1
+  rootPage.value = 1
   void loadItems()
 }
 
@@ -376,8 +441,9 @@ function leaveGallery() {
   items.value = []
   query.value = ''
   queryInput.value = ''
-  if (targetGallery) void loadItems()
-  else void loadGalleries()
+  page.value = 1
+  rootPage.value = 1
+  void loadItems()
 }
 
 function categoryOptionLabel(category) {
@@ -703,14 +769,18 @@ function showEdit(item) {
   editingItem.value = item
   editForm.name = item.name
   editForm.category = item.category
+  editForm.location = (editLocationOptions.value.find((option) => option.target.gallery_id === item.category)
+    || editLocationOptions.value[0]).target
   editOpen.value = true
 }
 
 async function saveEdit() {
-  if (!editForm.name.trim() || !editForm.category) return message.warning('请填写名称并选择分类')
+  if (!editForm.name.trim() || (materialType.value === 'image' ? !editForm.location : !editForm.category)) {
+    return message.warning('请填写名称并选择保存位置')
+  }
   await materialLibraryApi.updateItem(editingItem.value.id, {
     name: editForm.name.trim(),
-    category: editForm.category
+    ...(materialType.value === 'image' ? { location: editForm.location } : { category: editForm.category })
   })
   editOpen.value = false
   message.success('素材信息已更新')
@@ -810,6 +880,7 @@ watch(materialType, async () => {
   query.value = ''
   queryInput.value = ''
   page.value = 1
+  rootPage.value = 1
   items.value = []
   try {
     await loadCategories()
@@ -818,6 +889,12 @@ watch(materialType, async () => {
     message.error(error.message || '素材分类加载失败')
   }
 }, { immediate: true })
+
+watch(materialScope, () => {
+  rootPage.value = 1
+  selectedShareItemIds.value = []
+  if (isGalleryRoot.value) void loadRoot()
+})
 
 watch(uploadCategory, (id) => {
   const gallery = categoryMap.value[id]
@@ -852,7 +929,7 @@ onBeforeUnmount(releasePreviews)
       <div v-if="materialType === 'image'" class="context-head">
         <button v-if="activeGallery" type="button" class="back-button" @click="leaveGallery"><ArrowLeft :size="16" />{{ parentGallery ? `返回${parentGallery.name}` : '返回图库' }}</button>
         <div>
-          <a-radio-group v-if="isGalleryRoot" v-model:value="materialScope" button-style="solid" @change="activeGallery = ''; page = 1">
+          <a-radio-group v-if="isGalleryRoot" v-model:value="materialScope" button-style="solid">
             <a-radio-button value="private">我的素材</a-radio-button>
             <a-radio-button value="enterprise">企业共享</a-radio-button>
           </a-radio-group>
@@ -867,7 +944,7 @@ onBeforeUnmount(releasePreviews)
       </div>
 
       <div class="toolbar">
-        <a-input v-model:value="queryInput" allow-clear :placeholder="isGalleryRoot ? '搜索图库名称' : '搜索素材名称'" @pressEnter="search" @clear="search">
+        <a-input v-model:value="queryInput" allow-clear :placeholder="isGalleryRoot ? '搜索图库或图片名称' : '搜索素材名称'" @pressEnter="search" @clear="search">
           <template #prefix><Search :size="15" /></template>
         </a-input>
         <a-select v-if="isGalleryRoot" v-model:value="industryFilter" class="category-filter" placeholder="全部行业" allow-clear>
@@ -877,12 +954,12 @@ onBeforeUnmount(releasePreviews)
         <a-select v-else-if="materialType === 'cover_template'" v-model:value="categoryFilter" class="category-filter" placeholder="全部分类" allow-clear @change="page = 1; loadItems()">
           <a-select-option v-for="item in categories" :key="item.code" :value="item.code">{{ item.name }}</a-select-option>
         </a-select>
-        <a-select v-if="!isGalleryRoot" v-model:value="sort" class="sort-filter" @change="page = 1; loadItems()">
+        <a-select v-model:value="sort" class="sort-filter" @change="page = 1; rootPage = 1; loadItems()">
           <a-select-option value="newest">最新上传</a-select-option>
           <a-select-option value="oldest">最早上传</a-select-option>
           <a-select-option value="name">名称排序</a-select-option>
         </a-select>
-        <a-button v-if="!isGalleryRoot" @click="search">查询</a-button>
+        <a-button @click="search">查询</a-button>
         <a-button class="lucide-icon-btn" :loading="loading" @click="loadItems"><RefreshCw :size="15" />刷新</a-button>
       </div>
 
@@ -925,10 +1002,11 @@ onBeforeUnmount(releasePreviews)
           </div>
         </div>
 
-        <div v-if="!isGalleryRoot && (items.length || isTopLevelGallery)" class="material-section current-gallery-section">
-          <h3 v-if="isTopLevelGallery">当前图库图片</h3>
+        <div v-if="isGalleryRoot || items.length || isTopLevelGallery" class="material-section current-gallery-section">
+          <h3 v-if="isGalleryRoot">直接保存在{{ materialScope === 'enterprise' ? '企业共享' : '我的素材' }}中的图片</h3>
+          <h3 v-else-if="isTopLevelGallery">当前图库图片</h3>
           <div :class="materialType === 'image' ? 'image-grid' : 'poster-wall'">
-          <article v-for="item in items" :key="item.id" class="material-card" :class="{ poster: materialType === 'cover_template', 'is-share-selected': selectedShareOrder(item.id) }">
+          <article v-for="item in (isGalleryRoot ? rootItems : items)" :key="item.id" class="material-card" :class="{ poster: materialType === 'cover_template', 'is-share-selected': selectedShareOrder(item.id) }">
             <button
               v-if="materialType === 'image' && isChildGallery"
               type="button"
@@ -945,7 +1023,7 @@ onBeforeUnmount(releasePreviews)
             </button>
             <div class="material-info">
               <strong v-if="materialType === 'image'" :title="item.name">{{ item.name }}</strong>
-              <small>上传者 {{ item.uploaded_by_name }} · {{ item.category_name }}{{ item.design_style ? ` · ${item.design_style}` : '' }} · {{ item.width }}×{{ item.height }} · {{ formatSize(item.file_size) }}{{ item.storage_status === 'pending' ? ' · 入库中' : '' }}</small>
+              <small>上传者 {{ item.uploaded_by_name }} · {{ isGalleryRoot ? (materialScope === 'enterprise' ? '企业共享' : '我的素材') : item.category_name }}{{ item.design_style ? ` · ${item.design_style}` : '' }} · {{ item.width }}×{{ item.height }} · {{ formatSize(item.file_size) }}{{ item.storage_status === 'pending' ? ' · 入库中' : '' }}</small>
             </div>
             <div class="card-actions">
               <button type="button" title="预览" @click="previewItem = item"><Eye :size="15" /></button>
@@ -956,13 +1034,15 @@ onBeforeUnmount(releasePreviews)
             </div>
           </article>
           </div>
+          <a-empty v-if="isGalleryRoot && !loading && !rootItems.length" :image="false" :description="query ? '未找到匹配的根目录图片' : '暂无直接保存在此处的图片'" />
         </div>
 
-        <a-empty v-if="!loading && !filteredGalleries.length && (isGalleryRoot || !items.length)" :image="false" :description="isGalleryRoot ? '没有匹配的图库' : (query ? '未找到匹配素材' : (isTopLevelGallery ? '当前图库还没有图片或二级图库' : '当前图库还没有图片'))">
+        <a-empty v-if="!loading && !filteredGalleries.length && (isGalleryRoot ? !rootItems.length : !items.length)" :image="false" :description="isGalleryRoot ? '没有匹配的图库' : (query ? '未找到匹配素材' : (isTopLevelGallery ? '当前图库还没有图片或二级图库' : '当前图库还没有图片'))">
           <a-button v-if="!query && isGalleryRoot && (materialScope === 'private' || canCreateShared)" type="primary" class="lucide-icon-btn" @click="openCreateCategory('')"><FolderPlus :size="15" />新建第一个图库</a-button>
           <a-button v-else-if="!query" type="primary" class="lucide-icon-btn" @click="openUpload"><ImagePlus :size="15" />上传第一份素材</a-button>
         </a-empty>
       </a-spin>
+      <a-pagination v-if="isGalleryRoot && rootTotal > 24" v-model:current="rootPage" :total="rootTotal" :page-size="24" :show-size-changer="false" show-less-items @change="loadRoot" />
       <a-pagination v-if="!isGalleryRoot && total > 24" v-model:current="page" :total="total" :page-size="24" show-less-items @change="loadItems" />
     </main>
 
@@ -1037,7 +1117,10 @@ onBeforeUnmount(releasePreviews)
     <a-modal v-model:open="editOpen" title="编辑素材信息" ok-text="保存" @ok="saveEdit">
       <div class="upload-form">
         <label><span>名称</span><a-input v-model:value="editForm.name" maxlength="255" /></label>
-        <label><span>分类</span><a-select v-model:value="editForm.category" placeholder="请选择分类">
+        <label v-if="materialType === 'image'"><span>保存位置</span><a-select :value="JSON.stringify(editForm.location)" placeholder="请选择保存位置" @change="value => editForm.location = JSON.parse(value)">
+          <a-select-option v-for="option in editLocationOptions" :key="JSON.stringify(option.target)" :value="JSON.stringify(option.target)">{{ option.label }}</a-select-option>
+        </a-select></label>
+        <label v-else><span>分类</span><a-select v-model:value="editForm.category" placeholder="请选择分类">
           <a-select-option v-for="item in uploadCategories" :key="item.code" :value="item.code">{{ categoryOptionLabel(item) }} — {{ item.description }}</a-select-option>
         </a-select></label>
       </div>
