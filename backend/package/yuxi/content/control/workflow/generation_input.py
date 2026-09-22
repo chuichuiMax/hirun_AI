@@ -11,7 +11,7 @@ from yuxi.content.model.contracts.content_nodes import (
     knowledge_body_evidence_ids,
 )
 from yuxi.content.control.visual_template_fields import is_narrative_visual_field
-from yuxi.content.model.viral_assets import BLUEPRINT_FIELDS
+from yuxi.content.model.viral_assets import BLUEPRINT_FIELDS, normalize_reference_blueprint
 
 _MAX_LEXICON_CHUNKS = 1
 _MAX_LEXICON_CHUNK_CHARS = 48
@@ -360,7 +360,9 @@ def _slim_evidence_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     slim = {key: metadata[key] for key in _EVIDENCE_METADATA_KEEP if key in metadata}
     blueprint = slim.get("reference_blueprint")
     if isinstance(blueprint, dict):
-        slim["reference_blueprint"] = {key: blueprint[key] for key in BLUEPRINT_FIELDS if key in blueprint}
+        slim["reference_blueprint"] = normalize_reference_blueprint(
+            {key: blueprint[key] for key in BLUEPRINT_FIELDS if key in blueprint}
+        )
     return slim
 
 

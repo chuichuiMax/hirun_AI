@@ -160,7 +160,7 @@ WORKFLOW_V3_NODES = [
         max_chunks_per_knowledge_base=4,
         max_chars_per_knowledge_chunk=2400,
         token_budget=5000,
-        timeout_seconds=100,
+        timeout_seconds=180,
         parallel_group="research",
     ),
     _agent(

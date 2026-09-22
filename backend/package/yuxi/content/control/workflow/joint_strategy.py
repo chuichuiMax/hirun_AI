@@ -11,6 +11,7 @@ from sqlalchemy import select
 from yuxi.content.control.strategy.recommend_v3 import StrategyPreviewActor
 from yuxi.content.infrastructure.postgres.strategy_preview_repository import PostgresStrategyPreviewRepository
 from yuxi.content.model.contracts.joint_strategy import StrategySnapshotV2, validate_joint_strategy
+from yuxi.content.model.viral_assets import normalize_reference_blueprint
 from yuxi.services.content_viral_assets import (
     check_asset_source,
     preparation_skill_hash,
@@ -110,7 +111,7 @@ async def prepare_strategy_candidates(*, db, state, node_run_id):
                         "required_slots": [],
                         "anchors": [{"section": "title", "start": 0, "end": 1, "quote": "结构"}],
                     },
-                    "reference_blueprint": snapshot.reference_blueprint_json or {},
+                    "reference_blueprint": normalize_reference_blueprint(snapshot.reference_blueprint_json),
                     "source": "xiaohongshu_inspire",
                     "title": sample.title,
                 }
@@ -220,7 +221,7 @@ async def lock_joint_strategy(*, db, state, node_run_id):
                 "reference_card": next(
                     item["reference_card"] for item in state["reference_candidates"] if item["id"] == snapshot.id
                 ),
-                "reference_blueprint": snapshot.reference_blueprint_json,
+                "reference_blueprint": normalize_reference_blueprint(snapshot.reference_blueprint_json),
                 "slot_mapping": result.reference.slot_mapping,
                 "provider": "xiaohongshu_inspire",
             }
@@ -259,7 +260,7 @@ async def lock_joint_strategy(*, db, state, node_run_id):
                     "candidate_comparison": [item.model_dump() for item in result.reference.assessments],
                     "prepared_reference_decision": result.reference.model_dump(),
                 },
-                reference_blueprint=snapshot.reference_blueprint_json,
+                reference_blueprint=normalize_reference_blueprint(snapshot.reference_blueprint_json),
             )
         else:
             asset = await require_asset(db, user, result.reference.selected_asset_id)
@@ -283,7 +284,7 @@ async def lock_joint_strategy(*, db, state, node_run_id):
                 "reference_card": next(
                     item["reference_card"] for item in state["reference_candidates"] if item["id"] == asset.id
                 ),
-                "reference_blueprint": asset.prepared_json["reference_blueprint"],
+                "reference_blueprint": normalize_reference_blueprint(asset.prepared_json["reference_blueprint"]),
                 "slot_mapping": result.reference.slot_mapping,
             }
             source_id = f"{asset.kb_id}/{asset.file_id}/{asset.source_json['locator']}"
@@ -320,7 +321,7 @@ async def lock_joint_strategy(*, db, state, node_run_id):
                     "candidate_comparison": [item.model_dump() for item in result.reference.assessments],
                     "prepared_reference_decision": result.reference.model_dump(),
                 },
-                reference_blueprint=asset.prepared_json["reference_blueprint"],
+                reference_blueprint=normalize_reference_blueprint(asset.prepared_json["reference_blueprint"]),
             )
     payload = {
         "schema_version": 2,

@@ -85,6 +85,24 @@ def test_plan_visuals_allows_forced_submit_retry():
     assert CONTENT_NODE_EXECUTION_LIMITS["plan_visuals"][0] >= 2 * idle + 3 + 15
 
 
+def test_collect_compliance_allows_one_connection_recovery():
+    from yuxi.services.agent_delegation_service import AgentDelegationService, CONTENT_NODE_EXECUTION_LIMITS
+
+    request = SimpleNamespace(
+        node_run=SimpleNamespace(node_id="collect_compliance_evidence"),
+        knowledge_policy="frozen_evidence_only",
+    )
+    context = SimpleNamespace(reasoning_effort=None)
+    AgentDelegationService._apply_node_constraints(context, request)
+    assert context.reasoning_effort == "low"
+    assert context.model_call_timeout_seconds == 70
+    assert context.model_retry_times == 2
+    assert context._content_max_model_calls == 3
+    idle = CONTENT_NODE_EXECUTION_LIMITS["collect_compliance_evidence"][1]
+    assert CONTENT_NODE_EXECUTION_LIMITS["collect_compliance_evidence"] == (180, 70, "low", 3)
+    assert CONTENT_NODE_EXECUTION_LIMITS["collect_compliance_evidence"][0] >= 2 * idle + 3 + 15
+
+
 def test_siliconflow_50507_is_retryable():
     import httpx
     from openai import APIStatusError

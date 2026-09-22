@@ -41,6 +41,7 @@ from yuxi.content.validation import ComplianceEngine, validate_numeric_evidence_
 from yuxi.content.validators import validate_content, validate_viral_v5_content
 from yuxi.content.control.workflow.external_wait import skip_formula_lexicon_pipeline
 from yuxi.content.control.workflow.generation_input import compact_evidence_items_for_bundle
+from yuxi.content.model.viral_assets import normalize_reference_blueprint
 from yuxi.content.v3.body_calling import SOURCE_METADATA as BODY_CALLING_SOURCE
 from yuxi.content.v3.body_calling import get_decoration_body_calling
 from yuxi.content.industry_matrix import resolve_industry_formula
@@ -1182,7 +1183,7 @@ class V3DeterministicNodeHandler:
                         "selected_reference": True,
                         "selection_reason": selection.get("selection_reason"),
                         "selection_basis": selection.get("selection_basis") or {},
-                        "reference_blueprint": selection.get("reference_blueprint") or {},
+                        "reference_blueprint": normalize_reference_blueprint(selection.get("reference_blueprint")),
                     },
                 }
             )

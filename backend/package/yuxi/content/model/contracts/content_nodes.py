@@ -26,6 +26,8 @@ from yuxi.content.model.viral_assets import (
     ViralArticleSource,
     ViralAssetPreparationInputV1,
     ViralAssetPreparationResultV1,
+    coerce_content_block_sequence,
+    coerce_title_slot_sequence,
     validate_prepared_asset,
 )
 
@@ -1570,6 +1572,11 @@ def validate_content_node_result(
                 "emoji_pattern",
                 "interaction_style",
             }
+            if isinstance(blueprint, dict):
+                blueprint["title_slot_sequence"] = coerce_title_slot_sequence(blueprint.get("title_slot_sequence"))
+                blueprint["content_block_sequence"] = coerce_content_block_sequence(
+                    blueprint.get("content_block_sequence")
+                )
             if not isinstance(blueprint, dict) or not required_blueprint_fields.issubset(blueprint):
                 raise ContractDomainValidationError(
                     "viral_reference_blueprint_invalid",
@@ -1661,6 +1668,11 @@ def validate_content_node_result(
                 )
             _require_member(result.selected_candidate_id, context.viral_candidate_ids, "selected_candidate_id")
             blueprint = result.reference_blueprint or {}
+            if isinstance(blueprint, dict):
+                blueprint["title_slot_sequence"] = coerce_title_slot_sequence(blueprint.get("title_slot_sequence"))
+                blueprint["content_block_sequence"] = coerce_content_block_sequence(
+                    blueprint.get("content_block_sequence")
+                )
             required_blueprint_fields = {
                 "title_pattern",
                 "title_slot_sequence",
@@ -1952,7 +1964,21 @@ def validate_content_node_result(
                     }
                 }
             )
-        _validate_numbers("\n".join([*result.text, *result.template_fields.values()]), context, "text", "visual")
+        _validate_numbers(
+            "\n".join(
+                [
+                    *(item for item in (result.text or []) if not is_decorative_cover_label(item)),
+                    *(
+                        value
+                        for value in result.template_fields.values()
+                        if not is_decorative_cover_label(value)
+                    ),
+                ]
+            ),
+            context,
+            "text",
+            "visual",
+        )
         if not any(str(item).strip() for item in result.text) and not any(
             str(value).strip() for value in result.template_fields.values()
         ):
@@ -1961,22 +1987,10 @@ def validate_content_node_result(
                 "text",
                 "视觉方案必须提供 text 或 template_fields 封面文案",
             )
-        if result.text and is_decorative_cover_label(result.text[0]):
-            raise ContractDomainValidationError(
-                "visual_title_invalid",
-                "text.0",
-                "封面主标题 text[0] 不能只写 1/01 这类序号，请写可读的主标题钩子",
-            )
-        narrative_titles = [
-            str(result.template_fields.get(label) or "").strip()
-            for label in context.allowed_visual_template_fields
-        ]
-        if narrative_titles and all(is_decorative_cover_label(value) for value in narrative_titles if value):
-            raise ContractDomainValidationError(
-                "visual_title_invalid",
-                "template_fields",
-                "封面叙事字段不能只有序号角标，请至少提供一条可读主标题",
-            )
+        extra_texts = [str(item).strip() for item in result.text if str(item).strip()]
+        locked_title = str(context.locked_title or "").strip()
+        if locked_title and not is_decorative_cover_label(locked_title):
+            extra_texts.append(locked_title)
         missing_narrative_fields = set(context.allowed_visual_template_fields) - set(result.template_fields)
         if missing_narrative_fields:
             label = sorted(missing_narrative_fields)[0]
@@ -1994,6 +2008,8 @@ def validate_content_node_result(
                     f"template_fields.{label}",
                     f"封面字段“{label}”必须生成有依据且不重复的短句",
                 )
+            if is_decorative_cover_label(value):
+                continue
             unsupported_claim = next(
                 (term for term in ("免费", "保证", "保价", "最低", "第一", "省钱", "零风险") if term in value),
                 None,
@@ -2007,16 +2023,38 @@ def validate_content_node_result(
         repaired_fields = uniquify_visual_template_fields(
             dict(result.template_fields),
             limits=allowed_template_fields,
-            extra_texts=list(result.text),
+            extra_texts=extra_texts,
         )
         clamped_text = []
+        text_limits: list[int | None] = []
         for index, value in enumerate(result.text):
             role = "title" if index == 0 else "subtitle"
             max_chars = context.visual_text_max_chars.get(role)
             if max_chars is None and index > 0:
                 max_chars = context.visual_text_max_chars.get("body_excerpt")
             clamped_text.append(clamp_visual_text(value, max_chars))
+            text_limits.append(max_chars)
+        if clamped_text and is_decorative_cover_label(clamped_text[0]):
+            replacement = next((item for item in extra_texts if not is_decorative_cover_label(item)), "")
+            if replacement:
+                clamped_text[0] = clamp_visual_text(replacement, text_limits[0])
         result = result.model_copy(update={"template_fields": repaired_fields, "text": clamped_text})
+        if result.text and is_decorative_cover_label(result.text[0]):
+            raise ContractDomainValidationError(
+                "visual_title_invalid",
+                "text.0",
+                "封面主标题 text[0] 不能只写 1/01 这类序号，请写可读的主标题钩子",
+            )
+        narrative_titles = [
+            str(result.template_fields.get(label) or "").strip()
+            for label in context.allowed_visual_template_fields
+        ]
+        if narrative_titles and all(is_decorative_cover_label(value) for value in narrative_titles if value):
+            raise ContractDomainValidationError(
+                "visual_title_invalid",
+                "template_fields",
+                "封面叙事字段不能只有序号角标，请至少提供一条可读主标题",
+            )
         for label, constraints in allowed_template_fields.items():
             value = result.template_fields.get(label, "").strip()
             max_chars = constraints.get("maxChars")
@@ -2045,10 +2083,9 @@ def validate_content_node_result(
                     f"封面字段“{label}”与“{previous_label}”内容重复，请改写为不同的信息点",
                 )
             normalized_template_text[normalized] = label
-        role_indexes = {"title": 0, "subtitle": 1, "body_excerpt": 1}
-        for role, max_chars in context.visual_text_max_chars.items():
-            index = role_indexes[role]
-            if index < len(result.text) and len(result.text[index]) > max_chars:
+        for index, max_chars in enumerate(text_limits):
+            if max_chars and index < len(result.text) and len(result.text[index].replace("\n", "")) > max_chars:
+                role = "title" if index == 0 else "subtitle"
                 raise ContractDomainValidationError(
                     "visual_text_too_long",
                     f"text.{index}",

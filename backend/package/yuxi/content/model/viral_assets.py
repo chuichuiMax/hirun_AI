@@ -118,6 +118,44 @@ BLUEPRINT_FIELDS = frozenset(
     }
 )
 
+_SEQUENCE_SPLIT = re.compile(r"\s*(?:→|->|｜|\||[+＋/、;；,，])\s*")
+
+
+def coerce_title_slot_sequence(value: Any) -> list[str]:
+    """准备结果常把槽位写成“主题→场景”；合并证据要求可执行 list。"""
+    if isinstance(value, list):
+        slots: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                text = str(item.get("name") or item.get("function") or item.get("slot") or "").strip()
+            else:
+                text = str(item or "").strip()
+            if text and text not in slots:
+                slots.append(text)
+        return slots
+    if isinstance(value, str) and value.strip():
+        parts = [part.strip() for part in _SEQUENCE_SPLIT.split(value.strip()) if part.strip()]
+        return parts or [value.strip()]
+    return []
+
+
+def coerce_content_block_sequence(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return [item for item in value if item not in (None, "")]
+    if isinstance(value, str) and value.strip():
+        parts = [part.strip() for part in _SEQUENCE_SPLIT.split(value.strip()) if part.strip()]
+        return parts or [value.strip()]
+    return []
+
+
+def normalize_reference_blueprint(blueprint: dict[str, Any] | None) -> dict[str, Any]:
+    normalized = dict(blueprint or {})
+    if "title_slot_sequence" in normalized:
+        normalized["title_slot_sequence"] = coerce_title_slot_sequence(normalized.get("title_slot_sequence"))
+    if "content_block_sequence" in normalized:
+        normalized["content_block_sequence"] = coerce_content_block_sequence(normalized.get("content_block_sequence"))
+    return normalized
+
 
 def validate_prepared_asset(payload: dict[str, Any], source: ViralArticleSource) -> ViralAssetPreparationResultV1:
     result = ViralAssetPreparationResultV1.model_validate(payload)
@@ -128,6 +166,7 @@ def validate_prepared_asset(payload: dict[str, Any], source: ViralArticleSource)
     if source.completeness != "complete":
         raise ValueError("未核验完整性的原文不能发布画像")
     blueprint = result.reference_blueprint
+    blueprint.update(normalize_reference_blueprint(blueprint))
     if not BLUEPRINT_FIELDS.issubset(blueprint) or not BLUEPRINT_FIELDS.issubset(result.blueprint_anchors):
         raise ValueError("结构蓝图缺少必需字段或原文依据")
     if not blueprint["title_slot_sequence"] or not blueprint["content_block_sequence"]:

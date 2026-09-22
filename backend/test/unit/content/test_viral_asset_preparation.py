@@ -5,6 +5,7 @@ import pytest
 from yuxi.content.model.viral_assets import (
     BLUEPRINT_FIELDS,
     ViralArticleSource,
+    coerce_title_slot_sequence,
     extract_article_records,
     validate_prepared_asset,
 )
@@ -65,6 +66,23 @@ def test_article_identity_is_stable_but_text_changes_version():
     second = source(body="更新后的完整原文")
     assert first.article_id == second.article_id
     assert first.source_hash != second.source_hash
+
+
+def test_string_title_slot_sequence_is_split_into_executable_slots():
+    assert coerce_title_slot_sequence("面积(350㎡)→复式楼→人格名称(INFJ)") == [
+        "面积(350㎡)",
+        "复式楼",
+        "人格名称(INFJ)",
+    ]
+    assert coerce_title_slot_sequence("{城市}｜{年份}装修{主题}已出{语气词}") == [
+        "{城市}",
+        "{年份}装修{主题}已出{语气词}",
+    ]
+    article = source()
+    payload = prepared(article)
+    payload["reference_blueprint"]["title_slot_sequence"] = "主题句 → 动作 → 数字"
+    result = validate_prepared_asset(payload, article)
+    assert result.reference_blueprint["title_slot_sequence"] == ["主题句", "动作", "数字"]
 
 
 def test_valid_preparation_keeps_original_structure_and_source():

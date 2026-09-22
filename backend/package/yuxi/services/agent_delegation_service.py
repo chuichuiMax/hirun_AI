@@ -55,6 +55,7 @@ CONTENT_NODE_EXECUTION_LIMITS = {
     "generate_content": (400, 180, "low", 3),
     "select_creation_strategy": (150, 65, "low", 3),
     "reselect_creation_strategy": (150, 65, "low", 3),
+    "collect_compliance_evidence": (180, 70, "low", 3),
     "plan_visuals": (400, 180, "low", 3),
     "visual_review": (300, 120, "low", 2),
 }

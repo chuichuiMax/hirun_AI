@@ -269,6 +269,22 @@ def test_viral_rewrite_requires_exactly_one_selected_reference_with_blueprint():
         validate_content_node_result("EvidenceCollectionResultV1", payload, context)
 
 
+def test_viral_rewrite_accepts_string_title_slot_sequence():
+    context = replace(DOMAIN_CONTEXT, creation_mode="viral_rewrite")
+    payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
+    reference = _selected_viral_reference()
+    reference["metadata"]["reference_blueprint"]["title_slot_sequence"] = "面积(350㎡)→复式楼→人格名称(INFJ)"
+    payload["evidence_items"].append(reference)
+
+    result = validate_content_node_result("EvidenceCollectionResultV1", payload, context)
+
+    assert result.evidence_items[1].metadata["reference_blueprint"]["title_slot_sequence"] == [
+        "面积(350㎡)",
+        "复式楼",
+        "人格名称(INFJ)",
+    ]
+
+
 def test_original_mode_rejects_selected_viral_reference():
     payload = deepcopy(VALID_PAYLOADS["EvidenceCollectionResultV1"])
     payload["evidence_items"].append(_selected_viral_reference())
@@ -496,6 +512,37 @@ def test_visual_plan_strips_ordinal_badge_fields_before_validation():
     result = validate_content_node_result("VisualPlanResultV1", payload, context)
     assert "field_2" not in result.template_fields
     assert result.template_fields["field_1"] == "洋湖天旭工艺避坑"
+
+
+def test_visual_plan_repairs_ordinal_narrative_from_text_without_retry():
+    context = replace(
+        DOMAIN_CONTEXT,
+        locked_title="洋湖天旭工艺避坑",
+        allowed_visual_template_fields={"主标题": {"maxChars": 12}},
+    )
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["text"] = ["洋湖天旭工艺避坑"]
+    payload["template_fields"] = {"主标题": "01"}
+
+    result = validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    assert result.template_fields["主标题"] == "洋湖天旭工艺避坑"
+
+
+def test_visual_plan_still_rejects_ordinal_only_narrative_without_readable_title():
+    context = replace(
+        DOMAIN_CONTEXT,
+        locked_title="01",
+        allowed_visual_template_fields={"主标题": {"maxChars": 12}},
+    )
+    payload = deepcopy(VALID_PAYLOADS["VisualPlanResultV1"])
+    payload["text"] = ["1"]
+    payload["template_fields"] = {"主标题": "01"}
+
+    with pytest.raises(ContractDomainValidationError) as exc_info:
+        validate_content_node_result("VisualPlanResultV1", payload, context)
+
+    assert exc_info.value.code == "visual_title_invalid"
 
 
 def test_visual_plan_strips_unauthorized_system_fields_without_retry():
