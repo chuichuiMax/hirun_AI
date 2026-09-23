@@ -11,6 +11,9 @@ from yuxi.image_design.save_targets import (
     PRIVATE_ROOT_CATEGORY_ID,
     list_writable_save_targets,
     resolve_writable_save_target,
+    list_mp_save_targets,
+    validate_mp_save_target,
+    is_storage_root,
 )
 from yuxi.storage.postgres.models_content import ContentMaterialCategory
 
@@ -40,6 +43,9 @@ class FakeMaterialLibraryRepository:
 
     def __init__(self, _db, *, include_shared: bool = False):
         self.include_shared = include_shared
+
+    async def migrate_generated_private_root(self, owner_uid, root_id):
+        pass
 
     async def ensure_default_categories(self, values):
         existing = {(item.owner_uid, item.material_type, item.id) for item in self.categories}
@@ -228,3 +234,39 @@ async def test_writable_target_list_hides_storage_roots_and_keeps_scope_paths(or
     ]
     folder_ids = {folder["id"] for scope in payload["scopes"] for folder in scope["folders"]}
     assert ENTERPRISE_ROOT_CATEGORY_ID not in folder_ids
+
+
+@pytest.mark.asyncio
+async def test_mp_targets_are_private_root_and_one_existing_generated_gallery(ordinary_user):
+    FakeMaterialLibraryRepository.categories = [
+        _category("ordinary-user", "uncategorized", visibility="private", name="未分类", is_system=True),
+        _category("admin", "generated-real-id", visibility="enterprise", name="生图图库"),
+        _category("admin", "case", visibility="enterprise", name="案例图库"),
+    ]
+    private, enterprise = (await list_mp_save_targets(object(), ordinary_user))["scopes"]
+    assert private["can_write_root"] is True and private["folders"] == []
+    assert enterprise["can_write_root"] is False
+    assert [folder["id"] for folder in enterprise["folders"]] == ["generated-real-id"]
+    assert not is_storage_root(FakeMaterialLibraryRepository.categories[0])
+    resolved = await resolve_writable_save_target(object(), ordinary_user, SaveTarget(scope="private"))
+    assert resolved.category_id == "private-root"
+    await validate_mp_save_target(
+        object(), ordinary_user, SaveTarget(scope="enterprise", gallery_id="generated-real-id")
+    )
+    for target in [SaveTarget(scope="enterprise"), SaveTarget(scope="enterprise", gallery_id="case"),
+                   SaveTarget(scope="private", gallery_id="uncategorized")]:
+        with pytest.raises(HTTPException):
+            await validate_mp_save_target(object(), ordinary_user, target)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [0, 2])
+async def test_missing_or_ambiguous_generated_gallery_stays_unavailable(ordinary_user, count):
+    FakeMaterialLibraryRepository.categories = [
+        _category(f"admin-{i}", f"generated-{i}", visibility="enterprise", name="生图图库") for i in range(count)
+    ]
+    private, enterprise = (await list_mp_save_targets(object(), ordinary_user))["scopes"]
+    assert private["can_write_root"] is True
+    assert enterprise["folders"] == [] and enterprise["error"]
+    with pytest.raises(HTTPException):
+        await validate_mp_save_target(object(), ordinary_user, SaveTarget(scope="enterprise", gallery_id="generated-0"))

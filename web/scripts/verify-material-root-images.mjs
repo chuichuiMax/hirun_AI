@@ -8,20 +8,24 @@ const view = readFileSync(new URL('../src/views/MaterialLibraryView.vue', import
 assert.match(api, /root_only/)
 assert.match(view, /async function loadRootItems\(\)/)
 assert.match(view, /Promise\.all\(\[loadGalleries\(\), loadRootItems\(\)\]\)/)
-assert.match(view, /直接保存在.*中的图片/)
+assert.match(view, /我的素材图片/)
+assert.match(view, /FolderPlus[^\n]*新建图库/)
+assert.match(view, /privateRootCategoryId = 'private-root'/)
 assert.match(view, /v-if="isGalleryRoot && rootTotal > 24"[^\n]*v-model:current="rootPage"/)
 assert.match(view, /const editLocationOptions = computed/)
 assert.match(view, /location: editForm\.location/)
 assert.match(view, /target: \{ scope, gallery_id: null \}/)
 assert.match(view, /watch\(materialScope,/)
-assert(view.indexOf('v-for="group in galleryGroups"') < view.indexOf('直接保存在'), 'folder cards precede loose images')
+assert(view.indexOf('v-for="group in galleryGroups"') < view.indexOf('我的素材图片'), 'custom gallery cards precede root images')
 
 // Evaluate the card's actual location interpolation using stored backend root names.
 const cardLocationExpression = view.match(/<small>上传者 \{\{ item\.uploaded_by_name \}\} · \{\{ (.*?) \}\}/)?.[1]
 assert(cardLocationExpression, 'image card must include a location label')
 const cardLocationLabel = new Function('isGalleryRoot', 'materialScope', 'item', `return (${cardLocationExpression})`)
 for (const fixture of [
+  { root: true, scope: 'private', item: { category: 'private-root', category_name: '我的素材（根目录）' }, label: '我的素材' },
   { root: true, scope: 'private', item: { category: 'uncategorized', category_name: '未分类' }, label: '我的素材' },
+  { root: false, scope: 'private', item: { category: 'uncategorized', category_name: '未分类' }, label: '未分类' },
   { root: true, scope: 'enterprise', item: { category: 'enterprise-root', category_name: '企业素材' }, label: '企业共享' },
   { root: false, scope: 'private', item: { category: 'folder', category_name: '背景' }, label: '背景' },
   { root: false, scope: 'private', item: { material_type: 'cover_template', category_name: '活动海报' }, label: '活动海报' }

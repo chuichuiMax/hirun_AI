@@ -494,7 +494,9 @@ async def get_refinement(db: AsyncSession, user: User, refinement_id: str) -> di
     return {"refinement": _serialize_refinement(row)}
 
 
-async def create_generate_job(db: AsyncSession, user: User, payload: ImageDesignGenerateCreate) -> dict[str, Any]:
+async def create_generate_job(
+    db: AsyncSession, user: User, payload: ImageDesignGenerateCreate, *, mp_fixed_target: bool = False,
+) -> dict[str, Any]:
     owner_uid = _owner_uid(user)
     image2 = await get_image2_config_state(db, owner_uid=owner_uid)
     if not image2.get("configured"):
@@ -538,6 +540,7 @@ async def create_generate_job(db: AsyncSession, user: User, payload: ImageDesign
     request = {
         **payload.model_dump(mode="json", exclude={"save_target"}),
         "requested_save_target": payload.save_target.model_dump(mode="json") if payload.save_target else None,
+        "mp_fixed_target": mp_fixed_target,
         "workflow": refinement.workflow,
         "prompt_contract_version": 2,
         "plan_version": validated_plan.plan_version,

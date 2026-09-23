@@ -161,7 +161,7 @@ async def _seed_image_library_item(
     return item
 
 
-async def test_root_only_lists_only_scope_roots_and_hides_them_from_galleries(test_client, material_users):
+async def test_pc_private_root_includes_legacy_defaults_and_hides_system_folders(test_client, material_users):
     engine = create_async_engine(os.environ["POSTGRES_URL"])
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as db:
@@ -170,7 +170,7 @@ async def test_root_only_lists_only_scope_roots_and_hides_them_from_galleries(te
             owner_uid=material_users["owner_uid"],
             tenant_id=material_users["department_id"],
             category_owner_uid=material_users["owner_uid"],
-            category_id="uncategorized",
+            category_id="private-root",
             visibility="private",
             is_system=True,
         )
@@ -229,7 +229,11 @@ async def test_root_only_lists_only_scope_roots_and_hides_them_from_galleries(te
             headers=material_users["owner"],
         )
         assert private_response.status_code == 200, private_response.text
-        assert {item["id"] for item in private_response.json()["items"]} == {private.id, legacy_private_root.id}
+        assert {item["id"] for item in private_response.json()["items"]} == {
+            private.id,
+            legacy_private_root.id,
+        }
+        assert private_gallery.id not in {item["id"] for item in private_response.json()["items"]}
 
         enterprise_response = await test_client.get(
             "/api/material-library/items?material_type=image&scope=enterprise&root_only=true",
@@ -242,7 +246,8 @@ async def test_root_only_lists_only_scope_roots_and_hides_them_from_galleries(te
         assert galleries.status_code == 200, galleries.text
         gallery_ids = {item["id"] for item in galleries.json()["galleries"]}
         assert {private_gallery.category, enterprise_gallery.category} <= gallery_ids
-        assert {"uncategorized", "enterprise-root"}.isdisjoint(gallery_ids)
+        assert "uncategorized" not in gallery_ids
+        assert {"private-root", "enterprise-root"}.isdisjoint(gallery_ids)
     finally:
         async with session_factory() as db:
             item_ids = [private.id, private_gallery.id, legacy_private_root.id, enterprise.id, enterprise_gallery.id]
@@ -360,7 +365,9 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
 
     categories = await test_client.get("/api/material-library/categories?material_type=image", headers=owner_headers)
     assert categories.status_code == 200, categories.text
-    assert categories.json()["categories"][0]["code"] == "product"
+    assert {
+        entry["code"] for entry in categories.json()["categories"]
+    }.isdisjoint({"product", "people", "scene", "background", "decoration", "brand", "uncategorized"})
     cover_categories, cover_categories_again = await asyncio.gather(
         test_client.get(
             "/api/material-library/categories?material_type=cover_template",
@@ -379,9 +386,13 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
     }
     galleries = await test_client.get("/api/material-library/galleries", headers=owner_headers)
     assert galleries.status_code == 200, galleries.text
-    product_gallery = next(entry for entry in galleries.json()["galleries"] if entry["code"] == "product")
-    assert product_gallery["count"] >= 1
-    assert product_gallery["cover_item_id"] == item["id"]
+    assert "product" not in {entry["code"] for entry in galleries.json()["galleries"]}
+    private_root = await test_client.get(
+        "/api/material-library/items?material_type=image&scope=private&root_only=true&query=fixture",
+        headers=owner_headers,
+    )
+    assert private_root.status_code == 200, private_root.text
+    assert item["id"] in {entry["id"] for entry in private_root.json()["items"]}
 
     downloaded = await test_client.get(item["file_url"], headers=owner_headers)
     assert downloaded.status_code == 200, downloaded.text
@@ -433,6 +444,12 @@ async def test_image_gallery_crud_and_safe_item_reassignment(test_client, materi
     assert created.status_code == 201, created.text
     gallery = created.json()["category"]
     assert gallery["count"] == 0
+    owner_categories = await test_client.get(
+        "/api/material-library/categories?material_type=image",
+        headers=headers,
+    )
+    assert owner_categories.status_code == 200, owner_categories.text
+    assert gallery["id"] in {item["id"] for item in owner_categories.json()["categories"]}
 
     other_categories = await test_client.get(
         "/api/material-library/categories?material_type=image",
@@ -483,12 +500,12 @@ async def test_image_gallery_crud_and_safe_item_reassignment(test_client, materi
             "DELETE",
             f"/api/material-library/categories/{gallery['id']}?material_type=image",
             headers=headers,
-            json={"target_category_id": "uncategorized"},
+            json={},
         )
         assert removed.status_code == 200, removed.text
         assert removed.json()["moved"] == 1
         listed = await test_client.get(
-            "/api/material-library/items?material_type=image&category=uncategorized&query=spring",
+            "/api/material-library/items?material_type=image&scope=private&root_only=true&query=spring",
             headers=headers,
         )
         assert [entry["id"] for entry in listed.json()["items"]] == [item["id"]]
@@ -584,7 +601,8 @@ async def test_image_gallery_supports_exactly_one_nested_level(test_client, mate
         assert decoration_response.status_code == 200, decoration_response.text
         decoration_ids = {entry["id"] for entry in decoration_response.json()["galleries"]}
         assert {parent["id"], child["id"]} <= decoration_ids
-        assert "uncategorized" not in decoration_ids  # Root images have their own root_only listing.
+        assert "uncategorized" not in decoration_ids
+        assert "private-root" not in decoration_ids
 
         changed = await test_client.patch(
             f"/api/material-library/categories/{parent['id']}?material_type=image",

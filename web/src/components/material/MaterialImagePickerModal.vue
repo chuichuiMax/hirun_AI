@@ -32,6 +32,14 @@ const pageSize = 24
 const total = ref(0)
 const pendingItem = ref(null)
 let loadVersion = 0
+const privateRootCategoryId = 'private-root'
+const privateRootGallery = {
+  id: privateRootCategoryId,
+  name: '我的素材',
+  visibility: 'private',
+  parent_id: null,
+  is_private_root: true
+}
 
 const activeGallery = computed(() => galleries.value.find((item) => item.id === activeGalleryId.value))
 const rootGalleries = computed(() => galleries.value.filter((item) => !item.parent_id))
@@ -61,7 +69,9 @@ async function loadItems() {
   try {
     const response = await materialLibraryApi.listItems({
       material_type: 'image',
-      category: activeGalleryId.value,
+      ...(activeGalleryId.value === privateRootCategoryId
+        ? { scope: 'private', root_only: true }
+        : { category: activeGalleryId.value }),
       status: 'enabled',
       query: query.value || null,
       page: page.value,
@@ -98,7 +108,7 @@ async function loadGalleries() {
   loadingGalleries.value = true
   try {
     const response = await materialLibraryApi.listGalleries()
-    galleries.value = response.galleries || []
+    galleries.value = [privateRootGallery, ...(response.galleries || [])]
     activeGalleryId.value = (
       props.selectedGalleryId
       && galleries.value.some((item) => item.id === props.selectedGalleryId)

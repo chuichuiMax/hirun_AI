@@ -205,6 +205,8 @@ let posterPreviewGeneration = 0
 let hycanvasTemplateLoadGeneration = 0
 let inspireCoverLoadGeneration = 0
 let posterTemplateSignature = ''
+const privateRootCategoryId = 'private-root'
+const privateRootGallery = { id: privateRootCategoryId, name: '我的素材', visibility: 'private', parent_id: null }
 
 const materialGalleryMap = computed(() => new Map(materialGalleries.value.map((item) => [item.id, item])))
 const rootMaterialGalleries = computed(() => materialGalleries.value.filter((item) => !item.parent_id))
@@ -1156,7 +1158,9 @@ const loadGalleryImages = async () => {
   try {
     const response = await materialLibraryApi.listItems({
       material_type: 'image',
-      category: activeGalleryId.value,
+      ...(activeGalleryId.value === privateRootCategoryId
+        ? { scope: 'private', root_only: true }
+        : { category: activeGalleryId.value }),
       status: 'enabled',
       page: 1,
       page_size: 100,
@@ -1270,7 +1274,9 @@ const confirmGalleryImages = () => {
   const primaryItem = selectedItems[0]
   selectedImageItemId.value = primaryItem?.id || ''
   if (primaryItem) {
-    selectedImageGalleryId.value = primaryItem.category || selectedImageGalleryId.value
+    selectedImageGalleryId.value = materialGalleryMap.value.has(primaryItem.category)
+      ? primaryItem.category
+      : privateRootCategoryId
     selectedImageSummary.value = primaryItem.name
       ? primaryItem
       : primaryItem.id === selectedImageSummary.value?.id ? selectedImageSummary.value : null
@@ -1415,7 +1421,7 @@ const loadVisualMaterials = async () => {
       contentApi.getPhotoLayouts(),
       loadHyCanvasTemplates()
     ])
-    materialGalleries.value = galleryResponse.galleries || []
+    materialGalleries.value = [privateRootGallery, ...(galleryResponse.galleries || [])]
     photoLayouts.value = layoutResponse.layouts || []
     const savedCategoryId =
       store.task?.runtime_config_snapshot?.visual_material?.image_category_id ||
@@ -1424,7 +1430,9 @@ const loadVisualMaterials = async () => {
       (savedCategoryId && materialGalleries.value.some((item) => item.id === savedCategoryId)
         ? savedCategoryId
         : activeGalleryId.value) || rootMaterialGalleries.value[0]?.id || ''
-    selectedImageGalleryId.value = selectedImageItemId.value ? savedCategoryId || '' : ''
+    selectedImageGalleryId.value = selectedImageItemId.value
+      ? (materialGalleryMap.value.has(savedCategoryId) ? savedCategoryId : privateRootCategoryId)
+      : ''
     if (selectedImageItemId.value && activeGalleryId.value) await loadGalleryImages()
   } catch (error) {
     message.warning(error.message || '视觉素材加载失败')

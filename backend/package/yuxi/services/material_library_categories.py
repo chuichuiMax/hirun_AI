@@ -29,6 +29,8 @@ MATERIAL_CATEGORIES: dict[MaterialType, tuple[dict[str, str], ...]] = {
     ),
 }
 
+DEFAULT_IMAGE_CATEGORY_IDS = frozenset(item["code"] for item in MATERIAL_CATEGORIES["image"])
+
 
 def _aliases(material_type: MaterialType) -> dict[str, str]:
     aliases = {item["name"]: item["code"] for item in MATERIAL_CATEGORIES[material_type]}

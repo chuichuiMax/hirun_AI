@@ -15,6 +15,7 @@ from yuxi.storage.postgres.models_content import (
     ContentMaterialShare,
     ContentMaterialShareItem,
     ContentTask,
+    ImageDesignLibraryItem,
 )
 
 # 失败/取消的任务释放图库占用，便于重新选图生产；删除任务本来就不计入占用。
@@ -71,6 +72,44 @@ class MaterialLibraryRepository:
 
     async def ensure_default_categories(self, values: list[dict[str, Any]]) -> None:
         await self.db.execute(pg_insert(ContentMaterialCategory).values(values).on_conflict_do_nothing())
+
+    async def migrate_generated_private_root(self, owner_uid: str, root_id: str) -> None:
+        """Move only explicitly recorded old root saves, preserving ordinary uncategorized images."""
+        item = ContentMaterialLibraryItem
+        rows = (
+            (
+                await self.db.execute(
+                    select(item)
+                    .where(
+                        item.owner_uid == owner_uid,
+                        or_(item.category_owner_uid == owner_uid, item.category_owner_uid.is_(None)),
+                        item.material_type == "image",
+                        item.category == "uncategorized",
+                        item.metadata_json["source"].as_string() == "image_design",
+                        item.metadata_json["resolved_save_target"]["scope"].as_string() == "private",
+                        item.metadata_json["resolved_save_target"]["gallery_id"].as_string().is_(None),
+                    )
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for row in rows:
+            metadata = row.metadata_json or {}
+            saved = metadata.get("resolved_save_target") or {}
+            if metadata.get("save_target_version") == 2 or "gallery_id" not in saved:
+                continue
+            row.category = root_id
+            row.metadata_json = {**metadata, "save_target_version": 2}
+            await self.db.execute(
+                update(ImageDesignLibraryItem)
+                .where(
+                    ImageDesignLibraryItem.source_material_item_id == row.id,
+                )
+                .values(source_gallery_id=root_id)
+            )
+        await self.db.flush()
 
     async def list_categories(self, owner_uid: str, material_type: str) -> list[ContentMaterialCategory]:
         return list(

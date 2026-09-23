@@ -813,6 +813,7 @@ class PostgresManager(metaclass=SingletonMeta):
 
         self._check_initialized()
         stmts = [
+            "ALTER TABLE IF EXISTS image_design_library_items ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMP",
             "ALTER TABLE IF EXISTS content_inspire_samples "
             "ADD COLUMN IF NOT EXISTS cover_url VARCHAR(2048)",
             "ALTER TABLE IF EXISTS content_viral_article_versions "

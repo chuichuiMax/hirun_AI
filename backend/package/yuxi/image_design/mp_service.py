@@ -20,12 +20,15 @@ from yuxi.storage.postgres.models_content import (
     ImageDesignMpDraft,
     ImageDesignJob,
     ImageDesignRefinement,
+    ImageDesignAnalysis,
 )
 from yuxi.utils.datetime_utils import format_utc_datetime, utc_now_naive
 from yuxi.utils.upload_utils import read_upload_with_limit
 
-from .mp_schemas import MpDrafts, MpDraftsUpdate, MpLibraryCreate, MpPolishCreate, MpTaskCreate
+from .mp_schemas import MpDrafts, MpDraftsUpdate, MpLibraryCreate, MpPolishCreate, MpTaskCreate, SaveTarget
+from .save_targets import validate_mp_save_target
 from .schemas import (
+    ANALYSIS_SCHEMA_VERSION,
     CrossSpaceRefinementCreate,
     ImageDesignGenerateCreate,
     RoomAdaptRefinementCreate,
@@ -145,7 +148,7 @@ async def get_library_item_and_asset(db: AsyncSession, user: User, item_id: str)
 
 
 async def list_library(db: AsyncSession, user: User, *, page: int, page_size: int) -> dict[str, Any]:
-    query = _library_query(db, user)
+    query = _library_query(db, user).where(ImageDesignLibraryItem.hidden_at.is_(None))
     total = await db.scalar(select(func.count()).select_from(query.subquery()))
     rows = (
         await db.execute(
@@ -154,12 +157,57 @@ async def list_library(db: AsyncSession, user: User, *, page: int, page_size: in
             .limit(page_size)
         )
     ).all()
+    hashes = {asset.sha256 for _, asset in rows if asset.sha256}
+    analyses = (
+        (
+            await db.execute(
+                select(
+                    ImageDesignAnalysis.asset_sha256,
+                    ImageDesignAnalysis.analysis_role,
+                ).where(
+                    ImageDesignAnalysis.owner_uid == str(user.uid),
+                    ImageDesignAnalysis.asset_sha256.in_(hashes),
+                    ImageDesignAnalysis.schema_version == ANALYSIS_SCHEMA_VERSION,
+                    ImageDesignAnalysis.status == "completed",
+                )
+            )
+        ).all()
+        if hashes
+        else []
+    )
+    roles_by_hash: dict[str, set[str]] = {}
+    for sha256, role in analyses:
+        roles_by_hash.setdefault(sha256, set()).add(role)
     return {
-        "items": [serialize_mp_library_item(row, asset) for row, asset in rows],
+        "items": [
+            {
+                **serialize_mp_library_item(row, asset),
+                "recognized_roles": sorted(roles_by_hash.get(asset.sha256, set())),
+            }
+            for row, asset in rows
+        ],
         "total": total,
         "page": page,
         "page_size": page_size,
     }
+
+
+async def remove_library_item(db: AsyncSession, user: User, item_id: str) -> dict:
+    # Hide only this account's reference; existing draft/task inputs and PC assets remain readable.
+    row = await db.scalar(
+        select(ImageDesignLibraryItem)
+        .where(
+            ImageDesignLibraryItem.id == item_id,
+            ImageDesignLibraryItem.owner_uid == str(user.uid),
+        )
+        .with_for_update()
+    )
+    if row is None:
+        raise _error("IMAGE_DESIGN_MATERIAL_NOT_FOUND", "图库图片不存在")
+    if row.hidden_at is None:
+        row.hidden_at = utc_now_naive()
+    await db.commit()
+    return {"success": True, "id": item_id}
 
 
 async def add_library_item(db: AsyncSession, user: User, payload: MpLibraryCreate) -> dict[str, Any]:
@@ -200,6 +248,7 @@ async def add_library_item(db: AsyncSession, user: User, payload: MpLibraryCreat
     row.source_material_item_id = source.id
     row.source_gallery_id = source.category
     row.source_role = payload.source_role
+    row.hidden_at = None
     await db.commit()
     return {"item": serialize_mp_library_item(row, asset)}
 
@@ -387,6 +436,7 @@ async def create_task(db: AsyncSession, user: User, payload: MpTaskCreate) -> di
     from .service import create_generate_job
 
     # The core rechecks current input access, hashes, plan integrity and target permissions.
+    await validate_mp_save_target(db, user, payload.save_target)
     result = await create_generate_job(
         db,
         user,
@@ -398,6 +448,7 @@ async def create_task(db: AsyncSession, user: User, payload: MpTaskCreate) -> di
             save_target=payload.save_target,
             idempotency_key=payload.idempotency_key,
         ),
+        mp_fixed_target=True,
     )
     return {"task": serialize_task(result["job"]), "reused": result["reused"]}
 
@@ -429,6 +480,11 @@ async def retry_task(db: AsyncSession, user: User, job_id: str) -> dict[str, Any
     requested = int((job.request_json or {}).get("gen_count") or 1)
     if job.status != "failed" or completed >= requested:
         raise _error("IMAGE_DESIGN_RETRY_INVALID", "仅可补生成失败任务中尚未完成的图片", 409)
+    target = (job.request_json or {}).get("requested_save_target")
+    if not target:
+        raise _error("IMAGE_DESIGN_SAVE_TARGET_INVALID", "旧任务未指定保存位置，请重新生成", 422)
+    await validate_mp_save_target(db, user, SaveTarget.model_validate(target))
+    job.request_json = {**job.request_json, "mp_fixed_target": True}
     job.status = "queued"
     job.error_code = job.error_message = None
     job.completed_at = job.started_at = None

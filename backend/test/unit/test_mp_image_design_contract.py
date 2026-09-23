@@ -35,6 +35,29 @@ def test_cover_template_uncategorized_is_not_an_image_storage_root():
     assert not is_storage_root(category)
 
 
+@pytest.mark.asyncio
+async def test_retry_revalidates_fixed_target_before_enqueue_and_marks_legacy_request(monkeypatch):
+    from yuxi.image_design import mp_service
+    from yuxi.storage.postgres.models_content import ImageDesignJob
+
+    job = ImageDesignJob(id="idj_retry", owner_uid="employee", workflow="room_adapt", status="failed",
+        request_json={"gen_count": 2, "requested_save_target": {"scope": "private", "gallery_id": None}},
+        result_json={"asset_ids": []})
+    db = SimpleNamespace(scalar=AsyncMock(return_value=job), commit=AsyncMock())
+    validate = AsyncMock(side_effect=HTTPException(status_code=422, detail="unavailable"))
+    queue = SimpleNamespace(enqueue_job=AsyncMock(return_value=object()))
+    get_queue = AsyncMock(return_value=queue)
+    monkeypatch.setattr(mp_service, "validate_mp_save_target", validate)
+    monkeypatch.setattr(mp_service, "get_arq_pool", get_queue)
+    with pytest.raises(HTTPException):
+        await mp_service.retry_task(db, SimpleNamespace(uid="employee"), job.id)
+    get_queue.assert_not_awaited()
+    assert job.status == "failed"
+    validate.side_effect = None
+    result = await mp_service.retry_task(db, SimpleNamespace(uid="employee"), job.id)
+    assert result["task"]["status"] == "queued" and job.request_json["mp_fixed_target"] is True
+
+
 @pytest.mark.parametrize("space,prefix", [("客厅", ""), ("书房", "mp_")])
 @pytest.mark.parametrize(
     "elements,ids",
@@ -173,6 +196,7 @@ async def test_upload_uses_same_contribution_policy(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_polish_and_task_http_contract_accepts_same_array_and_rejects_stale_inputs(monkeypatch):
+    monkeypatch.setattr("yuxi.image_design.mp_service.validate_mp_save_target", AsyncMock())
     import httpx
     from fastapi import FastAPI
     from server.routers.mp_image_design_router import mp_image_design
@@ -209,6 +233,7 @@ async def test_polish_and_task_http_contract_accepts_same_array_and_rejects_stal
         assert created.status_code == 200, created.text
         assert created.json()["task"]["status"] == "queued"
         assert generate.await_args.args[2].save_target.scope == "private"
+        assert generate.await_args.kwargs["mp_fixed_target"] is True
         task["extra_element"][1] = "开放式层板展示架"
         stale = await client.post("/api/mp/image-design/tasks", json=task)
         assert stale.status_code == 409

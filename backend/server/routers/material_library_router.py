@@ -63,7 +63,12 @@ async def material_categories(
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_material_categories(db, current_user, material_type)
+    return await get_material_categories(
+        db,
+        current_user,
+        material_type,
+        include_private_defaults=False,
+    )
 
 
 @material_library.post("/categories", status_code=status.HTTP_201_CREATED)
@@ -103,7 +108,12 @@ async def image_galleries(
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_image_galleries(db, current_user, industry_slug=industry_slug)
+    return await list_image_galleries(
+        db,
+        current_user,
+        industry_slug=industry_slug,
+        include_private_defaults=False,
+    )
 
 
 @material_library.post("/shares", status_code=status.HTTP_201_CREATED)

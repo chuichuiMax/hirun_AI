@@ -1461,6 +1461,7 @@ class ImageDesignLibraryItem(Base):
     source_material_item_id = Column(String(64), nullable=True, index=True)
     source_gallery_id = Column(String(64), nullable=True)
     source_role = Column(String(32), nullable=False)
+    hidden_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now_naive, nullable=False, index=True)
     updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
 
