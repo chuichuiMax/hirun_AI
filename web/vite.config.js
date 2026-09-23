@@ -14,6 +14,10 @@ export default defineConfig(({ mode }) => {
       }
     },
     server: {
+      hmr: {
+        // 公网 Vite 会被扫描器打出假编译错误，红屏会挡住整站。
+        overlay: false
+      },
       proxy: {
         '^/api': {
           target: env.VITE_API_URL || 'http://api:5050',
