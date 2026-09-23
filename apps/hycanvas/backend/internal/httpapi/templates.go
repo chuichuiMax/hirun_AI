@@ -31,6 +31,7 @@ func mountTemplates(api chi.Router, tm *templates.Service, acct *accounts.Servic
 		r.Delete("/templates/{id}", templatesDeleteHandler(tm))
 		r.Get("/templates/{id}/file", templatesFileHandler(tm))
 		r.Get("/templates/{id}/render.png", templatesRenderHandler(tm, up))
+		r.Get("/templates/{id}/render-overlay.png", templatesOverlayHandler(tm, up))
 		r.Post("/templates/{id}/preview.png", templatesBackgroundPreviewHandler(tm, up))
 		r.Get("/templates/{id}/fillable-fields", templatesFillableHandler(tm))
 		r.Post("/templates/{id}/apply", templatesApplyHandler(tm))
@@ -133,8 +134,52 @@ func templatesRenderHandler(tm *templates.Service, up *uploads.Service) http.Han
 	}
 }
 
+// templatesOverlayHandler returns the template decorations without the page's
+// default background. Consumers can composite this PNG over a photo or a UI
+// color while preserving text, borders, and other node alpha.
+func templatesOverlayHandler(tm *templates.Service, up *uploads.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u := userFrom(r.Context())
+		template, err := tm.Get(r.Context(), u.ID, chi.URLParam(r, "id"))
+		if err != nil {
+			templatesProblem(w, r, err)
+			return
+		}
+		if key := apiKeyFrom(r.Context()); key != nil &&
+			template.WorkspaceID != nil && *template.WorkspaceID != key.WorkspaceID {
+			templatesProblem(w, r, templates.ErrNotFound)
+			return
+		}
+		file, err := tm.GetFile(r.Context(), u.ID, template.ID)
+		if err != nil {
+			templatesProblem(w, r, err)
+			return
+		}
+		var fetch assetContent
+		if up != nil && template.WorkspaceID != nil {
+			workspaceID := *template.WorkspaceID
+			fetch = func(assetID string) ([]byte, string, error) {
+				return up.ContentInWorkspace(r.Context(), workspaceID, assetID)
+			}
+		}
+		png, err := renderTemplateOverlay(file, fetch)
+		if err != nil {
+			problemWithCode(w, r, http.StatusBadRequest, "Bad Request", "could not render template overlay", "could_not_render_template_overlay")
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(png)
+	}
+}
+
 func renderTemplatePreview(file map[string]any, fetch assetContent) ([]byte, error) {
 	return render.ToPNG(render.Design(embedDesignFileAssets(fetch, file)), 0, 0.25)
+}
+
+func renderTemplateOverlay(file map[string]any, fetch assetContent) ([]byte, error) {
+	return render.ToElementPNG(render.Design(embedDesignFileAssets(fetch, file)), 0, 0.25)
 }
 
 func templatesDeleteHandler(tm *templates.Service) http.HandlerFunc {
