@@ -74,6 +74,44 @@ func TestRenderTemplatePreviewCreatesScaledPNG(t *testing.T) {
 	}
 }
 
+func TestRenderTemplateOverlayCreatesTransparentScaledPNG(t *testing.T) {
+	color := func(r, g, b float64) map[string]any {
+		return map[string]any{"srgb": map[string]any{"r": r, "g": g, "b": b, "a": 1.0}}
+	}
+	file := map[string]any{
+		"pages": []any{map[string]any{
+			"width": 100.0, "height": 200.0,
+			"background": map[string]any{"type": "solid", "color": color(1, 1, 1)},
+			"children": []any{map[string]any{
+				"id": "banner", "type": "shape", "shape": "rect",
+				"transform": map[string]any{"x": 20.0, "y": 40.0, "scaleX": 1.0, "scaleY": 1.0, "rotation": 0.0},
+				"size":      map[string]any{"width": 60.0, "height": 40.0},
+				"fills":     []any{map[string]any{"type": "solid", "color": color(1, 0, 0)}},
+			}},
+		}},
+	}
+
+	data, err := renderTemplateOverlay(file, nil)
+	if err != nil {
+		t.Fatalf("renderTemplateOverlay: %v", err)
+	}
+	image, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("decode overlay PNG: %v", err)
+	}
+	if image.Bounds().Dx() != 25 || image.Bounds().Dy() != 50 {
+		t.Fatalf("overlay dimensions = %dx%d, want 25x50", image.Bounds().Dx(), image.Bounds().Dy())
+	}
+	_, _, _, alpha := image.At(0, 0).RGBA()
+	if alpha != 0 {
+		t.Fatalf("overlay background alpha = %d, want 0", alpha)
+	}
+	red, green, blue, alpha := image.At(12, 15).RGBA()
+	if alpha == 0 || red <= green || red <= blue {
+		t.Fatalf("overlay element = RGBA(%d, %d, %d, %d), want visible red template element", red, green, blue, alpha)
+	}
+}
+
 func TestTemplatePreviewAPIKeyRouteRequiresExportScope(t *testing.T) {
 	route, designID, ok := matchAPIKeyRoute(http.MethodGet, "/api/v1/templates/template-id/render.png")
 	if !ok {
@@ -81,6 +119,16 @@ func TestTemplatePreviewAPIKeyRouteRequiresExportScope(t *testing.T) {
 	}
 	if route.scope != apikeys.ScopeExport || designID != "" {
 		t.Fatalf("template preview route = scope %q design %q", route.scope, designID)
+	}
+}
+
+func TestTemplateOverlayAPIKeyRouteRequiresExportScope(t *testing.T) {
+	route, designID, ok := matchAPIKeyRoute(http.MethodGet, "/api/v1/templates/template-id/render-overlay.png")
+	if !ok {
+		t.Fatal("template overlay route is not available to API keys")
+	}
+	if route.scope != apikeys.ScopeExport || designID != "" {
+		t.Fatalf("template overlay route = scope %q design %q", route.scope, designID)
 	}
 }
 

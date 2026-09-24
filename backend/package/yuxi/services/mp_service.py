@@ -866,6 +866,7 @@ def _mp_hycanvas_template_item(item: dict[str, Any]) -> dict[str, Any]:
     return {
         **item,
         "preview_urls": [f"/api/mp/content/hycanvas-templates/{template_id}/preview"],
+        "overlay_url": f"/api/mp/content/hycanvas-templates/{template_id}/overlay",
     }
 
 
@@ -1196,6 +1197,19 @@ async def read_hycanvas_template_preview(template_id: str) -> tuple[bytes, str]:
         if exc.status_code == 503:
             raise _mp_error(503, "HYCANVAS_NOT_CONFIGURED", "封面模板服务尚未配置") from exc
         raise _mp_error(404, "HYCANVAS_TEMPLATE_PREVIEW_MISSING", "封面模板预览不可用") from exc
+
+
+async def read_hycanvas_template_overlay(template_id: str) -> tuple[bytes, str]:
+    if not _HYCANVAS_TEMPLATE_ID.fullmatch(template_id):
+        raise _mp_error(404, "HYCANVAS_TEMPLATE_NOT_FOUND", "封面模板不存在")
+    from yuxi.services.hycanvas_service import HyCanvasClient
+
+    try:
+        return await HyCanvasClient.from_env().render_template_overlay_png(template_id)
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            raise _mp_error(503, "HYCANVAS_NOT_CONFIGURED", "封面模板服务尚未配置") from exc
+        raise _mp_error(404, "HYCANVAS_TEMPLATE_OVERLAY_MISSING", "封面模板透明图不可用") from exc
 
 
 async def _next_code_for_user(db: AsyncSession, user: User) -> str:

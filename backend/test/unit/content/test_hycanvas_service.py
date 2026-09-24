@@ -126,6 +126,29 @@ async def test_renders_custom_template_preview_through_hycanvas():
 
 
 @pytest.mark.asyncio
+async def test_renders_template_overlay_through_hycanvas():
+    template_id = "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/api/v1/templates/{template_id}/render-overlay.png"
+        assert request.headers["Authorization"] == "Bearer hyk_test"
+        return httpx.Response(200, content=b"transparent-png", headers={"content-type": "image/png"})
+
+    client = HyCanvasClient(
+        base_url="http://hycanvas",
+        public_url="http://canvas.example",
+        api_key="hyk_test",
+        workspace_id="ws-1",
+        transport=httpx.MockTransport(handler),
+    )
+
+    content, content_type = await client.render_template_overlay_png(template_id)
+
+    assert content == b"transparent-png"
+    assert content_type == "image/png"
+
+
+@pytest.mark.asyncio
 async def test_fetches_xiaohongshu_template_preview_png():
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/template-previews/xiaohongshu-checklist-p0.png"

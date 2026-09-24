@@ -115,6 +115,9 @@ async def test_mp_sms_login_me_schema_and_pc_token_isolation(test_client, admin_
             assert data["hycanvas_templates"][0]["preview_urls"][0].startswith(
                 "/api/mp/content/hycanvas-templates/"
             )
+            assert data["hycanvas_templates"][0]["overlay_url"].startswith(
+                "/api/mp/content/hycanvas-templates/"
+            )
 
         review_schema = await test_client.get(
             "/api/mp/content/form-schema",

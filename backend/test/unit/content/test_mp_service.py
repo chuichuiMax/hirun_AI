@@ -23,6 +23,7 @@ from yuxi.services.mp_service import (
     map_nrlx_to_ct_code,
     mask_phone,
     next_mp_content_code,
+    read_hycanvas_template_overlay,
     read_hycanvas_template_preview,
     resolve_content_goal,
 )
@@ -424,6 +425,7 @@ def test_mp_hycanvas_template_item_rewrites_preview_to_mp_proxy():
         }
     )
     assert item["preview_urls"] == [f"/api/mp/content/hycanvas-templates/{template_id}/preview"]
+    assert item["overlay_url"] == f"/api/mp/content/hycanvas-templates/{template_id}/overlay"
     assert item["title"] == "小红书爆款封面"
 
 
@@ -450,6 +452,33 @@ async def test_read_hycanvas_template_preview_accepts_workspace_id(monkeypatch):
 async def test_read_hycanvas_template_preview_rejects_invalid_id():
     with pytest.raises(HTTPException) as exc:
         await read_hycanvas_template_preview("not-a-template-id")
+    assert exc.value.status_code == 404
+    assert exc.value.detail["error"]["code"] == "HYCANVAS_TEMPLATE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_read_hycanvas_template_overlay_accepts_workspace_id(monkeypatch):
+    template_id = "8bc32ed9-f80a-47e2-8e2b-913e35c125c8"
+
+    class Client:
+        async def render_template_overlay_png(self, requested_id):
+            assert requested_id == template_id
+            return b"transparent-png", "image/png"
+
+        @classmethod
+        def from_env(cls):
+            return Client()
+
+    monkeypatch.setattr("yuxi.services.hycanvas_service.HyCanvasClient", Client)
+    data, content_type = await read_hycanvas_template_overlay(template_id)
+    assert data == b"transparent-png"
+    assert content_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_read_hycanvas_template_overlay_rejects_invalid_id():
+    with pytest.raises(HTTPException) as exc:
+        await read_hycanvas_template_overlay("not-a-template-id")
     assert exc.value.status_code == 404
     assert exc.value.detail["error"]["code"] == "HYCANVAS_TEMPLATE_NOT_FOUND"
 

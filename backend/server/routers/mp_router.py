@@ -44,6 +44,7 @@ from yuxi.services.mp_service import (
     logout,
     read_cover_file,
     read_cover_template_file,
+    read_hycanvas_template_overlay,
     read_hycanvas_template_preview,
     read_mp_gallery_item_file,
     read_mp_gallery_item_thumbnail,
@@ -159,6 +160,15 @@ async def mp_hycanvas_template_preview(
     _ctx: MpContext = Depends(get_mp_context),
 ):
     data, content_type = await read_hycanvas_template_preview(template_id)
+    return Response(content=data, media_type=content_type)
+
+
+@mp.get("/content/hycanvas-templates/{template_id}/overlay")
+async def mp_hycanvas_template_overlay(
+    template_id: str,
+    _ctx: MpContext = Depends(get_mp_context),
+):
+    data, content_type = await read_hycanvas_template_overlay(template_id)
     return Response(content=data, media_type=content_type)
 
 

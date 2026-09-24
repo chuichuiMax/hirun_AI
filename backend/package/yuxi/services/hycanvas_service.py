@@ -326,6 +326,12 @@ class HyCanvasClient:
         response = await self._send("GET", f"/api/v1/templates/{quote(template_id, safe='')}/render.png")
         return response.content, response.headers.get("content-type", "image/png")
 
+    async def render_template_overlay_png(self, template_id: str) -> tuple[bytes, str]:
+        response = await self._send(
+            "GET", f"/api/v1/templates/{quote(template_id, safe='')}/render-overlay.png"
+        )
+        return response.content, response.headers.get("content-type", "image/png")
+
     async def render_template_with_background_png(
         self,
         template_id: str,
