@@ -6,28 +6,31 @@ const api = readFileSync(new URL('../src/apis/material_library_api.js', import.m
 const view = readFileSync(new URL('../src/views/MaterialLibraryView.vue', import.meta.url), 'utf8')
 
 assert.match(api, /root_only/)
+assert.match(view, /privateRootCategoryId = 'private-root'/)
+assert.match(view, /name: '我的素材'/)
 assert.match(view, /async function loadRootItems\(\)/)
 assert.match(view, /Promise\.all\(\[loadGalleries\(\), loadRootItems\(\)\]\)/)
 assert.match(view, /我的素材图片/)
+assert.match(view, /root_only: true/)
+assert.match(view, /uploadCategory\.value = activeGallery\.value \|\| uploadCategories\.value\[0\]\?\.id \|\| ''/)
+assert.match(view, /!gallery\.is_system && gallery\.can_manage/)
+assert.match(view, /target: \{ scope, gallery_id: null \}/)
 assert.match(view, /FolderPlus[^\n]*新建图库/)
-assert.match(view, /privateRootCategoryId = 'private-root'/)
 assert.match(view, /v-if="isGalleryRoot && rootTotal > 24"[^\n]*v-model:current="rootPage"/)
 assert.match(view, /const editLocationOptions = computed/)
 assert.match(view, /location: editForm\.location/)
-assert.match(view, /target: \{ scope, gallery_id: null \}/)
 assert.match(view, /watch\(materialScope,/)
-assert(view.indexOf('v-for="group in galleryGroups"') < view.indexOf('我的素材图片'), 'custom gallery cards precede root images')
+assert(view.indexOf('v-for="group in galleryGroups"') < view.indexOf('我的素材图片'), 'gallery cards precede root images')
 
-// Evaluate the card's actual location interpolation using stored backend root names.
 const cardLocationExpression = view.match(/<small>上传者 \{\{ item\.uploaded_by_name \}\} · \{\{ (.*?) \}\}/)?.[1]
 assert(cardLocationExpression, 'image card must include a location label')
 const cardLocationLabel = new Function('isGalleryRoot', 'materialScope', 'item', `return (${cardLocationExpression})`)
 for (const fixture of [
   { root: true, scope: 'private', item: { category: 'private-root', category_name: '我的素材（根目录）' }, label: '我的素材' },
-  { root: true, scope: 'private', item: { category: 'uncategorized', category_name: '未分类' }, label: '我的素材' },
-  { root: false, scope: 'private', item: { category: 'uncategorized', category_name: '未分类' }, label: '未分类' },
+  { root: false, scope: 'private', item: { category: 'product', category_name: 'AI生图图库' }, label: 'AI生图图库' },
+  { root: false, scope: 'private', item: { category: 'uncategorized', category_name: '我的图库' }, label: '我的图库' },
   { root: true, scope: 'enterprise', item: { category: 'enterprise-root', category_name: '企业素材' }, label: '企业共享' },
-  { root: false, scope: 'private', item: { category: 'folder', category_name: '背景' }, label: '背景' },
+  { root: false, scope: 'private', item: { category: 'folder', category_name: '自建图库' }, label: '自建图库' },
   { root: false, scope: 'private', item: { material_type: 'cover_template', category_name: '活动海报' }, label: '活动海报' }
 ]) {
   assert.equal(cardLocationLabel(fixture.root, fixture.scope, fixture.item), fixture.label,
@@ -42,9 +45,8 @@ assert.equal(rootUrl.searchParams.get('root_only'), 'true')
 assert.equal(rootUrl.searchParams.get('page'), '2')
 assert.equal(apiClient.listItems({ category: 'folder' }), '/api/material-library/items?category=folder')
 
-console.log('material root static contract passed')
+console.log('personal material root static contract passed')
 
-// Exercise the real setup functions; only network, browser URL and UI messages are replaced.
 const script = view.match(/<script setup>([\s\S]*?)<\/script>/)[1]
   .replace(/^import [\s\S]*? from ['"][^'"]+['"]\r?\n/gm, '')
   .replace('import.meta.env.BASE_URL', "'/'")
@@ -52,7 +54,6 @@ const setup = new Function('computed', 'reactive', 'ref', 'watch', 'onBeforeUnmo
 return { loadRoot, loadItems, materialScope, activeGallery, categories, rootItems, rootTotal,
   rootPage, galleries, loading, search, queryInput, showEdit, saveEdit, editForm, editLocationOptions }
 `)
-// The planned static checker is dependency-free; opt in to Vue runtime checks after installation.
 if (!process.argv.includes('--behavior')) process.exit(0)
 const { computed, effectScope, nextTick, reactive, ref, watch } = await import('vue')
 const deferred = () => {
@@ -88,7 +89,7 @@ const state = scope.run(() => setup(computed, reactive, ref,
     revokeObjectURL: (url) => liveUrls.delete(url)
   }, { error: (error) => errors.push(error), warning: (error) => errors.push(error), success: () => {} }))
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve() }
-const gallery = { id: 'folder', code: 'folder', name: '背景', visibility: 'private', cover_item_id: 'cover' }
+const gallery = { id: 'folder', code: 'folder', name: '自建图库', visibility: 'private', cover_item_id: 'cover' }
 
 try {
   const first = state.loadRoot()
@@ -160,4 +161,4 @@ try {
   unmount()
   scope.stop()
 }
-console.log('material root behavior checks passed')
+console.log('personal material root behavior checks passed')

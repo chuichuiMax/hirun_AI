@@ -29,6 +29,7 @@ from yuxi.image_design.save_targets import (
 from yuxi.image_design.schemas import ImageDesignSaveTarget
 from yuxi.services.material_library_categories import (
     DEFAULT_IMAGE_CATEGORY_IDS,
+    RETIRED_PRIVATE_IMAGE_CATEGORY_IDS,
     list_material_categories,
     resolve_legacy_category,
 )
@@ -461,21 +462,26 @@ async def ensure_material_categories(
     material_type: Literal["image", "cover_template"],
 ) -> list[ContentMaterialCategory]:
     repo = MaterialLibraryRepository(db)
-    await repo.ensure_default_categories(
-        [
-            {
-                "owner_uid": owner_uid,
-                "id": definition["code"],
-                "tenant_id": tenant_id,
-                "material_type": material_type,
-                "name": definition["name"],
-                "description": definition["description"],
-                "sort_order": index * 10,
-                "is_system": definition["code"] == "uncategorized",
-            }
-            for index, definition in enumerate(list_material_categories(material_type))
-        ]
-    )
+    values = [
+        {
+            "owner_uid": owner_uid,
+            "id": definition["code"],
+            "tenant_id": tenant_id,
+            "material_type": material_type,
+            "visibility": "private",
+            "parent_id": None,
+            "industry_slug": "uncategorized",
+            "name": definition["name"],
+            "description": definition["description"],
+            "sort_order": index * 10,
+            "is_system": material_type == "image" or definition["code"] == "uncategorized",
+        }
+        for index, definition in enumerate(list_material_categories(material_type))
+    ]
+    if material_type == "image":
+        await repo.sync_system_categories(values)
+    else:
+        await repo.ensure_default_categories(values)
     categories = await repo.list_categories(owner_uid, material_type)
     fallback = next(
         category
@@ -1000,8 +1006,6 @@ async def list_material_items(
     category_ids = None
     if root is not None:
         category_ids = [root.id]
-        if scope == "private":
-            category_ids.extend(sorted(DEFAULT_IMAGE_CATEGORY_IDS))
     if resolved_category is not None and include_descendants:
         children = await repo.list_child_categories(
             resolved_category.owner_uid,
@@ -1155,6 +1159,7 @@ async def get_material_categories(
         category
         for category in await repo.list_categories(_owner_uid(user), material_type)
         if not is_storage_root(category)
+        and (material_type != "image" or category.id not in RETIRED_PRIVATE_IMAGE_CATEGORY_IDS)
         and (
             include_private_defaults
             or material_type != "image"
@@ -1293,6 +1298,8 @@ async def update_material_category(
         raise _error(404, "MATERIAL_CATEGORY_NOT_FOUND", "图库或分类不存在")
     if not _can_manage_category(user, category):
         raise _error(403, "MATERIAL_CATEGORY_FORBIDDEN", "只有管理员可管理企业共享图库")
+    if category.is_system:
+        raise _error(409, "MATERIAL_CATEGORY_SYSTEM_REQUIRED", "系统图库不能修改")
     changes = payload.model_dump(exclude_unset=True)
     if "visibility" in changes and changes["visibility"] != category.visibility:
         if not _is_admin(user) or material_type != "image" or category.parent_id or category.is_system:
@@ -1406,7 +1413,7 @@ async def delete_material_category(
     if not _can_manage_category(user, category):
         raise _error(403, "MATERIAL_CATEGORY_FORBIDDEN", "只有管理员可管理企业共享图库")
     if category.is_system:
-        raise _error(409, "MATERIAL_CATEGORY_SYSTEM_REQUIRED", "未分类是系统兜底项，不能删除")
+        raise _error(409, "MATERIAL_CATEGORY_SYSTEM_REQUIRED", "系统图库不能删除")
     children = await repo.list_child_categories(_owner_uid(user), material_type, category.id)
     if children:
         raise _error(409, "MATERIAL_CATEGORY_HAS_CHILDREN", "一级图库仍有二级图库，请先移动或删除二级图库")
@@ -1453,6 +1460,7 @@ async def list_image_galleries(
         category
         for category in await repo.list_categories(_owner_uid(user), "image")
         if not is_storage_root(category)
+        and category.id not in RETIRED_PRIVATE_IMAGE_CATEGORY_IDS
         and (
             include_private_defaults
             or category.visibility != "private"

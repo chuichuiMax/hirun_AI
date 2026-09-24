@@ -10,6 +10,7 @@ from yuxi.image_design.save_targets import (
     ENTERPRISE_ROOT_OWNER_UID,
     PRIVATE_ROOT_CATEGORY_ID,
     list_writable_save_targets,
+    resolve_mp_save_target,
     resolve_writable_save_target,
     list_mp_save_targets,
     validate_mp_save_target,
@@ -55,6 +56,18 @@ class FakeMaterialLibraryRepository:
                 self.categories.append(ContentMaterialCategory(**value))
                 existing.add(key)
 
+    async def sync_system_categories(self, values):
+        existing = {(item.owner_uid, item.material_type, item.id): item for item in self.categories}
+        for value in values:
+            key = (value["owner_uid"], value["material_type"], value["id"])
+            if key not in existing:
+                self.categories.append(ContentMaterialCategory(**value))
+                continue
+            category = existing[key]
+            for field, field_value in value.items():
+                setattr(category, field, field_value)
+            category.deleted_at = None
+
     async def get_category_exact(
         self,
         *,
@@ -76,12 +89,15 @@ class FakeMaterialLibraryRepository:
         return None
 
     async def list_categories(self, owner_uid: str, material_type: str):
-        return [
-            category
-            for category in self.categories
-            if category.material_type == material_type
-            and (category.owner_uid == owner_uid or category.visibility == "enterprise")
-        ]
+        return sorted(
+            (
+                category
+                for category in self.categories
+                if category.material_type == material_type
+                and (category.owner_uid == owner_uid or category.visibility == "enterprise")
+            ),
+            key=lambda category: (category.sort_order is None, category.sort_order or 0),
+        )
 
 
 @pytest.fixture
@@ -215,6 +231,8 @@ async def test_writable_target_list_hides_storage_roots_and_keeps_scope_paths(or
     assert private["label"] == "我的素材"
     assert enterprise["label"] == "企业图库"
     assert private["folders"] == [
+        {"id": "product", "name": "AI生图图库", "parent_id": None, "path": "AI生图图库"},
+        {"id": "uncategorized", "name": "我的图库", "parent_id": None, "path": "我的图库"},
         {"id": "private-parent", "name": "我的一级图库", "parent_id": None, "path": "我的一级图库"},
         {
             "id": "private-child",
@@ -237,9 +255,9 @@ async def test_writable_target_list_hides_storage_roots_and_keeps_scope_paths(or
 
 
 @pytest.mark.asyncio
-async def test_mp_targets_are_private_root_and_one_existing_generated_gallery(ordinary_user):
+async def test_mp_targets_keep_pc_root_but_resolve_private_generation_to_ai_gallery(ordinary_user):
     FakeMaterialLibraryRepository.categories = [
-        _category("ordinary-user", "uncategorized", visibility="private", name="未分类", is_system=True),
+        _category("ordinary-user", "uncategorized", visibility="private", name="我的图库", is_system=True),
         _category("admin", "generated-real-id", visibility="enterprise", name="生图图库"),
         _category("admin", "case", visibility="enterprise", name="案例图库"),
     ]
@@ -250,6 +268,9 @@ async def test_mp_targets_are_private_root_and_one_existing_generated_gallery(or
     assert not is_storage_root(FakeMaterialLibraryRepository.categories[0])
     resolved = await resolve_writable_save_target(object(), ordinary_user, SaveTarget(scope="private"))
     assert resolved.category_id == "private-root"
+    mp_resolved = await resolve_mp_save_target(object(), ordinary_user, SaveTarget(scope="private"))
+    assert mp_resolved.category_id == "product"
+    assert mp_resolved.public_target == {"scope": "private", "gallery_id": None}
     await validate_mp_save_target(
         object(), ordinary_user, SaveTarget(scope="enterprise", gallery_id="generated-real-id")
     )

@@ -1022,7 +1022,7 @@ onBeforeUnmount(releasePreviews)
               <span class="gallery-copy"><strong>{{ gallery.name }}</strong><small>{{ gallery.description || '暂未填写图库说明' }}</small><em v-if="isGalleryRoot">{{ gallery.industry_name }}</em></span>
             </button>
             <div class="gallery-actions">
-              <button v-if="gallery.can_manage" type="button" :aria-label="`编辑图库 ${gallery.name}`" title="编辑图库" @click="openEditCategory(gallery)"><Pencil :size="15" /></button>
+              <button v-if="!gallery.is_system && gallery.can_manage" type="button" :aria-label="`编辑图库 ${gallery.name}`" title="编辑图库" @click="openEditCategory(gallery)"><Pencil :size="15" /></button>
               <button v-if="!gallery.is_system && gallery.can_manage" type="button" class="danger" :aria-label="`删除图库 ${gallery.name}`" title="删除图库" @click="askDeleteCategory(gallery)"><Trash2 :size="15" /></button>
             </div>
           </article>

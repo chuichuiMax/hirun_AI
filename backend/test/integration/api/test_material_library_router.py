@@ -161,7 +161,7 @@ async def _seed_image_library_item(
     return item
 
 
-async def test_pc_private_root_includes_legacy_defaults_and_hides_system_folders(test_client, material_users):
+async def test_pc_private_root_only_lists_direct_images_and_shows_system_folders(test_client, material_users):
     engine = create_async_engine(os.environ["POSTGRES_URL"])
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory() as db:
@@ -229,10 +229,7 @@ async def test_pc_private_root_includes_legacy_defaults_and_hides_system_folders
             headers=material_users["owner"],
         )
         assert private_response.status_code == 200, private_response.text
-        assert {item["id"] for item in private_response.json()["items"]} == {
-            private.id,
-            legacy_private_root.id,
-        }
+        assert {item["id"] for item in private_response.json()["items"]} == {private.id}
         assert private_gallery.id not in {item["id"] for item in private_response.json()["items"]}
 
         enterprise_response = await test_client.get(
@@ -245,8 +242,7 @@ async def test_pc_private_root_includes_legacy_defaults_and_hides_system_folders
         galleries = await test_client.get("/api/material-library/galleries", headers=material_users["owner"])
         assert galleries.status_code == 200, galleries.text
         gallery_ids = {item["id"] for item in galleries.json()["galleries"]}
-        assert {private_gallery.category, enterprise_gallery.category} <= gallery_ids
-        assert "uncategorized" not in gallery_ids
+        assert {private_gallery.category, enterprise_gallery.category, "product", "uncategorized"} <= gallery_ids
         assert {"private-root", "enterprise-root"}.isdisjoint(gallery_ids)
     finally:
         async with session_factory() as db:
@@ -340,7 +336,7 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
     item = uploaded.json()["items"][0]
     assert item["material_type"] == "image"
     assert item["category"] == "product"
-    assert item["category_name"] == "产品商品"
+    assert item["category_name"] == "AI生图图库"
     assert "tags" not in item
 
     from yuxi.storage.postgres.models_content import ContentCoverAsset
@@ -365,9 +361,9 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
 
     categories = await test_client.get("/api/material-library/categories?material_type=image", headers=owner_headers)
     assert categories.status_code == 200, categories.text
-    assert {
-        entry["code"] for entry in categories.json()["categories"]
-    }.isdisjoint({"product", "people", "scene", "background", "decoration", "brand", "uncategorized"})
+    category_ids = {entry["code"] for entry in categories.json()["categories"]}
+    assert {"product", "uncategorized"} <= category_ids
+    assert category_ids.isdisjoint({"people", "scene", "background", "decoration", "brand"})
     cover_categories, cover_categories_again = await asyncio.gather(
         test_client.get(
             "/api/material-library/categories?material_type=cover_template",
@@ -386,13 +382,13 @@ async def test_material_image_round_trip_uses_private_image_bucket(test_client, 
     }
     galleries = await test_client.get("/api/material-library/galleries", headers=owner_headers)
     assert galleries.status_code == 200, galleries.text
-    assert "product" not in {entry["code"] for entry in galleries.json()["galleries"]}
+    assert "product" in {entry["code"] for entry in galleries.json()["galleries"]}
     private_root = await test_client.get(
         "/api/material-library/items?material_type=image&scope=private&root_only=true&query=fixture",
         headers=owner_headers,
     )
     assert private_root.status_code == 200, private_root.text
-    assert item["id"] in {entry["id"] for entry in private_root.json()["items"]}
+    assert item["id"] not in {entry["id"] for entry in private_root.json()["items"]}
 
     downloaded = await test_client.get(item["file_url"], headers=owner_headers)
     assert downloaded.status_code == 200, downloaded.text
@@ -463,6 +459,14 @@ async def test_image_gallery_crud_and_safe_item_reassignment(test_client, materi
         json={"name": "越权修改"},
     )
     assert other_update.status_code == 404, other_update.text
+
+    protected_update = await test_client.patch(
+        "/api/material-library/categories/product?material_type=image",
+        headers=headers,
+        json={"name": "不应修改"},
+    )
+    assert protected_update.status_code == 409, protected_update.text
+    assert protected_update.json()["detail"]["error"]["code"] == "MATERIAL_CATEGORY_SYSTEM_REQUIRED"
 
     protected = await test_client.request(
         "DELETE",
@@ -601,7 +605,7 @@ async def test_image_gallery_supports_exactly_one_nested_level(test_client, mate
         assert decoration_response.status_code == 200, decoration_response.text
         decoration_ids = {entry["id"] for entry in decoration_response.json()["galleries"]}
         assert {parent["id"], child["id"]} <= decoration_ids
-        assert "uncategorized" not in decoration_ids
+        assert {"product", "uncategorized"} <= decoration_ids
         assert "private-root" not in decoration_ids
 
         changed = await test_client.patch(

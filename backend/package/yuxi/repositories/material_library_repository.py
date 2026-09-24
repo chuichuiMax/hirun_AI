@@ -73,6 +73,43 @@ class MaterialLibraryRepository:
     async def ensure_default_categories(self, values: list[dict[str, Any]]) -> None:
         await self.db.execute(pg_insert(ContentMaterialCategory).values(values).on_conflict_do_nothing())
 
+    async def sync_system_categories(self, values: list[dict[str, Any]]) -> None:
+        """Create or restore fixed galleries without touching user-created galleries."""
+        for value in values:
+            category = await self.db.scalar(
+                select(ContentMaterialCategory).where(
+                    ContentMaterialCategory.owner_uid == value["owner_uid"],
+                    ContentMaterialCategory.material_type == value["material_type"],
+                    ContentMaterialCategory.id == value["id"],
+                )
+            )
+            if category is None:
+                self.db.add(ContentMaterialCategory(**value))
+                continue
+            for key in (
+                "tenant_id",
+                "visibility",
+                "parent_id",
+                "industry_slug",
+                "description",
+                "sort_order",
+                "is_system",
+            ):
+                setattr(category, key, value[key])
+            name_conflict = await self.db.scalar(
+                select(ContentMaterialCategory.id).where(
+                    ContentMaterialCategory.owner_uid == value["owner_uid"],
+                    ContentMaterialCategory.material_type == value["material_type"],
+                    ContentMaterialCategory.id != value["id"],
+                    func.lower(ContentMaterialCategory.name) == value["name"].lower(),
+                    ContentMaterialCategory.deleted_at.is_(None),
+                )
+            )
+            if name_conflict is None:
+                category.name = value["name"]
+            category.deleted_at = None
+        await self.db.flush()
+
     async def migrate_generated_private_root(self, owner_uid: str, root_id: str) -> None:
         """Move only explicitly recorded old root saves, preserving ordinary uncategorized images."""
         item = ContentMaterialLibraryItem

@@ -4,15 +4,14 @@ from typing import Literal
 
 MaterialType = Literal["image", "cover_template"]
 
+AI_GENERATED_GALLERY_ID = "product"
+MY_LIBRARY_GALLERY_ID = "uncategorized"
+RETIRED_PRIVATE_IMAGE_CATEGORY_IDS = frozenset({"people", "scene", "background", "decoration", "brand"})
+
 MATERIAL_CATEGORIES: dict[MaterialType, tuple[dict[str, str], ...]] = {
     "image": (
-        {"code": "product", "name": "产品商品", "description": "商品主体、产品细节、包装和展示图"},
-        {"code": "people", "name": "人物", "description": "人物肖像、模特、团队和动作姿态"},
-        {"code": "scene", "name": "场景", "description": "室内、户外、工作和生活场景"},
-        {"code": "background", "name": "背景", "description": "纯色、纹理、渐变和环境底图"},
-        {"code": "decoration", "name": "装饰", "description": "贴纸、图标、边框、光效和点缀元素"},
-        {"code": "brand", "name": "品牌", "description": "Logo、品牌标准图形和品牌专属素材"},
-        {"code": "uncategorized", "name": "未分类", "description": "待整理或无法判断用途的历史素材"},
+        {"code": AI_GENERATED_GALLERY_ID, "name": "AI生图图库", "description": "小程序生图工作流保存的图片"},
+        {"code": MY_LIBRARY_GALLERY_ID, "name": "我的图库", "description": "保留的个人图库图片"},
     ),
     "cover_template": (
         {"code": "product_promotion", "name": "产品推广", "description": "新品发布、卖点介绍和商品主视觉"},
@@ -36,7 +35,13 @@ def _aliases(material_type: MaterialType) -> dict[str, str]:
     aliases = {item["name"]: item["code"] for item in MATERIAL_CATEGORIES[material_type]}
     aliases.update({item["code"]: item["code"] for item in MATERIAL_CATEGORIES[material_type]})
     if material_type == "image":
-        aliases.update({"商品": "product", "产品": "product", "封面素材": "uncategorized"})
+        aliases.update({
+            "商品": AI_GENERATED_GALLERY_ID,
+            "产品": AI_GENERATED_GALLERY_ID,
+            "产品商品": AI_GENERATED_GALLERY_ID,
+            "未分类": MY_LIBRARY_GALLERY_ID,
+            "封面素材": MY_LIBRARY_GALLERY_ID,
+        })
     else:
         aliases.update({"产品": "product_promotion", "促销": "marketing", "封面素材": "uncategorized"})
     return aliases

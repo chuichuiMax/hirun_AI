@@ -67,7 +67,6 @@ async def material_categories(
         db,
         current_user,
         material_type,
-        include_private_defaults=False,
     )
 
 
@@ -112,7 +111,6 @@ async def image_galleries(
         db,
         current_user,
         industry_slug=industry_slug,
-        include_private_defaults=False,
     )
 
 

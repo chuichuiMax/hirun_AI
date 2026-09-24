@@ -8,6 +8,7 @@ from sqlalchemy.exc import MultipleResultsFound
 
 from yuxi.image_design.schemas import ImageDesignSaveTarget
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
+from yuxi.services.material_library_categories import AI_GENERATED_GALLERY_ID, list_material_categories
 from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import ContentMaterialCategory
 
@@ -52,6 +53,30 @@ def _save_target_error(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=422, detail={"error": {"code": code, "message": message}})
 
 
+async def ensure_private_system_galleries(db, user: User) -> None:
+    """Keep the two personal system galleries available for every existing and new user."""
+    owner_uid = str(user.uid)
+    tenant_id = str(user.department_id) if user.department_id is not None else None
+    await MaterialLibraryRepository(db, include_shared=True).sync_system_categories(
+        [
+            {
+                "owner_uid": owner_uid,
+                "id": definition["code"],
+                "tenant_id": tenant_id,
+                "material_type": "image",
+                "visibility": "private",
+                "parent_id": None,
+                "industry_slug": "uncategorized",
+                "name": definition["name"],
+                "description": definition["description"],
+                "sort_order": index * 10,
+                "is_system": True,
+            }
+            for index, definition in enumerate(list_material_categories("image"))
+        ]
+    )
+
+
 async def ensure_scope_root(
     db,
     user: User,
@@ -59,6 +84,7 @@ async def ensure_scope_root(
 ) -> ContentMaterialCategory:
     requester_uid = str(user.uid)
     if scope == "private":
+        await ensure_private_system_galleries(db, user)
         owner_uid = requester_uid
         category_id = PRIVATE_ROOT_CATEGORY_ID
         visibility = "private"
@@ -149,6 +175,23 @@ async def resolve_writable_save_target(
     if not can_contribute_to_category(user, category):
         raise _save_target_error("IMAGE_DESIGN_SAVE_TARGET_INVALID", "不能写入其他人的个人素材")
     return ResolvedSaveTarget(target.scope, category.id, category.id, category.owner_uid)
+
+
+async def resolve_mp_save_target(db, user: User, target: ImageDesignSaveTarget) -> ResolvedSaveTarget:
+    """Map the mini-program's fixed personal option to AI生图图库, not the PC root."""
+    if target.scope != "private" or target.gallery_id is not None:
+        return await resolve_writable_save_target(db, user, target)
+    await ensure_private_system_galleries(db, user)
+    category = await MaterialLibraryRepository(db, include_shared=True).get_category_exact(
+        requester_uid=str(user.uid),
+        material_type="image",
+        category_id=AI_GENERATED_GALLERY_ID,
+        category_owner_uid=str(user.uid),
+        visibility="private",
+    )
+    if category is None or not can_contribute_to_category(user, category):
+        raise _save_target_error("IMAGE_DESIGN_SAVE_TARGET_INVALID", "AI生图图库不可用")
+    return ResolvedSaveTarget("private", None, category.id, category.owner_uid)
 
 
 def _folder_path(category: ContentMaterialCategory, by_id: dict[str, ContentMaterialCategory]) -> str:

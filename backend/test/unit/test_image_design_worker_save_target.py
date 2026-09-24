@@ -43,6 +43,23 @@ class MemoryRepository:
             if not any(c.id == value["id"] and c.owner_uid == value["owner_uid"] for c in self.db.categories):
                 self.db.categories.append(ContentMaterialCategory(**value))
 
+    async def sync_system_categories(self, values):
+        for value in values:
+            category = next(
+                (
+                    item
+                    for item in self.db.categories
+                    if item.id == value["id"] and item.owner_uid == value["owner_uid"]
+                ),
+                None,
+            )
+            if category is None:
+                self.db.categories.append(ContentMaterialCategory(**value))
+                continue
+            for field, field_value in value.items():
+                setattr(category, field, field_value)
+            category.deleted_at = None
+
     async def get_category_exact(
         self, *, requester_uid, material_type, category_id, category_owner_uid=None, visibility=None
     ):
@@ -179,6 +196,21 @@ async def test_mp_worker_registers_both_libraries_in_existing_enterprise_gallery
         job_id="idj_test", workflow="room_adapt", mp_fixed_target=True,
     )
     assert len(db.design_library_items) == 1 and db.design_library_items[0].hidden_at is not None
+
+
+@pytest.mark.asyncio
+async def test_mp_worker_saves_private_option_to_ai_generated_gallery(db):
+    resolved, item = await worker.attach_generated_asset(
+        db,
+        user=db.user,
+        asset=asset(),
+        requested=ImageDesignSaveTarget(scope="private"),
+        job_id="idj_test",
+        workflow="room_adapt",
+        mp_fixed_target=True,
+    )
+    assert resolved.public_target == {"scope": "private", "gallery_id": None}
+    assert item.category == "product"
 
 
 @pytest.mark.asyncio

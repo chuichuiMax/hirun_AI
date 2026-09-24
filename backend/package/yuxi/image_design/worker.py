@@ -15,7 +15,12 @@ from sqlalchemy import select
 from yuxi.content_cover.image2_client import Image2Client, Image2Error
 from yuxi.content_cover.image2_settings import resolve_image2_config
 from yuxi.content_cover.schemas import Image2Input, Image2Request, Image2Submission
-from yuxi.image_design.save_targets import ResolvedSaveTarget, resolve_writable_save_target, validate_mp_save_target
+from yuxi.image_design.save_targets import (
+    ResolvedSaveTarget,
+    resolve_mp_save_target,
+    resolve_writable_save_target,
+    validate_mp_save_target,
+)
 from yuxi.image_design.schemas import ImageDesignSaveTarget
 from yuxi.image_design.service import resolve_image_input
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
@@ -201,8 +206,12 @@ async def attach_generated_asset(db, *, user, asset, requested, job_id, workflow
         allow_fallback = False
     if mp_fixed_target:
         await validate_mp_save_target(db, user, requested)
-    resolved = await resolve_writable_save_target(
-        db, user, requested, fallback_invalid_folder=allow_fallback and not mp_fixed_target,
+    resolved = (
+        await resolve_mp_save_target(db, user, requested)
+        if mp_fixed_target
+        else await resolve_writable_save_target(
+            db, user, requested, fallback_invalid_folder=allow_fallback,
+        )
     )
     metadata = {
         "source": "image_design",
