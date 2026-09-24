@@ -48,6 +48,34 @@ def test_deterministic_review_blocks_unsupported_numbers_and_claims():
     assert "CONTENT_HIGH_RISK_CLAIM" in codes
 
 
+def test_ai_edit_accepts_numbers_the_user_wrote_in_the_instruction():
+    shared = {
+        "body": "预算怎么花",
+        "topics": [],
+        "brief": {"required_terms": [], "forbidden_terms": []},
+        "evidence_bundle": {"items": [{"id": "ev_1", "value": "117㎡洋湖天序"}]},
+        "strategy": {"methods": ["M01"], "title_formula_code": "T05", "body_formula_code": "C01"},
+    }
+    blocked = validate_content(title="130㎡洋湖天序", **shared)
+    assert blocked["status"] == "blocked"
+    assert any(item["message"] == "数字“130㎡”没有出现在证据包中" for item in blocked["checks"])
+
+    allowed = validate_content(
+        title="130㎡洋湖天序",
+        confirmed_text="封面标题第一句修改为130㎡洋湖天序，第二句修改为预算即结算无隐形项",
+        **shared,
+    )
+    assert allowed["status"] == "passed"
+
+    still_blocked = validate_content(
+        title="130㎡洋湖天序",
+        confirmed_text="封面标题第一句修改为130㎡洋湖天序",
+        **{**shared, "body": "另外写了 88㎡"},
+    )
+    assert still_blocked["status"] == "blocked"
+    assert any("88㎡" in item["message"] for item in still_blocked["checks"])
+
+
 def test_deterministic_review_accepts_numbers_in_shared_evidence_bundle():
     report = validate_content(
         title="12周学习计划",

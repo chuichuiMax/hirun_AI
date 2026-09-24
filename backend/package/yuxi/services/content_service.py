@@ -2018,6 +2018,11 @@ async def ai_edit_content_artifact(
     except ValueError as exc:
         raise _content_error(422, "CONTENT_AI_EDIT_MODEL_OUTPUT_INVALID", str(exc)) from exc
     refined["topics"] = _clean_list(refined["topics"])
+    title_constraints: dict[str, Any] = {}
+    version_id = getattr(task, "channel_profile_version_id", None)
+    if version_id and hasattr(repo, "get_channel_strategy_profile"):
+        channel = await repo.get_channel_strategy_profile(version_id)
+        title_constraints = (channel or {}).get("title_constraints") or {}
     validation = validate_content(
         title=refined["title"],
         body=refined["body"],
@@ -2025,12 +2030,22 @@ async def ai_edit_content_artifact(
         brief=task.brief_json or {},
         evidence_bundle=evidence_snapshot,
         strategy=validation_strategy,
+        confirmed_text=payload.instruction,
+        title_constraints=title_constraints,
     )
     if validation["status"] == "blocked":
+        reasons = [
+            str(item.get("message") or "").strip()
+            for item in validation["checks"]
+            if item.get("level") == "error" and str(item.get("message") or "").strip()
+        ]
+        message = "AI 修改结果未通过内容校验，原版本未发生变化"
+        if reasons:
+            message = f"{message}：{'；'.join(reasons)}"
         raise _content_error(
             422,
             "CONTENT_AI_EDIT_VALIDATION_FAILED",
-            "AI 修改结果未通过内容校验，原版本未发生变化",
+            message,
             checks=validation["checks"],
         )
 

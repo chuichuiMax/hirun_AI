@@ -63,13 +63,19 @@ def evidence_number_tokens(evidence_bundle: dict[str, Any]) -> list[str]:
     return sorted(set(NUMBER_PATTERN.findall(evidence_text)))
 
 
-def unsupported_number_tokens(content: str, evidence_bundle: dict[str, Any]) -> list[str]:
+def unsupported_number_tokens(
+    content: str,
+    evidence_bundle: dict[str, Any],
+    *,
+    confirmed_text: str = "",
+) -> list[str]:
     evidence_text = " ".join(
         json.dumps(item.get("value"), ensure_ascii=False)
         for item in evidence_bundle.get("items") or []
         if item.get("value") is not None
     )
-    return sorted({number for number in NUMBER_PATTERN.findall(content) if number not in evidence_text})
+    allowed_text = f"{evidence_text}\n{confirmed_text or ''}"
+    return sorted({number for number in NUMBER_PATTERN.findall(content) if number not in allowed_text})
 
 
 def _problem_term_from_row(row: Any) -> str:
@@ -141,10 +147,12 @@ def validate_content(
     brief: dict[str, Any],
     evidence_bundle: dict[str, Any],
     strategy: dict[str, Any],
+    confirmed_text: str = "",
+    title_constraints: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     combined = f"{title}\n{body}\n{' '.join(topics)}"
-    for number in unsupported_number_tokens(combined, evidence_bundle):
+    for number in unsupported_number_tokens(combined, evidence_bundle, confirmed_text=confirmed_text):
         checks.append(
             {
                 "code": "FACT_NUMBER_WITHOUT_SOURCE",
@@ -225,6 +233,19 @@ def validate_content(
                     "suggestion": "改为有边界、可验证的客观表达",
                 }
             )
+
+    maximum = (title_constraints or {}).get("max_length")
+    if maximum is not None and len(title) > int(maximum):
+        checks.append(
+            {
+                "code": "CHANNEL_TITLE_LONG",
+                "level": "error",
+                "location": "title",
+                "message": f"标题必须是完整的一句话，且不超过 {int(maximum)} 字（当前 {len(title)} 字）",
+                "evidence_ids": [],
+                "suggestion": "整句改写到上限以内，不要在半句处截断",
+            }
+        )
 
     if (
         not strategy.get("methods")

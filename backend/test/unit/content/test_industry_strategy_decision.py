@@ -83,11 +83,16 @@ def test_model_cannot_change_locked_scope(key, value):
         validate(candidates, result)
 
 
-def test_decoration_rejects_formula_scores():
+def test_decoration_strips_formula_scores_without_retry():
     candidates, result = example()
     result["title_assessments"][0]["total"] = 90
-    with pytest.raises(ValueError, match="不允许公式数值评分"):
-        validate(candidates, result)
+    result["title_assessments"][0]["dimensions"] = {"goal": 4}
+    result["body_assessments"][0]["total"] = 80
+    decision = validate(candidates, result)
+    assert decision.title_assessments[0].total is None
+    assert decision.title_assessments[0].dimensions == {}
+    assert decision.body_assessments[0].total is None
+    assert decision.method_assessments[0].total is not None
 
 
 @pytest.mark.parametrize(

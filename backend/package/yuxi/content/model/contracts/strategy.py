@@ -65,10 +65,10 @@ class StrategyDecisionV2(StrategyContract):
         if self.strategy_mode == "direction_scoped":
             if not self.direction_code:
                 raise ValueError("方向选式模式必须明确本次采用方向")
-            if any(
-                item.dimensions or item.total is not None for item in self.title_assessments + self.body_assessments
-            ):
-                raise ValueError("方向选式不允许公式数值评分")
+            # 公式配对按适用说明选择，数值评分不参与。模型常把手法分数抄到公式上，清空即可，不必再耗纠错额度。
+            for item in self.title_assessments + self.body_assessments:
+                item.dimensions = {}
+                item.total = None
         if len(self.creation_method_codes) != len(set(self.creation_method_codes)):
             raise ValueError("创作手法不能重复")
         if self.status == "selected":

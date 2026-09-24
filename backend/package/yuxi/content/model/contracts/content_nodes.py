@@ -1881,10 +1881,12 @@ def validate_content_node_result(
                 f"标题少于 {context.title_min_length} 字",
             )
         if context.title_max_length is not None and title_length > context.title_max_length:
-            result = result.model_copy(
-                update={
-                    "title": result.title.model_copy(update={"text": result.title.text[: context.title_max_length]})
-                }
+            lower = f"{context.title_min_length}～" if context.title_min_length is not None else ""
+            raise ContractDomainValidationError(
+                "channel_title_long",
+                "title.text",
+                f"标题必须是完整的一句话，且在 {lower}{context.title_max_length} 字以内（当前 {title_length} 字）。"
+                "请整句改写到上限以内，不要在半句处截断。",
             )
         _require_equal(result.outline.body_formula_code, context.locked_body_formula_code, "outline.body_formula_code")
         _validate_outline_calling_contract(result.outline, context)

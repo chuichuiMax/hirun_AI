@@ -1,7 +1,7 @@
 ---
 name: content-title-generator
 description: 按锁定策略一次生成最终标题（与正文同轮提交）。
-version: 2.8.1
+version: 2.8.2
 ---
 
 # 标题生成
@@ -17,6 +17,6 @@ version: 2.8.1
 1. Skill 已注入；`generate_content` 仅一次调用，直接 `submit_content_node_result`。
 2. 只用 `title_formula.code` 与 schema；`title_formula.lexicon_codes` 全部写入 `title.lexicon_usage`；词库 `required=true` 时从 `formula_lexicon_bundle.title.chunks` 取材。
 3. 只生成一个最终标题，与大纲正文一并提交 `GeneratedContentResultV1`。
-4. 字数满足 `channel_profile.title_constraints`（小红书 6～20 字）。
+4. 字数必须落在 `channel_profile.title_constraints` 内（小红书 6～20 字）。先写成完整一句再数字数；超限整句改短后提交。超过上限会校验失败，服务端不会截断。
 5. 爆款仿写：只借 `reference_blueprint` 槽位顺序，内容用当前证据；无证据槽位删除或改非事实表述。
 6. 变量不得扩大含义（预算≠已搞定、工期≠已完工）。
