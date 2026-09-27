@@ -1,7 +1,7 @@
 -- A user may hide a built-in template without deleting the shared seed. The
 -- templates service reads this table for every catalog request, so it must be
 -- present even when no seed has been hidden yet.
-CREATE TABLE "hidden_seed_templates" (
+CREATE TABLE IF NOT EXISTS "hidden_seed_templates" (
     "template_id" TEXT NOT NULL,
     "hidden_by" UUID NOT NULL,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),

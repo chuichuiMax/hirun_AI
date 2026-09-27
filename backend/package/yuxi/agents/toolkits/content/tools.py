@@ -297,7 +297,7 @@ def _hycanvas_template_fields(
                 value = sources["body_excerpt"]
         if role == "project_area":
             match = re.search(r"\d+(?:\.\d+)?", value)
-            value = match.group(0) if match else ""
+            value = f"{match.group(0)}m²" if match else ""
         elif role == "completion_year":
             match = re.search(r"(?:19|20)\d{2}", value)
             value = match.group(0) if match else ""

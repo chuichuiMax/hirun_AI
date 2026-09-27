@@ -4,7 +4,7 @@ import random
 import re
 from typing import Any
 
-BRAND_NAME = "鸿扬家居"
+BRAND_NAME = "鸿扬家装"
 CONSTRUCTION_BRAND = "鸿扬家装"
 # 获客文案口径：鸿扬是定制化家装，禁止写成整装/标准化整装。
 BRAND_POSITIONING = "定制化家装"

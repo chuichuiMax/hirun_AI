@@ -1136,7 +1136,7 @@ def test_hycanvas_template_fields_resolve_semantics_and_constraints():
     )
 
     assert fields == {
-        "项目面积": "152",
+        "项目面积": "152m²",
         "项目名称": "岳阳·杏林小区",
         "封面标题": "住进理想新家",
     }

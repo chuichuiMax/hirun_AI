@@ -245,7 +245,7 @@ def test_map_service_entry_form_values_quotation_list_brand_over_price():
     assert "不以低价作为卖点" in mapped["advantage"]
     assert "留言私信" not in mapped["writing_instruction"]
     assert "报价参考" not in mapped["writing_instruction"]
-    assert "鸿扬家居品牌" in mapped["advantage"]
+    assert "鸿扬家装品牌" in mapped["advantage"]
     assert "定制化家装" in mapped["advantage"]
     assert "整装" not in mapped["advantage"]
     assert mapped["brand_positioning"] == "定制化家装"
@@ -348,7 +348,7 @@ def test_map_service_entry_form_values_keeps_configured_names():
     )
     assert mapped["楼盘信息"] == "星河湾"
     assert mapped["project_type"] == "星河湾"
-    assert mapped["brand_name"] == "鸿扬家居"
+    assert mapped["brand_name"] == "鸿扬家装"
     assert mapped["construction_brand"] == "鸿扬家装"
     assert mapped["brand_positioning"] == "定制化家装"
     assert "定制化家装" in mapped["advantage"]
