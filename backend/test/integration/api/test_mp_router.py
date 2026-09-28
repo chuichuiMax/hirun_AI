@@ -198,7 +198,9 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
         assert schema.status_code == 200, schema.text
         schema_data = schema.json()
         type_code = next(item["type_code"] for item in schema_data["content_types"] if item["name"] == "工艺施工展示")
-        process_vars = next(item["variables"] for item in schema_data["content_types"] if item["name"] == "工艺施工展示")
+        process_vars = next(
+            item["variables"] for item in schema_data["content_types"] if item["name"] == "工艺施工展示"
+        )
         form_values = {
             field["key"]: (
                 "毛坯装修三口之家"
@@ -273,7 +275,7 @@ async def test_mp_compile_brief_requires_cover_and_creates_locked_task(test_clie
         picked = await test_client.get(
             "/api/mp/content/gallery-items",
             headers=mp_headers,
-            params={"category": "uncategorized"},
+            params={"category": "mp-uploads-private", "scope": "private"},
         )
         assert picked.status_code == 200, picked.text
         used_item = next(

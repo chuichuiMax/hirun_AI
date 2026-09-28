@@ -592,11 +592,37 @@ async def import_material_images(
     *,
     category: str,
     design_style: str | None = None,
+    source_channel: Literal["pc", "mp"] = "pc",
+    source_folder: Literal["rough", "uploads"] | None = None,
 ) -> dict[str, Any]:
     if not files or len(files) > 50:
         raise _error(422, "MATERIAL_FILE_COUNT_INVALID", "每次必须上传 1–50 张图片")
     owner_uid = _owner_uid(user)
-    resolved_category, style = await _resolve_upload_category(db, user, category, design_style)
+    if source_channel == "mp":
+        from yuxi.services.personal_materials import upload_category
+
+        source_folder = source_folder or "uploads"
+        resolved_category = await upload_category(db, user, source_folder, "mp")
+        style = None
+    else:
+        resolved_category, style = await _resolve_upload_category(db, user, category, design_style)
+    if source_channel == "pc" and (
+        resolved_category.name in {"我的上传", "我的图库"}
+        or resolved_category.id in {"uncategorized", "private-root"}
+    ):
+        from yuxi.services.personal_materials import upload_category
+
+        source_folder = "uploads"
+        resolved_category = await upload_category(db, user, "uploads", "pc")
+        style = None
+    elif source_channel == "pc" and (
+        resolved_category.image_design_role == "rough" or resolved_category.name in {"毛坯房图库", "毛胚房图库"}
+    ):
+        source_folder = "rough"
+        if resolved_category.visibility != "enterprise":
+            from yuxi.services.personal_materials import upload_category
+
+            resolved_category = await upload_category(db, user, "rough", "pc")
     category_id = resolved_category.id
     results: list[dict[str, Any]] = []
     staged_ids: list[str] = []
@@ -647,6 +673,8 @@ async def import_material_images(
                 object_name=object_name,
                 metadata_json={
                     "original_content_type": file.content_type or "",
+                    "source_channel": source_channel,
+                    "source_folder": source_folder,
                     "ingest_status": INGEST_PENDING,
                     "redis_key": material_upload_redis_key(asset_id),
                 },
@@ -657,7 +685,12 @@ async def import_material_images(
                 material_type="image",
                 name=Path(file.filename).stem,
                 category=resolved_category.id,
-                metadata={"design_style": style} if style else None,
+                category_owner_uid=resolved_category.owner_uid,
+                metadata={
+                    "source_channel": source_channel,
+                    "source_folder": source_folder,
+                    **({"design_style": style} if style else {}),
+                },
             )
             _audit(db, user, "material.upload", item_id=item.id, category_id=resolved_category.id)
             await db.commit()
@@ -1557,7 +1590,7 @@ async def delete_material_item(db: AsyncSession, user: User, item_id: str) -> di
     category = await repo.get_category(item.category_owner_uid or item.owner_uid, item.material_type, item.category)
     if category is None or not _can_manage_item(user, item, category):
         raise _error(403, "MATERIAL_MANAGE_FORBIDDEN", "只能删除自己上传的素材，管理员可删除企业共享素材")
-    if (item.metadata_json or {}).get("ever_shared"):
+    if (item.metadata_json or {}).get("ever_shared") or (item.metadata_json or {}).get("retain_asset_on_delete"):
         item.deleted_at = utc_now_naive()
         _audit(db, user, "material.remove", item_id=item.id, retained_for_designs=True)
         await db.commit()

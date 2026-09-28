@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.services.material_library_service import MaterialShareCreate, create_material_share
+from yuxi.services.personal_materials import folder_counts, list_folder
 from yuxi.services.mp_service import (
     AuthCancelPayload,
     AuthConfirmPayload,
@@ -202,6 +204,30 @@ async def mp_gallery_items(
     )
 
 
+@mp.get("/content/my-materials/folders")
+async def mp_my_material_folders(
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return {"folders": await folder_counts(db, ctx.user)}
+
+
+@mp.get("/content/my-materials/{folder}")
+async def mp_my_material_items(
+    folder: Literal["rough", "generated", "uploads"],
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    ctx: MpContext = Depends(get_mp_context),
+    db: AsyncSession = Depends(get_db),
+):
+    return await list_folder(
+        db, ctx.user, folder, page=page, page_size=page_size,
+        date_from=date_from, date_to=date_to,
+    )
+
+
 @mp.get("/content/gallery-items/{item_id}/file")
 async def mp_gallery_item_file(
     item_id: str,
@@ -256,7 +282,10 @@ async def mp_work_file(
     db: AsyncSession = Depends(get_db),
 ):
     data, content_type, file_name = await read_mp_work_file(db, ctx, asset_id)
-    return Response(content=data, media_type=content_type, headers={"Content-Disposition": f'inline; filename="{file_name}"'})
+    return Response(
+        content=data, media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{file_name}"'},
+    )
 
 
 @mp.delete("/image/works/{asset_id}")
@@ -288,10 +317,11 @@ async def mp_upload_cover(
     file: UploadFile = File(...),
     category: str = Form("uncategorized"),
     design_style: str | None = Form(None),
+    folder: Literal["rough", "uploads"] = Form("uploads"),
     ctx: MpContext = Depends(get_mp_context),
     db: AsyncSession = Depends(get_db),
 ):
-    return await upload_cover(db, ctx, file, category=category, design_style=design_style)
+    return await upload_cover(db, ctx, file, category=category, design_style=design_style, folder=folder)
 
 
 @mp.get("/content/covers/{asset_id}/file")

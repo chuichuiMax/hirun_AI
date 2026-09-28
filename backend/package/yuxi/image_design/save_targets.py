@@ -8,7 +8,7 @@ from sqlalchemy.exc import MultipleResultsFound
 
 from yuxi.image_design.schemas import ImageDesignSaveTarget
 from yuxi.repositories.material_library_repository import MaterialLibraryRepository
-from yuxi.services.material_library_categories import AI_GENERATED_GALLERY_ID, list_material_categories
+from yuxi.services.material_library_categories import list_material_categories
 from yuxi.storage.postgres.models_business import User
 from yuxi.storage.postgres.models_content import ContentMaterialCategory
 
@@ -178,20 +178,15 @@ async def resolve_writable_save_target(
 
 
 async def resolve_mp_save_target(db, user: User, target: ImageDesignSaveTarget) -> ResolvedSaveTarget:
-    """Map the mini-program's fixed personal option to AI生图图库, not the PC root."""
-    if target.scope != "private" or target.gallery_id is not None:
-        return await resolve_writable_save_target(db, user, target)
-    await ensure_private_system_galleries(db, user)
-    category = await MaterialLibraryRepository(db, include_shared=True).get_category_exact(
-        requester_uid=str(user.uid),
-        material_type="image",
-        category_id=AI_GENERATED_GALLERY_ID,
-        category_owner_uid=str(user.uid),
-        visibility="private",
-    )
-    if category is None or not can_contribute_to_category(user, category):
-        raise _save_target_error("IMAGE_DESIGN_SAVE_TARGET_INVALID", "AI生图图库不可用")
-    return ResolvedSaveTarget("private", None, category.id, category.owner_uid)
+    """All mini-program effects enter the enterprise result gallery."""
+    from yuxi.services.personal_materials import folder_categories
+
+    gallery = (await folder_categories(db, user))["generated"][0]
+    if target.scope == "enterprise" and target.gallery_id != gallery.id:
+        raise _save_target_error("IMAGE_DESIGN_SAVE_TARGET_INVALID", "请选择生图图库")
+    if target.scope == "private" and target.gallery_id is not None:
+        raise _save_target_error("IMAGE_DESIGN_SAVE_TARGET_INVALID", "请选择生图图库")
+    return ResolvedSaveTarget("enterprise", gallery.id, gallery.id, gallery.owner_uid)
 
 
 def _folder_path(category: ContentMaterialCategory, by_id: dict[str, ContentMaterialCategory]) -> str:
@@ -244,30 +239,19 @@ async def list_writable_save_targets(db, user: User) -> dict[str, list[dict[str,
 
 
 async def list_mp_save_targets(db, user: User) -> dict:
-    """Two fixed destinations; never infer a shared root from a missing gallery."""
-    await ensure_scope_root(db, user, "private")
-    categories = await MaterialLibraryRepository(db, include_shared=True).list_categories(str(user.uid), "image")
-    galleries = [
-        category
-        for category in categories
-        if category.visibility == "enterprise"
-        and category.parent_id is None
-        and category.name == "生图图库"
-        and can_contribute_to_category(user, category)
-    ]
-    gallery = galleries[0] if len(galleries) == 1 else None
-    error = "" if gallery else ("存在多个企业生图图库，请联系管理员确认" if galleries else "企业生图图库不存在或不可用")
+    """Only the shared result destination is offered for new mini-program work."""
+    from yuxi.services.personal_materials import folder_categories
+
+    gallery = (await folder_categories(db, user))["generated"][0]
     return {
         "scopes": [
-            {"scope": "private", "label": "我的素材", "can_write_root": True, "folders": []},
+            {"scope": "private", "label": "个人图库", "can_write_root": False, "folders": []},
             {
                 "scope": "enterprise",
                 "label": "企业共享",
                 "can_write_root": False,
-                "error": error,
-                "folders": [{"id": gallery.id, "name": "生图图库", "path": "生图图库", "parent_id": None}]
-                if gallery
-                else [],
+                "error": "",
+                "folders": [{"id": gallery.id, "name": "生图图库", "path": "生图图库", "parent_id": None}],
             },
         ]
     }
@@ -275,7 +259,7 @@ async def list_mp_save_targets(db, user: User) -> dict:
 
 async def validate_mp_save_target(db, user: User, target: ImageDesignSaveTarget) -> None:
     if target.scope == "private" and target.gallery_id is None:
-        await ensure_scope_root(db, user, "private")
+        # Existing queued drafts may still carry the former personal choice.
         return
     scopes = (await list_mp_save_targets(db, user))["scopes"]
     enterprise = scopes[1]

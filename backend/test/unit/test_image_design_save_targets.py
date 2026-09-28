@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import AsyncMock
 from fastapi import HTTPException
 from pydantic import ValidationError
 
@@ -108,9 +109,11 @@ def ordinary_user():
 @pytest.fixture(autouse=True)
 def fake_repository(monkeypatch):
     from yuxi.image_design import save_targets
+    from yuxi.services import personal_materials
 
     FakeMaterialLibraryRepository.categories = []
     monkeypatch.setattr(save_targets, "MaterialLibraryRepository", FakeMaterialLibraryRepository)
+    monkeypatch.setattr(personal_materials, "MaterialLibraryRepository", FakeMaterialLibraryRepository)
 
 
 def test_root_target_normalizes_missing_gallery_id():
@@ -256,38 +259,43 @@ async def test_writable_target_list_hides_storage_roots_and_keeps_scope_paths(or
 
 @pytest.mark.asyncio
 async def test_mp_targets_keep_pc_root_but_resolve_private_generation_to_ai_gallery(ordinary_user):
+    db = type("Db", (), {"flush": AsyncMock()})()
     FakeMaterialLibraryRepository.categories = [
         _category("ordinary-user", "uncategorized", visibility="private", name="我的图库", is_system=True),
         _category("admin", "generated-real-id", visibility="enterprise", name="生图图库"),
         _category("admin", "case", visibility="enterprise", name="案例图库"),
     ]
-    private, enterprise = (await list_mp_save_targets(object(), ordinary_user))["scopes"]
-    assert private["can_write_root"] is True and private["folders"] == []
+    private, enterprise = (await list_mp_save_targets(db, ordinary_user))["scopes"]
+    assert private["can_write_root"] is False and private["folders"] == []
     assert enterprise["can_write_root"] is False
     assert [folder["id"] for folder in enterprise["folders"]] == ["generated-real-id"]
     assert not is_storage_root(FakeMaterialLibraryRepository.categories[0])
     resolved = await resolve_writable_save_target(object(), ordinary_user, SaveTarget(scope="private"))
     assert resolved.category_id == "private-root"
-    mp_resolved = await resolve_mp_save_target(object(), ordinary_user, SaveTarget(scope="private"))
-    assert mp_resolved.category_id == "product"
-    assert mp_resolved.public_target == {"scope": "private", "gallery_id": None}
+    mp_resolved = await resolve_mp_save_target(db, ordinary_user, SaveTarget(scope="private"))
+    assert mp_resolved.category_id == "generated-real-id"
+    assert mp_resolved.public_target == {"scope": "enterprise", "gallery_id": "generated-real-id"}
     await validate_mp_save_target(
-        object(), ordinary_user, SaveTarget(scope="enterprise", gallery_id="generated-real-id")
+        db, ordinary_user, SaveTarget(scope="enterprise", gallery_id="generated-real-id")
     )
     for target in [SaveTarget(scope="enterprise"), SaveTarget(scope="enterprise", gallery_id="case"),
                    SaveTarget(scope="private", gallery_id="uncategorized")]:
         with pytest.raises(HTTPException):
-            await validate_mp_save_target(object(), ordinary_user, target)
+            await validate_mp_save_target(db, ordinary_user, target)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("count", [0, 2])
 async def test_missing_or_ambiguous_generated_gallery_stays_unavailable(ordinary_user, count):
+    db = type("Db", (), {"flush": AsyncMock()})()
     FakeMaterialLibraryRepository.categories = [
         _category(f"admin-{i}", f"generated-{i}", visibility="enterprise", name="生图图库") for i in range(count)
     ]
-    private, enterprise = (await list_mp_save_targets(object(), ordinary_user))["scopes"]
-    assert private["can_write_root"] is True
-    assert enterprise["folders"] == [] and enterprise["error"]
-    with pytest.raises(HTTPException):
-        await validate_mp_save_target(object(), ordinary_user, SaveTarget(scope="enterprise", gallery_id="generated-0"))
+    if count == 2:
+        with pytest.raises(HTTPException):
+            await list_mp_save_targets(db, ordinary_user)
+    else:
+        private, enterprise = (await list_mp_save_targets(db, ordinary_user))["scopes"]
+        assert private["can_write_root"] is False
+        assert len(enterprise["folders"]) == 1
+        assert enterprise["folders"][0]["id"] == "mp-generated-shared"

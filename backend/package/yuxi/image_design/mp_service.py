@@ -292,10 +292,21 @@ async def upload_image(db: AsyncSession, user: User, file: UploadFile, *, role: 
             sha256=hashlib.sha256(normalized).hexdigest(),
             bucket_name=uploaded.bucket_name,
             object_name=uploaded.object_name,
-            metadata_json={"input_role": role},
+            metadata_json={"input_role": role, "source_channel": "mp", "source_folder": "uploads"},
         )
         db.add(asset)
         await db.flush()
+        from yuxi.services.material_library_service import create_library_item_for_asset
+        from yuxi.services.personal_materials import upload_category
+
+        upload_folder = await upload_category(db, user, "uploads", "mp")
+        material_item = await create_library_item_for_asset(
+            db, asset=asset, material_type="image", name=Path(file.filename).stem,
+            category=upload_folder.id, category_owner_uid=upload_folder.owner_uid,
+            metadata={"source_channel": "mp", "source_folder": "uploads"},
+        )
+        # Removing it from 我的上传 must not destroy the separate 生图 input history.
+        material_item.metadata_json = {**(material_item.metadata_json or {}), "retain_asset_on_delete": True}
         row = ImageDesignLibraryItem(
             id=f"idli_{uuid.uuid4().hex}",
             owner_uid=owner_uid,
