@@ -79,7 +79,7 @@ async def test_mp_sms_login_me_schema_and_pc_token_isolation(test_client, admin_
         process_keys = {field["key"] for field in process_type["variables"]}
         assert {"目标人群", "楼盘信息", "外框面积", "项目阶段"} <= process_keys
         assert any(field["key"] == "楼盘信息" and field["required"] is False for field in process_type["variables"])
-        assert any(field["key"] == "外框面积" and field["type"] == "select" for field in process_type["variables"])
+        assert any(field["key"] == "外框面积" and field["type"] == "text" for field in process_type["variables"])
         assert "三口之家" in data["resident_populations"]
         resident_field = next(
             (field for field in process_type["variables"] if field["key"] == "居住人口"),

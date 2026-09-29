@@ -32,7 +32,7 @@ DECORATION_WRITING_INSTRUCTION = (
     "写出的每个卡点与数字都要在 paragraph_evidence 挂载对应 evidence_bundle.items[].id"
     "（短码如 E01），禁止手写 ev_ 长串或编造 ID；"
     "若有可用于正文的业务知识证据，至少再挂一条；"
-    "必须写出鸿扬家居/鸿扬家装品牌优势（定位为定制化家装，禁止写整装或标准化整装），"
+    "必须写出鸿扬家装品牌优势（定位为定制化家装，禁止写整装或标准化整装），"
     "并带明确引流点（同城咨询、留言、评论区聊聊等；成品禁用「私信」「报价」等平台封禁词，以 evidence 中 forbidden_replacement_map 为准）；"
     + DECORATION_CTA_LAYOUT +
     "费用称谓一律写「预算价」，禁止写「合同价」（证据或词库原文是合同价时只改称谓，数字保持原样）；"
@@ -46,7 +46,7 @@ QUOTATION_LIST_WRITING_INSTRUCTION = (
     "正例：142㎡旧房翻新，钱要花在哪？；反例：旧房翻新业主130-150㎡预算不踩坑。"
     "旧房改造对外可写旧房翻新；主题落在钱花在哪、费用怎么拆、避隐形增项，不要吹嘘最低价；"
     "正文把基础/木制品/主材等费用仅作参考信息卡点展示，明确费用数字不是鸿扬核心卖点，禁止主推「更便宜、低价、性价比碾压」；"
-    "正文重点写鸿扬家居/鸿扬家装品牌优势：定制化家装、透明施工、自有/规范工艺、售后与靠谱服务，用品牌与交付能力收尾引流；"
+    "正文重点写鸿扬家装品牌优势：定制化家装、透明施工、自有/规范工艺、售后与靠谱服务，用品牌与交付能力收尾引流；"
     + DECORATION_CTA_LAYOUT +
     "成品标题/正文/话题必须规避平台封禁词库问题词（见 evidence forbidden_replacement_map），"
     "引流只用同城咨询、留言、评论区等安全表达，不得出现「私信」「报价」等表内问题词；词库原文含问题词时须改写后再写入；"
@@ -206,15 +206,6 @@ def configured_form_fields(
 
 
 FIELD_SELECT_OPTIONS: dict[str, list[str]] = {
-    "外框面积": [
-        "50-70㎡",
-        "90-110㎡",
-        "110-130㎡",
-        "130-150㎡",
-        "150-200㎡",
-        "200-300㎡",
-        "300㎡以上",
-    ],
     "设计风格": [
         "复合写意",
         "写意木构",
@@ -244,8 +235,20 @@ FIELD_PLACEHOLDERS: dict[str, str] = {
     "工艺类型": "请选择工艺类型",
     "工艺名称": "请选择工艺名称",
     "楼盘信息": "示例：洋湖天序",
+    "外框面积": "示例：108㎡",
     "项目阶段": "请选择项目阶段",
 }
+
+# 手填具体㎡时，按落档取暂时报价；边界优先命中上一档（如 110 → 90-110㎡）。
+FRAME_AREA_PRICING_BANDS: tuple[tuple[int, int | None, str], ...] = (
+    (50, 70, "50-70㎡"),
+    (90, 110, "90-110㎡"),
+    (111, 130, "110-130㎡"),
+    (131, 150, "130-150㎡"),
+    (151, 200, "150-200㎡"),
+    (201, 300, "200-300㎡"),
+    (301, None, "300㎡以上"),
+)
 
 
 def catalog_select_options(
@@ -364,11 +367,38 @@ def parse_concrete_area_sqm(text: str) -> int | None:
     return int(matched.group(1)) if matched else None
 
 
+def match_frame_area_pricing_band(text: str) -> str | None:
+    """把手填具体㎡或历史区间标签映射到报价档位标签。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    for _low, _high, label in FRAME_AREA_PRICING_BANDS:
+        if raw == label:
+            return label
+    # 历史区间标签仍可直接命中报价表（含与手填边界不完全重合的 110-130㎡ 等）。
+    if frame_area_band(raw) is not None:
+        return raw
+    number = parse_concrete_area_sqm(raw)
+    if number is None:
+        return None
+    for low, high, label in FRAME_AREA_PRICING_BANDS:
+        if high is None:
+            if number >= low:
+                return label
+        elif low <= number <= high:
+            return label
+    return None
+
+
 def lock_house_area_sqm(*candidates: str, rng: random.Random | None = None) -> str:
     """把外框面积区间锁成其中一个具体㎡，标题和正文共用同一数字。"""
     texts = [str(item or "").strip() for item in candidates if str(item or "").strip()]
     band = next((item for text in texts if (item := frame_area_band(text))), None)
     if band is None:
+        for text in texts:
+            number = parse_concrete_area_sqm(text)
+            if number is not None:
+                return f"{number}㎡"
         return texts[0] if texts else ""
     low, high = band
     for text in texts:

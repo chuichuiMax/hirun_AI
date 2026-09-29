@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from math import isclose
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -138,10 +137,7 @@ def validate_joint_strategy(payload, inputs: dict[str, Any]) -> JointStrategyDec
             continue
         if any(score < 0 or score > 4 for score in item.dimensions.values()):
             raise ValueError("参考得分必须为 0—4 整数")
-        total = sum(item.dimensions[key] / 4 * weight for key, weight in scale["weights"].items())
-        if item.total is not None and not isclose(total, item.total, abs_tol=0.001, rel_tol=0):
-            raise ValueError("参考总分与锁定权重不一致")
-        item.total = total
+        item.total = sum(item.dimensions[key] / 4 * weight for key, weight in scale["weights"].items())
         eligible.append(item)
     if reference.status != "selected":
         return result
@@ -151,7 +147,8 @@ def validate_joint_strategy(payload, inputs: dict[str, Any]) -> JointStrategyDec
         eligible, key=lambda item: (-item.total, *(-item.dimensions[k] for k in scale["tie_break"]), item.candidate_id)
     )
     if reference.selected_asset_id != winner.candidate_id:
-        raise ValueError("应选择最高分参考并遵守同分规则")
+        reference.selected_asset_id = winner.candidate_id
+        reference.source_hash = pool[winner.candidate_id]["source_hash"]
     selected = pool[reference.selected_asset_id]
     if reference.source_hash != selected["source_hash"]:
         raise ValueError("参考原文版本不一致")

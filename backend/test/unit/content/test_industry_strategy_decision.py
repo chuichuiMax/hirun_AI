@@ -98,7 +98,6 @@ def test_decoration_strips_formula_scores_without_retry():
 @pytest.mark.parametrize(
     "change",
     [
-        "wrong_total",
         "out_of_range",
         "float",
         "missing_path",
@@ -108,9 +107,7 @@ def test_decoration_strips_formula_scores_without_retry():
 def test_scored_mode_rejects_unverifiable_scores(change):
     candidates, result = example("education")
     score = result["title_assessments"][0]
-    if change == "wrong_total":
-        score["total"] = 99
-    elif change == "out_of_range":
+    if change == "out_of_range":
         score["dimensions"]["goal"] = 5
     elif change == "float":
         score["dimensions"]["goal"] = 3.5
@@ -120,6 +117,13 @@ def test_scored_mode_rejects_unverifiable_scores(change):
         result["title_assessments"] = []
     with pytest.raises(ValueError):
         validate(candidates, result)
+
+
+def test_scored_mode_rewrites_total_from_locked_weights():
+    candidates, result = example("education")
+    result["title_assessments"][0]["total"] = 99
+    decision = validate(candidates, result)
+    assert decision.title_assessments[0].total == 75
 
 
 def test_auto_direction_drops_other_direction_title_assessments():

@@ -1141,6 +1141,52 @@ def test_hycanvas_template_fields_resolve_semantics_and_constraints():
         "封面标题": "住进理想新家",
     }
 
+    tight = content_tools._hycanvas_template_fields(
+        [
+            {
+                "kind": "text",
+                "label": "120㎡",
+                "semanticRole": "project_area",
+                "constraints": {"required": True, "maxChars": 2, "maxCharsPerLine": 2, "maxLines": 1},
+            }
+        ],
+        visual_text=["标题"],
+        brief={"form_values": {"project_area": "120㎡"}},
+    )
+    assert tight == {"120㎡": "120m²"}
+
+    from_house_area = content_tools._hycanvas_template_fields(
+        [
+            {
+                "kind": "text",
+                "key": "field_7",
+                "label": "123㎡",
+                "semanticRole": "project_area",
+                "constraints": {"required": True, "maxChars": 3},
+            }
+        ],
+        visual_text=["标题"],
+        brief={"form_values": {"house_area": "130㎡"}},
+        template_fields={"field_7": "123㎡"},
+    )
+    assert from_house_area == {"field_7": "130m²"}
+
+    kept_rewrite = content_tools._hycanvas_template_fields(
+        [
+            {
+                "kind": "text",
+                "key": "field_7",
+                "label": "123㎡",
+                "semanticRole": "project_area",
+                "constraints": {"required": True, "maxChars": 3},
+            }
+        ],
+        visual_text=["标题"],
+        brief={"form_values": {}},
+        template_fields={"field_7": "户型"},
+    )
+    assert kept_rewrite == {"field_7": "户型"}
+
 
 def test_hycanvas_template_fields_use_distinct_agent_text_for_repeated_title_roles():
     fields = content_tools._hycanvas_template_fields(

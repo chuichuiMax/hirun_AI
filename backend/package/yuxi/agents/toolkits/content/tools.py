@@ -296,8 +296,12 @@ def _hycanvas_template_fields(
             else:
                 value = sources["body_excerpt"]
         if role == "project_area":
-            match = re.search(r"\d+(?:\.\d+)?", value)
-            value = f"{match.group(0)}m²" if match else ""
+            sourced_area = str(sources.get("project_area") or "")
+            match = re.search(r"\d+(?:\.\d+)?", sourced_area) or re.search(r"\d+(?:\.\d+)?", value)
+            if match:
+                value = f"{match.group(0)}m²"
+            elif not str(template_fields.get(field_key) or "").strip():
+                value = ""
         elif role == "completion_year":
             match = re.search(r"(?:19|20)\d{2}", value)
             value = match.group(0) if match else ""
@@ -305,6 +309,9 @@ def _hycanvas_template_fields(
         if constraints.get("required") and not value:
             raise ValueError(f"封面模板必填字段“{label}”未完成自动适配")
         max_chars = resolved_visual_text_max_chars(role, constraints)
+        # 面积框按整字宽度计量时只能放下 2 字，但数字加 m² 实际能排进同一框。
+        if role == "project_area" and re.fullmatch(r"\d+(?:\.\d+)?m²", value) and len(value) <= 8:
+            max_chars = None
         if isinstance(max_chars, int) and max_chars > 0 and len(value.replace("\n", "")) > max_chars:
             raise ValueError(f"封面字段“{label}”超过模板限制的 {max_chars} 个字符")
         max_chars_per_line = constraints.get("maxCharsPerLine")

@@ -32,6 +32,7 @@ from yuxi.content.service_entry_form import (
     catalog_select_options,
     configured_business_variable_fields,
     map_service_entry_form_values,
+    match_frame_area_pricing_band,
 )
 from yuxi.repositories.content_repository import ContentRepository
 from yuxi.repositories.cover_repository import CoverRepository
@@ -407,10 +408,11 @@ def _frame_area_payload(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def lookup_frame_area_pricing(frame_area: str) -> dict[str, Any]:
+    band = match_frame_area_pricing_band(frame_area) or str(frame_area or "").strip()
     for item in FRAME_AREA_PRICING:
-        if item["value"] == frame_area:
+        if item["value"] == band:
             return item
-    raise _mp_error(422, "MP_FRAME_AREA_INVALID", "外框面积不在可选范围内")
+    raise _mp_error(422, "MP_FRAME_AREA_INVALID", "外框面积无法匹配报价档，请填写有效面积（如 108㎡）")
 
 
 def next_mp_content_code(existing_codes: list[str], *, day: str) -> str:

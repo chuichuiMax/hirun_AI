@@ -99,12 +99,10 @@ def test_envelope_paths_are_normalized_and_scores_are_calculated():
 @pytest.mark.parametrize(
     "problem",
     [
-        "rank",
         "hash",
         "missing_slot",
         "fake_path",
         "original_fact",
-        "score",
         "missing_candidate",
         "unexpected_blueprint",
     ],
@@ -112,9 +110,7 @@ def test_envelope_paths_are_normalized_and_scores_are_calculated():
 def test_joint_decision_rejects_invalid_reference(problem):
     inputs, result = joint_example()
     ref = result["reference"]
-    if problem == "rank":
-        ref["selected_asset_id"] = "a"
-    elif problem == "hash":
+    if problem == "hash":
         ref["source_hash"] = "a" * 64
     elif problem == "missing_slot":
         ref["slot_mapping"] = {}
@@ -122,8 +118,6 @@ def test_joint_decision_rejects_invalid_reference(problem):
         ref["slot_mapping"]["pain"] = ["content_brief.missing"]
     elif problem == "original_fact":
         ref["slot_mapping"]["pain"] = ["reference_candidates.0.reference_card"]
-    elif problem == "score":
-        ref["assessments"][1]["total"] = 99
     elif problem == "missing_candidate":
         ref["assessments"].pop(0)
     elif problem == "unexpected_blueprint":
@@ -133,6 +127,18 @@ def test_joint_decision_rejects_invalid_reference(problem):
     if problem == "missing_slot":
         assert "缺少必要槽位：pain" in str(exc.value)
         assert "选中卡必要槽位：pain" in str(exc.value)
+
+
+def test_joint_decision_rewrites_reference_total_and_winner():
+    inputs, result = joint_example()
+    result["reference"]["assessments"][1]["total"] = 99
+    result["reference"]["selected_asset_id"] = "a"
+    result["reference"]["source_hash"] = "a" * 64
+    validated = validate_joint_strategy(result, inputs)
+    winner = next(item for item in validated.reference.assessments if item.candidate_id == "b")
+    assert winner.total == 100
+    assert validated.reference.selected_asset_id == "b"
+    assert validated.reference.source_hash == "b" * 64
 
 
 def test_reference_shape_normalizes_ineligible_scores_and_partial_dimensions():

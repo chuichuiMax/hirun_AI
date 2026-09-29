@@ -252,6 +252,31 @@ func fillImageFields(file map[string]any, declarations []any, values map[string]
 	return nil
 }
 
+func coverAreaWithUnit(value string) bool {
+	const suffix = "m²"
+	if !strings.HasSuffix(value, suffix) || utf8.RuneCountInString(value) > 8 {
+		return false
+	}
+	number := strings.TrimSuffix(value, suffix)
+	if number == "" {
+		return false
+	}
+	dot := false
+	for _, r := range number {
+		if r == '.' {
+			if dot {
+				return false
+			}
+			dot = true
+			continue
+		}
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func fillTextFields(file map[string]any, declarations []any, values map[string]string) error {
 	fieldNodes := make(map[string]string, len(declarations))
 	for _, raw := range declarations {
@@ -275,13 +300,14 @@ func fillTextFields(file map[string]any, declarations []any, values map[string]s
 			if required, _ := constraints["required"].(bool); required && (!present || strings.TrimSpace(value) == "") {
 				return ErrBadRequest
 			}
-			if maxChars := int(asNum(constraints["maxChars"])); maxChars > 0 && present && utf8.RuneCountInString(strings.ReplaceAll(value, "\n", "")) > maxChars {
+			skipAreaLimit := asStr(field["semanticRole"]) == "project_area" && coverAreaWithUnit(value)
+			if maxChars := int(asNum(constraints["maxChars"])); !skipAreaLimit && maxChars > 0 && present && utf8.RuneCountInString(strings.ReplaceAll(value, "\n", "")) > maxChars {
 				return ErrBadRequest
 			}
 			if maxLines := int(asNum(constraints["maxLines"])); maxLines > 0 && present && strings.Count(value, "\n")+1 > maxLines {
 				return ErrBadRequest
 			}
-			if maxCharsPerLine := int(asNum(constraints["maxCharsPerLine"])); maxCharsPerLine > 0 && present {
+			if maxCharsPerLine := int(asNum(constraints["maxCharsPerLine"])); !skipAreaLimit && maxCharsPerLine > 0 && present {
 				for _, line := range strings.Split(value, "\n") {
 					if utf8.RuneCountInString(line) > maxCharsPerLine {
 						return ErrBadRequest

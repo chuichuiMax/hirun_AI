@@ -476,7 +476,6 @@ const reviewNotePhotoIds = computed(() =>
 const REVIEW_NOTE_PHOTO_LIMIT = 3
 const REVIEW_NOTE_PHOTO_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const FIELD_SELECT_OPTIONS = {
-  外框面积: ['50-70㎡', '90-110㎡', '110-130㎡', '130-150㎡', '150-200㎡', '200-300㎡', '300㎡以上'],
   设计风格: [
     '复合写意',
     '写意木构',
@@ -546,6 +545,7 @@ const FIELD_PLACEHOLDERS = {
   工艺类型: '请选择工艺类型',
   工艺名称: '请选择工艺名称',
   楼盘信息: '示例：洋湖天序',
+  外框面积: '示例：108㎡',
   项目阶段: '请选择项目阶段'
 }
 
@@ -928,6 +928,31 @@ const restoringExistingRun = computed(
   () => Boolean(store.task?.latest_run_id) && !store.currentRun && !store.interrupt
 )
 
+const resolveFrameAreaQuoteKey = (frameArea) => {
+  const raw = String(frameArea || '').trim()
+  if (!raw) return ''
+  if (FRAME_AREA_QUOTES[raw]) return raw
+  const matched = raw.match(/^(\d+)\s*(?:㎡|m²|m2)?$/i)
+  if (!matched) return ''
+  const n = Number(matched[1])
+  if (n >= 50 && n <= 70) return '50-70㎡'
+  if (n >= 90 && n <= 110) return '90-110㎡'
+  if (n >= 111 && n <= 130) return '110-130㎡'
+  if (n >= 131 && n <= 150) return '130-150㎡'
+  if (n >= 151 && n <= 200) return '150-200㎡'
+  if (n >= 201 && n <= 300) return '200-300㎡'
+  if (n >= 301) return '300㎡以上'
+  return ''
+}
+
+const normalizeFrameAreaValue = (frameArea) => {
+  const raw = String(frameArea || '').trim()
+  if (!raw) return ''
+  if (FRAME_AREA_QUOTES[raw]) return raw
+  const matched = raw.match(/^(\d+)\s*(?:㎡|m²|m2)?$/i)
+  return matched ? `${matched[1]}㎡` : raw
+}
+
 const applyFrameAreaTemporaryQuotes = (frameArea) => {
   const presentKeys = new Set(
     activeFields.value
@@ -935,19 +960,24 @@ const applyFrameAreaTemporaryQuotes = (frameArea) => {
       .filter((key) => DECORATION_QUOTE_KEYS.includes(key))
   )
   if (!presentKeys.size) return
-  const quotes = FRAME_AREA_QUOTES[frameArea]
+  const quotes = FRAME_AREA_QUOTES[resolveFrameAreaQuoteKey(frameArea)]
   for (const key of presentKeys) {
     formValues[key] = quotes ? pickTemporaryQuote(quotes[key]) : ''
   }
 }
 
 const onBusinessSelectChange = (key, value) => {
-  if (key === '外框面积') applyFrameAreaTemporaryQuotes(value)
   if (key === '工艺类型') {
     const allowed = processNamesByType.value[value] || []
     const currentName = String(formValues['工艺名称'] || '').trim()
     if (currentName && !allowed.includes(currentName)) formValues['工艺名称'] = undefined
   }
+}
+
+const onFrameAreaBlur = () => {
+  const normalized = normalizeFrameAreaValue(formValues['外框面积'])
+  if (normalized) formValues['外框面积'] = normalized
+  applyFrameAreaTemporaryQuotes(formValues['外框面积'])
 }
 
 const guardProcessNameSelect = (fieldKey, open) => {
@@ -2617,6 +2647,7 @@ const openVersions = async () => {
                         v-if="field.type === 'text'"
                         v-model:value="formValues[field.key]"
                         :placeholder="field.placeholder || `请输入${field.label}`"
+                        @blur="field.key === '外框面积' ? onFrameAreaBlur() : undefined"
                       />
                       <a-textarea
                         v-else-if="field.type === 'textarea'"

@@ -196,7 +196,12 @@ def template_fact_sources(brief: dict[str, Any]) -> dict[str, str]:
             form_values.get("project_name_en") or form_values.get("community_name_en") or ""
         ).strip(),
         "project_area": str(
-            form_values.get("project_area") or form_values.get("area") or form_values.get("area_sqm") or ""
+            form_values.get("project_area")
+            or form_values.get("area")
+            or form_values.get("area_sqm")
+            or form_values.get("house_area")
+            or form_values.get("外框面积")
+            or ""
         ).strip(),
         "designer": str(form_values.get("designer") or form_values.get("designer_name") or "").strip(),
         "completion_year": str(form_values.get("completion_year") or form_values.get("year") or "").strip(),

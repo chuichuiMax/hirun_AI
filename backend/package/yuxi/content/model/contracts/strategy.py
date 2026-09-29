@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from math import isclose
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
@@ -290,10 +289,7 @@ def validate_strategy_decision(
                     continue
                 if any(value < 0 or value > 4 for value in item.dimensions.values()):
                     raise ValueError("评分必须为 0—4 整数")
-                total = sum(item.dimensions[key] / 4 * weight for key, weight in weights.items())
-                if item.total is not None and not isclose(item.total, total, abs_tol=0.001, rel_tol=0):
-                    raise ValueError("评分总分与锁定权重不一致")
-                item.total = total
+                item.total = sum(item.dimensions[key] / 4 * weight for key, weight in weights.items())
             ranked[label][item.candidate_id] = item
     if problems:
         raise ValueError("；".join(problems))

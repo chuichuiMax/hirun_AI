@@ -93,6 +93,13 @@ def test_lookup_frame_area_pricing_rejects_unknown():
     assert missing.value.detail["error"]["code"] == "MP_FRAME_AREA_INVALID"
 
 
+def test_lookup_frame_area_pricing_accepts_manual_concrete_sqm():
+    item = lookup_frame_area_pricing("108㎡")
+    assert item["value"] == "90-110㎡"
+    assert item["quotes"]["基础"] == "7-8万"
+    assert lookup_frame_area_pricing("108")["value"] == "90-110㎡"
+
+
 def test_mask_phone_hides_middle_digits():
     assert mask_phone("13912345678") == "139****5678"
 

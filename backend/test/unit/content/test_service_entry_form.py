@@ -113,10 +113,11 @@ def test_configured_business_variable_fields_filters_by_content_type_and_require
         select_options={"目标人群": ["毛坯", "精装房", "旧房改造", "别墅"]},
     )
     assert [(item["key"], item["required"], item["type"]) for item in fields] == [
-        ("外框面积", True, "select"),
+        ("外框面积", True, "text"),
         ("目标人群", True, "select"),
         ("楼盘信息", False, "text"),
     ]
+    assert fields[0]["placeholder"] == "示例：108㎡"
     assert fields[1]["name"] == "目标人群"
     assert fields[1]["options"] == ["毛坯", "精装房", "旧房改造", "别墅"]
     assert fields[1]["placeholder"] == "请选择目标人群"
@@ -411,3 +412,11 @@ def test_map_service_entry_form_values_locks_frame_area_to_concrete_sqm():
     assert "130-150" not in mapped["project_result"]
     remapped = map_service_entry_form_values("装修家居", mapped)
     assert remapped["house_area"] == mapped["house_area"]
+
+
+def test_map_service_entry_form_values_keeps_manual_concrete_frame_area():
+    mapped = map_service_entry_form_values(
+        "装修家居",
+        {"楼盘信息": "润府", "外框面积": "108", "设计风格": "北欧之光"},
+    )
+    assert mapped["area"] == mapped["house_area"] == mapped["外框面积"] == "108㎡"
