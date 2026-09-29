@@ -165,7 +165,7 @@ async def test_save_targets_offer_fixed_destinations_and_reject_pc_token(test_cl
     assert response.status_code == 200, response.text
     scopes = response.json()["scopes"]
     assert [item["scope"] for item in scopes] == ["private", "enterprise"]
-    assert scopes[0]["can_write_root"] is True and scopes[0]["folders"] == []
+    assert scopes[0]["can_write_root"] is False and scopes[0]["folders"] == []
     assert scopes[1]["can_write_root"] is False
     assert all(
         folder["name"] == "生图图库" and folder["parent_id"] is None for folder in scopes[1]["folders"]
@@ -223,12 +223,48 @@ async def test_upload_is_private_dedicated_input_with_authenticated_files(test_c
     )
     assert ordinary.status_code == 200, ordinary.text
     assert item["asset_id"] not in {row["asset_id"] for row in ordinary.json()["items"]}
+    own_uploads = await test_client.get("/api/mp/content/my-materials/uploads", headers=headers)
+    assert own_uploads.status_code == 200, own_uploads.text
+    assert item["asset_id"] in {row["asset_id"] for row in own_uploads.json()["items"]}
+    foreign_uploads = await test_client.get("/api/mp/content/my-materials/uploads", headers=mp_accounts[1]["headers"])
+    assert foreign_uploads.status_code == 200, foreign_uploads.text
+    assert item["asset_id"] not in {row["asset_id"] for row in foreign_uploads.json()["items"]}
     for url in (item["file_url"], item["thumbnail_file_url"]):
         own = await test_client.get(url, headers=headers)
         assert own.status_code == 200, own.text
         assert own.headers["content-type"].startswith("image/")
         foreign = await test_client.get(url, headers=mp_accounts[1]["headers"])
         assert foreign.status_code == 404, foreign.text
+
+
+async def test_mp_cover_upload_stays_private_in_fixed_upload_folder(test_client, mp_accounts):
+    raw = io.BytesIO()
+    Image.new("RGB", (32, 24), "green").save(raw, format="PNG")
+    owner = mp_accounts[0]["headers"]
+    other = mp_accounts[1]["headers"]
+    uploaded = await test_client.post(
+        "/api/mp/content/uploads/cover",
+        headers=owner,
+        files={"file": ("room.png", raw.getvalue(), "image/png")},
+        data={"folder": "uploads"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    item_id = uploaded.json()["library_item_id"]
+    try:
+        assert uploaded.json()["category"] == "mp-uploads-private"
+        folders = await test_client.get("/api/mp/content/my-materials/folders", headers=owner)
+        assert folders.status_code == 200, folders.text
+        assert next(folder["count"] for folder in folders.json()["folders"] if folder["id"] == "uploads") >= 1
+        own = await test_client.get("/api/mp/content/my-materials/uploads", headers=owner)
+        assert own.status_code == 200, own.text
+        assert item_id in {item["id"] for item in own.json()["items"]}
+        foreign = await test_client.get("/api/mp/content/my-materials/uploads", headers=other)
+        assert foreign.status_code == 200, foreign.text
+        assert item_id not in {item["id"] for item in foreign.json()["items"]}
+        forbidden = await test_client.get(f"/api/mp/content/gallery-items/{item_id}/file", headers=other)
+        assert forbidden.status_code == 404, forbidden.text
+    finally:
+        await test_client.delete(f"/api/mp/content/gallery-items/{item_id}", headers=owner)
 
 
 async def test_add_library_deduplicates_and_revokes_private_source(test_client, admin_headers, mp_accounts):

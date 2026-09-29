@@ -1082,14 +1082,7 @@ async def delete_mp_gallery_item(db: AsyncSession, ctx: MpContext, item_id: str)
     return await delete_material_item(db, ctx.user, item_id)
 
 
-async def list_mp_works(
-    db: AsyncSession,
-    ctx: MpContext,
-    *,
-    page: int,
-    page_size: int,
-) -> dict[str, Any]:
-    owner_uid = str(ctx.user.uid)
+async def visible_mp_works(db: AsyncSession, owner_uid: str) -> list[dict[str, Any]]:
     repo = ContentCoverRepository(db)
     jobs = await repo.list_succeeded_jobs_for_user(owner_uid)
     asset_ids = [
@@ -1098,7 +1091,17 @@ async def list_mp_works(
         for asset_id in ((job.result_json or {}).get("asset_ids") or [])
     ]
     assets = await repo.get_assets_for_user(list(dict.fromkeys(asset_ids)), owner_uid)
-    flattened = visible_work_items(jobs, {asset.id: asset for asset in assets})
+    return visible_work_items(jobs, {asset.id: asset for asset in assets})
+
+
+async def list_mp_works(
+    db: AsyncSession,
+    ctx: MpContext,
+    *,
+    page: int,
+    page_size: int,
+) -> dict[str, Any]:
+    flattened = await visible_mp_works(db, str(ctx.user.uid))
     total = len(flattened)
     start = (page - 1) * page_size
     items = []
@@ -1108,6 +1111,7 @@ async def list_mp_works(
             {
                 **item,
                 "created_at": format_utc_datetime(item["created_at"]),
+                "uploaded_at": format_utc_datetime(item["uploaded_at"]),
                 "file_url": f"/api/mp/image/works/{asset_id}/file",
                 "thumbnail_file_url": f"/api/mp/image/works/{asset_id}/file",
             }
@@ -1143,12 +1147,14 @@ async def upload_cover(
     *,
     category: str | None = None,
     design_style: str | None = None,
+    folder: Literal["rough", "uploads"] = "uploads",
 ) -> dict[str, Any]:
     """Upload via the same material-library import path used by PC 素材库."""
     resolved_category = (category or "uncategorized").strip() or "uncategorized"
     try:
         imported = await import_material_images(
-            db, ctx.user, [file], category=resolved_category, design_style=design_style
+            db, ctx.user, [file], category=resolved_category, design_style=design_style,
+            source_channel="mp", source_folder=folder,
         )
     except HTTPException:
         raise

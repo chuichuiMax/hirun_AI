@@ -370,7 +370,11 @@ class ContentCoverRepository:
             (
                 await self.db.execute(
                     select(ContentCoverJob)
-                    .where(ContentCoverJob.owner_uid == owner_uid, ContentCoverJob.status == "succeeded")
+                    .where(
+                        ContentCoverJob.owner_uid == owner_uid,
+                        ContentCoverJob.status == "succeeded",
+                        ContentCoverJob.content_task_id.is_not(None),
+                    )
                     .order_by(ContentCoverJob.completed_at.desc(), ContentCoverJob.created_at.desc())
                 )
             ).scalars()

@@ -730,6 +730,9 @@ async function uploadFiles() {
     resetUpload()
     page.value = 1
     if (materialType.value === 'image') {
+      const uploadedScope = response?.items?.[0]?.visibility
+      if (uploadedScope && uploadedScope !== materialScope.value) materialScope.value = uploadedScope
+      if (!categoryMap.value[uploadedTo] && uploadedTo !== privateRootCategoryId) await loadGalleries()
       activeGallery.value = uploadedTo === privateRootCategoryId ? '' : uploadedTo
     }
     await loadItems()

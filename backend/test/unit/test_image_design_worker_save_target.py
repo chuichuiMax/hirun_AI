@@ -156,7 +156,8 @@ class MemorySession:
 @pytest.fixture
 def db(monkeypatch):
     session = MemorySession()
-    for module in (save_targets, worker, material_library_service):
+    from yuxi.services import personal_materials
+    for module in (save_targets, worker, material_library_service, personal_materials):
         monkeypatch.setattr(module, "MaterialLibraryRepository", MemoryRepository)
     return session
 
@@ -209,8 +210,8 @@ async def test_mp_worker_saves_private_option_to_ai_generated_gallery(db):
         workflow="room_adapt",
         mp_fixed_target=True,
     )
-    assert resolved.public_target == {"scope": "private", "gallery_id": None}
-    assert item.category == "product"
+    assert resolved.public_target == {"scope": "enterprise", "gallery_id": "mp-generated-shared"}
+    assert item.category == "mp-generated-shared"
 
 
 @pytest.mark.asyncio

@@ -28,10 +28,21 @@ class MpWorksLogicTest(unittest.TestCase):
                     "created_at": "2026-09-16T11:00:00",
                     "result_json": {"asset_ids": ["failed-output"]},
                 },
+                {
+                    "id": "job-retry",
+                    "status": "succeeded",
+                    "created_at": "2026-09-16T09:00:00",
+                    "result_json": {"asset_ids": ["output-visible"]},
+                },
             ],
             {
-                "output-visible": {"id": "output-visible", "role": "output", "hidden_from_works_at": None},
-                "output-hidden": {"id": "output-hidden", "role": "output", "hidden_from_works_at": "2026-09-16T10:01:00"},
+                "output-visible": {
+                    "id": "output-visible", "role": "output", "hidden_from_works_at": None,
+                    "created_at": "2026-09-16T10:02:00",
+                },
+                "output-hidden": {
+                    "id": "output-hidden", "role": "output", "hidden_from_works_at": "2026-09-16T10:01:00"
+                },
                 "source-asset": {"id": "source-asset", "role": "source", "hidden_from_works_at": None},
                 "failed-output": {"id": "failed-output", "role": "output", "hidden_from_works_at": None},
             },
@@ -44,6 +55,7 @@ class MpWorksLogicTest(unittest.TestCase):
                     "id": "output-visible",
                     "job_id": "job-new",
                     "created_at": "2026-09-16T10:00:00",
+                    "uploaded_at": "2026-09-16T10:02:00",
                 }
             ],
         )
